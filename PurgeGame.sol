@@ -24,7 +24,7 @@ interface IPurgeCoinInterface {
     function mintInGame(address recipient, uint256 amount) external;
     function burnInGame(address target, uint256 amount) external;
     function payAffiliate(uint256 amount, bytes32 code, address sender, uint24 lvl) external;
-    function requestRngPurgeGame(bool pauseBetting) external returns (uint256 reqId);
+    function requestRngPurgeGame(bool pauseBetting) external;
     function pullRng() external view returns (uint256 word);
     function processCoinflipPayouts(uint24 level, uint32 cap, bool bonusFlip)external returns (bool);
     function triggerCoinJackpot() external;
@@ -229,8 +229,8 @@ contract PurgeGame is ERC721A {
 
     // --- State machine: advance one tick ------------------------------------------------
 
-    /// @notice Advances the game state machine. Anyone can call, but certain steps
-    ///         require the caller to meet a luckbox threshold (payment for work/luckbox bonus).
+    /// @notice Advances the game state machine. Anyone can call, but
+    ///         requires the caller to meet a luckbox threshold (payment for work/luckbox bonus).
     /// @param cap Emergency unstuck function, in case a necessary transaction is too large for a block.
     ///            Using cap removes Purgecoin payment.
     function advanceGame(uint32 cap) external {
@@ -1076,7 +1076,6 @@ contract PurgeGame is ERC721A {
         uint256 total = pendingMapMints.length;
         if (airdropIndex >= total) return true;
 
-        // Single clamp: cheap mode gets a conservative 2× bump.
         if (writesBudget == 0) writesBudget = WRITES_BUDGET_SAFE;
         if (phase < 2 ) { writesBudget = (writesBudget * 3) /4; phase = 2;}
         uint32 used = 0;
@@ -1088,15 +1087,27 @@ contract PurgeGame is ERC721A {
             if (owed == 0) { unchecked { ++airdropIndex; } airdropMapsProcessedCount = 0; continue; }
 
             uint32 room = writesBudget - used;
-            uint32 maxT = (room <= 256) ? (room / 2) : (room - 256);
 
+            // per-address overhead (reserve before sizing 'take')
+            uint32 baseOv = 2;
+            if (airdropMapsProcessedCount == 0 && owed <= 2) { baseOv += 2; }
+            if (room <= baseOv) break;
+            room -= baseOv;
+
+            // existing writes-based clamp
+            uint32 maxT = (room <= 256) ? (room / 2) : (room - 256);
             uint32 take = owed > maxT ? maxT : owed;
             if (take == 0) break;
 
+            // do the work
             uint256 baseKey = baseTokenId + (uint256(airdropIndex) << 20);
             _raritySymbolBatch(p, baseKey, airdropMapsProcessedCount, take, entropy);
 
+            // writes accounting: ticket writes + per-address overhead + finish overhead
             uint32 writesThis = (take <= 256) ? (take * 2) : (take + 256);
+            writesThis += baseOv;
+            if (take == owed) { writesThis += 1; }
+
             unchecked {
                 playerMapMintsOwed[p] = owed - take;
                 airdropMapsProcessedCount += take;

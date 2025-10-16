@@ -590,9 +590,8 @@ contract Purgecoin is ERC20, VRFConsumerBaseV2Plus {
     function requestRngPurgeGame(bool pauseBetting)
         external
         onlyPurgeGameContract
-        returns (uint256 id)
     {
-        id = s_vrfCoordinator.requestRandomWords(                   
+        uint256 id = s_vrfCoordinator.requestRandomWords(                   
             VRFV2PlusClient.RandomWordsRequest({
                 keyHash: vrfKeyHash,
                 subId: vrfSubscriptionId,
