@@ -188,9 +188,6 @@ contract PurgeGame is ERC721A {
 
     }
 
-    function devHacks() external{                                      //***TESTNET***
-        dailyIdx -=1;
-    }                                                                  //***TESTNET***
 
     // --- View: lightweight game status -------------------------------------------------
 
