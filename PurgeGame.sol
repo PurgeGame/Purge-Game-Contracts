@@ -86,10 +86,10 @@ contract PurgeGame is ERC721A {
     uint48  private constant JACKPOT_RESET_TIME = 82620; // Offset anchor for "daily" windows
     uint256 private constant MILLION = 1_000_000;        // 6-decimal unit helper
     uint256 private constant PRICE_PURGECOIN  = 1000 * MILLION;   // 1,000 Purgecoin (6d)
-    uint32  private constant NFT_AIRDROP_PLAYER_BATCH_SIZE = 75;    // Mint batch cap (# players)
+    uint32  private constant NFT_AIRDROP_PLAYER_BATCH_SIZE = 225;    // Mint batch cap (# players)
     uint32  private constant NFT_AIRDROP_TOKEN_CAP         = 3_000; // Mint batch cap (# tokens)
     uint32  private constant DEFAULT_PAYOUTS_PER_TX = 500; // ≤16M worst-case
-    uint32  private constant WRITES_BUDGET_SAFE    = 800;   // <16M gas
+    uint32  private constant WRITES_BUDGET_SAFE    = 800;   // <16M gas  budget                                         ***TESTING***
     uint72  private constant MAP_PERMILLE = 0x0A0A07060304050564;   // Payout permilles packed (9 bytes)
 
 
@@ -97,12 +97,12 @@ contract PurgeGame is ERC721A {
     // Economic / Admin
     // -----------------------
     address private immutable creator;      // Receives protocol ETH (end-game drains, etc.)
-    uint256 private price = 0.025 ether; // / MILLION;    // Base mint price (adjusts with level milestones)             ***TESTNET***
+    uint256 private price = 0.025 ether; // / MILLION;    // Base mint price (adjusts with level milestones)            
 
     // -----------------------
     // Prize Pools and RNG
     // -----------------------
-    uint256 private lastPrizePool     = 125 ether; //  / MILLION; // Snapshot from previous epoch (non-zero post L1)        ***TESTNET***
+    uint256 private lastPrizePool     = 125 ether; //  / MILLION; // Snapshot from previous epoch (non-zero post L1)       
     uint256 private levelPrizePool;                // Snapshot for endgame distribution of current level
     uint256 private prizePool;                     // Live ETH pool for current level
     uint256 private carryoverForNextLevel;         // Saved carryover % for next level
@@ -229,8 +229,8 @@ contract PurgeGame is ERC721A {
 
     // --- State machine: advance one tick ------------------------------------------------
 
-    /// @notice Advances the game state machine. Anyone can call, but
-    ///         requires the caller to meet a luckbox threshold (payment for work/luckbox bonus).
+    /// @notice Advances the game state machine. Anyone can call, but certain steps
+    ///         require the caller to meet a luckbox threshold (payment for work/luckbox bonus).
     /// @param cap Emergency unstuck function, in case a necessary transaction is too large for a block.
     ///            Using cap removes Purgecoin payment.
     function advanceGame(uint32 cap) external {
@@ -1066,9 +1066,6 @@ contract PurgeGame is ERC721A {
 
     // --- Map / NFT airdrop batching ------------------------------------------------------------------
 
-
-
-
     /// @notice Process a batch of map mints using a caller-provided writes budget (0 = auto).
     /// @param writesBudget Count of SSTORE writes allowed this tx; hard-clamped to ≤16M-safe.
     /// @return finished True if all pending map mints have been fully processed.
@@ -1357,7 +1354,7 @@ contract PurgeGame is ERC721A {
 
         return IPurgeRenderer(_renderer).tokenURI(tokenId, metaPacked, remaining);
     }
-    /// @notice Return tickets owned by a player.
+    
     function getTickets(uint8 trait, uint24 lvl, uint32 offset, uint32 limit, address player)
         external
         view

@@ -607,6 +607,7 @@ contract Purgecoin is ERC20, VRFConsumerBaseV2Plus {
         isBettingPaused = pauseBetting;
     }
 
+
     /// @notice VRF callback: store the random word once for the expected request.
     /// @dev Reverts if `requestId` does not match the most recent request or if already fulfilled.
     function fulfillRandomWords(uint256 requestId, uint256[] calldata randomWords) internal override {
@@ -669,7 +670,7 @@ contract Purgecoin is ERC20, VRFConsumerBaseV2Plus {
         if (!isBettingPaused) return true;
         // --- Step sizing (bounded work) ----------------------------------------------------
 
-        uint32 stepPayout = (cap == 0) ? 400 : cap;
+        uint32 stepPayout = (cap == 0) ? 600 : cap;
 
         uint256 word = rngWord;
         bool  win = (word & 1) == 1;
@@ -844,8 +845,9 @@ contract Purgecoin is ERC20, VRFConsumerBaseV2Plus {
     ///  - Finally, zero `dailyCoinBurn` for the next cycle.
     function triggerCoinJackpot() external onlyPurgeGameContract {
         uint256 randWord  = rngWord;
-        bool flipWin = (randWord & 1) == 1;
+        bool flipWin = (rngWord & 1) == 1;
         if (!flipWin) { dailyCoinBurn = 0; return; }
+
         uint256 burnBase  = dailyCoinBurn;
         if (burnBase < 8000 * MILLION) burnBase = 8000 * MILLION;
 
