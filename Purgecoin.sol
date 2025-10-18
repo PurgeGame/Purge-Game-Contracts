@@ -733,7 +733,7 @@ contract Purgecoin is ERC20, VRFConsumerBaseV2Plus {
         // --- Step sizing (bounded work) ----------------------------------------------------
 
         uint32 stepPayout = (cap == 0) ? 500 : cap;
-        uint32 stepstake = (cap == 0) ? 200 : cap;
+        uint32 stepStake = (cap == 0) ? 200 : cap;
 
         uint256 word = rngWord;
         bool win = (word & 1) == 1;
