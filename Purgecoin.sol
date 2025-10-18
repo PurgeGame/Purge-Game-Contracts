@@ -130,7 +130,7 @@ contract Purgecoin is ERC20, VRFConsumerBaseV2Plus {
 
     // LINK token (Chainlink ERC677) — network-specific address
     ILinkToken public constant LINK =
-        ILinkToken(0x779877A7B0D9E8603169DdbD7836e478b4624789);
+        ILinkToken(0x514910771AF9Ca656af840dff83E8264EcF986CA);
 
     // ---------------------------------------------------------------------
     // Game wiring & state
