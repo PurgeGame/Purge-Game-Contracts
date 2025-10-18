@@ -656,6 +656,7 @@ contract Purgecoin is ERC20, VRFConsumerBaseV2Plus {
             })
         );
         rngFulfilled = false;
+        rngWord = 0;
         rngRequestId = id;
         isBettingPaused = pauseBetting;
     }
