@@ -403,7 +403,6 @@ contract PurgeGame is ERC721A {
         bool payInCoin,
         bytes32 affiliateCode
     ) external payable {
-        uint256 priceUnit = pricePurgecoinUnit;
         uint8 ph = phase;
         if (
             quantity == 0 ||
@@ -415,14 +414,14 @@ contract PurgeGame is ERC721A {
         if (lvl % 100 == 0) {
             if (
                 IPurgeCoinInterface(_coin).playerLuckbox(msg.sender) <
-                10 * priceUnit * ((lvl / 100) + 1)
+                10 * pricePurgecoinUnit * ((lvl / 100) + 1)
             ) revert LuckboxTooSmall();
         }
 
         // Payment handling (ETH vs coin)
         if (payInCoin) {
             if (msg.value != 0) revert WrongValue();
-            _coinReceive(quantity * priceUnit, lvl);
+            _coinReceive(quantity * pricePurgecoinUnit, lvl);
         } else {
             _ethReceive(quantity * 100, affiliateCode, lvl); // price × (quantity * 100) / 100
         }
@@ -561,7 +560,6 @@ contract PurgeGame is ERC721A {
         uint256 count = tokenIds.length;
         if (count == 0 || count > 75) revert E();
         uint24 lvl = level;
-        uint256 priceUnit = pricePurgecoinUnit;
 
         uint16 prevExterminated = lastExterminatedTrait;
         address caller = msg.sender;
@@ -625,7 +623,7 @@ contract PurgeGame is ERC721A {
         if (lvl % 10 == 2) count <<= 1;
         IPurgeCoinInterface(_coin).mintInGame(
             caller,
-            (count + bonusTenths) * (priceUnit / 10)
+            (count + bonusTenths) * (pricePurgecoinUnit / 10)
         );
         emit Purge(msg.sender, tokenIds);
     }
@@ -988,13 +986,12 @@ contract PurgeGame is ERC721A {
         // Recompute after any external stage updated carryover
         carryWei = carryoverForNextLevel;
         uint256 totalWei = carryWei + prizePool;
-        uint256 priceUnit = pricePurgecoinUnit;
         uint256 lvlMod100 = lvl % 100;
 
         // Small creator payout in PURGE (proportional to total ETH processed)
         IPurgeCoinInterface(_coin).mintInGame(
             creator,
-            (totalWei * 5 * priceUnit) / 1 ether
+            (totalWei * 5 * pricpricePurgecoinUniteUnit) / 1 ether
         );
 
         // Save % for next level (randomized bands per range)
@@ -1273,7 +1270,6 @@ contract PurgeGame is ERC721A {
         bytes32 affiliateCode,
         uint24 lvl
     ) private {
-        uint256 priceUnit = pricePurgecoinUnit;
         uint256 expectedWei = (price * scaledQty) / 100;
         if (msg.value != expectedWei) revert WrongValue();
 
@@ -1285,7 +1281,7 @@ contract PurgeGame is ERC721A {
         // Affiliate mint uses Purgecoin units; 0.1% of scaledQty (scaled by 100) -> /1000
         unchecked {
             coin.payAffiliate(
-                (scaledQty * priceUnit) / 1000,
+                (scaledQty * pricePurgecoinUnit) / 1000,
                 affiliateCode,
                 msg.sender,
                 lvl
