@@ -284,10 +284,8 @@ contract PurgeGame is ERC721A {
             }
 
             // luckbox rewards
-            if (
-                cap == 0 &&
-                coin.playerLuckbox(msg.sender) < priceUnit * lvl
-            ) revert LuckboxTooSmall();
+            if (cap == 0 && coin.playerLuckbox(msg.sender) < priceUnit * lvl)
+                revert LuckboxTooSmall();
 
             // Arm VRF when due/new (reward allowed)
             if ((rngConsumed && day != dayIdx) || rngTs == 0) {
@@ -698,16 +696,13 @@ contract PurgeGame is ERC721A {
 
             if (levelSnapshot % 100 == 0) {
                 price = 0.05 ether;
+                pricePurgecoinUnit >>= 1;
                 lastPrizePool = prizePool >> 3;
             }
 
             carryoverForNextLevel += prizePool;
 
             lastExterminatedTrait = 420;
-        }
-
-        if (levelSnapshot == 100) {
-            pricePurgecoinUnit = pricePurgecoinUnit / 2;
         }
 
         // Advance level
