@@ -206,7 +206,7 @@ contract PurgeGame is ERC721A {
     /// @return phase_                   Current airdrop sub-phase (0..7)
     /// @return jackpotCounter_          Number of daily jackpots processed this level
     /// @return price_                   Current mint price (wei)
-    /// @return prizePoolTarget          Previous level's new eth snapshot (wei)
+    /// @return prizePoolTarget          Prize pool minimum to end mint for current level (wei)
     /// @return prizePoolCurrent         Current level’s live prize pool (wei)
     /// @return enoughPurchases          True if purchaseCount >= 1500
     /// @return rngFulfilled_            Last VRF request fulfilled
