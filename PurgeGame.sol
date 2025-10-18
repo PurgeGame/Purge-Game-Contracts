@@ -991,7 +991,7 @@ contract PurgeGame is ERC721A {
         // Small creator payout in PURGE (proportional to total ETH processed)
         IPurgeCoinInterface(_coin).mintInGame(
             creator,
-            (totalWei * 5 * pricpricePurgecoinUniteUnit) / 1 ether
+            (totalWei * 5 * pricePurgecoinUnit) / 1 ether
         );
 
         // Save % for next level (randomized bands per range)
