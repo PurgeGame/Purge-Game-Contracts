@@ -79,9 +79,7 @@ contract PurgeGame is ERC721A {
     // -----------------------
     error E(); // Generic guard (reverts in multiple paths)
     error LuckboxTooSmall(); // Caller does not meet luckbox threshold for the action
-    error RngNotReady(); // RNG not yet fulfilled and not expired
     error NotTimeYet(); // Called in a phase where the action is not permitted
-    error WrongValue(); // Ether value mismatch
 
     // -----------------------
     // Events
@@ -281,7 +279,7 @@ contract PurgeGame is ERC721A {
                 } else if (ts - rngTs > 6 hours) {
                     _requestVrf(ts, pauseBetting);
                     break;
-                } else revert RngNotReady();
+                } else revert NotTimeYet();
             }
 
             // luckbox rewards
@@ -423,7 +421,7 @@ contract PurgeGame is ERC721A {
 
         // Payment handling (ETH vs coin)
         if (payInCoin) {
-            if (msg.value != 0) revert WrongValue();
+            if (msg.value != 0) revert E();
             _coinReceive(quantity * pricePurgecoinUnit, lvl);
         } else {
             _ethReceive(quantity * 100, affiliateCode, lvl); // price × (quantity * 100) / 100
@@ -519,7 +517,7 @@ contract PurgeGame is ERC721A {
         uint256 rebate = ((qty / 4) * priceUnit) / 10;
 
         if (payInCoin) {
-            if (msg.value != 0) revert WrongValue();
+            if (msg.value != 0) revert E();
             _coinReceive(coinCost - rebate, lvl);
         } else {
             _ethReceive(scaledQty, affiliateCode, lvl);
@@ -1280,7 +1278,7 @@ contract PurgeGame is ERC721A {
         uint24 lvl
     ) private {
         uint256 expectedWei = (price * scaledQty) / 100;
-        if (msg.value != expectedWei) revert WrongValue();
+        if (msg.value != expectedWei) revert E();
 
         unchecked {
             prizePool += msg.value;
