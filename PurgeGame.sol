@@ -208,8 +208,8 @@ contract PurgeGame is ERC721A {
     /// @return phase_                   Current airdrop sub-phase (0..7)
     /// @return jackpotCounter_          Number of daily jackpots processed this level
     /// @return price_                   Current mint price (wei)
-    /// @return lastPrizePool_           Previous level's effective prize pool snapshot (wei)
-    /// @return prizePool_               Current level’s live prize pool (wei)
+    /// @return prizePoolTarget          Previous level's new eth snapshot (wei)
+    /// @return prizePoolCurrent         Current level’s live prize pool (wei)
     /// @return enoughPurchases          True if purchaseCount >= 1500
     /// @return rngFulfilled_            Last VRF request fulfilled
     /// @return rngConsumed_             Last VRF word consumed by game logic
@@ -220,8 +220,8 @@ contract PurgeGame is ERC721A {
             uint8 phase_,
             uint8 jackpotCounter_,
             uint256 price_,
-            uint256 lastPrizePool_,
-            uint256 prizePool_,
+            uint256 prizePoolTarget,
+            uint256 prizePoolCurrent,
             bool enoughPurchases,
             bool rngFulfilled_,
             bool rngConsumed_
@@ -230,8 +230,10 @@ contract PurgeGame is ERC721A {
         phase_ = phase;
         jackpotCounter_ = jackpotCounter;
         price_ = price;
-        lastPrizePool_ = lastPrizePool;
-        prizePool_ = prizePool;
+        prizePoolTarget = lastPrizePool + carryoverForNextLevel;
+        prizePoolCurrent = (gameState == 4)
+            ? levelPrizePool
+            : (prizePool + carryoverForNextLevel);
         enoughPurchases = (purchaseCount >= 1500);
         rngFulfilled_ = rngFulfilled;
         rngConsumed_ = rngConsumed;
