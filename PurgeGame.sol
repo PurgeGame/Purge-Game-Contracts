@@ -262,7 +262,6 @@ contract PurgeGame is ERC721A {
         uint24 lvl = level;
         uint8 s = gameState;
         uint8 ph = phase;
-        uint256 priceUnit = pricePurgecoinUnit;
         bool pauseBetting = !((s == 2) && (ph < 3) && (lvl % 20 == 0));
 
         IPurgeCoinInterface coin = IPurgeCoinInterface(_coin);
@@ -284,8 +283,10 @@ contract PurgeGame is ERC721A {
             }
 
             // luckbox rewards
-            if (cap == 0 && coin.playerLuckbox(msg.sender) < priceUnit * lvl)
-                revert LuckboxTooSmall();
+            if (
+                cap == 0 &&
+                coin.playerLuckbox(msg.sender) < pricePurgecoinUnit * lvl
+            ) revert LuckboxTooSmall();
 
             // Arm VRF when due/new (reward allowed)
             if ((rngConsumed && day != dayIdx) || rngTs == 0) {
@@ -384,7 +385,7 @@ contract PurgeGame is ERC721A {
             }
         } while (false);
 
-        if (s != 0 && cap == 0) coin.mintInGame(msg.sender, priceUnit);
+        if (s != 0 && cap == 0) coin.mintInGame(msg.sender, pricePurgecoinUnit);
     }
 
     // --- Purchases: schedule NFT mints (traits precomputed) ----------------------------------------
@@ -769,17 +770,29 @@ contract PurgeGame is ERC721A {
                         : (poolTotal * 5) / 100;
                     address[] memory affLeaders = IPurgeCoinInterface(_coin)
                         .getLeaderboardAddresses(1);
-                    if (affLeaders.length > 0)
-                        _addClaimableEth(affLeaders[0], (affPool * 50) / 100);
-                    if (affLeaders.length > 1)
-                        _addClaimableEth(affLeaders[1], (affPool * 25) / 100);
-                    if (affLeaders.length > 2)
-                        _addClaimableEth(affLeaders[2], (affPool * 15) / 100);
-                    if (affLeaders.length > 3) {
-                        address rndAddr = affLeaders[
-                            3 + (rngWord % (affLeaders.length - 3))
-                        ];
-                        _addClaimableEth(rndAddr, (affPool * 10) / 100);
+                    uint256 affLen = affLeaders.length;
+                    if (affLen != 0) {
+                        uint256 top = affLen < 3 ? affLen : 3;
+                        for (uint256 i; i < top; ) {
+                            uint256 pct = i == 0
+                                ? 50
+                                : i == 1
+                                    ? 25
+                                    : 15;
+                            _addClaimableEth(
+                                affLeaders[i],
+                                (affPool * pct) / 100
+                            );
+                            unchecked {
+                                ++i;
+                            }
+                        }
+                        if (affLen > 3) {
+                            address rndAddr = affLeaders[
+                                3 + (rngWord % (affLen - 3))
+                            ];
+                            _addClaimableEth(rndAddr, (affPool * 10) / 100);
+                        }
                     }
 
                     // Historical trophy bonus (5% across two past trophies)
@@ -976,6 +989,7 @@ contract PurgeGame is ERC721A {
         carryWei = carryoverForNextLevel;
         uint256 totalWei = carryWei + prizePool;
         uint256 priceUnit = pricePurgecoinUnit;
+        uint256 lvlMod100 = lvl % 100;
 
         // Small creator payout in PURGE (proportional to total ETH processed)
         IPurgeCoinInterface(_coin).mintInGame(
@@ -999,7 +1013,7 @@ contract PurgeGame is ERC721A {
         }
 
         uint256 effectiveWei;
-        if (lvl % 100 == 0) {
+        if (lvlMod100 == 0) {
             effectiveWei = totalWei;
             carryoverForNextLevel = 0;
         } else {
@@ -1025,11 +1039,11 @@ contract PurgeGame is ERC721A {
             quadTrait[3] = uint8((r & 0x3F) + 192); // Q3: 192..255
         }
 
-        bool doubleMap = ((lvl % 100) == 30) ||
-            ((lvl % 100) == 50) ||
-            ((lvl % 100) == 70);
         uint256 packedTraits;
         uint256 totalPaidWei;
+        bool doubleMap = (lvlMod100 == 30) ||
+            (lvlMod100 == 50) ||
+            (lvlMod100 == 70);
 
         for (uint8 idx; idx < 9; ) {
             (uint8 winnersN, uint8 permille) = _mapSpec(idx);
@@ -1098,8 +1112,7 @@ contract PurgeGame is ERC721A {
             ? JackpotUtils._getWinningTraits(randWord, dailyPurgeCount)
             : JackpotUtils._getRandomTraits(randWord);
 
-        uint8 stepWithinCentury = uint8(lvl % 100);
-        uint256 multiplier = 1 + (stepWithinCentury / 20); // 1..5
+        uint256 multiplier = 1 + ((lvl % 100) / 20); // 1..5
 
         uint256 dailyTotalWei;
         if (isDaily) {
@@ -1118,13 +1131,18 @@ contract PurgeGame is ERC721A {
         uint256 totalPaidWei;
 
         for (uint8 groupIdx; groupIdx < 4; ) {
-            uint256 wantWinners = groupIdx == 0
-                ? 30 * multiplier
-                : groupIdx == 1
-                    ? 20 * multiplier
-                    : groupIdx == 2
-                        ? 10 * multiplier
-                        : 1;
+            uint256 wantWinners;
+            if (groupIdx < 3) {
+                wantWinners =
+                    (
+                        groupIdx == 0
+                            ? 30
+                            : groupIdx == 1
+                                ? 20
+                                : 10
+                    ) *
+                    multiplier;
+            } else wantWinners = 1;
 
             address[] memory winners = JackpotUtils._randTraitTicket(
                 traitPurgeTicket[lvl],
@@ -1135,17 +1153,17 @@ contract PurgeGame is ERC721A {
             );
 
             uint256 winnersLen = winners.length;
-            if (winnersLen != 0) {
-                uint256 prizeEachWei = perGroupWei / winnersLen;
-                if (prizeEachWei != 0) {
+            uint256 prizeEachWei = winnersLen == 0
+                ? 0
+                : perGroupWei / winnersLen;
+            if (prizeEachWei != 0) {
+                unchecked {
+                    totalPaidWei += prizeEachWei * winnersLen;
+                }
+                for (uint256 k; k < winnersLen; ) {
+                    _addClaimableEth(winners[k], prizeEachWei);
                     unchecked {
-                        totalPaidWei += prizeEachWei * winnersLen;
-                    }
-                    for (uint256 k; k < winnersLen; ) {
-                        _addClaimableEth(winners[k], prizeEachWei);
-                        unchecked {
-                            ++k;
-                        }
+                        ++k;
                     }
                 }
             }
