@@ -1040,7 +1040,8 @@ contract PurgeGame is ERC721A {
         uint256 totalPaidWei;
         bool doubleMap = (lvlMod100 == 30) ||
             (lvlMod100 == 50) ||
-            (lvlMod100 == 70);
+            (lvlMod100 == 70) ||
+            (lvlMod100 == 0);
 
         for (uint8 idx; idx < 9; ) {
             (uint8 winnersN, uint8 permille) = _mapSpec(idx);
