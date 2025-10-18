@@ -732,7 +732,8 @@ contract Purgecoin is ERC20, VRFConsumerBaseV2Plus {
         if (!isBettingPaused) return true;
         // --- Step sizing (bounded work) ----------------------------------------------------
 
-        uint32 stepPayout = (cap == 0) ? 600 : cap;
+        uint32 stepPayout = (cap == 0) ? 500 : cap;
+        uint32 stepstake = (cap == 0) ? 200 : cap;
 
         uint256 word = rngWord;
         bool win = (word & 1) == 1;
@@ -755,7 +756,7 @@ contract Purgecoin is ERC20, VRFConsumerBaseV2Plus {
                     address[] storage a = stakeAddr[level];
                     uint32 len = uint32(a.length);
                     if (st < len) {
-                        uint32 en = st + stepPayout;
+                        uint32 en = st + stepStake;
                         if (en > len) en = len;
 
                         for (uint32 i = st; i < en; ) {
