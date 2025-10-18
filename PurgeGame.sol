@@ -901,11 +901,16 @@ contract PurgeGame is ERC721A {
     // --- Claiming winnings (ETH) --------------------------------------------------------------------
 
     /// @notice Claim the caller’s accrued ETH winnings (affiliates, jackpots, endgame payouts).
+    /// @dev Leaves a 1 wei sentinel so subsequent credits remain non-zero → cheaper SSTORE.
 
     function claimWinnings() external {
         address player = msg.sender;
         uint256 amount = claimableWinnings[player];
-        claimableWinnings[player] = 0;
+        if (amount <= 1) revert E();
+        unchecked {
+            claimableWinnings[player] = 1;
+            amount -= 1;
+        }
         (bool ok, ) = payable(player).call{value: amount}("");
         if (!ok) revert E();
     }
