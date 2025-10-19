@@ -1006,17 +1006,14 @@ contract PurgeGame is ERC721A {
         uint256 savePct;
         if ((rndWord % 1_000_000_000) == MILLION) {
             savePct = 10;
-        } else if (lvl < 10) {
-            savePct = uint256(lvl) * 5;
-        } else {
-            if (lvl < 20) savePct = 55 + (rndWord % 16);
-            else if (lvl < 40) savePct = 55 + (rndWord % 21);
-            else if (lvl < 60) savePct = 60 + (rndWord % 21);
-            else if (lvl < 80) savePct = 60 + (rndWord % 26);
-            else if (lvl == 99) savePct = 93;
-            else savePct = 65 + (rndWord % 26);
-            if (lvl % 10 == 9) savePct += 5;
-        }
+        } else if (lvl < 10) savePct = uint256(lvl) * 5;
+        else if (lvl < 20) savePct = 55 + (rndWord % 16);
+        else if (lvl < 40) savePct = 55 + (rndWord % 21);
+        else if (lvl < 60) savePct = 60 + (rndWord % 21);
+        else if (lvl < 80) savePct = 60 + (rndWord % 26);
+        else if (lvl == 99) savePct = 93;
+        else savePct = 65 + (rndWord % 26);
+        if (lvl % 10 == 9) savePct += 5;
 
         uint256 effectiveWei;
         if (lvlMod100 == 0) {
