@@ -1319,7 +1319,7 @@ contract PurgeGame is ERC721A {
         if (phase < 2) {
             writesBudget = (writesBudget * 3) / 4;
             phase = 2;
-        }
+        } else if (phase == 3) writesBudget = (writesBudget * 3) / 4;
         uint32 used = 0;
         uint256 entropy = rngWord;
 
@@ -1582,7 +1582,6 @@ contract PurgeGame is ERC721A {
         uint32 cap,
         uint24 lvl
     ) internal returns (bool finished) {
-        if (poolWei == 0) return true;
         if (kind == 0 && (rngWord & 1) == 0) return true;
 
         (
@@ -1597,8 +1596,7 @@ contract PurgeGame is ERC721A {
                 lvl
             );
 
-        uint256 n = winnersArr.length;
-        for (uint256 i; i < n; ) {
+        for (uint256 i; i < winnersArr.length; ) {
             _addClaimableEth(winnersArr[i], amountsArr[i]);
             unchecked {
                 ++i;
