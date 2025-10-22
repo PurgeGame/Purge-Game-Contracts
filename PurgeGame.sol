@@ -511,7 +511,11 @@ contract PurgeGame is ERC721A {
             if (msg.value != 0) revert E();
             _coinReceive(coinCost - rebate, lvl);
         } else {
-            uint256 bonus = _ethReceive(scaledQty, affiliateCode, quantity);
+            uint256 bonus = _ethReceive(
+                scaledQty,
+                affiliateCode,
+                (lvl < 10) ? quantity : 0
+            );
             uint256 rebateMint = rebate + bonus;
             if (rebateMint != 0)
                 IPurgeCoinInterface(_coin).mintInGame(
@@ -1289,12 +1293,19 @@ contract PurgeGame is ERC721A {
             );
         }
 
-        if (
-            bonusUnits != 0 &&
-            level < 10 &&
-            prizePool <= (lastPrizePool * 3) / 10
-        ) {
-            bonusMint = (pricePurgecoinUnit / 5) * bonusUnits;
+        if (bonusUnits != 0) {
+            uint256 target = lastPrizePool;
+            if (target != 0) {
+                uint256 thirtyPct = (target * 3) / 10;
+                if (prizePool <= thirtyPct) {
+                    bonusMint = (pricePurgecoinUnit / 5) * bonusUnits;
+                } else {
+                    uint256 fiftyPct = target / 2;
+                    if (prizePool <= fiftyPct) {
+                        bonusMint = (pricePurgecoinUnit / 10) * bonusUnits;
+                    }
+                }
+            }
         }
     }
 
