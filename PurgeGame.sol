@@ -850,7 +850,7 @@ contract PurgeGame is ERC721A {
             if (lvl > 1) {
                 _clearDailyPurgeCount();
                 IPurgeCoinInterface(_coin).resetAffiliateLeaderboard();
-                airdropIndex = 0;
+
                 prizePool = 0;
                 phase = 0;
             }
@@ -865,7 +865,6 @@ contract PurgeGame is ERC721A {
         uint32 len = uint32(arr.length);
         if (len == 0) {
             prizePool = 0;
-            airdropIndex = 0;
             return;
         }
 
