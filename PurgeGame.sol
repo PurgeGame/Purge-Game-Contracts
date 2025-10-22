@@ -518,10 +518,7 @@ contract PurgeGame is ERC721A {
             );
             uint256 rebateMint = rebate + bonus;
             if (rebateMint != 0)
-                IPurgeCoinInterface(_coin).mintInGame(
-                    msg.sender,
-                    rebateMint
-                );
+                IPurgeCoinInterface(_coin).mintInGame(msg.sender, rebateMint);
         }
 
         // Schedule symbol mints (extra 4 per each block of 40)
@@ -1229,9 +1226,10 @@ contract PurgeGame is ERC721A {
     /// - Increments `jackpotCounter` by the number of newly crossed thresholds since the last call
     ///   using a popcount trick on the delta mask.
     function _updateEarlyPurgeJackpots(uint24 lvl) internal {
-        if (lvl < 10 || lvl == 99) return;
+        if (lvl == 99) return;
 
         uint256 prevPoolWei = lastPrizePool;
+
         uint256 pctOfLast = (prizePool * 100) / prevPoolWei;
 
         uint8 targetMask = (pctOfLast >= 10 ? uint8(1) : 0) |
@@ -1242,7 +1240,13 @@ contract PurgeGame is ERC721A {
             (pctOfLast >= 75 ? uint8(32) : 0);
 
         uint8 paidMask = earlyPurgeJackpotPaidMask;
+        earlyPurgeJackpotPaidMask = targetMask;
+
+        if (lvl < 10) return;
+
         uint8 addMask = targetMask & ~paidMask;
+        if (addMask == 0) return;
+
         uint8 newCountBits = addMask;
         unchecked {
             newCountBits = newCountBits - ((newCountBits >> 1) & 0x55);
@@ -1250,7 +1254,6 @@ contract PurgeGame is ERC721A {
             newCountBits = (newCountBits + (newCountBits >> 4)) & 0x0F;
         }
 
-        earlyPurgeJackpotPaidMask = targetMask;
         jackpotCounter += newCountBits;
     }
 
@@ -1293,18 +1296,14 @@ contract PurgeGame is ERC721A {
             );
         }
 
+        _updateEarlyPurgeJackpots(level);
+
         if (bonusUnits != 0) {
-            uint256 target = lastPrizePool;
-            if (target != 0) {
-                uint256 thirtyPct = (target * 3) / 10;
-                if (prizePool <= thirtyPct) {
-                    bonusMint = (pricePurgecoinUnit / 5) * bonusUnits;
-                } else {
-                    uint256 fiftyPct = target / 2;
-                    if (prizePool <= fiftyPct) {
-                        bonusMint = (pricePurgecoinUnit / 10) * bonusUnits;
-                    }
-                }
+            uint8 mask = earlyPurgeJackpotPaidMask;
+            if ((mask & uint8(1 << 2)) == 0) {
+                bonusMint = (pricePurgecoinUnit / 5) * bonusUnits;
+            } else if ((mask & uint8(1 << 4)) == 0) {
+                bonusMint = (pricePurgecoinUnit / 10) * bonusUnits;
             }
         }
     }
