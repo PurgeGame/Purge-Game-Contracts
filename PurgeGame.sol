@@ -413,19 +413,20 @@ contract PurgeGame is ERC721A {
             (!rngConsumed && ph == 3)
         ) revert NotTimeYet();
         uint24 lvl = level;
-        if (lvl % 100 == 0) {
-            if (
-                IPurgeCoinInterface(_coin).playerLuckbox(msg.sender) <
-                10 * pricePurgecoinUnit * ((lvl / 100) + 1)
-            ) revert LuckboxTooSmall();
-        }
+        _enforceCenturyLuckbox(lvl, pricePurgecoinUnit);
 
         // Payment handling (ETH vs coin)
         if (payInCoin) {
             if (msg.value != 0) revert E();
             _coinReceive(quantity * pricePurgecoinUnit, lvl);
         } else {
-            _ethReceive(quantity * 100, affiliateCode, lvl); // price × (quantity * 100) / 100
+            uint256 bonus = _ethReceive(
+                quantity * 100,
+                affiliateCode,
+                quantity
+            ); // price × (quantity * 100) / 100
+            if (bonus != 0)
+                IPurgeCoinInterface(_coin).mintInGame(msg.sender, bonus);
         }
 
         // Compute total scheduled outputs (10% bonus)
@@ -499,35 +500,28 @@ contract PurgeGame is ERC721A {
         if (gameState != 2 || quantity == 0 || !rngConsumed)
             revert NotTimeYet();
         uint24 lvl = level;
-        if (lvl % 100 == 0) {
-            if (
-                IPurgeCoinInterface(_coin).playerLuckbox(msg.sender) <
-                10 * priceUnit * ((lvl / 100) + 1)
-            ) revert LuckboxTooSmall();
-        }
+        _enforceCenturyLuckbox(lvl, priceUnit);
 
         // Pricing / rebates
-        uint256 qty = quantity;
-        uint256 isOne = qty == 1 ? 1 : 0;
-        uint256 isTwo = qty == 2 ? 1 : 0;
-        uint256 scaledQty = qty * 25 + isOne * 13 + isTwo * 10; // ETH path scale factor (÷100 later)
-        uint256 coinCost = qty *
-            (priceUnit / 4) +
-            (priceUnit * (130 * isOne + 100 * isTwo)) /
-            1000;
-        uint256 rebate = ((qty / 4) * priceUnit) / 10;
+        uint256 scaledQty = quantity * 25; // ETH path scale factor (÷100 later)
+        uint256 coinCost = quantity * (priceUnit / 4);
+        uint256 rebate = ((quantity / 4) * priceUnit) / 10;
 
         if (payInCoin) {
             if (msg.value != 0) revert E();
             _coinReceive(coinCost - rebate, lvl);
         } else {
-            _ethReceive(scaledQty, affiliateCode, lvl);
-            if (rebate != 0)
-                IPurgeCoinInterface(_coin).mintInGame(msg.sender, rebate);
+            uint256 bonus = _ethReceive(scaledQty, affiliateCode, quantity);
+            uint256 rebateMint = rebate + bonus;
+            if (rebateMint != 0)
+                IPurgeCoinInterface(_coin).mintInGame(
+                    msg.sender,
+                    rebateMint
+                );
         }
 
         // Schedule symbol mints (extra 4 per each block of 40)
-        uint32 totalMaps = uint32(qty + 4 * (qty / 40));
+        uint32 totalMaps = uint32(quantity + 4 * (quantity / 40));
 
         if (playerMapMintsOwed[msg.sender] == 0) {
             pendingMapMints.push(msg.sender);
@@ -1275,8 +1269,8 @@ contract PurgeGame is ERC721A {
     function _ethReceive(
         uint256 scaledQty,
         bytes32 affiliateCode,
-        uint24 lvl
-    ) private {
+        uint256 bonusUnits
+    ) private returns (uint256 bonusMint) {
         uint256 expectedWei = (price * scaledQty) / 100;
         if (msg.value != expectedWei) revert E();
 
@@ -1291,8 +1285,16 @@ contract PurgeGame is ERC721A {
                 (scaledQty * pricePurgecoinUnit) / 1000,
                 affiliateCode,
                 msg.sender,
-                lvl
+                level
             );
+        }
+
+        if (
+            bonusUnits != 0 &&
+            level < 10 &&
+            prizePool <= (lastPrizePool * 3) / 10
+        ) {
+            bonusMint = (pricePurgecoinUnit / 5) * bonusUnits;
         }
     }
 
@@ -1302,6 +1304,15 @@ contract PurgeGame is ERC721A {
         if (lvl % 20 == 13) amount = (amount * 3) / 2;
         else if (lvl % 20 == 18) amount = (amount * 9) / 10;
         IPurgeCoinInterface(_coin).burnInGame(msg.sender, amount);
+    }
+
+    function _enforceCenturyLuckbox(uint24 lvl, uint256 unit) private view {
+        if (lvl % 100 == 0) {
+            if (
+                IPurgeCoinInterface(_coin).playerLuckbox(msg.sender) <
+                10 * unit * ((lvl / 100) + 1)
+            ) revert LuckboxTooSmall();
+        }
     }
 
     // --- Map / NFT airdrop batching ------------------------------------------------------------------
