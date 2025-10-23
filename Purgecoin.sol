@@ -5,8 +5,8 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 // VRF v2.5 consumer + client
-import {VRFConsumerBaseV2Plus} from "@chainlink/contracts/src/v0.8/dev/vrf/VRFConsumerBaseV2Plus.sol";
-import {VRFV2PlusClient} from "@chainlink/contracts/src/v0.8/dev/vrf/libraries/VRFV2PlusClient.sol";
+import {VRFConsumerBaseV2Plus} from "@chainlink/contracts/src/v0.8/vrf/dev/VRFConsumerBaseV2Plus.sol";
+import {VRFV2PlusClient} from "@chainlink/contracts/src/v0.8/vrf/dev/libraries/VRFV2PlusClient.sol";
 
 /**
  * @title Purged (PURGE) — game token + VRF/RNG coordinator side
@@ -64,7 +64,7 @@ contract Purgecoin is ERC20, VRFConsumerBaseV2Plus {
     error InvalidLeaderboard(); // bad leaderboard selector
     error PresaleExceedsRemaining(); // over cap on presale
     error InvalidKind(); // parameter enumerations out of range
-    error StakeCollision(); // staking schedule conflict
+    error StakeInvalid(); // packed stake overflow / capacity / collision
 
     // ---------------------------------------------------------------------
     // Types
@@ -107,6 +107,15 @@ contract Purgecoin is ERC20, VRFConsumerBaseV2Plus {
     uint32 private constant BAF_BATCH = 5000;
     uint256 private constant BUCKET_SIZE = 1500;
     uint256 private constant LUCK_PER_LINK = 220 * MILLION; // 220 PURGE per 1 LINK
+    uint8 private constant STAKE_MAX_LANES = 3;
+    uint256 private constant STAKE_LANE_BITS = 86;
+    uint256 private constant STAKE_LANE_MASK = (uint256(1) << STAKE_LANE_BITS) - 1;
+    uint256 private constant STAKE_LANE_RISK_BITS = 8;
+    uint256 private constant STAKE_LANE_PRINCIPAL_BITS = STAKE_LANE_BITS - STAKE_LANE_RISK_BITS;
+    uint256 private constant STAKE_LANE_PRINCIPAL_MASK = (uint256(1) << STAKE_LANE_PRINCIPAL_BITS) - 1;
+    uint256 private constant STAKE_LANE_RISK_SHIFT = STAKE_LANE_PRINCIPAL_BITS;
+    uint256 private constant STAKE_LANE_RISK_MASK =
+        ((uint256(1) << STAKE_LANE_RISK_BITS) - 1) << STAKE_LANE_RISK_SHIFT;
 
     // ---------------------------------------------------------------------
     // VRF configuration
@@ -183,7 +192,7 @@ contract Purgecoin is ERC20, VRFConsumerBaseV2Plus {
 
     // Staking
     mapping(uint24 => address[]) private stakeAddr; // level => stakers
-    mapping(uint24 => mapping(address => uint256)) private stakeAmt; // level => encoded principal+risk
+    mapping(uint24 => mapping(address => uint256)) private stakeAmt; // level => packed stake lanes (principal/risk)
 
     // Leaderboard index maps (1-based positions)
     mapping(address => uint8) private luckboxPos;
@@ -344,6 +353,93 @@ contract Purgecoin is ERC20, VRFConsumerBaseV2Plus {
         emit Affiliate(0, code_, msg.sender); // 0 = player referred
     }
     // Stake with encoded risk window
+    function _encodeStakeLane(uint256 principalRounded, uint8 risk) private pure returns (uint256) {
+        if (risk == 0 || risk > MAX_RISK) revert StakeInvalid();
+        if (principalRounded == 0 || principalRounded % RF_BASE != 0)
+            revert StakeInvalid();
+        uint256 units = principalRounded / RF_BASE;
+        if (units >> STAKE_LANE_PRINCIPAL_BITS != 0) revert StakeInvalid();
+        return units | (uint256(risk) << STAKE_LANE_RISK_SHIFT);
+    }
+
+    function _decodeStakeLane(
+        uint256 lane
+    ) private pure returns (uint256 principalRounded, uint8 risk) {
+        if (lane == 0) return (0, 0);
+        uint256 units = lane & STAKE_LANE_PRINCIPAL_MASK;
+        principalRounded = units * RF_BASE;
+        risk = uint8((lane >> STAKE_LANE_PRINCIPAL_BITS) & ((uint256(1) << STAKE_LANE_RISK_BITS) - 1));
+    }
+
+    function _laneAt(uint256 encoded, uint8 index) private pure returns (uint256) {
+        if (index >= STAKE_MAX_LANES) return 0;
+        uint256 shift = uint256(index) * STAKE_LANE_BITS;
+        return (encoded >> shift) & STAKE_LANE_MASK;
+    }
+
+    function _setLane(
+        uint256 encoded,
+        uint8 index,
+        uint256 laneValue
+    ) private pure returns (uint256) {
+        uint256 shift = uint256(index) * STAKE_LANE_BITS;
+        uint256 mask = STAKE_LANE_MASK << shift;
+        return (encoded & ~mask) | (laneValue << shift);
+    }
+
+    function _laneCount(uint256 encoded) private pure returns (uint8 count) {
+        if ((encoded & STAKE_LANE_MASK) != 0) count++;
+        if (((encoded >> STAKE_LANE_BITS) & STAKE_LANE_MASK) != 0) count++;
+        if (((encoded >> (2 * STAKE_LANE_BITS)) & STAKE_LANE_MASK) != 0) count++;
+    }
+
+    function _ensureCompatible(uint256 encoded, uint8 expectRisk) private pure {
+        uint8 lanes = _laneCount(encoded);
+        for (uint8 i; i < lanes; ) {
+            (, uint8 haveRisk) = _decodeStakeLane(_laneAt(encoded, i));
+            if (haveRisk != expectRisk) revert StakeInvalid();
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    function _insertLane(
+        uint256 encoded,
+        uint256 laneValue,
+        bool strictCapacity
+    ) private pure returns (uint256) {
+        (, uint8 riskNew) = _decodeStakeLane(laneValue);
+
+        uint8 lanes = _laneCount(encoded);
+
+        // Try to merge with an existing lane carrying the same risk
+        for (uint8 idx; idx < lanes; ) {
+            uint256 target = _laneAt(encoded, idx);
+            (, uint8 riskExisting) = _decodeStakeLane(target);
+            if (riskExisting == riskNew) {
+                uint256 unitsExisting = target & STAKE_LANE_PRINCIPAL_MASK;
+                uint256 unitsNew = laneValue & STAKE_LANE_PRINCIPAL_MASK;
+                uint256 totalUnits = unitsExisting + unitsNew;
+                if (totalUnits >> STAKE_LANE_PRINCIPAL_BITS != 0)
+                    revert StakeInvalid();
+                uint256 mergedLane = (target & ~STAKE_LANE_PRINCIPAL_MASK) |
+                    totalUnits;
+                return _setLane(encoded, idx, mergedLane);
+            }
+            unchecked {
+                ++idx;
+            }
+        }
+
+        if (lanes < STAKE_MAX_LANES) {
+            return _setLane(encoded, lanes, laneValue);
+        }
+        if (strictCapacity) revert StakeInvalid();
+        // all slots occupied with different maturities
+        revert StakeInvalid();
+    }
+
     /// @notice Burn PURGED to open a future “stake window” targeting `targetLevel` with a risk radius.
     /// @dev
     /// - `burnAmt` must be ≥ 250e6 (6d).
@@ -372,9 +468,10 @@ contract Purgecoin is ERC20, VRFConsumerBaseV2Plus {
             uint24 checkLevel = uint24(placeLevel + offset);
             existingEncoded = stakeAmt[checkLevel][msg.sender];
             if (existingEncoded != 0) {
-                uint16 haveRisk = uint16(existingEncoded % RF_BASE);
-                uint16 wantRisk = uint16(risk - offset);
-                if (haveRisk != wantRisk) revert StakeCollision();
+                uint8 wantRisk = uint8(risk - offset);
+                _ensureCompatible(existingEncoded, wantRisk);
+                if (_laneCount(existingEncoded) >= STAKE_MAX_LANES)
+                    revert StakeInvalid();
             }
             unchecked {
                 ++offset;
@@ -391,14 +488,21 @@ contract Purgecoin is ERC20, VRFConsumerBaseV2Plus {
         for (uint24 scanLevel = scanStart; scanLevel < placeLevel; ) {
             uint256 existingAtScan = stakeAmt[scanLevel][msg.sender];
             if (existingAtScan != 0) {
-                uint16 existingRisk = uint16(existingAtScan % RF_BASE);
-                uint24 reachLevel = scanLevel + uint24(existingRisk) - 1;
-                if (reachLevel >= placeLevel) {
-                    // Risk code implied at placeLevel must match `risk`
-                    uint24 impliedRiskAtPlace = uint24(existingRisk) -
-                        (placeLevel - scanLevel);
-                    if (uint8(impliedRiskAtPlace) != risk)
-                        revert StakeCollision();
+                uint8 lanes = _laneCount(existingAtScan);
+                for (uint8 li; li < lanes; ) {
+                    (, uint8 existingRisk) = _decodeStakeLane(
+                        _laneAt(existingAtScan, li)
+                    );
+                    uint24 reachLevel = scanLevel + uint24(existingRisk) - 1;
+                    if (reachLevel >= placeLevel) {
+                        uint24 impliedRiskAtPlace = uint24(existingRisk) -
+                            (placeLevel - scanLevel);
+                        if (uint8(impliedRiskAtPlace) != risk)
+                            revert StakeInvalid();
+                    }
+                    unchecked {
+                        ++li;
+                    }
                 }
             }
             unchecked {
@@ -435,32 +539,22 @@ contract Purgecoin is ERC20, VRFConsumerBaseV2Plus {
             }
         }
 
-        // Encode: round principal to RF_BASE and append risk code in the last two digits
+        // Encode and place the stake lane
         uint256 principalRounded = boostedPrincipal -
             (boostedPrincipal % RF_BASE);
-        uint256 encoded = principalRounded + risk;
+        uint256 newLane = _encodeStakeLane(principalRounded, risk);
 
-        // Track first-time stakers at this start level
-        if (stakeAmt[placeLevel][msg.sender] == 0) {
+        uint256 existingAtPlace = stakeAmt[placeLevel][msg.sender];
+        if (existingAtPlace == 0) {
+            stakeAmt[placeLevel][msg.sender] = newLane;
             stakeAddr[placeLevel].push(msg.sender);
-        }
-
-        // Merge with existing stake at `placeLevel` (risk equality already validated)
-        existingEncoded = stakeAmt[placeLevel][msg.sender];
-        if (existingEncoded == 0) {
-            stakeAmt[placeLevel][msg.sender] = encoded;
         } else {
-            uint16 existingRiskAtPlace = uint16(existingEncoded % RF_BASE);
-            uint256 existingPrincipal = existingEncoded - existingRiskAtPlace;
-            uint16 mergedRisk = (risk > existingRiskAtPlace)
-                ? risk
-                : existingRiskAtPlace; // equal per precheck
-            unchecked {
-                stakeAmt[placeLevel][msg.sender] =
-                    existingPrincipal +
-                    principalRounded +
-                    mergedRisk;
-            }
+            _ensureCompatible(existingAtPlace, risk);
+            stakeAmt[placeLevel][msg.sender] = _insertLane(
+                existingAtPlace,
+                newLane,
+                true
+            );
         }
     }
 
@@ -665,7 +759,7 @@ contract Purgecoin is ERC20, VRFConsumerBaseV2Plus {
     /// @dev Reverts if `requestId` does not match the most recent request or if already fulfilled.
     function fulfillRandomWords(
         uint256 requestId,
-        uint256[] memory randomWords
+        uint256[] calldata randomWords
     ) internal override {
         if (requestId != rngRequestId || rngFulfilled) return;
         rngFulfilled = true;
@@ -764,30 +858,49 @@ contract Purgecoin is ERC20, VRFConsumerBaseV2Plus {
                         for (uint32 i = st; i < en; ) {
                             address s = a[i];
                             uint256 enc = stakeAmt[level][s];
-                            uint16 rf = uint16(enc % RF_BASE); // encoded risk (1..MAX_RISK)
-                            uint256 pr = enc - rf; // principal (multiple of RF_BASE)
+                            if (enc != 0) {
+                                stakeAmt[level][s] = 0;
 
-                            if (rf <= 1) {
-                                // Matured: realize 5% of principal into luckbox; credit 95% as a flip.
-                                uint256 fivePct = pr / 20;
-                                uint256 newLuck = playerLuckbox[s] + fivePct;
-                                playerLuckbox[s] = newLuck;
-                                _updatePlayerScore(0, s, newLuck);
-                                addFlip(s, fivePct * 19, false);
-                            } else {
-                                // Roll forward: double principal and decrement risk into next level.
-                                uint24 nextL = level + 1;
-                                uint256 doubled = pr * 2;
-                                uint256 ex = stakeAmt[nextL][s];
-                                uint16 newRf = rf - 1;
-
-                                if (ex == 0) {
-                                    stakeAmt[nextL][s] = doubled + newRf;
-                                    stakeAddr[nextL].push(s);
-                                } else {
-                                    uint16 exRf = uint16(ex % RF_BASE);
-                                    uint256 exPr = ex - exRf;
-                                    stakeAmt[nextL][s] = exPr + doubled + exRf; // merge
+                                for (uint8 li; li < STAKE_MAX_LANES; ) {
+                                    uint256 lane = _laneAt(enc, li);
+                                    if (lane != 0) {
+                                        (uint256 pr, uint8 rf) = _decodeStakeLane(
+                                            lane
+                                        );
+                                        if (rf <= 1) {
+                                            uint256 fivePct = pr / 20;
+                                            uint256 newLuck = playerLuckbox[s] +
+                                                fivePct;
+                                            playerLuckbox[s] = newLuck;
+                                            _updatePlayerScore(0, s, newLuck);
+                                            addFlip(s, fivePct * 19, false);
+                                        } else {
+                                            uint24 nextL = level + 1;
+                                            uint8 newRf = rf - 1;
+                                            uint256 laneValue = _encodeStakeLane(
+                                                pr * 2,
+                                                newRf
+                                            );
+                                            uint256 nextEnc = stakeAmt[nextL][s];
+                                            if (nextEnc == 0) {
+                                                stakeAmt[nextL][s] = laneValue;
+                                                stakeAddr[nextL].push(s);
+                                            } else {
+                                                _ensureCompatible(
+                                                    nextEnc,
+                                                    newRf
+                                                );
+                                                stakeAmt[nextL][s] = _insertLane(
+                                                    nextEnc,
+                                                    laneValue,
+                                                    false
+                                                );
+                                            }
+                                        }
+                                    }
+                                    unchecked {
+                                        ++li;
+                                    }
                                 }
                             }
                             unchecked {
