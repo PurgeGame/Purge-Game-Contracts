@@ -100,7 +100,7 @@ contract PurgeGame is ERC721A {
     // -----------------------
     uint48 private constant JACKPOT_RESET_TIME = 82620; // Offset anchor for "daily" windows
     uint256 private constant MILLION = 1_000_000; // 6-decimal unit helper
-    uint256 private pricePurgecoinUnit = 1000 * MILLION; // 1,000 Purgecoin (6d) base unit
+    uint256 private priceCoin = 1000 * MILLION; // 1,000 Purgecoin (6d) base unit
     uint32 private constant NFT_AIRDROP_PLAYER_BATCH_SIZE = 225; // Mint batch cap (# players)
     uint32 private constant NFT_AIRDROP_TOKEN_CAP = 3_000; // Mint batch cap (# tokens)
     uint32 private constant DEFAULT_PAYOUTS_PER_TX = 500; // ≤16M worst-case
@@ -287,7 +287,7 @@ contract PurgeGame is ERC721A {
             if (
                 cap == 0 &&
                 coin.playerLuckbox(msg.sender) <
-                pricePurgecoinUnit * lvl * (lvl / 100 + 1)
+                priceCoin * lvl * (lvl / 100 + 1)
             ) revert LuckboxTooSmall();
 
             // Arm VRF when due/new (reward allowed)
@@ -385,7 +385,7 @@ contract PurgeGame is ERC721A {
             }
         } while (false);
 
-        if (s != 0 && cap == 0) coin.mintInGame(msg.sender, pricePurgecoinUnit);
+        if (s != 0 && cap == 0) coin.mintInGame(msg.sender, priceCoin);
     }
 
     // --- Purchases: schedule NFT mints (traits precomputed) ----------------------------------------
@@ -411,12 +411,12 @@ contract PurgeGame is ERC721A {
             (!rngConsumed && ph == 3)
         ) revert NotTimeYet();
         uint24 lvl = level;
-        _enforceCenturyLuckbox(lvl, pricePurgecoinUnit);
+        _enforceCenturyLuckbox(lvl, priceCoin);
         // Payment handling (ETH vs coin)
-        uint256 bonusCoinReward = (quantity / 10) * pricePurgecoinUnit;
+        uint256 bonusCoinReward = (quantity / 10) * priceCoin;
         if (payInCoin) {
             if (msg.value != 0) revert E();
-            _coinReceive(quantity * pricePurgecoinUnit, lvl, bonusCoinReward);
+            _coinReceive(quantity * priceCoin, lvl, bonusCoinReward);
         } else {
             uint256 bonus = _ethReceive(
                 quantity * 100,
@@ -424,7 +424,7 @@ contract PurgeGame is ERC721A {
                 quantity
             ); // price × (quantity * 100) / 100
             if (ph == 3 && (lvl % 100) > 90) {
-                bonus += (quantity * pricePurgecoinUnit) / 5;
+                bonus += (quantity * priceCoin) / 5;
             }
             bonus += bonusCoinReward;
             if (bonus != 0)
@@ -493,7 +493,7 @@ contract PurgeGame is ERC721A {
         bool payInCoin,
         bytes32 affiliateCode
     ) external payable {
-        uint256 priceUnit = pricePurgecoinUnit;
+        uint256 priceUnit = priceCoin;
         uint8 ph = phase;
         if (gameState != 2 || quantity == 0 || !rngConsumed)
             revert NotTimeYet();
@@ -618,7 +618,7 @@ contract PurgeGame is ERC721A {
         if (lvl % 10 == 2) count <<= 1;
         IPurgeCoinInterface(_coin).mintInGame(
             caller,
-            (count + bonusTenths) * (pricePurgecoinUnit / 10)
+            (count + bonusTenths) * (priceCoin / 10)
         );
         emit Purge(msg.sender, tokenIds);
     }
@@ -690,7 +690,7 @@ contract PurgeGame is ERC721A {
 
             if (levelSnapshot % 100 == 0) {
                 price = 0.05 ether;
-                pricePurgecoinUnit >>= 1;
+                priceCoin >>= 1;
                 lastPrizePool = prizePool >> 3;
             }
 
@@ -990,7 +990,7 @@ contract PurgeGame is ERC721A {
         // Small creator payout in PURGE (proportional to total ETH processed)
         IPurgeCoinInterface(_coin).mintInGame(
             creator,
-            (totalWei * 5 * pricePurgecoinUnit) / 1 ether
+            (totalWei * 5 * priceCoin) / 1 ether
         );
 
         // Save % for next level (randomized bands per range)
@@ -1283,7 +1283,7 @@ contract PurgeGame is ERC721A {
         }
 
         IPurgeCoinInterface coin = IPurgeCoinInterface(_coin);
-        uint256 affiliateAmount = (scaledQty * pricePurgecoinUnit) / 1000;
+        uint256 affiliateAmount = (scaledQty * priceCoin) / 1000;
         uint8 reached = earlyPurgeJackpotPaidMask & 0x3F;
         unchecked {
             reached -= (reached >> 1) & 0x55;
@@ -1304,7 +1304,7 @@ contract PurgeGame is ERC721A {
             );
         }
 
-        bonusMint = (bonusUnits * pricePurgecoinUnit * pct) / 100;
+        bonusMint = (bonusUnits * priceCoin * pct) / 100;
     }
 
     /// @notice Handle Purgecoin coin payments for purchases;
