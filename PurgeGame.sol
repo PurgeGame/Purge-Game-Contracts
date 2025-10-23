@@ -500,8 +500,7 @@ contract PurgeGame is ERC721A {
         uint24 lvl = level;
         _enforceCenturyLuckbox(lvl, priceUnit);
         // Pricing / rebates
-        uint256 mapUnitCost = priceUnit / 4;
-        uint256 coinCost = quantity * mapUnitCost;
+        uint256 coinCost = quantity * (priceUnit / 4);
         uint256 scaledQty = quantity * 25; // ETH path scale factor (÷100 later)
         uint256 mapRebate = (quantity / 4) * (priceUnit / 10);
         uint256 mapBonus = (quantity / 40) * priceUnit;
