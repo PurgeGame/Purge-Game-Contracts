@@ -2,11 +2,39 @@
 pragma solidity ^0.8.26;
 
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
-// VRF v2.5 consumer + client
-import {VRFConsumerBaseV2Plus} from "@chainlink/contracts/src/v0.8/vrf/dev/VRFConsumerBaseV2Plus.sol";
-import {VRFV2PlusClient} from "@chainlink/contracts/src/v0.8/vrf/dev/libraries/VRFV2PlusClient.sol";
+// ---------------------------------------------------------------------
+// Minimal VRF client bundle (extracted from Chainlink)
+// ---------------------------------------------------------------------
+library VRFV2PlusClient {
+    bytes4 public constant EXTRA_ARGS_V1_TAG =
+        bytes4(keccak256("VRF ExtraArgsV1"));
+
+    struct ExtraArgsV1 {
+        bool nativePayment;
+    }
+
+    struct RandomWordsRequest {
+        bytes32 keyHash;
+        uint256 subId;
+        uint16 requestConfirmations;
+        uint32 callbackGasLimit;
+        uint32 numWords;
+        bytes extraArgs;
+    }
+
+    function _argsToBytes(
+        ExtraArgsV1 memory extraArgs
+    ) internal pure returns (bytes memory bts) {
+        return abi.encodeWithSelector(EXTRA_ARGS_V1_TAG, extraArgs);
+    }
+}
+
+interface IVRFCoordinatorV2Plus {
+    function requestRandomWords(
+        VRFV2PlusClient.RandomWordsRequest calldata req
+    ) external returns (uint256 requestId);
+}
 
 /**
  * @title Purged (PURGE) — game token + VRF/RNG coordinator side
@@ -48,7 +76,7 @@ interface ILinkToken {
     ) external returns (bool);
 }
 
-contract Purgecoin is ERC20, VRFConsumerBaseV2Plus {
+contract Purgecoin is ERC20 {
     // ---------------------------------------------------------------------
     // Errors
     // ---------------------------------------------------------------------
@@ -65,6 +93,9 @@ contract Purgecoin is ERC20, VRFConsumerBaseV2Plus {
     error PresaleExceedsRemaining(); // over cap on presale
     error InvalidKind(); // parameter enumerations out of range
     error StakeInvalid(); // packed stake overflow / capacity / collision
+
+    error OnlyCoordinatorCanFulfill(address have, address want); // VRF guard
+    error ZeroAddress(); // zero coordinator disallowed
 
     // ---------------------------------------------------------------------
     // Types
@@ -141,6 +172,8 @@ contract Purgecoin is ERC20, VRFConsumerBaseV2Plus {
     address private immutable creator; // deployer / ETH sink
     bytes32 private immutable vrfKeyHash; // VRF key hash
     uint256 private immutable vrfSubscriptionId; // VRF sub id
+
+    IVRFCoordinatorV2Plus private s_vrfCoordinator; // VRF coordinator handle
 
     // LINK token (Chainlink ERC677) — network-specific address
     ILinkToken public constant LINK =
@@ -266,7 +299,9 @@ contract Purgecoin is ERC20, VRFConsumerBaseV2Plus {
         address _vrfCoordinator,
         bytes32 _keyHash,
         uint256 _subId
-    ) ERC20("Purgecoin", "PURGE") VRFConsumerBaseV2Plus(_vrfCoordinator) {
+    ) ERC20("Purgecoin", "PURGE") {
+        if (_vrfCoordinator == address(0)) revert ZeroAddress();
+        s_vrfCoordinator = IVRFCoordinatorV2Plus(_vrfCoordinator);
         creator = msg.sender;
         vrfKeyHash = _keyHash;
         vrfSubscriptionId = _subId;
@@ -408,10 +443,7 @@ contract Purgecoin is ERC20, VRFConsumerBaseV2Plus {
             count++;
     }
 
-    function _ensureCompatible(
-        uint256 encoded,
-        uint8 expectRisk
-    ) private pure {
+    function _ensureCompatible(uint256 encoded, uint8 expectRisk) private pure {
         uint8 lanes = _laneCount(encoded);
         for (uint8 i; i < lanes; ) {
             (, uint8 haveRisk) = _decodeStakeLane(_laneAt(encoded, i));
@@ -547,11 +579,9 @@ contract Purgecoin is ERC20, VRFConsumerBaseV2Plus {
         // Compounded boost starting from 95% of burn (fivePercent * 19)
         uint256 boostedPrincipal = fivePercent * 19;
         for (uint24 i = distance; i != 0; ) {
-            boostedPrincipal = Math.mulDiv(
-                boostedPrincipal,
-                10_000 + stepBps,
-                10_000
-            );
+            boostedPrincipal =
+                (boostedPrincipal * (10_000 + stepBps)) /
+                10_000;
             unchecked {
                 --i;
             }
@@ -756,6 +786,19 @@ contract Purgecoin is ERC20, VRFConsumerBaseV2Plus {
         }
     }
 
+    function rawFulfillRandomWords(
+        uint256 requestId,
+        uint256[] calldata randomWords
+    ) external {
+        if (msg.sender != address(s_vrfCoordinator)) {
+            revert OnlyCoordinatorCanFulfill(
+                msg.sender,
+                address(s_vrfCoordinator)
+            );
+        }
+        fulfillRandomWords(requestId, randomWords);
+    }
+
     function requestRngPurgeGame(
         bool pauseBetting
     ) external onlyPurgeGameContract {
@@ -782,7 +825,7 @@ contract Purgecoin is ERC20, VRFConsumerBaseV2Plus {
     function fulfillRandomWords(
         uint256 requestId,
         uint256[] calldata randomWords
-    ) internal override {
+    ) internal {
         if (requestId != rngRequestId || rngFulfilled) return;
         rngFulfilled = true;
         rngWord = randomWords[0];
@@ -1554,7 +1597,7 @@ contract Purgecoin is ERC20, VRFConsumerBaseV2Plus {
                 address p = _srcPlayer(1, lvl, i);
                 DecEntry storage e = decBurn[p];
                 if (e.level == lvl && _eligibleLuckbox(p, lbMin)) {
-                    uint256 amt = Math.mulDiv(pool, e.burn, denom);
+                    uint256 amt = (pool * e.burn) / denom;
                     if (amt != 0) {
                         tmpWinners[n2] = p;
                         tmpAmounts[n2] = amt;
@@ -1846,8 +1889,8 @@ contract Purgecoin is ERC20, VRFConsumerBaseV2Plus {
         uint16 mult = _tierMultPermille(uint256(bal));
         uint256 credit;
         if (mult != 0) {
-            uint256 base = Math.mulDiv(amount, LUCK_PER_LINK, 1 ether); // amount is 18d LINK
-            credit = Math.mulDiv(base, mult, 1000);
+            uint256 base = (amount * LUCK_PER_LINK) / 1 ether; // amount is 18d LINK
+            credit = (base * mult) / 1000;
             uint256 newLuck = playerLuckbox[from] + credit;
             playerLuckbox[from] = newLuck;
             _updatePlayerScore(0, from, newLuck);
