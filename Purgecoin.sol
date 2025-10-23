@@ -109,10 +109,13 @@ contract Purgecoin is ERC20, VRFConsumerBaseV2Plus {
     uint256 private constant LUCK_PER_LINK = 220 * MILLION; // 220 PURGE per 1 LINK
     uint8 private constant STAKE_MAX_LANES = 3;
     uint256 private constant STAKE_LANE_BITS = 86;
-    uint256 private constant STAKE_LANE_MASK = (uint256(1) << STAKE_LANE_BITS) - 1;
+    uint256 private constant STAKE_LANE_MASK =
+        (uint256(1) << STAKE_LANE_BITS) - 1;
     uint256 private constant STAKE_LANE_RISK_BITS = 8;
-    uint256 private constant STAKE_LANE_PRINCIPAL_BITS = STAKE_LANE_BITS - STAKE_LANE_RISK_BITS;
-    uint256 private constant STAKE_LANE_PRINCIPAL_MASK = (uint256(1) << STAKE_LANE_PRINCIPAL_BITS) - 1;
+    uint256 private constant STAKE_LANE_PRINCIPAL_BITS =
+        STAKE_LANE_BITS - STAKE_LANE_RISK_BITS;
+    uint256 private constant STAKE_LANE_PRINCIPAL_MASK =
+        (uint256(1) << STAKE_LANE_PRINCIPAL_BITS) - 1;
     uint256 private constant STAKE_LANE_RISK_SHIFT = STAKE_LANE_PRINCIPAL_BITS;
     uint256 private constant STAKE_LANE_RISK_MASK =
         ((uint256(1) << STAKE_LANE_RISK_BITS) - 1) << STAKE_LANE_RISK_SHIFT;
@@ -353,7 +356,10 @@ contract Purgecoin is ERC20, VRFConsumerBaseV2Plus {
         emit Affiliate(0, code_, msg.sender); // 0 = player referred
     }
     // Stake with encoded risk window
-    function _encodeStakeLane(uint256 principalRounded, uint8 risk) private pure returns (uint256) {
+    function _encodeStakeLane(
+        uint256 principalRounded,
+        uint8 risk
+    ) private pure returns (uint256) {
         if (risk == 0 || risk > MAX_RISK) revert StakeInvalid();
         if (principalRounded == 0 || principalRounded % RF_BASE != 0)
             revert StakeInvalid();
@@ -368,10 +374,16 @@ contract Purgecoin is ERC20, VRFConsumerBaseV2Plus {
         if (lane == 0) return (0, 0);
         uint256 units = lane & STAKE_LANE_PRINCIPAL_MASK;
         principalRounded = units * RF_BASE;
-        risk = uint8((lane >> STAKE_LANE_PRINCIPAL_BITS) & ((uint256(1) << STAKE_LANE_RISK_BITS) - 1));
+        risk = uint8(
+            (lane >> STAKE_LANE_PRINCIPAL_BITS) &
+                ((uint256(1) << STAKE_LANE_RISK_BITS) - 1)
+        );
     }
 
-    function _laneAt(uint256 encoded, uint8 index) private pure returns (uint256) {
+    function _laneAt(
+        uint256 encoded,
+        uint8 index
+    ) private pure returns (uint256) {
         if (index >= STAKE_MAX_LANES) return 0;
         uint256 shift = uint256(index) * STAKE_LANE_BITS;
         return (encoded >> shift) & STAKE_LANE_MASK;
@@ -390,7 +402,8 @@ contract Purgecoin is ERC20, VRFConsumerBaseV2Plus {
     function _laneCount(uint256 encoded) private pure returns (uint8 count) {
         if ((encoded & STAKE_LANE_MASK) != 0) count++;
         if (((encoded >> STAKE_LANE_BITS) & STAKE_LANE_MASK) != 0) count++;
-        if (((encoded >> (2 * STAKE_LANE_BITS)) & STAKE_LANE_MASK) != 0) count++;
+        if (((encoded >> (2 * STAKE_LANE_BITS)) & STAKE_LANE_MASK) != 0)
+            count++;
     }
 
     function _ensureCompatible(uint256 encoded, uint8 expectRisk) private pure {
@@ -859,14 +872,13 @@ contract Purgecoin is ERC20, VRFConsumerBaseV2Plus {
                             address s = a[i];
                             uint256 enc = stakeAmt[level][s];
                             if (enc != 0) {
-                                stakeAmt[level][s] = 0;
-
                                 for (uint8 li; li < STAKE_MAX_LANES; ) {
                                     uint256 lane = _laneAt(enc, li);
                                     if (lane != 0) {
-                                        (uint256 pr, uint8 rf) = _decodeStakeLane(
-                                            lane
-                                        );
+                                        (
+                                            uint256 pr,
+                                            uint8 rf
+                                        ) = _decodeStakeLane(lane);
                                         if (rf <= 1) {
                                             uint256 fivePct = pr / 20;
                                             uint256 newLuck = playerLuckbox[s] +
@@ -878,10 +890,12 @@ contract Purgecoin is ERC20, VRFConsumerBaseV2Plus {
                                             uint24 nextL = level + 1;
                                             uint8 newRf = rf - 1;
                                             uint256 laneValue = _encodeStakeLane(
-                                                pr * 2,
-                                                newRf
-                                            );
-                                            uint256 nextEnc = stakeAmt[nextL][s];
+                                                    pr * 2,
+                                                    newRf
+                                                );
+                                            uint256 nextEnc = stakeAmt[nextL][
+                                                s
+                                            ];
                                             if (nextEnc == 0) {
                                                 stakeAmt[nextL][s] = laneValue;
                                                 stakeAddr[nextL].push(s);
@@ -890,7 +904,9 @@ contract Purgecoin is ERC20, VRFConsumerBaseV2Plus {
                                                     nextEnc,
                                                     newRf
                                                 );
-                                                stakeAmt[nextL][s] = _insertLane(
+                                                stakeAmt[nextL][
+                                                    s
+                                                ] = _insertLane(
                                                     nextEnc,
                                                     laneValue,
                                                     false
