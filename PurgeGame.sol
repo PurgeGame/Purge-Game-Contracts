@@ -94,13 +94,12 @@ contract PurgeGame is ERC721A {
     // -----------------------
     address private immutable _renderer; // Trusted renderer; used for tokenURI composition
     address private immutable _coin; // Trusted coin/game-side coordinator (PURGE ERC20)
-
+    address private immutable creator; // Receives protocol PURGE (end-game drains, etc.)
     // -----------------------
     // Game Constants
     // -----------------------
     uint48 private constant JACKPOT_RESET_TIME = 82620; // Offset anchor for "daily" windows
     uint256 private constant MILLION = 1_000_000; // 6-decimal unit helper
-    uint256 private priceCoin = 1000 * MILLION; // 1,000 Purgecoin (6d) base unit
     uint32 private constant NFT_AIRDROP_PLAYER_BATCH_SIZE = 225; // Mint batch cap (# players)
     uint32 private constant NFT_AIRDROP_TOKEN_CAP = 3_000; // Mint batch cap (# tokens)
     uint32 private constant DEFAULT_PAYOUTS_PER_TX = 500; // ≤16M worst-case
@@ -108,10 +107,10 @@ contract PurgeGame is ERC721A {
     uint72 private constant MAP_PERMILLE = 0x0A0A07060304050564; // Payout permilles packed (9 bytes)
 
     // -----------------------
-    // Economic / Admin
+    // Price
     // -----------------------
-    address private immutable creator; // Receives protocol ETH (end-game drains, etc.)
-    uint256 private price = 0.025 ether; // Base mint price (adjusts with level milestones)
+    uint256 private price = 0.025 ether; // Base mint price
+    uint256 private priceCoin = 1000 * MILLION; // 1,000 Purgecoin (6d) base unit
 
     // -----------------------
     // Prize Pools and RNG
@@ -411,12 +410,13 @@ contract PurgeGame is ERC721A {
             (!rngConsumed && ph == 3)
         ) revert NotTimeYet();
         uint24 lvl = level;
-        _enforceCenturyLuckbox(lvl, priceCoin);
+        uint256 _priceCoin = priceCoin;
+        _enforceCenturyLuckbox(lvl, _priceCoin);
         // Payment handling (ETH vs coin)
-        uint256 bonusCoinReward = (quantity / 10) * priceCoin;
+        uint256 bonusCoinReward = (quantity / 10) * _priceCoin;
         if (payInCoin) {
             if (msg.value != 0) revert E();
-            _coinReceive(quantity * priceCoin, lvl, bonusCoinReward);
+            _coinReceive(quantity * _priceCoin, lvl, bonusCoinReward);
         } else {
             uint256 bonus = _ethReceive(
                 quantity * 100,
@@ -424,7 +424,7 @@ contract PurgeGame is ERC721A {
                 quantity
             ); // price × (quantity * 100) / 100
             if (ph == 3 && (lvl % 100) > 90) {
-                bonus += (quantity * priceCoin) / 5;
+                bonus += (quantity * _priceCoin) / 5;
             }
             bonus += bonusCoinReward;
             if (bonus != 0)
