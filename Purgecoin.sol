@@ -102,7 +102,6 @@ contract Purgecoin is ERC20, VRFConsumerBaseV2Plus {
     uint256 private constant PRESALEAMOUNT = 4_000_000 * MILLION;
     uint256 private constant MIN = 100 * MILLION; // min burn / min flip (100 PURGED)
     uint8 private constant MAX_RISK = 11; // staking risk 1..11
-    uint256 private constant RF_BASE = 100; // last 2 digits encode risk
     uint256 private constant ONEK = 1_000 * MILLION; // 1,000 PURGED (6d)
     uint32 private constant BAF_BATCH = 5000;
     uint256 private constant BUCKET_SIZE = 1500;
@@ -119,6 +118,9 @@ contract Purgecoin is ERC20, VRFConsumerBaseV2Plus {
     uint256 private constant STAKE_LANE_RISK_SHIFT = STAKE_LANE_PRINCIPAL_BITS;
     uint256 private constant STAKE_LANE_RISK_MASK =
         ((uint256(1) << STAKE_LANE_RISK_BITS) - 1) << STAKE_LANE_RISK_SHIFT;
+    uint256 private constant STAKE_PRINCIPAL_FACTOR = MILLION;
+    uint256 private constant STAKE_MAX_PRINCIPAL =
+        STAKE_LANE_PRINCIPAL_MASK * STAKE_PRINCIPAL_FACTOR;
 
     // ---------------------------------------------------------------------
     // VRF configuration
@@ -361,11 +363,14 @@ contract Purgecoin is ERC20, VRFConsumerBaseV2Plus {
         uint8 risk
     ) private pure returns (uint256) {
         if (risk == 0 || risk > MAX_RISK) revert StakeInvalid();
-        if (principalRounded == 0 || principalRounded % RF_BASE != 0)
-            revert StakeInvalid();
-        uint256 units = principalRounded / RF_BASE;
-        if (units >> STAKE_LANE_PRINCIPAL_BITS != 0) revert StakeInvalid();
-        return units | (uint256(risk) << STAKE_LANE_RISK_SHIFT);
+        if (principalRounded == 0) revert StakeInvalid();
+
+        uint256 normalized = principalRounded / STAKE_PRINCIPAL_FACTOR;
+        if (normalized == 0) normalized = 1;
+        if (normalized > STAKE_LANE_PRINCIPAL_MASK) {
+            normalized = STAKE_LANE_PRINCIPAL_MASK;
+        }
+        return normalized | (uint256(risk) << STAKE_LANE_RISK_SHIFT);
     }
 
     function _decodeStakeLane(
@@ -373,11 +378,8 @@ contract Purgecoin is ERC20, VRFConsumerBaseV2Plus {
     ) private pure returns (uint256 principalRounded, uint8 risk) {
         if (lane == 0) return (0, 0);
         uint256 units = lane & STAKE_LANE_PRINCIPAL_MASK;
-        principalRounded = units * RF_BASE;
-        risk = uint8(
-            (lane >> STAKE_LANE_PRINCIPAL_BITS) &
-                ((uint256(1) << STAKE_LANE_RISK_BITS) - 1)
-        );
+        principalRounded = units * STAKE_PRINCIPAL_FACTOR;
+        risk = uint8((lane & STAKE_LANE_RISK_MASK) >> STAKE_LANE_RISK_SHIFT);
     }
 
     function _laneAt(
@@ -458,7 +460,7 @@ contract Purgecoin is ERC20, VRFConsumerBaseV2Plus {
     /// - `burnAmt` must be ≥ 250e6 (6d).
     /// - `targetLevel` must be at least 11 levels ahead of the current game level.
     /// - `risk` ∈ [1..MAX_RISK] and cannot exceed the distance to `targetLevel`.
-    /// - Encodes stake as: principal rounded to RF_BASE (100) + 2‑digit risk code.
+    /// - Encodes stake as: whole-token principal (6‑decimal trimmed) + 8-bit risk code.
     /// - Enforces no overlap/collision with caller’s existing stakes.
     function stake(uint256 burnAmt, uint24 targetLevel, uint8 risk) external {
         if (burnAmt < 250 * MILLION) revert AmountLTMin();
@@ -554,7 +556,11 @@ contract Purgecoin is ERC20, VRFConsumerBaseV2Plus {
 
         // Encode and place the stake lane
         uint256 principalRounded = boostedPrincipal -
-            (boostedPrincipal % RF_BASE);
+            (boostedPrincipal % STAKE_PRINCIPAL_FACTOR);
+        if (principalRounded > STAKE_MAX_PRINCIPAL) {
+            principalRounded = STAKE_MAX_PRINCIPAL;
+        }
+        if (principalRounded == 0) principalRounded = STAKE_PRINCIPAL_FACTOR;
         uint256 newLane = _encodeStakeLane(principalRounded, risk);
 
         uint256 existingAtPlace = stakeAmt[placeLevel][msg.sender];
