@@ -408,7 +408,10 @@ contract Purgecoin is ERC20, VRFConsumerBaseV2Plus {
             count++;
     }
 
-    function _ensureCompatible(uint256 encoded, uint8 expectRisk) private pure {
+    function _ensureCompatible(
+        uint256 encoded,
+        uint8 expectRisk
+    ) private pure {
         uint8 lanes = _laneCount(encoded);
         for (uint8 i; i < lanes; ) {
             (, uint8 haveRisk) = _decodeStakeLane(_laneAt(encoded, i));
@@ -906,10 +909,6 @@ contract Purgecoin is ERC20, VRFConsumerBaseV2Plus {
                                                 stakeAmt[nextL][s] = laneValue;
                                                 stakeAddr[nextL].push(s);
                                             } else {
-                                                _ensureCompatible(
-                                                    nextEnc,
-                                                    newRf
-                                                );
                                                 stakeAmt[nextL][
                                                     s
                                                 ] = _insertLane(
