@@ -1304,10 +1304,7 @@ contract PurgeGame is ERC721A {
             );
         }
 
-        if (bonusUnits != 0) {
-            bonusMint =
-                (bonusUnits * pricePurgecoinUnit * pct) / 100;
-        }
+        bonusMint = (bonusUnits * pricePurgecoinUnit * pct) / 100;
     }
 
     /// @notice Handle Purgecoin coin payments for purchases;

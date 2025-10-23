@@ -4,3 +4,6 @@ cache
 .env
 package-lock.json
 package.json
+hardhat.config.js
+tsconfig.json
+contracts/
