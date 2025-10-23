@@ -148,7 +148,7 @@ contract PurgeGame is ERC721A {
     // -----------------------
     // Minting / Airdrops
     // -----------------------
-    uint32 private purchaseCount; // Total purchased NFTs this level (incl. bonuses)
+    uint32 private purchaseCount; // Total purchased NFTs this level
     uint64 private baseTokenId = 1; // Rolling base for token IDs across levels
     uint32 private airdropMapsProcessedCount; // Progress inside current map-mint player's queue
     uint32 private airdropIndex; // Progress across players in pending arrays
@@ -500,11 +500,10 @@ contract PurgeGame is ERC721A {
         uint24 lvl = level;
         _enforceCenturyLuckbox(lvl, priceUnit);
         // Pricing / rebates
-        uint256 scaledQty = quantity * 25; // ETH path scale factor (÷100 later)
-        uint256 mapUnitCost = priceUnit / 4;
-        uint256 coinCost = quantity * mapUnitCost;
-        uint256 rebate = ((quantity / 4) * priceUnit) / 10;
-        uint256 bonusMapCoinReward = (quantity / 40) * 4 * mapUnitCost;
+        uint256 coinCost = quantity * (priceUnit / 4);
+        uint256 scaledQty = coinCost / 4; // ETH path scale factor (÷100 later)
+        uint256 rebate = (quantity * priceUnit) / 40;
+        uint256 bonusMapCoinReward = (quantity * priceUnit) / 40;
 
         if (payInCoin) {
             if (msg.value != 0) revert E();
