@@ -1283,10 +1283,21 @@ contract PurgeGame is ERC721A {
         }
 
         IPurgeCoinInterface coin = IPurgeCoinInterface(_coin);
-        // Affiliate mint uses Purgecoin units; 0.1% of scaledQty (scaled by 100) -> /1000
+        uint256 affiliateAmount = (scaledQty * pricePurgecoinUnit) / 1000;
+        uint8 reached = earlyPurgeJackpotPaidMask & 0x3F;
+        unchecked {
+            reached -= (reached >> 1) & 0x55;
+            reached = (reached & 0x33) + ((reached >> 2) & 0x33);
+            reached = (reached + (reached >> 4)) & 0x0F;
+        }
+        uint256 steps = reached > 5 ? 5 : reached;
+        uint256 pct = 25 - (steps * 5);
+        unchecked {
+            affiliateAmount += (affiliateAmount * pct) / 100;
+        }
         unchecked {
             coin.payAffiliate(
-                (scaledQty * pricePurgecoinUnit) / 1000,
+                affiliateAmount,
                 affiliateCode,
                 msg.sender,
                 level
@@ -1294,16 +1305,6 @@ contract PurgeGame is ERC721A {
         }
 
         if (bonusUnits != 0) {
-            uint8 reached = earlyPurgeJackpotPaidMask & 0x3F;
-            unchecked {
-                reached -= (reached >> 1) & 0x55;
-                reached =
-                    (reached & 0x33) +
-                    ((reached >> 2) & 0x33);
-                reached = (reached + (reached >> 4)) & 0x0F;
-            }
-            uint256 steps = reached > 5 ? 5 : reached;
-            uint256 pct = 25 - (steps * 5);
             bonusMint =
                 (bonusUnits * pricePurgecoinUnit * pct) / 100;
         }
