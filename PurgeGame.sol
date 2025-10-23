@@ -111,12 +111,12 @@ contract PurgeGame is ERC721A {
     // Economic / Admin
     // -----------------------
     address private immutable creator; // Receives protocol ETH (end-game drains, etc.)
-    uint256 private price = 0.025 ether; // / MILLION;    // Base mint price (adjusts with level milestones)
+    uint256 private price = 0.025 ether; // Base mint price (adjusts with level milestones)
 
     // -----------------------
     // Prize Pools and RNG
     // -----------------------
-    uint256 private lastPrizePool = 125 ether; //  / MILLION; // Snapshot from previous epoch (non-zero post L1)
+    uint256 private lastPrizePool = 125 ether; // Snapshot from previous epoch (non-zero post L1)
     uint256 private levelPrizePool; // Snapshot for endgame distribution of current level
     uint256 private prizePool; // Live ETH pool for current level
     uint256 private carryoverForNextLevel; // Saved carryover % for next level
