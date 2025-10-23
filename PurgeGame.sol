@@ -312,7 +312,6 @@ contract PurgeGame is ERC721A {
                 ) {
                     if (_endJackpot(lvl, cap, day, true, pauseBetting)) {
                         phase = 3;
-                        if (lvl % 100 > 90) price = (price * 4) / 5;
                     }
                     break;
                 } else if (ph == 3 && jackpotCounter == 0) {
@@ -358,7 +357,6 @@ contract PurgeGame is ERC721A {
                 if (ph == 5) {
                     if (_processNftBatch(cap)) {
                         phase = 6;
-                        if (lvl % 100 > 90) price = (price * 125) / 100;
                     }
                     break;
                 }
@@ -414,25 +412,27 @@ contract PurgeGame is ERC721A {
         ) revert NotTimeYet();
         uint24 lvl = level;
         _enforceCenturyLuckbox(lvl, pricePurgecoinUnit);
-
         // Payment handling (ETH vs coin)
+        uint256 bonusCoinReward = (quantity / 10) * pricePurgecoinUnit;
         if (payInCoin) {
             if (msg.value != 0) revert E();
-            _coinReceive(quantity * pricePurgecoinUnit, lvl);
+            _coinReceive(
+                quantity * pricePurgecoinUnit,
+                lvl,
+                bonusCoinReward
+            );
         } else {
             uint256 bonus = _ethReceive(
                 quantity * 100,
                 affiliateCode,
                 quantity
             ); // price × (quantity * 100) / 100
+            if (ph == 3 && (lvl % 100) > 90) {
+                bonus += (quantity * pricePurgecoinUnit) / 5;
+            }
+            bonus += bonusCoinReward;
             if (bonus != 0)
                 IPurgeCoinInterface(_coin).mintInGame(msg.sender, bonus);
-        }
-
-        // Compute total scheduled outputs (10% bonus)
-        uint32 totalScheduled;
-        unchecked {
-            totalScheduled = uint32(quantity + quantity / 10);
         }
 
         // Push buyer to the pending list once (de-dup)
@@ -444,7 +444,7 @@ contract PurgeGame is ERC721A {
         // NOTE: tokenIds are not minted yet; only trait counters are updated.
         uint256 randomWord = rngWord; // 0 is allowed by design here
         uint256 tokenIdStart = uint256(baseTokenId) + uint256(purchaseCount);
-        for (uint32 i; i < totalScheduled; ) {
+        for (uint32 i; i < quantity; ) {
             uint256 _tokenId = tokenIdStart + i;
             uint256 rand = uint256(
                 keccak256(abi.encodePacked(_tokenId, randomWord))
@@ -476,8 +476,9 @@ contract PurgeGame is ERC721A {
 
         // Accrue scheduled mints to the buyer
         unchecked {
-            playerTokensOwed[msg.sender] += totalScheduled;
-            purchaseCount += totalScheduled;
+            uint32 qty32 = uint32(quantity);
+            playerTokensOwed[msg.sender] += qty32;
+            purchaseCount += qty32;
         }
     }
 
@@ -497,38 +498,43 @@ contract PurgeGame is ERC721A {
         bytes32 affiliateCode
     ) external payable {
         uint256 priceUnit = pricePurgecoinUnit;
+        uint8 ph = phase;
         if (gameState != 2 || quantity == 0 || !rngConsumed)
             revert NotTimeYet();
         uint24 lvl = level;
         _enforceCenturyLuckbox(lvl, priceUnit);
-
         // Pricing / rebates
         uint256 scaledQty = quantity * 25; // ETH path scale factor (÷100 later)
-        uint256 coinCost = quantity * (priceUnit / 4);
+        uint256 mapUnitCost = priceUnit / 4;
+        uint256 coinCost = quantity * mapUnitCost;
         uint256 rebate = ((quantity / 4) * priceUnit) / 10;
+        uint256 bonusMapCoinReward = (quantity / 40) * priceUnit;
 
         if (payInCoin) {
             if (msg.value != 0) revert E();
-            _coinReceive(coinCost - rebate, lvl);
+            _coinReceive(coinCost - rebate, lvl, bonusMapCoinReward);
         } else {
             uint256 bonus = _ethReceive(
                 scaledQty,
                 affiliateCode,
                 (lvl < 10) ? quantity : 0
             );
-            uint256 rebateMint = rebate + bonus;
+            if (ph == 3 && (lvl % 100) > 90) {
+                bonus += coinCost / 5;
+            }
+            uint256 rebateMint = rebate + bonus + bonusMapCoinReward;
             if (rebateMint != 0)
-                IPurgeCoinInterface(_coin).mintInGame(msg.sender, rebateMint);
+                IPurgeCoinInterface(_coin).mintInGame(
+                    msg.sender,
+                    rebateMint
+                );
         }
-
-        // Schedule symbol mints (extra 4 per each block of 40)
-        uint32 totalMaps = uint32(quantity + 4 * (quantity / 40));
 
         if (playerMapMintsOwed[msg.sender] == 0) {
             pendingMapMints.push(msg.sender);
         }
         unchecked {
-            playerMapMintsOwed[msg.sender] += totalMaps;
+            playerMapMintsOwed[msg.sender] += uint32(quantity);
         }
     }
     // --- Purging NFTs into tickets & potentially ending the level -----------------------------------
@@ -1308,10 +1314,16 @@ contract PurgeGame is ERC721A {
     }
 
     /// @notice Handle Purgecoin coin payments for purchases;
-    /// @dev 1.5x cost on steps where `level % 20 == 13`. 10% discount on 18
-    function _coinReceive(uint256 amount, uint24 lvl) private {
+    /// @dev 1.5x cost on steps where `level % 20 == 13`. 10% discount on 18. Applies post-adjustment discount.
+    function _coinReceive(
+        uint256 amount,
+        uint24 lvl,
+        uint256 discount
+    ) private {
         if (lvl % 20 == 13) amount = (amount * 3) / 2;
         else if (lvl % 20 == 18) amount = (amount * 9) / 10;
+        if (discount >= amount) amount = 0;
+        else amount -= discount;
         IPurgeCoinInterface(_coin).burnInGame(msg.sender, amount);
     }
 
