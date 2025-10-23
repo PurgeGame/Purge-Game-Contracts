@@ -416,11 +416,7 @@ contract PurgeGame is ERC721A {
         uint256 bonusCoinReward = (quantity / 10) * pricePurgecoinUnit;
         if (payInCoin) {
             if (msg.value != 0) revert E();
-            _coinReceive(
-                quantity * pricePurgecoinUnit,
-                lvl,
-                bonusCoinReward
-            );
+            _coinReceive(quantity * pricePurgecoinUnit, lvl, bonusCoinReward);
         } else {
             uint256 bonus = _ethReceive(
                 quantity * 100,
@@ -508,7 +504,7 @@ contract PurgeGame is ERC721A {
         uint256 mapUnitCost = priceUnit / 4;
         uint256 coinCost = quantity * mapUnitCost;
         uint256 rebate = ((quantity / 4) * priceUnit) / 10;
-        uint256 bonusMapCoinReward = (quantity / 40) * priceUnit;
+        uint256 bonusMapCoinReward = (quantity / 40) * 4 * mapUnitCost;
 
         if (payInCoin) {
             if (msg.value != 0) revert E();
@@ -524,10 +520,7 @@ contract PurgeGame is ERC721A {
             }
             uint256 rebateMint = rebate + bonus + bonusMapCoinReward;
             if (rebateMint != 0)
-                IPurgeCoinInterface(_coin).mintInGame(
-                    msg.sender,
-                    rebateMint
-                );
+                IPurgeCoinInterface(_coin).mintInGame(msg.sender, rebateMint);
         }
 
         if (playerMapMintsOwed[msg.sender] == 0) {
@@ -1322,8 +1315,7 @@ contract PurgeGame is ERC721A {
     ) private {
         if (lvl % 20 == 13) amount = (amount * 3) / 2;
         else if (lvl % 20 == 18) amount = (amount * 9) / 10;
-        if (discount >= amount) amount = 0;
-        else amount -= discount;
+        amount -= discount;
         IPurgeCoinInterface(_coin).burnInGame(msg.sender, amount);
     }
 
