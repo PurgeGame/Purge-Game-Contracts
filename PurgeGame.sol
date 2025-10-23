@@ -500,14 +500,15 @@ contract PurgeGame is ERC721A {
         uint24 lvl = level;
         _enforceCenturyLuckbox(lvl, priceUnit);
         // Pricing / rebates
-        uint256 coinCost = quantity * (priceUnit / 4);
-        uint256 scaledQty = coinCost / 4; // ETH path scale factor (÷100 later)
-        uint256 rebate = (quantity * priceUnit) / 40;
-        uint256 bonusMapCoinReward = (quantity * priceUnit) / 40;
+        uint256 mapUnitCost = priceUnit / 4;
+        uint256 coinCost = quantity * mapUnitCost;
+        uint256 scaledQty = quantity * 25; // ETH path scale factor (÷100 later)
+        uint256 mapRebate = (quantity / 4) * (priceUnit / 10);
+        uint256 mapBonus = (quantity / 40) * priceUnit;
 
         if (payInCoin) {
             if (msg.value != 0) revert E();
-            _coinReceive(coinCost - rebate, lvl, bonusMapCoinReward);
+            _coinReceive(coinCost - mapRebate, lvl, mapBonus);
         } else {
             uint256 bonus = _ethReceive(
                 scaledQty,
@@ -517,7 +518,7 @@ contract PurgeGame is ERC721A {
             if (ph == 3 && (lvl % 100) > 90) {
                 bonus += coinCost / 5;
             }
-            uint256 rebateMint = rebate + bonus + bonusMapCoinReward;
+            uint256 rebateMint = bonus + mapRebate + mapBonus;
             if (rebateMint != 0)
                 IPurgeCoinInterface(_coin).mintInGame(msg.sender, rebateMint);
         }
