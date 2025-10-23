@@ -1293,15 +1293,19 @@ contract PurgeGame is ERC721A {
             );
         }
 
-        _updateEarlyPurgeJackpots(level);
-
         if (bonusUnits != 0) {
-            uint8 mask = earlyPurgeJackpotPaidMask;
-            if ((mask & uint8(1 << 2)) == 0) {
-                bonusMint = (pricePurgecoinUnit / 5) * bonusUnits;
-            } else if ((mask & uint8(1 << 4)) == 0) {
-                bonusMint = (pricePurgecoinUnit / 10) * bonusUnits;
+            uint8 reached = earlyPurgeJackpotPaidMask & 0x3F;
+            unchecked {
+                reached -= (reached >> 1) & 0x55;
+                reached =
+                    (reached & 0x33) +
+                    ((reached >> 2) & 0x33);
+                reached = (reached + (reached >> 4)) & 0x0F;
             }
+            uint256 steps = reached > 5 ? 5 : reached;
+            uint256 pct = 25 - (steps * 5);
+            bonusMint =
+                (bonusUnits * pricePurgecoinUnit * pct) / 100;
         }
     }
 
