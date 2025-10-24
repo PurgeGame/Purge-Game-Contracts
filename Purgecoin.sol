@@ -1,20 +1,68 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
-// ---------------------------------------------------------------------
-// Minimal VRF client bundle (extracted from Chainlink)
-// ---------------------------------------------------------------------
-library VRFV2PlusClient {
-    bytes4 public constant EXTRA_ARGS_V1_TAG =
-        bytes4(keccak256("VRF ExtraArgsV1"));
+contract Purgecoin {
+    // ---------------------------------------------------------------------
+    // ERC20 state
+    // ---------------------------------------------------------------------
+    event Transfer(address indexed from, address indexed to, uint256 amount);
+    event Approval(address indexed owner, address indexed spender, uint256 amount);
 
-    struct ExtraArgsV1 {
+    string public name;
+    string public symbol;
+    uint8 public immutable decimals;
+
+    uint256 public totalSupply;
+    mapping(address => uint256) public balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
+
+    function approve(address spender, uint256 amount) public returns (bool) {
+        allowance[msg.sender][spender] = amount;
+        emit Approval(msg.sender, spender, amount);
+        return true;
+    }
+
+    function transfer(address to, uint256 amount) public returns (bool) {
+        _transfer(msg.sender, to, amount);
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 amount) public returns (bool) {
+        uint256 allowed = allowance[from][msg.sender];
+        if (allowed != type(uint256).max) {
+            allowance[from][msg.sender] = allowed - amount;
+        }
+        _transfer(from, to, amount);
+        return true;
+    }
+
+    function _transfer(address from, address to, uint256 amount) internal {
+        if (from == address(0) || to == address(0)) revert ZeroAddress();
+        balanceOf[from] -= amount;
+        balanceOf[to] += amount;
+        emit Transfer(from, to, amount);
+    }
+
+    function _mint(address to, uint256 amount) internal {
+        if (to == address(0)) revert ZeroAddress();
+        totalSupply += amount;
+        balanceOf[to] += amount;
+        emit Transfer(address(0), to, amount);
+    }
+
+    function _burn(address from, uint256 amount) internal {
+        if (from == address(0)) revert ZeroAddress();
+        balanceOf[from] -= amount;
+        totalSupply -= amount;
+        emit Transfer(from, address(0), amount);
+    }
+
+    struct VRFExtraArgsV1 {
         bool nativePayment;
     }
 
-    struct RandomWordsRequest {
+    struct VRFRandomWordsRequest {
         bytes32 keyHash;
         uint256 subId;
         uint16 requestConfirmations;
@@ -23,60 +71,105 @@ library VRFV2PlusClient {
         bytes extraArgs;
     }
 
-    function _argsToBytes(
-        ExtraArgsV1 memory extraArgs
-    ) internal pure returns (bytes memory bts) {
-        return abi.encodeWithSelector(EXTRA_ARGS_V1_TAG, extraArgs);
-    }
-}
+    bytes4 private constant EXTRA_ARGS_V1_TAG =
+        bytes4(keccak256("VRF ExtraArgsV1"));
+    bytes4 private constant VRF_REQUEST_SELECTOR =
+        bytes4(keccak256("requestRandomWords((bytes32,uint256,uint16,uint32,uint32,bytes))"));
+    bytes4 private constant VRF_GET_SUB_SELECTOR =
+        bytes4(keccak256("getSubscription(uint256)"));
+    bytes4 private constant LINK_TRANSFER_AND_CALL_SELECTOR =
+        bytes4(keccak256("transferAndCall(address,uint256,bytes)"));
+    bytes4 private constant GAME_STATE_SELECTOR =
+        bytes4(keccak256("gameState()"));
+    bytes4 private constant GAME_LEVEL_SELECTOR =
+        bytes4(keccak256("level()"));
+    bytes4 private constant GAME_JACKPOT_SELECTOR =
+        bytes4(keccak256("getJackpotWinners(uint256,uint8,uint8,uint8)"));
 
-interface IVRFCoordinatorV2Plus {
-    function requestRandomWords(
-        VRFV2PlusClient.RandomWordsRequest calldata req
-    ) external returns (uint256 requestId);
-}
-
-/**
- * @title Purged (PURGE) — game token + VRF/RNG coordinator side
- * @notice ERC20 with game mechanics (coinflip, jackpots, staking, affiliates) and Chainlink VRF v2.5.
- * @dev The coin contract is the coordinator side the game calls into. This file contains declarations,
- *      configuration, storage, events, and constructor wiring. Functional sections follow below in the file.
- */
-interface IVRFCoordinatorV2PlusLike {
-    function getSubscription(
-        uint256 subId
-    )
-        external
-        view
-        returns (
-            uint96 balance,
-            uint96 nativeBalance,
-            uint64 reqCount,
-            address owner,
-            address[] memory consumers
+    function _vrfEncodeExtraArgs(bool nativePayment) private pure returns (bytes memory) {
+        return abi.encodeWithSelector(
+            EXTRA_ARGS_V1_TAG,
+            VRFExtraArgsV1({nativePayment: nativePayment})
         );
-}
+    }
 
-interface IPurgeGame {
-    function gameState() external view returns (uint8);
-    function level() external view returns (uint24);
-    function getJackpotWinners(
+    function _vrfRequestRandomWords(
+        VRFRandomWordsRequest memory req
+    ) private returns (uint256 requestId) {
+        (bool ok, bytes memory data) = s_vrfCoordinator.call(
+            abi.encodeWithSelector(VRF_REQUEST_SELECTOR, req)
+        );
+        if (!ok || data.length == 0) revert E();
+        requestId = abi.decode(data, (uint256));
+    }
+
+    function _vrfGetSubscription(uint256 subId)
+        private
+        view
+        returns (uint96 bal, uint96, uint64, address, address[] memory)
+    {
+        (bool ok, bytes memory data) = s_vrfCoordinator.staticcall(
+            abi.encodeWithSelector(VRF_GET_SUB_SELECTOR, subId)
+        );
+        if (!ok || data.length == 0) revert E();
+        return abi.decode(
+            data,
+            (uint96, uint96, uint64, address, address[])
+        );
+    }
+
+    function _linkTransferAndCall(
+        address to,
+        uint256 amount,
+        bytes memory data
+    ) private returns (bool) {
+        (bool ok, bytes memory ret) = LINK.call(
+            abi.encodeWithSelector(
+                LINK_TRANSFER_AND_CALL_SELECTOR,
+                to,
+                amount,
+                data
+            )
+        );
+        if (!ok) return false;
+        return ret.length == 0 || abi.decode(ret, (bool));
+    }
+
+    function _gameState() private view returns (uint8) {
+        (bool ok, bytes memory data) = purgeGameContract.staticcall(
+            abi.encodeWithSelector(GAME_STATE_SELECTOR)
+        );
+        if (!ok || data.length == 0) revert E();
+        return abi.decode(data, (uint8));
+    }
+
+    function _gameLevel() private view returns (uint24) {
+        (bool ok, bytes memory data) = purgeGameContract.staticcall(
+            abi.encodeWithSelector(GAME_LEVEL_SELECTOR)
+        );
+        if (!ok || data.length == 0) revert E();
+        return abi.decode(data, (uint24));
+    }
+
+    function _gameJackpotWinners(
         uint256 randomWord,
         uint8 trait,
         uint8 numWinners,
         uint8 salt
-    ) external view returns (address[] memory);
-}
+    ) private view returns (address[] memory) {
+        (bool ok, bytes memory data) = purgeGameContract.staticcall(
+            abi.encodeWithSelector(
+                GAME_JACKPOT_SELECTOR,
+                randomWord,
+                trait,
+                numWinners,
+                salt
+            )
+        );
+        if (!ok) revert E();
+        return abi.decode(data, (address[]));
+    }
 
-interface ILinkToken {
-    function transferAndCall(
-        address to,
-        uint256 value,
-        bytes calldata data
-    ) external returns (bool);
-}
-
-contract Purgecoin is ERC20 {
     // ---------------------------------------------------------------------
     // Errors
     // ---------------------------------------------------------------------
@@ -173,11 +266,10 @@ contract Purgecoin is ERC20 {
     bytes32 private immutable vrfKeyHash; // VRF key hash
     uint256 private immutable vrfSubscriptionId; // VRF sub id
 
-    IVRFCoordinatorV2Plus private s_vrfCoordinator; // VRF coordinator handle
+    address private immutable s_vrfCoordinator; // VRF coordinator handle
 
     // LINK token (Chainlink ERC677) — network-specific address
-    ILinkToken private constant LINK =
-        ILinkToken(0x514910771AF9Ca656af840dff83E8264EcF986CA); // MAINNET LINK
+    address private constant LINK = 0x514910771AF9Ca656af840dff83E8264EcF986CA; // MAINNET LINK
 
     // ---------------------------------------------------------------------
     // Game wiring & state
@@ -299,9 +391,12 @@ contract Purgecoin is ERC20 {
         address _vrfCoordinator,
         bytes32 _keyHash,
         uint256 _subId
-    ) ERC20("Purgecoin", "PURGE") {
+    ) {
         if (_vrfCoordinator == address(0)) revert ZeroAddress();
-        s_vrfCoordinator = IVRFCoordinatorV2Plus(_vrfCoordinator);
+        name = "Purgecoin";
+        symbol = "PURGE";
+        decimals = 6;
+        s_vrfCoordinator = _vrfCoordinator;
         creator = msg.sender;
         vrfKeyHash = _keyHash;
         vrfSubscriptionId = _subId;
@@ -325,7 +420,7 @@ contract Purgecoin is ERC20 {
 
         address caller = msg.sender;
         uint256 burnTotal = amount + coinflipDeposit;
-        uint256 bal = balanceOf(msg.sender);
+        uint256 bal = balanceOf[msg.sender];
         if (burnTotal == bal) burnTotal -= 1; // leave 1 unit to avoid zero balance
 
         if (coinflipDeposit != 0) {
@@ -500,7 +595,7 @@ contract Purgecoin is ERC20 {
     function stake(uint256 burnAmt, uint24 targetLevel, uint8 risk) external {
         if (burnAmt < 250 * MILLION) revert AmountLTMin();
         if (isBettingPaused) revert BettingPaused();
-        uint24 currLevel = IPurgeGame(purgeGameContract).level();
+        uint24 currLevel = _gameLevel();
         uint24 distance = targetLevel - currLevel;
         if (
             risk == 0 ||
@@ -788,10 +883,10 @@ contract Purgecoin is ERC20 {
         uint256 requestId,
         uint256[] calldata randomWords
     ) external {
-        if (msg.sender != address(s_vrfCoordinator)) {
+        if (msg.sender != s_vrfCoordinator) {
             revert OnlyCoordinatorCanFulfill(
                 msg.sender,
-                address(s_vrfCoordinator)
+                s_vrfCoordinator
             );
         }
         fulfillRandomWords(requestId, randomWords);
@@ -800,16 +895,14 @@ contract Purgecoin is ERC20 {
     function requestRngPurgeGame(
         bool pauseBetting
     ) external onlyPurgeGameContract {
-        uint256 id = s_vrfCoordinator.requestRandomWords(
-            VRFV2PlusClient.RandomWordsRequest({
+        uint256 id = _vrfRequestRandomWords(
+            VRFRandomWordsRequest({
                 keyHash: vrfKeyHash,
                 subId: vrfSubscriptionId,
                 requestConfirmations: vrfRequestConfirmations,
                 callbackGasLimit: vrfCallbackGasLimit,
                 numWords: 1,
-                extraArgs: VRFV2PlusClient._argsToBytes(
-                    VRFV2PlusClient.ExtraArgsV1({nativePayment: vrfPayInNative})
-                )
+                extraArgs: _vrfEncodeExtraArgs(vrfPayInNative)
             })
         );
         rngFulfilled = false;
@@ -865,12 +958,6 @@ contract Purgecoin is ERC20 {
         uint256 newLuck = playerLuckbox[target] + credit;
         playerLuckbox[target] = newLuck;
         _updatePlayerScore(0, target, newLuck); // luckbox leaderboard
-    }
-
-    /// @inheritdoc ERC20
-    /// @dev Fixed 6‑decimals token.
-    function decimals() public pure override returns (uint8) {
-        return 6;
     }
 
     /// @notice Progress coinflip payouts for the current level in bounded slices.
@@ -1141,13 +1228,12 @@ contract Purgecoin is ERC20 {
                     uint8 winningTrait = uint8(traitRnd & 0x3F) + (i << 6);
 
                     // Up to 5 candidates sampled by the game; pick highest luckbox.
-                    address[] memory candidates = IPurgeGame(purgeGameContract)
-                        .getJackpotWinners(
-                            randWord,
-                            winningTrait,
-                            5,
-                            uint8(42 + i)
-                        );
+                    address[] memory candidates = _gameJackpotWinners(
+                        randWord,
+                        winningTrait,
+                        5,
+                        uint8(42 + i)
+                    );
                     address winnerAddr = getTopLuckbox(candidates);
 
                     emit CoinJackpotPaid(
@@ -1831,10 +1917,9 @@ contract Purgecoin is ERC20 {
     /// @return on  True if level >= 25 and `level % 10 == 5` (Decimator checkpoint).
     /// @return lvl Current game level (0 if purge phase).
     function _decWindow() internal view returns (bool on, uint24 lvl) {
-        IPurgeGame g = IPurgeGame(purgeGameContract);
-        uint8 s = g.gameState();
+        uint8 s = _gameState();
         if (s == 4) return (false, 0);
-        lvl = g.level();
+        lvl = _gameLevel();
         on = (lvl >= 25 && (lvl % 10) == 5);
     }
 
@@ -1865,13 +1950,13 @@ contract Purgecoin is ERC20 {
         bytes calldata
     ) external {
         if (isBettingPaused) revert BettingPaused();
-        if (msg.sender != address(LINK)) revert E();
+        if (msg.sender != LINK) revert E();
         if (amount == 0) revert Zero();
 
         // fund VRF sub
         if (
-            !LINK.transferAndCall(
-                address(s_vrfCoordinator),
+            !_linkTransferAndCall(
+                s_vrfCoordinator,
                 amount,
                 abi.encode(vrfSubscriptionId)
             )
@@ -1880,9 +1965,7 @@ contract Purgecoin is ERC20 {
         }
 
         // post‑fund subscription LINK balance
-        (uint96 bal, , , , ) = IVRFCoordinatorV2PlusLike(
-            address(s_vrfCoordinator)
-        ).getSubscription(vrfSubscriptionId);
+        (uint96 bal, , , , ) = _vrfGetSubscription(vrfSubscriptionId);
 
         uint16 mult = _tierMultPermille(uint256(bal));
         uint256 credit;
