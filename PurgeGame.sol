@@ -117,7 +117,7 @@ contract PurgeGame {
     // -----------------------
     uint48 private constant JACKPOT_RESET_TIME = 82620; // Offset anchor for "daily" windows
     uint256 private constant MILLION = 1_000_000; // 6-decimal unit helper
-    uint32 private constant NFT_AIRDROP_PLAYER_BATCH_SIZE = 225; // Mint batch cap (# players)
+    uint32 private constant NFT_AIRDROP_PLAYER_BATCH_SIZE = 210; // Mint batch cap (# players)
     uint32 private constant NFT_AIRDROP_TOKEN_CAP = 3_000; // Mint batch cap (# tokens)
     uint32 private constant DEFAULT_PAYOUTS_PER_TX = 500; // ≤16M worst-case
     uint32 private constant WRITES_BUDGET_SAFE = 800; // <16M gas  budget
