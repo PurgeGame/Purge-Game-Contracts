@@ -30,7 +30,6 @@ contract PurgeGameNFT is ERC721A {
     error NotGame();
     error GameAlreadySet();
     error GameNotLinked();
-
     // Immutable roles --------------------------------------------------------
     address public immutable creator;
 
@@ -72,6 +71,10 @@ contract PurgeGameNFT is ERC721A {
 
     function gameBurn(uint256 tokenId) external onlyGame {
         _burn(tokenId, false);
+    }
+
+    function trophyAward(address to, uint256 tokenId) external onlyGame {
+        transferFrom(game, to, tokenId);
     }
 
     // --- Views ----------------------------------------------------------------

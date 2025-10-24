@@ -72,15 +72,11 @@ interface IPurgeGameNFT {
 
     function gameBurn(uint256 tokenId) external;
 
+    function trophyAward(address to, uint256 tokenId) external;
+
     function ownerOf(uint256 tokenId) external view returns (address);
 
     function exists(uint256 tokenId) external view returns (bool);
-
-    function transferFrom(
-        address from,
-        address to,
-        uint256 tokenId
-    ) external payable;
 }
 
 // ===========================================================================
@@ -695,11 +691,7 @@ contract PurgeGame {
             prizePool = (ticketsLen == 0) ? 0 : (participantShare / ticketsLen);
 
             // Award trophy (transfer placeholder owned by contract)
-            IPurgeGameNFT(_nft).transferFrom(
-                address(this),
-                exterminator,
-                trophyId
-            );
+            IPurgeGameNFT(_nft).trophyAward(exterminator, trophyId);
             trophyTokenIds.push(trophyId);
             trophyData[trophyId] =
                 (uint256(exTrait) << 152) |
