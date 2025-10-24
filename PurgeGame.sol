@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import "./JackpotUtils.sol";
-
 /**
  * @title Purge Game — Core NFT game contract
  * @notice This file defines the on-chain game logic surface (interfaces + core state).
@@ -972,7 +970,7 @@ contract PurgeGame {
         uint8 salt
     ) external view returns (address[] memory) {
         return
-            JackpotUtils._randTraitTicket(
+            _randTraitTicket(
                 traitPurgeTicket[level],
                 randomWord,
                 trait,
@@ -1075,7 +1073,7 @@ contract PurgeGame {
 
             packedTraits |= uint256(traitId) << (idx * 8);
 
-            address[] memory winners = JackpotUtils._randTraitTicket(
+            address[] memory winners = _randTraitTicket(
                 traitPurgeTicket[lvl],
                 rndWord,
                 traitId,
@@ -1131,8 +1129,8 @@ contract PurgeGame {
             : uint256(keccak256(abi.encode(rngWord, uint8(5), jackpotCounter)));
 
         uint8[4] memory winningTraits = isDaily
-            ? JackpotUtils._getWinningTraits(randWord, dailyPurgeCount)
-            : JackpotUtils._getRandomTraits(randWord);
+            ? _getWinningTraits(randWord, dailyPurgeCount)
+            : _getRandomTraits(randWord);
 
         uint256 multiplier = 1 + ((lvl % 100) / 20); // 1..5
 
@@ -1166,7 +1164,7 @@ contract PurgeGame {
                     multiplier;
             } else wantWinners = 1;
 
-            address[] memory winners = JackpotUtils._randTraitTicket(
+            address[] memory winners = _randTraitTicket(
                 traitPurgeTicket[lvl],
                 randWord,
                 winningTraits[groupIdx],
@@ -1659,6 +1657,92 @@ contract PurgeGame {
             carryoverForNextLevel -= (poolWei - returnWei);
         }
         return isFinished;
+    }
+
+    function _randTraitTicket(
+        address[][256] storage traitPurgeTicket_,
+        uint256 randomWord,
+        uint8 trait,
+        uint8 numWinners,
+        uint8 salt
+    ) internal view returns (address[] memory winners) {
+        address[] storage holders = traitPurgeTicket_[trait];
+        uint256 len = holders.length;
+        if (len == 0 || numWinners == 0) return new address[](0);
+
+        winners = new address[](numWinners);
+        bytes32 base = keccak256(abi.encode(randomWord, salt, trait));
+        for (uint256 i; i < numWinners; ) {
+            uint256 idx = uint256(keccak256(abi.encode(base, i))) % len;
+            winners[i] = holders[idx];
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    function _getRandomTraits(
+        uint256 rw
+    ) internal pure returns (uint8[4] memory w) {
+        w[0] = uint8(rw & 0x3F);
+        w[1] = 64 + uint8((rw >> 6) & 0x3F);
+        w[2] = 128 + uint8((rw >> 12) & 0x3F);
+        w[3] = 192 + uint8((rw >> 18) & 0x3F);
+    }
+
+    function _getWinningTraits(
+        uint256 randomWord,
+        uint32[80] storage counters
+    ) internal view returns (uint8[4] memory w) {
+        uint256 seed = uint256(
+            keccak256(abi.encodePacked(randomWord, uint256(0xBAF)))
+        );
+
+        uint8 sym = _maxIdxInRange(counters, 0, 8);
+        uint8 col0 = uint8(
+            uint256(keccak256(abi.encodePacked(seed, uint256(0)))) & 7
+        );
+        w[0] = (col0 << 3) | sym;
+
+        uint8 maxColor = _maxIdxInRange(counters, 8, 8);
+        uint8 randSym = uint8(
+            uint256(keccak256(abi.encodePacked(seed, uint256(1)))) & 7
+        );
+        w[1] = 64 + ((maxColor << 3) | randSym);
+
+        uint8 maxTrait = _maxIdxInRange(counters, 16, 64);
+        w[2] = 128 + maxTrait;
+
+        w[3] = 192 +
+            uint8(
+                uint256(keccak256(abi.encodePacked(seed, uint256(2)))) & 63
+            );
+    }
+
+    function _maxIdxInRange(
+        uint32[80] storage counters,
+        uint8 base,
+        uint8 len
+    ) private view returns (uint8) {
+        if (len == 0 || base >= 80) return 0;
+
+        uint256 end = uint256(base) + uint256(len);
+        if (end > 80) end = 80;
+
+        uint8 maxRel = 0;
+        uint32 maxVal = counters[base];
+
+        for (uint256 i = uint256(base) + 1; i < end; ) {
+            uint32 v = counters[i];
+            if (v > maxVal) {
+                maxVal = v;
+                maxRel = uint8(i) - base;
+            }
+            unchecked {
+                ++i;
+            }
+        }
+        return maxRel;
     }
 
     // --- Views / metadata ---------------------------------------------------------------------------
