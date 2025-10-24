@@ -1928,7 +1928,7 @@ contract Purgecoin {
         uint8 s = _gameState();
         if (s == 4) return (false, 0);
         lvl = _gameLevel();
-        on = (lvl >= 25 && (lvl % 10) == 5);
+        on = (lvl >= 25 && (lvl % 10) == 5 && (lvl % 100) != 95);
     }
 
     /// @notice Append a player to the Decimator roster for a given level.

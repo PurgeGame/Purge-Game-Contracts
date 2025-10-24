@@ -179,10 +179,10 @@ contract PurgeGame is ERC721A {
 
     /**
      * @param purgeCoinContract Trusted PURGE ERC20 / game coordinator address
-     * @param renderer_         Trusted off-chain renderer
+     * @param renderer_         Trusted on-chain renderer
      *
-     * @dev Mints a sentinel tokenId=0 to the contract (reserved trophy slot). Initializes
-     *      sentinel values for L[0] / trophyData to simplify edge checks in early levels.
+     * @dev Mints a sentinel tokenId=0 to the contract (reserved trophy slot).
+     *
      */
     constructor(
         address purgeCoinContract,
@@ -977,7 +977,7 @@ contract PurgeGame is ERC721A {
         if (lvl % 20 == 0) {
             uint256 bafPoolWei = (carryWei * 24) / 100;
             if (!_progressExternal(0, bafPoolWei, cap, lvl)) return false;
-        } else if (lvl >= 25 && (lvl % 10) == 5) {
+        } else if (lvl >= 25 && (lvl % 10) == 5 && lvl % 100 != 95) {
             uint256 decPoolWei = (carryWei * 15) / 100;
             if (!_progressExternal(1, decPoolWei, cap, lvl)) return false;
         }
