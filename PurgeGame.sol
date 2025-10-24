@@ -831,7 +831,6 @@ contract PurgeGame is ERC721A {
                     // Century boundary ends the epoch here
                     if ((prevLevel % 100) == 0) {
                         gameState = 0;
-                        phase = 99;
                         return;
                     }
                 }
