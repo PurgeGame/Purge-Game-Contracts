@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import "erc721a/contracts/ERC721A.sol";
 import "./JackpotUtils.sol";
 
 /**
@@ -61,7 +60,10 @@ interface IPurgeCoinInterface {
  * @dev Interface to the on-chain renderer used for tokenURI generation.
  */
 interface IPurgeRenderer {
-    function setStartingTraitRemaining(uint32[256] calldata values) external;
+    function setStartingTraitRemaining(
+        uint32[256] calldata values
+    ) external;
+
     function tokenURI(
         uint256 tokenId,
         uint256 data,
@@ -69,11 +71,35 @@ interface IPurgeRenderer {
     ) external view returns (string memory);
 }
 
+/**
+ * @dev Minimal interface to the dedicated NFT contract owned by the game.
+ */
+interface IPurgeGameNFT {
+    function gameMint(
+        address to,
+        uint256 quantity
+    ) external returns (uint256 startTokenId);
+
+    function gameBurn(uint256 tokenId) external;
+
+    function ownerOf(
+        uint256 tokenId
+    ) external view returns (address);
+
+    function exists(uint256 tokenId) external view returns (bool);
+
+    function transferFrom(
+        address from,
+        address to,
+        uint256 tokenId
+    ) external payable;
+}
+
 // ===========================================================================
 // Contract
 // ===========================================================================
 
-contract PurgeGame is ERC721A {
+contract PurgeGame {
     // -----------------------
     // Custom Errors
     // -----------------------
@@ -94,6 +120,7 @@ contract PurgeGame is ERC721A {
     // -----------------------
     address private immutable _renderer; // Trusted renderer; used for tokenURI composition
     address private immutable _coin; // Trusted coin/game-side coordinator (PURGE ERC20)
+    address private immutable _nft; // ERC721 contract handling mint/burn/metadata surface
     address private immutable creator; // Receives protocol PURGE (end-game drains, etc.)
     // -----------------------
     // Game Constants
@@ -148,7 +175,7 @@ contract PurgeGame is ERC721A {
     // Minting / Airdrops
     // -----------------------
     uint32 private purchaseCount; // Total purchased NFTs this level
-    uint64 private baseTokenId = 1; // Rolling base for token IDs across levels
+    uint64 private _baseTokenId = 1; // Rolling base for token IDs across levels
     uint32 private airdropMapsProcessedCount; // Progress inside current map-mint player's queue
     uint32 private airdropIndex; // Progress across players in pending arrays
 
@@ -186,17 +213,13 @@ contract PurgeGame is ERC721A {
      */
     constructor(
         address purgeCoinContract,
-        address renderer_
-    ) ERC721A("Purge Game", "PG") {
+        address renderer_,
+        address nftContract
+    ) {
         creator = msg.sender;
         _coin = purgeCoinContract;
         _renderer = renderer_;
-
-        // Mint a sentinel token to contract for trophy bookkeeping (tokenId 0).
-        _mint(address(this), 1);
-
-        // Initialize sentinel trophyData for tokenId 0 (0xFFFF in high 16 bits of slot schema).
-        trophyData[0] = (0xFFFF << 152);
+        _nft = nftContract;
     }
 
     // --- View: lightweight game status -------------------------------------------------
@@ -438,7 +461,7 @@ contract PurgeGame is ERC721A {
         // Precompute traits for future mints using the current RNG snapshot.
         // NOTE: tokenIds are not minted yet; only trait counters are updated.
         uint256 randomWord = rngWord; // 0 is allowed by design here
-        uint256 tokenIdStart = uint256(baseTokenId) + uint256(purchaseCount);
+        uint256 tokenIdStart = uint256(_baseTokenId) + uint256(purchaseCount);
         for (uint32 i; i < quantity; ) {
             uint256 _tokenId = tokenIdStart + i;
             uint256 rand = uint256(
@@ -580,7 +603,7 @@ contract PurgeGame is ERC721A {
                 }
             }
 
-            _burn(tokenId, false);
+            IPurgeGameNFT(_nft).gameBurn(tokenId);
 
             unchecked {
                 dailyPurgeCount[trait0 & 0x07] += 1;
@@ -642,7 +665,7 @@ contract PurgeGame is ERC721A {
     ///   set default exterminated sentinel to 420, and request fresh VRF.
     function _endLevel(uint16 exterminated) private {
         address exterminator = msg.sender;
-        uint256 trophyId = baseTokenId - 1;
+        uint256 trophyId = _baseTokenId - 1;
 
         uint24 levelSnapshot = level;
 
@@ -673,7 +696,11 @@ contract PurgeGame is ERC721A {
             prizePool = (ticketsLen == 0) ? 0 : (participantShare / ticketsLen);
 
             // Award trophy (transfer placeholder owned by contract)
-            this.transferFrom(address(this), exterminator, trophyId);
+            IPurgeGameNFT(_nft).transferFrom(
+                address(this),
+                exterminator,
+                trophyId
+            );
             trophyTokenIds.push(trophyId);
             trophyData[trophyId] =
                 (uint256(exTrait) << 152) |
@@ -718,9 +745,9 @@ contract PurgeGame is ERC721A {
         earlyPurgeJackpotPaidMask = 0;
 
         // Mint next level’s trophy placeholder to the contract
-        _mint(address(this), 1);
-        baseTokenId = uint64(_nextTokenId());
-        trophyData[baseTokenId - 1] = (0xFFFF << 152);
+        uint256 newTrophyId = IPurgeGameNFT(_nft).gameMint(address(this), 1);
+        _baseTokenId = uint64(newTrophyId + 1);
+        trophyData[newTrophyId] = (0xFFFF << 152);
 
         // Price schedule
         uint256 mod100 = levelSnapshot % 100;
@@ -742,6 +769,11 @@ contract PurgeGame is ERC721A {
     ///      Pass `cap` from advanceGame to keep tx gas ≤ target.
     function _finalizeEndgame(uint24 lvl, uint32 cap, uint48 day) internal {
         uint24 ph = phase;
+        if (lvl == 1 && _baseTokenId == 1) {
+            uint256 sentinelId = IPurgeGameNFT(_nft).gameMint(address(this), 1);
+            trophyData[sentinelId] = (0xFFFF << 152);
+            _baseTokenId = uint64(sentinelId + 1);
+        }
         if (ph > 3) {
             // (C) Endgame distributions (skip this block if prior level ended non-trait, i.e. 420)
             if (lastExterminatedTrait != 420) {
@@ -800,11 +832,11 @@ contract PurgeGame is ERC721A {
                             ];
                             uint256 halfA = trophyPool >> 1;
                             uint256 halfB = trophyPool - halfA;
-                            if (_exists(idA)) {
+                            if (IPurgeGameNFT(_nft).exists(idA)) {
                                 _addClaimableEth(ownerOf(idA), halfA);
                                 trophyPool -= halfA;
                             }
-                            if (_exists(idB)) {
+                            if (IPurgeGameNFT(_nft).exists(idB)) {
                                 _addClaimableEth(ownerOf(idB), halfB);
                                 trophyPool -= halfB;
                             }
@@ -1372,7 +1404,7 @@ contract PurgeGame is ERC721A {
             if (take == 0) break;
 
             // do the work
-            uint256 baseKey = baseTokenId + (uint256(airdropIndex) << 20);
+            uint256 baseKey = _baseTokenId + (uint256(airdropIndex) << 20);
             _raritySymbolBatch(
                 p,
                 baseKey,
@@ -1437,7 +1469,7 @@ contract PurgeGame is ERC721A {
             if (room == 0) return false;
 
             uint32 chunk = owed > room ? room : owed;
-            _mint(player, chunk);
+            IPurgeGameNFT(_nft).gameMint(player, chunk);
 
             minted += chunk;
             owed -= chunk;
@@ -1632,49 +1664,49 @@ contract PurgeGame is ERC721A {
         return isFinished;
     }
 
-    // --- Views / overrides ---------------------------------------------------------------------------
+    // --- Views / metadata ---------------------------------------------------------------------------
 
-    /// @inheritdoc ERC721A
-    /// @dev Disallows reading ownership for pre‑trophy era tokens unless they are trophies.
-    function ownerOf(uint256 tokenId) public view override returns (address) {
-        if (tokenId < baseTokenId - 1 && trophyData[tokenId] == 0) revert E();
-        return super.ownerOf(tokenId);
+    function ownerOf(uint256 tokenId) public view returns (address) {
+        if (tokenId < _baseTokenId - 1 && trophyData[tokenId] == 0) revert E();
+        return IPurgeGameNFT(_nft).ownerOf(tokenId);
     }
-    // --- Metadata / views --------------------------------------------------------------------------------
 
-    /// @inheritdoc ERC721A
-    /// @dev
-    /// - Trophy tokens (trophyData[tokenId] != 0) are always valid across eras.
-    /// - Non‑trophy tokens from prior eras (tokenId < baseTokenId - 1) are invalidated.
-    /// - For regular tokens, returns metadata encoded as:
-    ///     bits [71:56] : last exterminated trait (uint16)
-    ///     bits [55:32] : current level (uint24)
-    ///     bits [31:00] : packed 4×8‑bit traits (uint32)
-    function tokenURI(
+    function renderer() external view returns (address) {
+        return _renderer;
+    }
+
+    function baseTokenId() external view returns (uint64) {
+        return _baseTokenId;
+    }
+
+    function describeToken(
         uint256 tokenId
-    ) public view override returns (string memory) {
-        uint256 trophyInfo = trophyData[tokenId];
-        if (tokenId < baseTokenId - 1 && trophyInfo == 0) revert E();
+    )
+        external
+        view
+        returns (
+            bool isTrophy,
+            uint256 trophyInfo,
+            uint256 metaPacked,
+            uint32[4] memory remaining
+        )
+    {
+        trophyInfo = trophyData[tokenId];
+        if (tokenId < _baseTokenId - 1 && trophyInfo == 0) revert E();
 
-        uint32[4] memory remaining;
         if (trophyInfo != 0) {
-            return
-                IPurgeRenderer(_renderer).tokenURI(
-                    tokenId,
-                    trophyInfo,
-                    remaining
-                );
+            return (true, trophyInfo, 0, remaining);
         }
 
         uint32 traitsPacked = tokenTraits[tokenId];
+        uint8 t0 = uint8(traitsPacked);
+        uint8 t1 = uint8(traitsPacked >> 8);
+        uint8 t2 = uint8(traitsPacked >> 16);
+        uint8 t3 = uint8(traitsPacked >> 24);
+
         uint256 lastExterminated = lastExterminatedTrait;
-
-        uint8 t0 = uint8(traitsPacked); // 0..63
-        uint8 t1 = uint8(traitsPacked >> 8); // 64..127
-        uint8 t2 = uint8(traitsPacked >> 16); // 128..191
-        uint8 t3 = uint8(traitsPacked >> 24); // 192..255
-
-        uint256 metaPacked = (lastExterminated << 56) |
+        metaPacked =
+            (uint256(lastExterminated) << 56) |
             (uint256(level) << 32) |
             uint256(traitsPacked);
 
@@ -1683,8 +1715,7 @@ contract PurgeGame is ERC721A {
         remaining[2] = traitRemaining[t2];
         remaining[3] = traitRemaining[t3];
 
-        return
-            IPurgeRenderer(_renderer).tokenURI(tokenId, metaPacked, remaining);
+        return (false, 0, metaPacked, remaining);
     }
 
     function getTickets(
