@@ -176,7 +176,7 @@ contract Purgecoin is ERC20 {
     IVRFCoordinatorV2Plus private s_vrfCoordinator; // VRF coordinator handle
 
     // LINK token (Chainlink ERC677) — network-specific address
-    ILinkToken public constant LINK =
+    ILinkToken private constant LINK =
         ILinkToken(0x514910771AF9Ca656af840dff83E8264EcF986CA); // MAINNET LINK
 
     // ---------------------------------------------------------------------
@@ -579,9 +579,7 @@ contract Purgecoin is ERC20 {
         // Compounded boost starting from 95% of burn (fivePercent * 19)
         uint256 boostedPrincipal = fivePercent * 19;
         for (uint24 i = distance; i != 0; ) {
-            boostedPrincipal =
-                (boostedPrincipal * (10_000 + stepBps)) /
-                10_000;
+            boostedPrincipal = (boostedPrincipal * (10_000 + stepBps)) / 10_000;
             unchecked {
                 --i;
             }
