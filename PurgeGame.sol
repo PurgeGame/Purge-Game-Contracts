@@ -133,6 +133,7 @@ contract PurgeGame {
     uint256 private lastPrizePool = 125 ether; // Snapshot from previous epoch (non-zero post L1)
     uint256 private levelPrizePool; // Snapshot for endgame distribution of current level
     uint256 private prizePool; // Live ETH pool for current level
+    uint256 private nextPrizePool; // ETH collected during purge for upcoming level
     uint256 private carryoverForNextLevel; // Saved carryover % for next level
     uint256 private rngWord; // Cached fulfilled RNG word (game-level scope)
 
@@ -163,7 +164,7 @@ contract PurgeGame {
     // Minting / Airdrops
     // -----------------------
     uint32 private purchaseCount; // Total purchased NFTs this level
-    uint64 private _baseTokenId = 0; // Rolling base for token IDs across levels
+    uint64 private _baseTokenId; // Rolling base for token IDs across levels
     uint32 private airdropMapsProcessedCount; // Progress inside current map-mint player's queue
     uint32 private airdropIndex; // Progress across players in pending arrays
 
@@ -364,6 +365,11 @@ contract PurgeGame {
                 }
                 if (ph == 5) {
                     if (_processNftBatch(cap)) {
+                        delete pendingNftMints;
+                        delete pendingMapMints;
+                        airdropIndex = 0;
+                        airdropMapsProcessedCount = 0;
+                        earlyPurgeJackpotPaidMask = 0;
                         phase = 6;
                     }
                     break;
@@ -504,8 +510,12 @@ contract PurgeGame {
     ) external payable {
         uint256 priceUnit = priceCoin;
         uint8 ph = phase;
-        if (gameState != 2 || quantity == 0 || !rngConsumed)
-            revert NotTimeYet();
+        uint8 state = gameState;
+        if (
+            quantity == 0 ||
+            (state != 2 && state != 4) ||
+            (state == 2 && !rngConsumed)
+        ) revert NotTimeYet();
         uint24 lvl = level;
         _enforceCenturyLuckbox(lvl, priceUnit);
         // Pricing / rebates
@@ -726,17 +736,20 @@ contract PurgeGame {
                 ++t;
             }
         }
-        delete pendingNftMints;
-        delete pendingMapMints;
-        airdropIndex = 0;
-        airdropMapsProcessedCount = 0;
         jackpotCounter = 0;
-        earlyPurgeJackpotPaidMask = 0;
 
         // Mint next level’s trophy placeholder to the contract
         uint256 newTrophyId = IPurgeGameNFT(_nft).gameMint(address(this), 1);
         _baseTokenId = uint64(newTrophyId + 1);
         trophyData[newTrophyId] = (0xFFFF << 152);
+
+        uint256 pendingPool = nextPrizePool;
+        if (pendingPool != 0) {
+            unchecked {
+                prizePool += pendingPool;
+            }
+            nextPrizePool = 0;
+        }
 
         // Price schedule
         uint256 mod100 = levelSnapshot % 100;
@@ -758,7 +771,7 @@ contract PurgeGame {
     ///      Pass `cap` from advanceGame to keep tx gas ≤ target.
     function _finalizeEndgame(uint24 lvl, uint32 cap, uint48 day) internal {
         uint24 ph = phase;
-        if (lvl == 1 && _baseTokenId == 0) {
+        if (lvl == 1 && _baseTokenId == 1) {
             uint256 sentinelId = IPurgeGameNFT(_nft).gameMint(address(this), 1);
             trophyData[sentinelId] = (0xFFFF << 152);
             _baseTokenId = uint64(sentinelId + 1);
@@ -1302,8 +1315,14 @@ contract PurgeGame {
         uint256 expectedWei = (price * scaledQty) / 100;
         if (msg.value != expectedWei) revert E();
 
-        unchecked {
-            prizePool += msg.value;
+        if (gameState == 4) {
+            unchecked {
+                nextPrizePool += msg.value;
+            }
+        } else {
+            unchecked {
+                prizePool += msg.value;
+            }
         }
 
         IPurgeCoinInterface coin = IPurgeCoinInterface(_coin);
