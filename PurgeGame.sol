@@ -60,15 +60,7 @@ interface IPurgeCoinInterface {
  * @dev Interface to the on-chain renderer used for tokenURI generation.
  */
 interface IPurgeRenderer {
-    function setStartingTraitRemaining(
-        uint32[256] calldata values
-    ) external;
-
-    function tokenURI(
-        uint256 tokenId,
-        uint256 data,
-        uint32[4] calldata remaining
-    ) external view returns (string memory);
+    function setStartingTraitRemaining(uint32[256] calldata values) external;
 }
 
 /**
@@ -82,9 +74,7 @@ interface IPurgeGameNFT {
 
     function gameBurn(uint256 tokenId) external;
 
-    function ownerOf(
-        uint256 tokenId
-    ) external view returns (address);
+    function ownerOf(uint256 tokenId) external view returns (address);
 
     function exists(uint256 tokenId) external view returns (bool);
 
@@ -175,7 +165,7 @@ contract PurgeGame {
     // Minting / Airdrops
     // -----------------------
     uint32 private purchaseCount; // Total purchased NFTs this level
-    uint64 private _baseTokenId = 1; // Rolling base for token IDs across levels
+    uint64 private _baseTokenId = 0; // Rolling base for token IDs across levels
     uint32 private airdropMapsProcessedCount; // Progress inside current map-mint player's queue
     uint32 private airdropIndex; // Progress across players in pending arrays
 
@@ -582,8 +572,10 @@ contract PurgeGame {
 
         for (uint256 i; i < count; ) {
             uint256 tokenId = tokenIds[i];
-            if (ownerOf(tokenId) != caller || trophyData[tokenId] != 0)
-                revert E();
+            if (
+                IPurgeGameNFT(_nft).ownerOf(tokenId) != caller ||
+                trophyData[tokenId] != 0
+            ) revert E();
 
             uint32 traits = tokenTraits[tokenId];
             uint8 trait0 = uint8(traits & 0xFF);
@@ -768,7 +760,7 @@ contract PurgeGame {
     ///      Pass `cap` from advanceGame to keep tx gas ≤ target.
     function _finalizeEndgame(uint24 lvl, uint32 cap, uint48 day) internal {
         uint24 ph = phase;
-        if (lvl == 1 && _baseTokenId == 1) {
+        if (lvl == 1 && _baseTokenId == 0) {
             uint256 sentinelId = IPurgeGameNFT(_nft).gameMint(address(this), 1);
             trophyData[sentinelId] = (0xFFFF << 152);
             _baseTokenId = uint64(sentinelId + 1);
@@ -832,11 +824,17 @@ contract PurgeGame {
                             uint256 halfA = trophyPool >> 1;
                             uint256 halfB = trophyPool - halfA;
                             if (IPurgeGameNFT(_nft).exists(idA)) {
-                                _addClaimableEth(ownerOf(idA), halfA);
+                                _addClaimableEth(
+                                    IPurgeGameNFT(_nft).ownerOf(idA),
+                                    halfA
+                                );
                                 trophyPool -= halfA;
                             }
                             if (IPurgeGameNFT(_nft).exists(idB)) {
-                                _addClaimableEth(ownerOf(idB), halfB);
+                                _addClaimableEth(
+                                    IPurgeGameNFT(_nft).ownerOf(idB),
+                                    halfB
+                                );
                                 trophyPool -= halfB;
                             }
                         }
@@ -852,7 +850,7 @@ contract PurgeGame {
                     if ((prevLevel % 100) == 0) {
                         exterminatorShare += carryoverForNextLevel;
                     }
-                    address exterminatorOwner = ownerOf(
+                    address exterminatorOwner = IPurgeGameNFT(_nft).ownerOf(
                         trophyTokenIds[trophyTokenIds.length - 1]
                     );
                     _addClaimableEth(exterminatorOwner, exterminatorShare);
@@ -1664,11 +1662,6 @@ contract PurgeGame {
     }
 
     // --- Views / metadata ---------------------------------------------------------------------------
-
-    function ownerOf(uint256 tokenId) public view returns (address) {
-        return IPurgeGameNFT(_nft).ownerOf(tokenId);
-    }
-
     function describeToken(
         uint256 tokenId
     )
