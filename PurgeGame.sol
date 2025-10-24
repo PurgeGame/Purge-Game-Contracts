@@ -743,14 +743,6 @@ contract PurgeGame {
         _baseTokenId = uint64(newTrophyId + 1);
         trophyData[newTrophyId] = (0xFFFF << 152);
 
-        uint256 pendingPool = nextPrizePool;
-        if (pendingPool != 0) {
-            unchecked {
-                prizePool += pendingPool;
-            }
-            nextPrizePool = 0;
-        }
-
         // Price schedule
         uint256 mod100 = levelSnapshot % 100;
         if (mod100 == 10 || mod100 == 0) {
@@ -888,6 +880,11 @@ contract PurgeGame {
 
                 prizePool = 0;
                 phase = 0;
+            }
+            uint256 pendingPool = nextPrizePool;
+            if (pendingPool != 0) {
+                prizePool = pendingPool;
+                nextPrizePool = 0;
             }
             gameState = 2;
         }
