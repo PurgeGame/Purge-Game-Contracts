@@ -208,8 +208,7 @@ contract PurgeGame {
      * @param purgeCoinContract Trusted PURGE ERC20 / game coordinator address
      * @param renderer_         Trusted on-chain renderer
      *
-     * @dev Mints a sentinel tokenId=0 to the contract (reserved trophy slot).
-     *
+     * @dev ERC721 sentinel trophy token is minted lazily during the first transition to state 2.
      */
     constructor(
         address purgeCoinContract,
@@ -1667,16 +1666,7 @@ contract PurgeGame {
     // --- Views / metadata ---------------------------------------------------------------------------
 
     function ownerOf(uint256 tokenId) public view returns (address) {
-        if (tokenId < _baseTokenId - 1 && trophyData[tokenId] == 0) revert E();
         return IPurgeGameNFT(_nft).ownerOf(tokenId);
-    }
-
-    function renderer() external view returns (address) {
-        return _renderer;
-    }
-
-    function baseTokenId() external view returns (uint64) {
-        return _baseTokenId;
     }
 
     function describeToken(
