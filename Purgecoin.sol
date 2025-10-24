@@ -4,13 +4,40 @@ pragma solidity ^0.8.26;
 
 contract Purgecoin {
     // ---------------------------------------------------------------------
-    // ERC20 state
+    // Events
     // ---------------------------------------------------------------------
     event Transfer(address indexed from, address indexed to, uint256 amount);
     event Approval(address indexed owner, address indexed spender, uint256 amount);
     event StakeCreated(address indexed player, uint24 targetLevel, uint8 risk, uint256 principal);
     event LuckyCoinBurned(address indexed player, uint256 amount, uint256 coinflipDeposit);
+    event Affiliate(uint256 amount, bytes32 indexed code, address sender);
+    event CoinflipFinished(bool result);
+    event CoinJackpotPaid(uint16 trait, address winner, uint256 amount);
+    event BountyOwed(address indexed to, uint256 bountyAmount, uint256 newRecordFlip);
+    event BountyPaid(address indexed to, uint256 amount);
 
+    // ---------------------------------------------------------------------
+    // Errors
+    // ---------------------------------------------------------------------
+    error OnlyDeployer();
+    error OnlyGame();
+    error BettingPaused();
+    error Zero();
+    error Insufficient();
+    error AmountLTMin();
+    error FlipLTMin();
+    error BurnLT2pct();
+    error E();
+    error InvalidLeaderboard();
+    error PresaleExceedsRemaining();
+    error InvalidKind();
+    error StakeInvalid();
+    error OnlyCoordinatorCanFulfill(address have, address want);
+    error ZeroAddress();
+
+    // ---------------------------------------------------------------------
+    // ERC20 state
+    // ---------------------------------------------------------------------
     string public name;
     string public symbol;
     uint8 public immutable decimals;
@@ -164,26 +191,6 @@ contract Purgecoin {
         if (!ok) revert E();
         return abi.decode(data, (address[]));
     }
-
-    // ---------------------------------------------------------------------
-    // Errors
-    // ---------------------------------------------------------------------
-    error OnlyDeployer(); // caller must be contract deployer
-    error OnlyGame(); // caller must be the PurgeGame contract
-    error BettingPaused(); // coinflip entry disabled
-    error Zero(); // generic zero-value disallow
-    error Insufficient(); // insufficient balance / bad payment / generic
-    error AmountLTMin(); // provided amount is below minimum
-    error FlipLTMin(); // coinflip deposit below minimum
-    error BurnLT2pct(); // burn requirement not met vs deposit
-    error E();
-    error InvalidLeaderboard(); // bad leaderboard selector
-    error PresaleExceedsRemaining(); // over cap on presale
-    error InvalidKind(); // parameter enumerations out of range
-    error StakeInvalid(); // packed stake overflow / capacity / collision
-
-    error OnlyCoordinatorCanFulfill(address have, address want); // VRF guard
-    error ZeroAddress(); // zero coordinator disallowed
 
     // ---------------------------------------------------------------------
     // Types
@@ -351,20 +358,6 @@ contract Purgecoin {
     uint256 private constant TIER2_PRICE = 0.000015 ether;
     uint256 private constant TIER3_PRICE = 0.0000175 ether;
     uint256 private constant TIER4_PRICE = 0.00002 ether;
-
-    // ---------------------------------------------------------------------
-    // Events
-    // ---------------------------------------------------------------------
-    event Affiliate(uint256 amount, bytes32 indexed code, address sender);
-    event CoinflipFinished(bool result);
-    event CoinJackpotPaid(uint16 trait, address winner, uint256 amount);
-    event BountyOwed(
-        address indexed to,
-        uint256 bountyAmount,
-        uint256 newRecordFlip
-    );
-    event BountyPaid(address indexed to, uint256 amount);
-
     // ---------------------------------------------------------------------
     // Modifiers
     // ---------------------------------------------------------------------
