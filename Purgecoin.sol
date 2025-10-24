@@ -86,13 +86,6 @@ contract Purgecoin {
     bytes4 private constant GAME_JACKPOT_SELECTOR =
         bytes4(keccak256("getJackpotWinners(uint256,uint8,uint8,uint8)"));
 
-    function _vrfEncodeExtraArgs(bool nativePayment) private pure returns (bytes memory) {
-        return abi.encodeWithSelector(
-            EXTRA_ARGS_V1_TAG,
-            VRFExtraArgsV1({nativePayment: nativePayment})
-        );
-    }
-
     function _vrfRequestRandomWords(
         VRFRandomWordsRequest memory req
     ) private returns (uint256 requestId) {
@@ -251,7 +244,6 @@ contract Purgecoin {
     // ---------------------------------------------------------------------
     uint32 private constant vrfCallbackGasLimit = 200_000;
     uint16 private constant vrfRequestConfirmations = 5;
-    bool private constant vrfPayInNative = false;
 
     // ---------------------------------------------------------------------
     // Scan sentinels
@@ -902,7 +894,10 @@ contract Purgecoin {
                 requestConfirmations: vrfRequestConfirmations,
                 callbackGasLimit: vrfCallbackGasLimit,
                 numWords: 1,
-                extraArgs: _vrfEncodeExtraArgs(vrfPayInNative)
+                extraArgs: abi.encodeWithSelector(
+                    EXTRA_ARGS_V1_TAG,
+                    VRFExtraArgsV1({nativePayment: false})
+                )
             })
         );
         rngFulfilled = false;
