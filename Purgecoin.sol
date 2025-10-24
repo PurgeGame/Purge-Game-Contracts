@@ -8,6 +8,8 @@ contract Purgecoin {
     // ---------------------------------------------------------------------
     event Transfer(address indexed from, address indexed to, uint256 amount);
     event Approval(address indexed owner, address indexed spender, uint256 amount);
+    event StakeCreated(address indexed player, uint24 targetLevel, uint8 risk, uint256 principal);
+    event LuckyCoinBurned(address indexed player, uint256 amount, uint256 coinflipDeposit);
 
     string public name;
     string public symbol;
@@ -453,6 +455,8 @@ contract Purgecoin {
                 e.burn += uint232(amount);
             }
         }
+
+        emit LuckyCoinBurned(caller, amount, coinflipDeposit);
     }
 
     // Affiliate code management
@@ -693,6 +697,8 @@ contract Purgecoin {
                 true
             );
         }
+
+        emit StakeCreated(msg.sender, targetLevel, risk, principalRounded);
     }
 
     /// @notice Return the recorded referrer for `player` (zero address if none).
