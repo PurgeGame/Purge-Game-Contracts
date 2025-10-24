@@ -249,7 +249,6 @@ contract PurgeGame is ERC721A {
         // Liveness drain
         if (ts - 365 days > levelStartTime) {
             gameState = 0;
-            phase = 99;
             uint256 bal = address(this).balance;
             if (bal > 0) {
                 address dst = creator;
@@ -522,9 +521,8 @@ contract PurgeGame is ERC721A {
                 IPurgeCoinInterface(_coin).mintInGame(msg.sender, rebateMint);
         }
 
-        if (playerMapMintsOwed[msg.sender] == 0) {
+        if (playerMapMintsOwed[msg.sender] == 0)
             pendingMapMints.push(msg.sender);
-        }
         unchecked {
             playerMapMintsOwed[msg.sender] += uint32(quantity);
         }
