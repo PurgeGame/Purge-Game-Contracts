@@ -1,19 +1,35 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-
 contract Purgecoin {
     // ---------------------------------------------------------------------
     // Events
     // ---------------------------------------------------------------------
     event Transfer(address indexed from, address indexed to, uint256 amount);
-    event Approval(address indexed owner, address indexed spender, uint256 amount);
-    event StakeCreated(address indexed player, uint24 targetLevel, uint8 risk, uint256 principal);
-    event LuckyCoinBurned(address indexed player, uint256 amount, uint256 coinflipDeposit);
+    event Approval(
+        address indexed owner,
+        address indexed spender,
+        uint256 amount
+    );
+    event StakeCreated(
+        address indexed player,
+        uint24 targetLevel,
+        uint8 risk,
+        uint256 principal
+    );
+    event LuckyCoinBurned(
+        address indexed player,
+        uint256 amount,
+        uint256 coinflipDeposit
+    );
     event Affiliate(uint256 amount, bytes32 indexed code, address sender);
     event CoinflipFinished(bool result);
     event CoinJackpotPaid(uint16 trait, address winner, uint256 amount);
-    event BountyOwed(address indexed to, uint256 bountyAmount, uint256 newRecordFlip);
+    event BountyOwed(
+        address indexed to,
+        uint256 bountyAmount,
+        uint256 newRecordFlip
+    );
     event BountyPaid(address indexed to, uint256 amount);
 
     // ---------------------------------------------------------------------
@@ -57,7 +73,11 @@ contract Purgecoin {
         return true;
     }
 
-    function transferFrom(address from, address to, uint256 amount) public returns (bool) {
+    function transferFrom(
+        address from,
+        address to,
+        uint256 amount
+    ) public returns (bool) {
         uint256 allowed = allowance[from][msg.sender];
         if (allowed != type(uint256).max) {
             allowance[from][msg.sender] = allowed - amount;
@@ -103,15 +123,18 @@ contract Purgecoin {
     bytes4 private constant EXTRA_ARGS_V1_TAG =
         bytes4(keccak256("VRF ExtraArgsV1"));
     bytes4 private constant VRF_REQUEST_SELECTOR =
-        bytes4(keccak256("requestRandomWords((bytes32,uint256,uint16,uint32,uint32,bytes))"));
+        bytes4(
+            keccak256(
+                "requestRandomWords((bytes32,uint256,uint16,uint32,uint32,bytes))"
+            )
+        );
     bytes4 private constant VRF_GET_SUB_SELECTOR =
         bytes4(keccak256("getSubscription(uint256)"));
     bytes4 private constant LINK_TRANSFER_AND_CALL_SELECTOR =
         bytes4(keccak256("transferAndCall(address,uint256,bytes)"));
     bytes4 private constant GAME_STATE_SELECTOR =
         bytes4(keccak256("gameState()"));
-    bytes4 private constant GAME_LEVEL_SELECTOR =
-        bytes4(keccak256("level()"));
+    bytes4 private constant GAME_LEVEL_SELECTOR = bytes4(keccak256("level()"));
     bytes4 private constant GAME_JACKPOT_SELECTOR =
         bytes4(keccak256("getJackpotWinners(uint256,uint8,uint8,uint8)"));
 
@@ -125,7 +148,9 @@ contract Purgecoin {
         requestId = abi.decode(data, (uint256));
     }
 
-    function _vrfGetSubscription(uint256 subId)
+    function _vrfGetSubscription(
+        uint256 subId
+    )
         private
         view
         returns (uint96 bal, uint96, uint64, address, address[] memory)
@@ -134,10 +159,7 @@ contract Purgecoin {
             abi.encodeWithSelector(VRF_GET_SUB_SELECTOR, subId)
         );
         if (!ok || data.length == 0) revert E();
-        return abi.decode(
-            data,
-            (uint96, uint96, uint64, address, address[])
-        );
+        return abi.decode(data, (uint96, uint96, uint64, address, address[]));
     }
 
     function _linkTransferAndCall(
@@ -374,12 +396,7 @@ contract Purgecoin {
      * @param _keyHash           Key hash for the coordinator
      * @param _subId             Subscription id (funded with LINK / native per config)
      */
-    constructor(
-        address _vrfCoordinator,
-        bytes32 _keyHash,
-        uint256 _subId
-    ) {
-        if (_vrfCoordinator == address(0)) revert ZeroAddress();
+    constructor(address _vrfCoordinator, bytes32 _keyHash, uint256 _subId) {
         name = "Purgecoin";
         symbol = "PURGE";
         decimals = 6;
@@ -875,10 +892,7 @@ contract Purgecoin {
         uint256[] calldata randomWords
     ) external {
         if (msg.sender != s_vrfCoordinator) {
-            revert OnlyCoordinatorCanFulfill(
-                msg.sender,
-                s_vrfCoordinator
-            );
+            revert OnlyCoordinatorCanFulfill(msg.sender, s_vrfCoordinator);
         }
         fulfillRandomWords(requestId, randomWords);
     }
