@@ -376,10 +376,10 @@ contract Purgecoin {
     uint256 private constant TIER1_BOUNDARY = 800_000 * MILLION;
     uint256 private constant TIER2_BOUNDARY = 1_600_000 * MILLION;
     uint256 private constant TIER3_BOUNDARY = 2_400_000 * MILLION;
-    uint256 private constant TIER1_PRICE = 0.0000125 ether;
-    uint256 private constant TIER2_PRICE = 0.000015 ether;
-    uint256 private constant TIER3_PRICE = 0.0000175 ether;
-    uint256 private constant TIER4_PRICE = 0.00002 ether;
+    uint256 private constant TIER1_PRICE = 0.000012 ether;
+    uint256 private constant TIER2_PRICE = 0.000014 ether;
+    uint256 private constant TIER3_PRICE = 0.000016 ether;
+    uint256 private constant TIER4_PRICE = 0.000018 ether;
     // ---------------------------------------------------------------------
     // Modifiers
     // ---------------------------------------------------------------------
