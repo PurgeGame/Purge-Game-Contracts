@@ -110,11 +110,11 @@ contract PurgeGame {
     address private immutable _coin; // Trusted coin/game-side coordinator (PURGE ERC20)
     address private immutable _nft; // ERC721 contract handling mint/burn/metadata surface
     address private immutable creator; // Receives protocol PURGE (end-game drains, etc.)
+
     // -----------------------
     // Game Constants
     // -----------------------
     uint48 private constant JACKPOT_RESET_TIME = 82620; // Offset anchor for "daily" windows
-    uint256 private constant MILLION = 1_000_000; // 6-decimal unit helper
     uint32 private constant NFT_AIRDROP_PLAYER_BATCH_SIZE = 210; // Mint batch cap (# players)
     uint32 private constant NFT_AIRDROP_TOKEN_CAP = 3_000; // Mint batch cap (# tokens)
     uint32 private constant DEFAULT_PAYOUTS_PER_TX = 500; // ≤16M worst-case
@@ -125,7 +125,7 @@ contract PurgeGame {
     // Price
     // -----------------------
     uint256 private price = 0.025 ether; // Base mint price
-    uint256 private priceCoin = 1000 * MILLION; // 1,000 Purgecoin (6d) base unit
+    uint256 private priceCoin = 1_000_000_000; // 1,000 Purgecoin (6d) base unit
 
     // -----------------------
     // Prize Pools and RNG
@@ -1020,7 +1020,7 @@ contract PurgeGame {
         // Save % for next level (randomized bands per range)
         uint256 rndWord = uint256(keccak256(abi.encode(rngWord, uint8(3))));
         uint256 savePct;
-        if ((rndWord % 1_000_000_000) == MILLION) {
+        if ((rndWord % 1_000_000_000) == 420) {
             savePct = 10;
         } else if (lvl < 10) savePct = uint256(lvl) * 5;
         else if (lvl < 20) savePct = 55 + (rndWord % 16);
@@ -1713,10 +1713,9 @@ contract PurgeGame {
         uint8 maxTrait = _maxIdxInRange(counters, 16, 64);
         w[2] = 128 + maxTrait;
 
-        w[3] = 192 +
-            uint8(
-                uint256(keccak256(abi.encodePacked(seed, uint256(2)))) & 63
-            );
+        w[3] =
+            192 +
+            uint8(uint256(keccak256(abi.encodePacked(seed, uint256(2)))) & 63);
     }
 
     function _maxIdxInRange(
