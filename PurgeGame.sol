@@ -102,9 +102,9 @@ contract PurgeGame {
     // -----------------------
     // Immutable Addresses
     // -----------------------
-    address private immutable _renderer; // Trusted renderer; used for tokenURI composition
-    address private immutable _coin; // Trusted coin/game-side coordinator (PURGE ERC20)
-    address private immutable _nft; // ERC721 contract handling mint/burn/metadata surface
+    IPurgeRenderer private immutable renderer; // Trusted renderer; used for tokenURI composition
+    IPurgeCoinInterface private immutable coin; // Trusted coin/game-side coordinator (PURGE ERC20)
+    IPurgeGameNFT private immutable nft; // ERC721 interface for mint/burn/metadata surface
     address private immutable creator; // Receives protocol PURGE (end-game drains, etc.)
 
     // -----------------------
@@ -201,9 +201,9 @@ contract PurgeGame {
         address nftContract
     ) {
         creator = msg.sender;
-        _coin = purgeCoinContract;
-        _renderer = renderer_;
-        _nft = nftContract;
+        coin = IPurgeCoinInterface(purgeCoinContract);
+        renderer = IPurgeRenderer(renderer_);
+        nft = IPurgeGameNFT(nftContract);
     }
 
     // --- View: lightweight game status -------------------------------------------------
@@ -270,14 +270,14 @@ contract PurgeGame {
         uint8 ph = phase;
         bool pauseBetting = !((s == 2) && (ph < 3) && (lvl % 20 == 0));
 
-        IPurgeCoinInterface coin = IPurgeCoinInterface(_coin);
+        IPurgeCoinInterface coinContract = coin;
         uint48 day = uint48((ts - JACKPOT_RESET_TIME) / 1 days);
         uint48 dayIdx = dailyIdx;
 
         do {
             // RNG pull / SLA
             if (rngTs != 0 && !rngFulfilled) {
-                uint256 w = coin.pullRng();
+                uint256 w = coinContract.pullRng();
                 if (w != 0) {
                     rngFulfilled = true;
                     rngWord = w;
@@ -291,7 +291,7 @@ contract PurgeGame {
             // luckbox rewards
             if (
                 cap == 0 &&
-                coin.playerLuckbox(msg.sender) <
+                coinContract.playerLuckbox(msg.sender) <
                 priceCoin * lvl * (lvl / 100 + 1)
             ) revert LuckboxTooSmall();
 
@@ -321,9 +321,7 @@ contract PurgeGame {
                     break;
                 } else if (ph == 3 && jackpotCounter == 0) {
                     gameState = 3;
-                    IPurgeRenderer(_renderer).setStartingTraitRemaining(
-                        traitRemaining
-                    );
+                    renderer.setStartingTraitRemaining(traitRemaining);
                     if (_processMapBatch(cap)) {
                         phase = 4;
                         airdropIndex = 0;
@@ -381,7 +379,7 @@ contract PurgeGame {
             if (s == 4) {
                 if (ph == 6) {
                     payDailyJackpot(true, lvl);
-                    coin.triggerCoinJackpot();
+                    coinContract.triggerCoinJackpot();
                     phase = 7;
                     break;
                 }
@@ -395,7 +393,7 @@ contract PurgeGame {
             }
         } while (false);
 
-        if (s != 0 && cap == 0) coin.mintInGame(msg.sender, priceCoin);
+        if (s != 0 && cap == 0) coinContract.mintInGame(msg.sender, priceCoin);
     }
 
     // --- Purchases: schedule NFT mints (traits precomputed) ----------------------------------------
@@ -438,8 +436,7 @@ contract PurgeGame {
                 bonus += (quantity * _priceCoin) / 5;
             }
             bonus += bonusCoinReward;
-            if (bonus != 0)
-                IPurgeCoinInterface(_coin).mintInGame(msg.sender, bonus);
+            if (bonus != 0) coin.mintInGame(msg.sender, bonus);
         }
 
         // Push buyer to the pending list once (de-dup)
@@ -533,8 +530,7 @@ contract PurgeGame {
                 bonus += coinCost / 5;
             }
             uint256 rebateMint = bonus + mapRebate + mapBonus;
-            if (rebateMint != 0)
-                IPurgeCoinInterface(_coin).mintInGame(msg.sender, rebateMint);
+            if (rebateMint != 0) coin.mintInGame(msg.sender, rebateMint);
         }
 
         if (playerMapMintsOwed[msg.sender] == 0)
@@ -576,10 +572,8 @@ contract PurgeGame {
 
         for (uint256 i; i < count; ) {
             uint256 tokenId = tokenIds[i];
-            if (
-                IPurgeGameNFT(_nft).ownerOf(tokenId) != caller ||
-                trophyData[tokenId] != 0
-            ) revert E();
+        if (nft.ownerOf(tokenId) != caller || trophyData[tokenId] != 0)
+            revert E();
 
             uint32 traits = tokenTraits[tokenId];
             uint8 trait0 = uint8(traits & 0xFF);
@@ -598,7 +592,7 @@ contract PurgeGame {
                 }
             }
 
-            IPurgeGameNFT(_nft).gameBurn(tokenId);
+            nft.gameBurn(tokenId);
 
             unchecked {
                 dailyPurgeCount[trait0 & 0x07] += 1;
@@ -632,7 +626,7 @@ contract PurgeGame {
         }
 
         if (lvl % 10 == 2) count <<= 1;
-        IPurgeCoinInterface(_coin).mintInGame(
+        coin.mintInGame(
             caller,
             (count + bonusTenths) * (priceCoin / 10)
         );
@@ -691,7 +685,7 @@ contract PurgeGame {
             prizePool = (ticketsLen == 0) ? 0 : (participantShare / ticketsLen);
 
             // Award trophy (transfer placeholder owned by contract)
-            IPurgeGameNFT(_nft).trophyAward(exterminator, trophyId);
+            nft.trophyAward(exterminator, trophyId);
             trophyTokenIds.push(trophyId);
             trophyData[trophyId] =
                 (uint256(exTrait) << 152) |
@@ -731,7 +725,7 @@ contract PurgeGame {
         jackpotCounter = 0;
 
         // Mint next level’s trophy placeholder to the contract
-        uint256 newTrophyId = IPurgeGameNFT(_nft).gameMint(address(this), 1);
+        uint256 newTrophyId = nft.gameMint(address(this), 1);
         _baseTokenId = uint64(newTrophyId + 1);
         trophyData[newTrophyId] = (0xFFFF << 152);
 
@@ -756,7 +750,7 @@ contract PurgeGame {
     function _finalizeEndgame(uint24 lvl, uint32 cap, uint48 day) internal {
         uint24 ph = phase;
         if (lvl == 1 && _baseTokenId == 1) {
-            uint256 sentinelId = IPurgeGameNFT(_nft).gameMint(address(this), 1);
+            uint256 sentinelId = nft.gameMint(address(this), 1);
             trophyData[sentinelId] = (0xFFFF << 152);
             _baseTokenId = uint64(sentinelId + 1);
         }
@@ -777,8 +771,9 @@ contract PurgeGame {
                     uint256 affPool = (prevLevel == 1)
                         ? (poolTotal * 10) / 100
                         : (poolTotal * 5) / 100;
-                    address[] memory affLeaders = IPurgeCoinInterface(_coin)
-                        .getLeaderboardAddresses(1);
+                    address[] memory affLeaders = coin.getLeaderboardAddresses(
+                        1
+                    );
                     uint256 affLen = affLeaders.length;
                     if (affLen != 0) {
                         uint256 top = affLen < 3 ? affLen : 3;
@@ -818,18 +813,12 @@ contract PurgeGame {
                             ];
                             uint256 halfA = trophyPool >> 1;
                             uint256 halfB = trophyPool - halfA;
-                            if (IPurgeGameNFT(_nft).exists(idA)) {
-                                _addClaimableEth(
-                                    IPurgeGameNFT(_nft).ownerOf(idA),
-                                    halfA
-                                );
+                            if (nft.exists(idA)) {
+                                _addClaimableEth(nft.ownerOf(idA), halfA);
                                 trophyPool -= halfA;
                             }
-                            if (IPurgeGameNFT(_nft).exists(idB)) {
-                                _addClaimableEth(
-                                    IPurgeGameNFT(_nft).ownerOf(idB),
-                                    halfB
-                                );
+                            if (nft.exists(idB)) {
+                                _addClaimableEth(nft.ownerOf(idB), halfB);
                                 trophyPool -= halfB;
                             }
                         }
@@ -845,7 +834,7 @@ contract PurgeGame {
                     if ((prevLevel % 100) == 0) {
                         exterminatorShare += carryoverForNextLevel;
                     }
-                    address exterminatorOwner = IPurgeGameNFT(_nft).ownerOf(
+                    address exterminatorOwner = nft.ownerOf(
                         trophyTokenIds[trophyTokenIds.length - 1]
                     );
                     _addClaimableEth(exterminatorOwner, exterminatorShare);
@@ -868,7 +857,7 @@ contract PurgeGame {
             // on completion move to purchase state
             if (lvl > 1) {
                 _clearDailyPurgeCount();
-                IPurgeCoinInterface(_coin).resetAffiliateLeaderboard();
+                coin.resetAffiliateLeaderboard();
 
                 prizePool = 0;
                 phase = 0;
@@ -1014,7 +1003,7 @@ contract PurgeGame {
         uint256 lvlMod100 = lvl % 100;
 
         // Small creator payout in PURGE (proportional to total ETH processed)
-        IPurgeCoinInterface(_coin).mintInGame(
+        coin.mintInGame(
             creator,
             (totalWei * 5 * priceCoin) / 1 ether
         );
@@ -1230,7 +1219,7 @@ contract PurgeGame {
         bool pauseBetting
     ) private returns (bool ok) {
         if (pauseBetting) {
-            ok = IPurgeCoinInterface(_coin).processCoinflipPayouts(
+            ok = coin.processCoinflipPayouts(
                 lvl,
                 cap,
                 bonusFlip
@@ -1290,7 +1279,7 @@ contract PurgeGame {
         rngWord = 0;
         rngTs = ts;
         rngConsumed = false;
-        IPurgeCoinInterface(_coin).requestRngPurgeGame(pauseBetting);
+        coin.requestRngPurgeGame(pauseBetting);
     }
 
     /// @notice Handle ETH payments for purchases; forwards affiliate rewards in Purgecoin.
@@ -1314,7 +1303,6 @@ contract PurgeGame {
             }
         }
 
-        IPurgeCoinInterface coin = IPurgeCoinInterface(_coin);
         uint256 affiliateAmount = (scaledQty * priceCoin) / 1000;
         uint8 reached = earlyPurgeJackpotPaidMask & 0x3F;
         unchecked {
@@ -1349,13 +1337,13 @@ contract PurgeGame {
         if (lvl % 20 == 13) amount = (amount * 3) / 2;
         else if (lvl % 20 == 18) amount = (amount * 9) / 10;
         amount -= discount;
-        IPurgeCoinInterface(_coin).burnInGame(msg.sender, amount);
+        coin.burnInGame(msg.sender, amount);
     }
 
     function _enforceCenturyLuckbox(uint24 lvl, uint256 unit) private view {
         if (lvl % 100 == 0) {
             if (
-                IPurgeCoinInterface(_coin).playerLuckbox(msg.sender) <
+                coin.playerLuckbox(msg.sender) <
                 10 * unit * ((lvl / 100) + 1)
             ) revert LuckboxTooSmall();
         }
@@ -1472,7 +1460,7 @@ contract PurgeGame {
             if (room == 0) return false;
 
             uint32 chunk = owed > room ? room : owed;
-            IPurgeGameNFT(_nft).gameMint(player, chunk);
+            nft.gameMint(player, chunk);
 
             minted += chunk;
             owed -= chunk;
@@ -1646,7 +1634,7 @@ contract PurgeGame {
             address[] memory winnersArr,
             uint256[] memory amountsArr,
             uint256 returnWei
-        ) = IPurgeCoinInterface(_coin).runExternalJackpot(
+        ) = coin.runExternalJackpot(
                 kind,
                 poolWei,
                 cap,
