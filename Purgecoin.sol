@@ -1,6 +1,19 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+struct VRFExtraArgsV1 {
+    bool nativePayment;
+}
+
+struct VRFRandomWordsRequest {
+    bytes32 keyHash;
+    uint256 subId;
+    uint16 requestConfirmations;
+    uint32 callbackGasLimit;
+    uint32 numWords;
+    bytes extraArgs;
+}
+
 interface IPurgeLinkable {
     function wireContracts(address game_) external;
 }
@@ -14,6 +27,23 @@ interface IPurgeGame is IPurgeLinkable {
         uint8 numWinners,
         uint8 salt
     ) external view returns (address[] memory);
+}
+
+interface IVRFCoordinator {
+    function requestRandomWords(
+        VRFRandomWordsRequest calldata request
+    ) external returns (uint256);
+
+    function getSubscription(
+        uint256 subId
+    )
+        external
+        view
+        returns (uint96 balance, uint96 premium, uint64 reqCount, address owner, address[] memory consumers);
+}
+
+interface ILinkToken {
+    function transferAndCall(address to, uint256 value, bytes calldata data) external returns (bool);
 }
 
 contract Purgecoin {
@@ -101,46 +131,12 @@ contract Purgecoin {
         emit Transfer(from, address(0), amount);
     }
 
-    struct VRFExtraArgsV1 {
-        bool nativePayment;
-    }
-
-    struct VRFRandomWordsRequest {
-        bytes32 keyHash;
-        uint256 subId;
-        uint16 requestConfirmations;
-        uint32 callbackGasLimit;
-        uint32 numWords;
-        bytes extraArgs;
-    }
-
-    bytes4 private constant EXTRA_ARGS_V1_TAG = bytes4(keccak256("VRF ExtraArgsV1"));
-    bytes4 private constant VRF_REQUEST_SELECTOR =
-        bytes4(keccak256("requestRandomWords((bytes32,uint256,uint16,uint32,uint32,bytes))"));
-    bytes4 private constant VRF_GET_SUB_SELECTOR = bytes4(keccak256("getSubscription(uint256)"));
-    bytes4 private constant LINK_TRANSFER_AND_CALL_SELECTOR =
-        bytes4(keccak256("transferAndCall(address,uint256,bytes)"));
-
-    function _vrfRequestRandomWords(VRFRandomWordsRequest memory req) private returns (uint256 requestId) {
-        (bool ok, bytes memory data) = s_vrfCoordinator.call(abi.encodeWithSelector(VRF_REQUEST_SELECTOR, req));
-        if (!ok || data.length == 0) revert E();
-        requestId = abi.decode(data, (uint256));
-    }
-
-    function _vrfGetSubscription(
-        uint256 subId
-    ) private view returns (uint96 bal, uint96, uint64, address, address[] memory) {
-        (bool ok, bytes memory data) = s_vrfCoordinator.staticcall(abi.encodeWithSelector(VRF_GET_SUB_SELECTOR, subId));
-        if (!ok || data.length == 0) revert E();
-        return abi.decode(data, (uint96, uint96, uint64, address, address[]));
-    }
-
     function _linkTransferAndCall(address to, uint256 amount, bytes memory data) private returns (bool) {
-        (bool ok, bytes memory ret) = LINK.call(
-            abi.encodeWithSelector(LINK_TRANSFER_AND_CALL_SELECTOR, to, amount, data)
-        );
-        if (!ok) return false;
-        return ret.length == 0 || abi.decode(ret, (bool));
+        try ILinkToken(LINK).transferAndCall(to, amount, data) returns (bool ok) {
+            return ok;
+        } catch {
+            return false;
+        }
     }
 
 
@@ -223,7 +219,7 @@ contract Purgecoin {
     bytes32 private immutable vrfKeyHash; // VRF key hash
     uint256 private immutable vrfSubscriptionId; // VRF sub id
 
-    address private immutable s_vrfCoordinator; // VRF coordinator handle
+    IVRFCoordinator private immutable vrfCoordinator; // VRF coordinator handle
 
     // LINK token (Chainlink ERC677) — network-specific address
     address private constant LINK = 0x514910771AF9Ca656af840dff83E8264EcF986CA; // MAINNET LINK
@@ -335,7 +331,7 @@ contract Purgecoin {
         name = "Purgecoin";
         symbol = "PURGE";
         decimals = 6;
-        s_vrfCoordinator = _vrfCoordinator;
+        vrfCoordinator = IVRFCoordinator(_vrfCoordinator);
         creator = msg.sender;
         vrfKeyHash = _keyHash;
         vrfSubscriptionId = _subId;
@@ -760,35 +756,30 @@ contract Purgecoin {
     }
 
     function rawFulfillRandomWords(uint256 requestId, uint256[] calldata randomWords) external {
-        if (msg.sender != s_vrfCoordinator) {
-            revert OnlyCoordinatorCanFulfill(msg.sender, s_vrfCoordinator);
+        address coordinator = address(vrfCoordinator);
+        if (msg.sender != coordinator) {
+            revert OnlyCoordinatorCanFulfill(msg.sender, coordinator);
         }
-        fulfillRandomWords(requestId, randomWords);
+        if (requestId != rngRequestId || rngFulfilled) return;
+        rngFulfilled = true;
+        rngWord = randomWords[0];
     }
 
     function requestRng(bool pauseBetting) external onlyPurgeGameContract {
-        uint256 id = _vrfRequestRandomWords(
+        uint256 id = vrfCoordinator.requestRandomWords(
             VRFRandomWordsRequest({
                 keyHash: vrfKeyHash,
                 subId: vrfSubscriptionId,
                 requestConfirmations: vrfRequestConfirmations,
                 callbackGasLimit: vrfCallbackGasLimit,
                 numWords: 1,
-                extraArgs: abi.encodeWithSelector(EXTRA_ARGS_V1_TAG, VRFExtraArgsV1({nativePayment: false}))
+                extraArgs: abi.encode(VRFExtraArgsV1({nativePayment: false}))
             })
         );
         rngFulfilled = false;
         rngWord = 0;
         rngRequestId = id;
         isBettingPaused = pauseBetting;
-    }
-
-    /// @notice VRF callback: store the random word once for the expected request.
-    /// @dev Reverts if `requestId` does not match the most recent request or if already fulfilled.
-    function fulfillRandomWords(uint256 requestId, uint256[] calldata randomWords) internal {
-        if (requestId != rngRequestId || rngFulfilled) return;
-        rngFulfilled = true;
-        rngWord = randomWords[0];
     }
 
     /// @notice Read the current VRF word (0 if not yet fulfilled).
@@ -1736,12 +1727,12 @@ contract Purgecoin {
         if (amount == 0) revert Zero();
 
         // fund VRF sub
-        if (!_linkTransferAndCall(s_vrfCoordinator, amount, abi.encode(vrfSubscriptionId))) {
+        if (!_linkTransferAndCall(address(vrfCoordinator), amount, abi.encode(vrfSubscriptionId))) {
             revert E();
         }
 
         // post‑fund subscription LINK balance
-        (uint96 bal, , , , ) = _vrfGetSubscription(vrfSubscriptionId);
+        (uint96 bal, , , , ) = vrfCoordinator.getSubscription(vrfSubscriptionId);
 
         uint16 mult = _tierMultPermille(uint256(bal));
         uint256 credit;
