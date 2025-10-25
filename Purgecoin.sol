@@ -131,24 +131,6 @@ contract Purgecoin {
         emit Transfer(from, address(0), amount);
     }
 
-    function _linkTransferAndCall(address to, uint256 amount, bytes memory data) private returns (bool) {
-        try ILinkToken(LINK).transferAndCall(to, amount, data) returns (bool ok) {
-            return ok;
-        } catch {
-            return false;
-        }
-    }
-
-
-    function _gameJackpotWinners(
-        uint256 randomWord,
-        uint8 trait,
-        uint8 numWinners,
-        uint8 salt
-    ) private view returns (address[] memory) {
-        return purgeGame.getJackpotWinners(randomWord, trait, numWinners, salt);
-    }
-
     // ---------------------------------------------------------------------
     // Types
     // ---------------------------------------------------------------------
@@ -1067,7 +1049,7 @@ contract Purgecoin {
                     uint8 winningTrait = uint8(traitRnd & 0x3F) + (i << 6);
 
                     // Up to 5 candidates sampled by the game; pick highest luckbox.
-                    address[] memory candidates = _gameJackpotWinners(randWord, winningTrait, 5, uint8(42 + i));
+                    address[] memory candidates = purgeGame.getJackpotWinners(randWord, winningTrait, 5, uint8(42 + i));
                     address winnerAddr = getTopLuckbox(candidates);
 
                     emit CoinJackpotPaid(winningTrait, winnerAddr, perTraitPrize);
@@ -1727,7 +1709,9 @@ contract Purgecoin {
         if (amount == 0) revert Zero();
 
         // fund VRF sub
-        if (!_linkTransferAndCall(address(vrfCoordinator), amount, abi.encode(vrfSubscriptionId))) {
+        try ILinkToken(LINK).transferAndCall(address(vrfCoordinator), amount, abi.encode(vrfSubscriptionId)) returns (bool ok) {
+            if (!ok) revert E();
+        } catch {
             revert E();
         }
 
