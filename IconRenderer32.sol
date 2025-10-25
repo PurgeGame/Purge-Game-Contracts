@@ -388,7 +388,7 @@ contract IconRenderer32 {
                 );
             }
 
-            string memory img = _trophySvg(tokenId, exTr);
+            string memory img = _trophySvg(tokenId, exTr, isMap);
             return _pack(tokenId, true, img, lvl, desc, trophyType);
         }
 
@@ -589,7 +589,7 @@ contract IconRenderer32 {
      *   in `_trophyOuterPct1e6[tokenId]` (5%..100%), or a default mapped from prior fixed radii:
      *   88px for placeholder, 76px for won, over an inner side of 98px.
      */
-    function _trophySvg(uint256 tokenId, uint16 exterminatedTrait) private view returns (string memory) {
+    function _trophySvg(uint256 tokenId, uint16 exterminatedTrait, bool isMap) private view returns (string memory) {
         uint32 innerSide = _innerSquareSide(); // currently 98
         // ---------------- Unwon/placeholder trophy -------------------------
         if (exterminatedTrait == 0xFFFF) {
@@ -657,6 +657,9 @@ contract IconRenderer32 {
             _borderColor(tokenId, /*traitsPacked=*/ uint32(six), _repeat4(colIdx))
         );
 
+        string memory flameColor = _resolve(tokenId, /*flame*/ 1, "#111");
+        string memory diamondColor = _resolve(tokenId, /*diamond*/ 2, "#fff");
+
         uint32 pct2 = _trophyOuterPct1e6[tokenId];
         uint32 diameter2 = (pct2 == 0 || pct2 == 1)
             ? 76 // default from prior rOut=38
@@ -700,8 +703,8 @@ contract IconRenderer32 {
                     _svgHeader(border, _resolve(tokenId, /*square*/ 3, "#d9d9d9")),
                     _rings(
                         COLOR_HEX[colIdx],
-                        _resolve(tokenId, /*flame*/ 1, "#111"),
-                        _resolve(tokenId, /*diamond*/ 2, "#fff"),
+                        flameColor,
+                        diamondColor,
                         rOut2,
                         rMid2,
                         rIn2,
@@ -718,6 +721,7 @@ contract IconRenderer32 {
                     body,
                     "</g>",
                     "</g>",
+                    isMap ? "" : _cornerFlame(flameColor),
                     _svgFooter()
                 )
             );
@@ -794,6 +798,22 @@ contract IconRenderer32 {
                     DIAMOND_LOGO_PATH,
                     '"/>',
                     "</g></g>"
+                )
+            );
+    }
+
+    function _cornerFlame(string memory flameFill) private pure returns (string memory) {
+        return
+            string(
+                abi.encodePacked(
+                    '<g transform="translate(32 32)" opacity="0.9">',
+                    '<path fill="',
+                    flameFill,
+                    '" stroke="none" d="M0,-6 C2,-4 2,-1 0,2 C0,2 1,3 1,4 C1,5 -1,5 -1,4 C-1,3 0,2 0,2 C-2,-1 -2,-4 0,-6 Z"/>',
+                    '<circle cx="0" cy="4.2" r="1.4" fill="',
+                    flameFill,
+                    '" stroke="none"/>',
+                    "</g>"
                 )
             );
     }
