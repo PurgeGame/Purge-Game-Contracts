@@ -417,8 +417,12 @@ contract PurgeGame {
         bytes32 affiliateCode
     ) external payable {
         uint8 ph = phase;
-        if (quantity == 0 || quantity > 100 || gameState != 2 || !rngConsumed)
-            revert NotTimeYet();
+        if (
+            quantity == 0 ||
+            quantity > 100 ||
+            gameState != 2 ||
+            !rngConsumed
+        ) revert NotTimeYet();
         uint24 lvl = level;
         uint256 _priceCoin = priceCoin;
         _enforceCenturyLuckbox(lvl, _priceCoin);
@@ -505,8 +509,11 @@ contract PurgeGame {
         uint256 priceUnit = priceCoin;
         uint8 ph = phase;
         uint8 state = gameState;
-        if (quantity == 0 || (state != 2 && state != 4) || !rngConsumed)
-            revert NotTimeYet();
+        if (
+            quantity == 0 ||
+            (state != 2 && state != 4) ||
+            !rngConsumed
+        ) revert NotTimeYet();
         uint24 lvl = level;
         _enforceCenturyLuckbox(lvl, priceUnit);
         // Pricing / rebates
