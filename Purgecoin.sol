@@ -817,7 +817,6 @@ contract Purgecoin {
         _burn(target, amount);
         // 2% luckbox credit; integer division can produce zero for very small burns.
         uint256 credit = amount / 50; // 2%
-        if (credit == 0) return;
         uint256 codeSize;
         assembly {
             codeSize := extcodesize(target)
