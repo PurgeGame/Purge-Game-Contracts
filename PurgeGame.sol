@@ -4,9 +4,6 @@ pragma solidity ^0.8.26;
 /**
  * @title Purge Game — Core NFT game contract
  * @notice This file defines the on-chain game logic surface (interfaces + core state).
- * @dev The full audit will annotate each function as it is reviewed. This section covers
- *      declarations, configuration, and constructor. No state-variable renames are applied here
- *      to avoid breaking linkages in later functions; comments call out semantics and risks.
  */
 
 // ===========================================================================
@@ -124,7 +121,7 @@ contract PurgeGame {
     // Game Progress
     // -----------------------
     uint24 public level = 1; // 1-based level counter
-    uint8 public gameState = 1; // Phase FSM (audited in advanceGame() review)
+    uint8 public gameState = 1; // Phase FSM 
     uint8 private jackpotCounter; // # of daily jackpots paid in current level
     uint8 private earlyPurgeJackpotPaidMask; // Bitmask for early purge jackpots paid (progressive)
     uint8 private phase; // Airdrop sub-phase (0..7)
@@ -967,8 +964,6 @@ contract PurgeGame {
         carryWei = carryoverForNextLevel;
         uint256 totalWei = carryWei + prizePool;
         uint256 lvlMod100 = lvl % 100;
-
-        // Small creator payout in PURGE (proportional to total ETH processed)
         coin.burnie((totalWei * 5 * priceCoin) / 1 ether);
 
         // Save % for next level (randomized bands per range)
