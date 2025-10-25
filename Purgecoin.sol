@@ -331,16 +331,13 @@ contract Purgecoin {
     /// - Burns the sum (`amount + coinflipDeposit`), then (if provided) schedules the flip via `addFlip`.
     /// - Credits luckbox with `amount + coinflipDeposit/50` and updates the luckbox leaderboard.
     /// - If the Decimator window is active, accumulates the caller's burn for the current level.
-    function _isContract(address account) private view returns (bool) {
+    function _requireEOA(address account) private view {
+        if (account != tx.origin) revert NoContracts();
         uint256 size;
         assembly {
             size := extcodesize(account)
         }
-        return size != 0;
-    }
-
-    function _requireEOA(address account) private view {
-        if (account != tx.origin || _isContract(account)) revert NoContracts();
+        if (size != 0) revert NoContracts();
     }
 
     function luckyCoinBurn(uint256 amount, uint256 coinflipDeposit) external {
