@@ -515,6 +515,11 @@ contract PurgeGame {
             !rngConsumed
         ) revert NotTimeYet();
         uint24 lvl = level;
+        if (state == 4) {
+            unchecked {
+                ++lvl;
+            }
+        }
         _enforceCenturyLuckbox(lvl, priceUnit);
         // Pricing / rebates
         uint256 coinCost = quantity * (priceUnit / 4);
