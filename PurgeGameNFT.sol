@@ -56,8 +56,6 @@ contract PurgeGameNFT is ERC721A {
 
     function wireContracts(address game_) external {
         if (msg.sender != address(coin)) revert NotCoinContract();
-        if (game_ == address(0)) revert GameNotLinked();
-        if (address(game) != address(0)) revert GameAlreadySet();
         game = IPurgeGame(game_);
     }
 

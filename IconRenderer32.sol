@@ -315,8 +315,6 @@ contract IconRenderer32 {
     /// @dev Callable only by the PURGE coin contract; cannot be re-set after initialization.
     function wireContracts(address game_) external {
         if (msg.sender != coin) revert E();
-        if (game_ == address(0)) revert E();
-        if (game != address(0)) revert E();
         game = game_;
     }
 
