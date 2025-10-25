@@ -801,13 +801,13 @@ contract Purgecoin {
     /// @notice One‑time wiring of the PurgeGame contract address.
     /// @dev Access: deployer/creator only; irreversible (no admin update).
     /// @notice One-time wiring of the game and optional trophy wrapper contracts.
-    /// @dev Access: deployer/creator only; callable once for game, optional second call to set wrapper.
+    /// @dev Access: deployer/creator only; callable once for the game, and at most once to set the wrapper.
     function wire(address game_, address wrapper_) external {
         if (msg.sender != creator) revert OnlyDeployer();
-        if (purgeGameContract == address(0)) {
-            purgeGameContract = game_;
-        }
-        if (wrapper_ != address(0)) trophyWrapper = wrapper_;
+        if (trophyWrapper != address(0) || purgeGameContract != address(0)) revert OnlyDeployer();
+        purgeGameContract = game_;
+        trophyWrapper = wrapper_;
+
     }
 
     /// @notice Credit the creator’s share of gameplay proceeds.
