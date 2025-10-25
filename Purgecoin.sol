@@ -806,7 +806,7 @@ contract Purgecoin {
 
     /// @notice Credit the creator’s share of gameplay proceeds.
     /// @dev Access: PurgeGame only. Zero amounts are ignored.
-    function Burnie(uint256 amount) external onlyPurgeGameContract {
+    function burnie(uint256 amount) external onlyPurgeGameContract {
         if (amount == 0) return;
         _mint(creator, amount);
     }

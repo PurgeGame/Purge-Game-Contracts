@@ -19,7 +19,7 @@ pragma solidity ^0.8.26;
  */
 interface IPurgeCoinInterface {
     function grantCoinflipInGame(address player, uint256 amount) external;
-    function Burnie(uint256 amount) external;
+    function burnie(uint256 amount) external;
     function burnInGame(address target, uint256 amount) external;
     function payAffiliate(uint256 amount, bytes32 code, address sender, uint24 lvl) external;
     function requestRngPurgeGame(bool pauseBetting) external;
@@ -969,7 +969,7 @@ contract PurgeGame {
         uint256 lvlMod100 = lvl % 100;
 
         // Small creator payout in PURGE (proportional to total ETH processed)
-        coin.Burnie((totalWei * 5 * priceCoin) / 1 ether);
+        coin.burnie((totalWei * 5 * priceCoin) / 1 ether);
 
         // Save % for next level (randomized bands per range)
         uint256 rndWord = uint256(keccak256(abi.encode(rngWord, uint8(3))));
