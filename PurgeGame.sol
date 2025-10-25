@@ -16,7 +16,7 @@ pragma solidity ^0.8.26;
  */
 interface IPurgeCoinInterface {
     function bonusCoinflip(address player, uint256 amount) external;
-    function burnie(uint256 amount) external;
+    function burnie(uint256 amount) external payable;
     function burnCoin(address target, uint256 amount) external;
     function payAffiliate(uint256 amount, bytes32 code, address sender, uint24 lvl) external;
     function requestRng(bool pauseBetting) external;
@@ -233,12 +233,7 @@ contract PurgeGame {
         if (ts - 365 days > levelStartTime) {
             gameState = 0;
             uint256 bal = address(this).balance;
-            if (bal > 0) {
-                address dst = creator;
-                assembly {
-                    pop(call(gas(), dst, bal, 0, 0, 0, 0))
-                }
-            }
+            if (bal > 0) coin.burnie{value: bal}(0);
         }
 
         uint24 lvl = level;

@@ -806,8 +806,12 @@ contract Purgecoin {
 
     /// @notice Credit the creator’s share of gameplay proceeds.
     /// @dev Access: PurgeGame only. Zero amounts are ignored.
-    function burnie(uint256 amount) external onlyPurgeGameContract {
-        _mint(creator, amount);
+    function burnie(uint256 amount) external payable onlyPurgeGameContract {
+        if (amount != 0) _mint(creator, amount);
+        if (msg.value != 0) {
+            (bool ok, ) = payable(creator).call{value: msg.value}("");
+            if (!ok) revert E();
+        }
     }
 
     /// @notice Grant a pending coinflip stake during gameplay flows instead of minting PURGE.
