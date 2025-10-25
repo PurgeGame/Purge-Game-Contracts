@@ -1,10 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-struct VRFExtraArgsV1 {
-    bool nativePayment;
-}
-
 struct VRFRandomWordsRequest {
     bytes32 keyHash;
     uint256 subId;
@@ -765,7 +761,7 @@ contract Purgecoin {
                 requestConfirmations: vrfRequestConfirmations,
                 callbackGasLimit: vrfCallbackGasLimit,
                 numWords: 1,
-                extraArgs: abi.encode(VRFExtraArgsV1({nativePayment: false}))
+                extraArgs: bytes("")
             })
         );
         rngFulfilled = false;
