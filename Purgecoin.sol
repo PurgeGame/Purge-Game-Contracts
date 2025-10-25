@@ -768,7 +768,7 @@ contract Purgecoin {
         fulfillRandomWords(requestId, randomWords);
     }
 
-    function requestRngPurgeGame(bool pauseBetting) external onlyPurgeGameContract {
+    function requestRng(bool pauseBetting) external onlyPurgeGameContract {
         uint256 id = _vrfRequestRandomWords(
             VRFRandomWordsRequest({
                 keyHash: vrfKeyHash,
@@ -812,7 +812,7 @@ contract Purgecoin {
 
     /// @notice Grant a pending coinflip stake during gameplay flows instead of minting PURGE.
     /// @dev Access: PurgeGame only. Zero address or zero amount are ignored.
-    function grantCoinflipInGame(address player, uint256 amount) external onlyPurgeGameContract {
+    function bonusCoinflip(address player, uint256 amount) external onlyPurgeGameContract {
         if (player == address(0) || amount == 0) return;
         addFlip(player, amount, false);
     }
@@ -821,7 +821,7 @@ contract Purgecoin {
     ///         and credit 2% of the burned amount to their luckbox.
     /// @dev Access: PurgeGame only. OZ ERC20 `_burn` reverts on zero address or insufficient balance.
     ///      Leaderboard is refreshed only when a non‑zero credit is applied.
-    function burnInGame(address target, uint256 amount) external onlyPurgeGameContract {
+    function burnCoin(address target, uint256 amount) external onlyPurgeGameContract {
         _burn(target, amount);
         // 2% luckbox credit; skip if too small to matter after integer division.
         uint256 credit = amount / 50; // 2%

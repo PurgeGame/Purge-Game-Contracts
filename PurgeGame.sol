@@ -15,11 +15,11 @@ pragma solidity ^0.8.26;
  *      All calls are trusted (set via constructor in the ERC20 contract).
  */
 interface IPurgeCoinInterface {
-    function grantCoinflipInGame(address player, uint256 amount) external;
+    function bonusCoinflip(address player, uint256 amount) external;
     function burnie(uint256 amount) external;
-    function burnInGame(address target, uint256 amount) external;
+    function burnCoin(address target, uint256 amount) external;
     function payAffiliate(uint256 amount, bytes32 code, address sender, uint24 lvl) external;
-    function requestRngPurgeGame(bool pauseBetting) external;
+    function requestRng(bool pauseBetting) external;
     function pullRng() external view returns (uint256 word);
     function processCoinflipPayouts(uint24 level, uint32 cap, bool bonusFlip) external returns (bool);
     function triggerCoinJackpot() external;
@@ -362,7 +362,7 @@ contract PurgeGame {
             }
         } while (false);
 
-        if (s != 0 && cap == 0) coinContract.grantCoinflipInGame(msg.sender, priceCoin);
+        if (s != 0 && cap == 0) coinContract.bonusCoinflip(msg.sender, priceCoin);
     }
 
     // --- Purchases: schedule NFT mints (traits precomputed) ----------------------------------------
@@ -392,7 +392,7 @@ contract PurgeGame {
                 bonus += (quantity * _priceCoin) / 5;
             }
             bonus += bonusCoinReward;
-            if (bonus != 0) coin.grantCoinflipInGame(msg.sender, bonus);
+            if (bonus != 0) coin.bonusCoinflip(msg.sender, bonus);
         }
 
         // Push buyer to the pending list once (de-dup)
@@ -474,7 +474,7 @@ contract PurgeGame {
                 bonus += coinCost / 5;
             }
             uint256 rebateMint = bonus + mapRebate + mapBonus;
-            if (rebateMint != 0) coin.grantCoinflipInGame(msg.sender, rebateMint);
+            if (rebateMint != 0) coin.bonusCoinflip(msg.sender, rebateMint);
         }
 
         if (playerMapMintsOwed[msg.sender] == 0) pendingMapMints.push(msg.sender);
@@ -578,7 +578,7 @@ contract PurgeGame {
         }
 
         if (lvl % 10 == 2) count <<= 1;
-        coin.grantCoinflipInGame(caller, (count + bonusTenths) * (priceCoin / 10));
+        coin.bonusCoinflip(caller, (count + bonusTenths) * (priceCoin / 10));
         emit Purge(msg.sender, tokenIds);
     }
 
@@ -1231,7 +1231,7 @@ contract PurgeGame {
         rngWord = 0;
         rngTs = ts;
         rngConsumed = false;
-        coin.requestRngPurgeGame(pauseBetting);
+        coin.requestRng(pauseBetting);
     }
 
     /// @notice Handle ETH payments for purchases; forwards affiliate rewards as coinflip credits.
@@ -1280,7 +1280,7 @@ contract PurgeGame {
         if (lvl % 20 == 13) amount = (amount * 3) / 2;
         else if (lvl % 20 == 18) amount = (amount * 9) / 10;
         amount -= discount;
-        coin.burnInGame(msg.sender, amount);
+        coin.burnCoin(msg.sender, amount);
     }
 
     function _enforceCenturyLuckbox(uint24 lvl, uint256 unit) private view {
