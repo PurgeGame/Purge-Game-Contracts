@@ -19,7 +19,6 @@ interface IPurgeLinkable {
 }
 
 interface IPurgeGame is IPurgeLinkable {
-    function gameState() external view returns (uint8);
     function level() external view returns (uint24);
     function getJackpotWinners(
         uint256 randomWord,
@@ -1681,13 +1680,10 @@ contract Purgecoin {
         }
     }
 
-    /// @notice Check whether the Decimator window is active for the current game phase.
-    /// @dev Returns `(false, 0)` while purge phase (gameState==4) is active.
+    /// @notice Check whether the Decimator window is active for the current level.
     /// @return on  True if level >= 25 and `level % 10 == 5` (Decimator checkpoint).
-    /// @return lvl Current game level (0 if purge phase).
+    /// @return lvl Current game level.
     function _decWindow() internal view returns (bool on, uint24 lvl) {
-        uint8 s = purgeGame.gameState();
-        if (s == 4) return (false, 0);
         lvl = purgeGame.level();
         on = (lvl >= 25 && (lvl % 10) == 5 && (lvl % 100) != 95);
     }

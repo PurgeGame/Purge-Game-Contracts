@@ -120,7 +120,7 @@ contract PurgeGame {
     // Game Progress
     // -----------------------
     uint24 public level = 1; // 1-based level counter
-    uint8 public gameState = 1; // Phase FSM
+    uint8 private gameState = 1; // Phase FSM
     uint8 private jackpotCounter; // # of daily jackpots paid in current level
     uint8 private earlyPurgeJackpotPaidMask; // Bitmask for early purge jackpots paid (progressive)
     uint8 private phase; // Airdrop sub-phase (0..7)
@@ -182,20 +182,23 @@ contract PurgeGame {
 
     // --- View: lightweight game status -------------------------------------------------
 
-    /// @notice Public snapshot of selected game state for UI/indexers.
-    /// @return phase_                   Current airdrop sub-phase (0..7)
-    /// @return jackpotCounter_          Number of daily jackpots processed this level
-    /// @return price_                   Current mint price (wei)
-    /// @return carry_                   Carryover for next level (wei)
-    /// @return prizePoolTarget          Prize pool minimum to end mint for current level (wei)
-    /// @return prizePoolCurrent         Current level’s live prize pool (wei)
-    /// @return enoughPurchases          True if purchaseCount >= 1500
-    /// @return rngFulfilled_            Last VRF request fulfilled
-    /// @return rngConsumed_             Last VRF word consumed by game logic
+
+    /// @notice Snapshot key game state for UI/indexers.
+    /// @return gameState_       FSM state (0=idle,1=pregame,2=purchase,3=airdrop,4=purge)
+    /// @return phase_           Airdrop sub-phase (0..7)
+    /// @return jackpotCounter_  Daily jackpots processed this level
+    /// @return price_           Current mint price (wei)
+    /// @return carry_           Carryover earmarked for next level (wei)
+    /// @return prizePoolTarget  Last level's prize pool snapshot (wei)
+    /// @return prizePoolCurrent Active prize pool (levelPrizePool when purging)
+    /// @return enoughPurchases  True if purchaseCount >= 1,500
+    /// @return rngFulfilled_    Last VRF request fulfilled
+    /// @return rngConsumed_     Current RNG word consumed
     function gameInfo()
         external
         view
         returns (
+            uint8 gameState_,
             uint8 phase_,
             uint8 jackpotCounter_,
             uint256 price_,
@@ -207,6 +210,7 @@ contract PurgeGame {
             bool rngConsumed_
         )
     {
+        gameState_ = gameState;
         phase_ = phase;
         jackpotCounter_ = jackpotCounter;
         price_ = price;
@@ -589,7 +593,8 @@ contract PurgeGame {
     /// - Start next level and seed `levelPrizePool`.
     ///
     /// When a non-trait end occurs (>=256, e.g. daily jackpots path):
-    /// - Allocate 20% of the remaining `prizePool` to the MAP trophy holder for this level.
+    /// - Allocate 10% of the remaining `prizePool` to the current MAP trophy holder and 5% each to three
+    ///   random MAP trophies still receiving drip payouts (with replacement).
     /// - Carry the remainder forward and reset leaderboards.
     /// - On L%100==0: adjust price and `lastPrizePool`.
     ///
@@ -647,14 +652,19 @@ contract PurgeGame {
             }
 
             uint256 poolCarry = prizePool;
-            uint256 mapShare = poolCarry / 5; // 20%
             uint256 mapTrophyId = trophyId - 1;
             address mapOwner = nft.ownerOf(mapTrophyId);
+
+            uint256 mapShare = poolCarry / 10; // 10% to current MAP trophy
+            uint256 randomShare = poolCarry / 20; // 5% slices for MAP trophies still dripping
+
             _addClaimableEth(mapOwner, mapShare);
-            poolCarry -= mapShare;
+            uint256 distributed = mapShare;
+            distributed += _sampleTrophies(false, randomShare, rngWord);
+
+            poolCarry -= distributed;
             carryoverForNextLevel += poolCarry;
             prizePool = 0;
-            
 
             lastExterminatedTrait = 420;
         }
@@ -709,79 +719,70 @@ contract PurgeGame {
             _baseTokenId = uint64(levelPlaceholderId + 1);
         }
         if (ph > 3) {
+            uint24 prevLevel;
+            unchecked {
+                prevLevel = lvl - 1;
+            }
+
             // (C) Endgame distributions (skip this block if prior level ended non-trait, i.e. 420)
             if (lastExterminatedTrait != 420) {
-                uint24 prevLevel;
-                unchecked {
-                    prevLevel = lvl - 1;
-                }
                 if (prizePool != 0) {
                     _payoutParticipants(cap, prevLevel);
                     return;
                 }
                 uint256 poolTotal = levelPrizePool;
-                if (poolTotal != 0) {
-                    // Affiliate reward (10% for L1, 5% otherwise)
-                    uint256 affPool = (prevLevel == 1) ? (poolTotal * 10) / 100 : (poolTotal * 5) / 100;
-                    address[] memory affLeaders = coin.getLeaderboardAddresses(1);
-                    uint256 affLen = affLeaders.length;
-                    if (affLen != 0) {
-                        uint256 top = affLen < 3 ? affLen : 3;
-                        for (uint256 i; i < top; ) {
-                            uint256 pct = i == 0
-                                ? 50
-                                : i == 1
-                                    ? 25
-                                    : 15;
-                            _addClaimableEth(affLeaders[i], (affPool * pct) / 100);
-                            unchecked {
-                                ++i;
-                            }
-                        }
-                        if (affLen > 3) {
-                            address rndAddr = affLeaders[3 + (rngWord % (affLen - 3))];
-                            _addClaimableEth(rndAddr, (affPool * 10) / 100);
+
+                // Affiliate reward (10% for L1, 5% otherwise)
+                uint256 affPool = (prevLevel == 1) ? (poolTotal * 10) / 100 : (poolTotal * 5) / 100;
+                address[] memory affLeaders = coin.getLeaderboardAddresses(1);
+                uint256 affLen = affLeaders.length;
+                if (affLen != 0) {
+                    uint256 top = affLen < 3 ? affLen : 3;
+                    for (uint256 i; i < top; ) {
+                        uint256 pct = i == 0
+                            ? 50
+                            : i == 1
+                                ? 25
+                                : 15;
+                        _addClaimableEth(affLeaders[i], (affPool * pct) / 100);
+                        unchecked {
+                            ++i;
                         }
                     }
-
-                    // Historical trophy bonus (5% across two past trophies)
-                    if (prevLevel > 1) {
-                        uint256 trophyPool = poolTotal / 20;
-                        uint256 trophiesLen = exterminationTrophyIds.length;
-
-                        if (trophiesLen > 1) {
-                            uint256 idA = exterminationTrophyIds[rngWord % (trophiesLen - 1)];
-                            uint256 idB = exterminationTrophyIds[(rngWord >> 128) % (trophiesLen - 1)];
-                            uint256 halfA = trophyPool >> 1;
-                            uint256 halfB = trophyPool - halfA;
-                            _addClaimableEth(nft.ownerOf(idA), halfA);
-                            trophyPool -= halfA;
-                            _addClaimableEth(nft.ownerOf(idB), halfB);
-                            trophyPool -= halfB;
-                        }
-                        if (trophyPool != 0) carryoverForNextLevel += trophyPool;
+                    if (affLen > 3) {
+                        address rndAddr = affLeaders[3 + (rngWord % (affLen - 3))];
+                        _addClaimableEth(rndAddr, (affPool * 10) / 100);
                     }
+                }
 
-                    // Exterminator’s share (20% or 40%), plus epoch carry if prevLevel%100==0
-                    uint256 exterminatorShare = (prevLevel % 10 == 7 && prevLevel >= 25)
-                        ? (poolTotal * 40) / 100
-                        : (poolTotal * 20) / 100;
-                    if ((prevLevel % 100) == 0) {
-                        exterminatorShare += carryoverForNextLevel;
+                // Historical trophy bonus (5% across up to three active level trophies)
+                if (prevLevel > 1) {
+                    uint256 trophyPool = poolTotal / 20;
+                    uint256 paid = _sampleTrophies(true, trophyPool, rngWord);
+                    if (paid < trophyPool) {
+                        carryoverForNextLevel += trophyPool - paid;
                     }
-                    uint256 levelTrophyId = exterminationTrophyIds[exterminationTrophyIds.length - 1];
-                    address exterminatorOwner = nft.ownerOf(levelTrophyId);
-                    uint256 immediateEx = exterminatorShare >> 1;
-                    _addClaimableEth(exterminatorOwner, immediateEx);
-                    _startTrophyDrip(levelTrophyId, exterminatorShare - immediateEx);
+                }
 
-                    levelPrizePool = 0;
+                // Exterminator’s share (20% or 40%), plus epoch carry if prevLevel%100==0
+                uint256 exterminatorShare = (prevLevel % 10 == 7 && prevLevel >= 25)
+                    ? (poolTotal * 40) / 100
+                    : (poolTotal * 20) / 100;
+                if ((prevLevel % 100) == 0) {
+                    exterminatorShare += carryoverForNextLevel;
+                }
+                uint256 levelTrophyId = exterminationTrophyIds[exterminationTrophyIds.length - 1];
+                address exterminatorOwner = nft.ownerOf(levelTrophyId);
+                uint256 immediateEx = exterminatorShare >> 1;
+                _addClaimableEth(exterminatorOwner, immediateEx);
+                _startTrophyDrip(levelTrophyId, exterminatorShare - immediateEx);
 
-                    // Century boundary ends the epoch here
-                    if ((prevLevel % 100) == 0) {
-                        gameState = 0;
-                        return;
-                    }
+                levelPrizePool = 0;
+
+                // Century boundary ends the epoch here
+                if ((prevLevel % 100) == 0) {
+                    gameState = 0;
+                    return;
                 }
             }
             // (D) Finish coinflip / stake payouts for the day;
@@ -790,6 +791,18 @@ contract PurgeGame {
                 return;
             }
         } else {
+            uint24 prevLevel;
+            unchecked {
+                prevLevel = lvl - 1;
+            }
+
+            bool decWindow = prevLevel >= 25 && (prevLevel % 10) == 5 && (prevLevel % 100) != 95;
+            if (decWindow) {
+                uint256 decPoolWei = (carryoverForNextLevel * 15) / 100;
+                (bool decFinished, ) = _progressExternal(1, decPoolWei, cap, prevLevel);
+                if (!decFinished) return;
+            }
+
             // on completion move to purchase state
             if (lvl > 1) {
                 _clearDailyPurgeCount();
@@ -928,6 +941,77 @@ contract PurgeGame {
         }
     }
 
+    function _eligibleTrophies(bool isExtermination)
+        private
+        view
+        returns (uint256[] memory pool)
+    {
+        uint256 len = activeTrophyDrips.length;
+        pool = new uint256[](len);
+        uint256 count;
+
+        for (uint256 i; i < len; ) {
+            uint256 tokenId = activeTrophyDrips[i];
+            bool isMap = (trophyData[tokenId] & TROPHY_FLAG_MAP) != 0;
+            if (isExtermination ? !isMap : isMap) {
+                pool[count] = tokenId;
+                unchecked {
+                    ++count;
+                }
+            }
+            unchecked {
+                ++i;
+            }
+        }
+
+        assembly {
+            mstore(pool, count)
+        }
+    }
+
+    function _sampleTrophies(
+        bool isExtermination,
+        uint256 payout,
+        uint256 randomWord
+    ) private returns (uint256 distributed) {
+        if (payout == 0) return 0;
+
+        uint256[] memory pool = _eligibleTrophies(isExtermination);
+        uint256 len = pool.length;
+
+        if (len == 0) return 0;
+
+        uint256 mask = type(uint64).max;
+        uint256 baseShare;
+        uint256 remainder;
+
+        if (isExtermination) {
+            baseShare = payout / 3;
+            remainder = payout - (baseShare * 3);
+        }
+
+        for (uint256 draw; draw < 3; ) {
+            uint256 idx = len == 1 ? 0 : (randomWord & mask) % len;
+            randomWord >>= 64;
+            uint256 tokenId = pool[idx];
+
+            uint256 amount = isExtermination
+                ? (draw < 2 ? baseShare : baseShare + remainder)
+                : payout;
+
+            if (amount != 0) {
+                _addClaimableEth(nft.ownerOf(tokenId), amount);
+                distributed += amount;
+            }
+
+            unchecked {
+                ++draw;
+            }
+        }
+
+        return distributed;
+    }
+
     /// @notice Expose trait-ticket sampling (view helper for coinJackpot).
     function getJackpotWinners(
         uint256 randomWord,
@@ -942,7 +1026,7 @@ contract PurgeGame {
 
     /// @notice Compute carry split, set the new prize pool, and pay the 9 map buckets.
     /// @dev
-    /// - External jackpots (BAF/Decimator) may short‑circuit for continuation.
+    /// - BAF external jackpot may short‑circuit for continuation; Decimator is reserved for endgame.
     /// - Trait selection:
     ///     * idx 0: one random full‑range trait (0..255)
     ///     * idx 1–2: same random Q0 trait (big payout, then many small)
@@ -956,14 +1040,11 @@ contract PurgeGame {
         // External jackpots first (may need multiple calls)
         if (lvl % 20 == 0) {
             uint256 bafPoolWei = (carryWei * 24) / 100;
-            if (!_progressExternal(0, bafPoolWei, cap, lvl)) return false;
-        } else if (lvl >= 25 && (lvl % 10) == 5 && lvl % 100 != 95) {
-            uint256 decPoolWei = (carryWei * 15) / 100;
-            if (!_progressExternal(1, decPoolWei, cap, lvl)) return false;
+            (bool finishedBaf, ) = _progressExternal(0, bafPoolWei, cap, lvl);
+            if (!finishedBaf) return false;
+            carryWei = carryoverForNextLevel;
         }
 
-        // Recompute after any external stage updated carryover
-        carryWei = carryoverForNextLevel;
         uint256 totalWei = carryWei + prizePool;
         uint256 lvlMod100 = lvl % 100;
         coin.burnie((totalWei * 5 * priceCoin) / 1 ether);
@@ -1546,12 +1627,16 @@ contract PurgeGame {
     // --- External jackpot coordination ---------------------------------------------------------------
 
     /// @notice Progress an external jackpot (BAF / Decimator) and account winners locally.
-    /// @param kind  External jackpot kind (0 = BAF, 1 = Decimator).
-    /// @param poolWei Total wei allocated for this external jackpot stage.
-    /// @param cap   Step cap forwarded to the external processor.
+    /// @param kind            External jackpot kind (0 = BAF, 1 = Decimator).
+    /// @param poolWei         Total wei allocated for this external jackpot stage.
+    /// @param cap             Step cap forwarded to the external processor.
     /// @return finished True if the external stage reports completion.
-    function _progressExternal(uint8 kind, uint256 poolWei, uint32 cap, uint24 lvl) internal returns (bool finished) {
-        if (kind == 0 && (rngWord & 1) == 0) return true;
+    /// @return returnedWei Wei to be returned to carryover (non-zero only on completion).
+    function _progressExternal(uint8 kind, uint256 poolWei, uint32 cap, uint24 lvl)
+        internal
+        returns (bool finished, uint256 returnedWei)
+    {
+        if (kind == 0 && (rngWord & 1) == 0) return (true, 0);
 
         (bool isFinished, address[] memory winnersArr, uint256[] memory amountsArr, uint256 returnWei) = coin
             .runExternalJackpot(kind, poolWei, cap, lvl);
@@ -1566,8 +1651,9 @@ contract PurgeGame {
         if (isFinished) {
             // Decrease carryover by the spent portion (poolWei - returnWei).
             carryoverForNextLevel -= (poolWei - returnWei);
+            returnedWei = returnWei;
         }
-        return isFinished;
+        return (isFinished, returnedWei);
     }
 
     function _randTraitTicket(
