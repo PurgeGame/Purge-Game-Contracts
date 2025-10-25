@@ -76,7 +76,7 @@ interface IPurgeGameNFT {
 
     function ownerOf(uint256 tokenId) external view returns (address);
 
-    function exists(uint256 tokenId) external view returns (bool);
+    
 }
 
 // ===========================================================================
@@ -116,6 +116,8 @@ contract PurgeGame {
     uint32 private constant DEFAULT_PAYOUTS_PER_TX = 500; // ≤16M worst-case
     uint32 private constant WRITES_BUDGET_SAFE = 800; // <16M gas  budget
     uint72 private constant MAP_PERMILLE = 0x0A0A07060304050564; // Payout permilles packed (9 bytes)
+    uint256 private constant TROPHY_FLAG_MAP = uint256(1) << 200; // Marks trophies sourced from MAP jackpots
+    uint8 private constant TROPHY_DRIP_STEPS = 10; // # of level transitions to drip deferred trophies
 
     // -----------------------
     // Price
@@ -184,6 +186,9 @@ contract PurgeGame {
     // -----------------------
     uint32[80] internal dailyPurgeCount; // 8 + 8 + 64
     uint32[256] internal traitRemaining; // Remaining supply per trait (0..255)
+
+    uint256[] private activeTrophyDrips; // Trophy tokenIds with deferred payouts pending
+    mapping(uint256 => uint256) private trophyDripPerLevel; // Fixed wei streamed per level
 
     // -----------------------
     // Constructor
@@ -653,6 +658,8 @@ contract PurgeGame {
     /// - Reset per-level state, mint the next level’s trophy placeholder,
     ///   set default exterminated sentinel to 420, and request fresh VRF.
     function _endLevel(uint16 exterminated) private {
+        _disburseTrophyDrips();
+
         address exterminator = msg.sender;
         uint256 trophyId = _baseTokenId - 1;
 
@@ -724,10 +731,12 @@ contract PurgeGame {
         }
         jackpotCounter = 0;
 
-        // Mint next level’s trophy placeholder to the contract
-        uint256 newTrophyId = nft.gameMint(address(this), 1);
-        _baseTokenId = uint64(newTrophyId + 1);
-        trophyData[newTrophyId] = (0xFFFF << 152);
+        // Mint next level’s trophy placeholders (map + level) to the contract
+        uint256 startId = nft.gameMint(address(this), 2);
+        uint256 levelPlaceholderId = startId + 1;
+        trophyData[startId] = (0xFFFF << 152) | TROPHY_FLAG_MAP;
+        trophyData[levelPlaceholderId] = (0xFFFF << 152);
+        _baseTokenId = uint64(levelPlaceholderId + 1);
 
         // Price schedule
         uint256 mod100 = levelSnapshot % 100;
@@ -749,10 +758,12 @@ contract PurgeGame {
     ///      Pass `cap` from advanceGame to keep tx gas ≤ target.
     function _finalizeEndgame(uint24 lvl, uint32 cap, uint48 day) internal {
         uint24 ph = phase;
-        if (lvl == 1 && _baseTokenId == 1) {
-            uint256 sentinelId = nft.gameMint(address(this), 1);
-            trophyData[sentinelId] = (0xFFFF << 152);
-            _baseTokenId = uint64(sentinelId + 1);
+        if (lvl == 1 && _baseTokenId <= 1) {
+            uint256 startId = nft.gameMint(address(this), 2);
+            uint256 levelPlaceholderId = startId + 1;
+            trophyData[startId] = (0xFFFF << 152) | TROPHY_FLAG_MAP;
+            trophyData[levelPlaceholderId] = (0xFFFF << 152);
+            _baseTokenId = uint64(levelPlaceholderId + 1);
         }
         if (ph > 3) {
             // (C) Endgame distributions (skip this block if prior level ended non-trait, i.e. 420)
@@ -813,14 +824,10 @@ contract PurgeGame {
                             ];
                             uint256 halfA = trophyPool >> 1;
                             uint256 halfB = trophyPool - halfA;
-                            if (nft.exists(idA)) {
-                                _addClaimableEth(nft.ownerOf(idA), halfA);
-                                trophyPool -= halfA;
-                            }
-                            if (nft.exists(idB)) {
-                                _addClaimableEth(nft.ownerOf(idB), halfB);
-                                trophyPool -= halfB;
-                            }
+                            _addClaimableEth(nft.ownerOf(idA), halfA);
+                            trophyPool -= halfA;
+                            _addClaimableEth(nft.ownerOf(idB), halfB);
+                            trophyPool -= halfB;
                         }
                         if (trophyPool != 0)
                             carryoverForNextLevel += trophyPool;
@@ -834,10 +841,16 @@ contract PurgeGame {
                     if ((prevLevel % 100) == 0) {
                         exterminatorShare += carryoverForNextLevel;
                     }
-                    address exterminatorOwner = nft.ownerOf(
-                        trophyTokenIds[trophyTokenIds.length - 1]
+                    uint256 levelTrophyId = trophyTokenIds[
+                        trophyTokenIds.length - 1
+                    ];
+                    address exterminatorOwner = nft.ownerOf(levelTrophyId);
+                    uint256 immediateEx = exterminatorShare >> 1;
+                    _addClaimableEth(exterminatorOwner, immediateEx);
+                    _startTrophyDrip(
+                        levelTrophyId,
+                        exterminatorShare - immediateEx
                     );
-                    _addClaimableEth(exterminatorOwner, exterminatorShare);
 
                     levelPrizePool = 0;
 
@@ -951,6 +964,46 @@ contract PurgeGame {
     ) internal pure returns (uint8 winnersN, uint8 permille) {
         winnersN = (index & 1) == 1 ? 1 : (index == 0 ? 1 : 20);
         permille = uint8(MAP_PERMILLE >> (uint256(index) * 8));
+    }
+
+    function _startTrophyDrip(uint256 tokenId, uint256 deferredWei) private {
+        uint256 perLevel = deferredWei / TROPHY_DRIP_STEPS;
+        trophyDripPerLevel[tokenId] = perLevel;
+        activeTrophyDrips.push(tokenId);
+    }
+
+    function _clearTrophyDripEntry(uint256 index) private {
+        uint256 last = activeTrophyDrips.length - 1;
+        if (index != last) {
+            activeTrophyDrips[index] = activeTrophyDrips[last];
+        }
+        activeTrophyDrips.pop();
+    }
+
+    function _disburseTrophyDrips() private {
+        uint256 len = activeTrophyDrips.length;
+        for (uint256 i; i < len; ) {
+            uint256 tokenId = activeTrophyDrips[i];
+            uint256 perLevel = trophyDripPerLevel[tokenId];
+            uint256 data = trophyData[tokenId];
+            uint256 awardLevel = (data >> 128) & 0xFFFFFF;
+            uint256 elapsed = level - awardLevel;
+
+            if (elapsed == 0) {
+                unchecked { ++i; }
+                continue;
+            }
+
+        _addClaimableEth(nft.ownerOf(tokenId), perLevel);
+
+        if (elapsed >= TROPHY_DRIP_STEPS) {
+            _clearTrophyDripEntry(i);
+            len = activeTrophyDrips.length;
+            continue;
+        }
+
+            unchecked { ++i; }
+        }
     }
 
     /// @notice Expose trait-ticket sampling (view helper for coinJackpot).
@@ -1075,10 +1128,24 @@ contract PurgeGame {
             uint256 bucketWei = (effectiveWei * permille) / 1000;
             if (doubleMap) bucketWei <<= 1;
 
-            uint256 winnersLen = winners.length;
-            if (winnersLen != 0) {
-                uint256 prizeEachWei = bucketWei / winnersLen;
+            if (idx == 0 && winners.length != 0) {
+                uint256 trophyTokenId = uint256(_baseTokenId) - 2;
+                address trophyOwner = winners[0];
+                nft.trophyAward(trophyOwner, trophyTokenId);
+                trophyData[trophyTokenId] =
+                    (uint256(traitId) << 152) |
+                    (uint256(lvl) << 128) |
+                    TROPHY_FLAG_MAP;
 
+                uint256 immediatePool = bucketWei >> 1;
+                unchecked {
+                    totalPaidWei += bucketWei;
+                }
+                _addClaimableEth(trophyOwner, immediatePool);
+                _startTrophyDrip(trophyTokenId, bucketWei - immediatePool);
+            } else if (winners.length != 0) {
+                uint256 winnersLen = winners.length;
+                uint256 prizeEachWei = bucketWei / winnersLen;
                 uint256 paidWei = prizeEachWei * winnersLen;
                 unchecked {
                     totalPaidWei += paidWei;

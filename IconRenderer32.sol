@@ -28,6 +28,8 @@ interface IPurgedRead {
 contract IconRenderer32 {
     using Strings for uint256;
 
+    uint256 private constant MAP_TROPHY_FLAG = uint256(1) << 200;
+
     // ---------------- Storage ----------------
 
     /// @dev Four color channels (border, mid ring, inner ring, square bg).
@@ -338,6 +340,7 @@ contract IconRenderer32 {
 
     /// @dev Read the exterminated trait from a packed trophy `data` word.
     ///      Bits [167:152] hold: 0xFFFF for placeholder (unwon), else uint8 trait id.
+    ///      Bit 200 is reserved for MAP trophies (1 = MAP, 0 = level trophy).
     function _readExterminatedTrait(uint256 data) private pure returns (uint16) {
         uint16 ex16 = uint16((data >> 152) & 0xFFFF);
         if (ex16 == 0xFFFF) return 0xFFFF; // placeholder/unwon trophy
@@ -347,7 +350,7 @@ contract IconRenderer32 {
     /// @notice Render metadata + image for a PURGE token (regular or trophy).
     /// @param tokenId   NFT id.
     /// @param data      Packed game data:
-    ///                  - Trophy: bits [167:152] exterminated trait (0xFFFF = placeholder), bits [151:128] level.
+    ///                  - Trophy: bits [167:152] exterminated trait (0xFFFF = placeholder), bits [151:128] level, bit 200 = MAP flag.
     ///                  - Regular: bits [63:48] last exterminated trait (0..255 or 420 sentinel),
     ///                             bits [47:24] level, bits [23:00] packed traits.
     /// @param remaining Live remaining counts for this token’s four traits (regular only).
@@ -362,8 +365,31 @@ contract IconRenderer32 {
         if ((data >> 128) != 0) {
             lvl = uint24((data >> 128) & 0xFFFFFF);       // may be 0 for placeholder trophies
             uint16 exTr = _readExterminatedTrait(data);   // 0xFFFF = placeholder, else 0..255
+            bool isMap = (data & MAP_TROPHY_FLAG) != 0;
+            string memory lvlStr = (lvl == 0)
+                ? "TBD"
+                : uint256(lvl).toString();
+            string memory trophyType = isMap ? "Map" : "Winner's";
+
+            string memory desc;
+            if (exTr == 0xFFFF) {
+                desc = string.concat(
+                    "Unawarded ",
+                    trophyType,
+                    " trophy placeholder."
+                );
+            } else {
+                desc = string.concat(
+                    "Awarded for Level ",
+                    lvlStr,
+                    isMap
+                        ? " MAP jackpot dominance."
+                        : " final extermination victory."
+                );
+            }
+
             string memory img = _trophySvg(tokenId, exTr);
-            return _pack(tokenId, true, img, lvl, "Purge Game Trophy");
+            return _pack(tokenId, true, img, lvl, desc, trophyType);
         }
 
         // ----- Regular token path -----
@@ -375,7 +401,7 @@ contract IconRenderer32 {
         string memory img2  = _svgFull(tokenId, traits, col, sym, remaining, lastEx);
         string memory desc2 = _descFromRem(col, sym, remaining);
 
-        return _pack(tokenId, false, img2, lvl, desc2);
+        return _pack(tokenId, false, img2, lvl, desc2, "");
     }
 
     /// @dev Compose the full SVG for a regular token (non‑trophy).
@@ -713,18 +739,22 @@ contract IconRenderer32 {
     /**
     * @dev Build ERC‑721 metadata as data:application/json;base64 with an embedded
     *      data:image/svg+xml;base64 image.
+    * @param trophyType For trophies, short label (e.g. "Map"); ignored for regular tokens.
     */
     function _pack(
         uint256 tokenId,
         bool isTrophy,
         string memory svg,
         uint256 level,
-        string memory desc
+        string memory desc,
+        string memory trophyType
     ) private pure returns (string memory) {
-        // Name: “Purge Game Level <L> Trophy” or “Purge Game Level <L> #<id>”
+        string memory lvlStr = (level == 0)
+            ? "TBD"
+            : level.toString();
         string memory nm = isTrophy
-            ? string.concat("Purge Game Level ", level.toString(), " Trophy")
-            : string.concat("Purge Game Level ", level.toString(), " #", tokenId.toString());
+            ? string.concat("Purge Game Level ", lvlStr, " ", trophyType, " Trophy")
+            : string.concat("Purge Game Level ", lvlStr, " #", tokenId.toString());
 
         // Image: inline SVG → base64 data URL
         string memory imgData = string.concat(
@@ -735,7 +765,17 @@ contract IconRenderer32 {
         // Minimal trait list; attributes[] intentionally empty for compactness
         string memory j = string.concat('{"name":"', nm);
         j = string.concat(j, '","description":"', desc);
-        j = string.concat(j, '","image":"', imgData, '","attributes":[]}');
+        j = string.concat(j, '","image":"', imgData, '","attributes":');
+        if (isTrophy) {
+            j = string.concat(
+                j,
+                '[{"trait_type":"Trophy","value":"',
+                trophyType,
+                '"}]}'
+            );
+        } else {
+            j = string.concat(j, "[]}");
+        }
 
         // Return as data:application/json;base64
         return string.concat("data:application/json;base64,", Base64.encode(bytes(j)));

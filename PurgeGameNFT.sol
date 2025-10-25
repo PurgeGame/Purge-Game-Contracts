@@ -30,6 +30,7 @@ contract PurgeGameNFT is ERC721A {
     error NotGame();
     error GameAlreadySet();
     error GameNotLinked();
+    error TrophyBurnNotAllowed();
     // Immutable roles --------------------------------------------------------
     address public immutable creator;
 
@@ -37,6 +38,8 @@ contract PurgeGameNFT is ERC721A {
     address public game;
     IPurgeRenderer public renderer;
     IPurgeGameMetadataProvider public metadataProvider;
+
+    mapping(uint256 => bool) private trophyToken;
 
     constructor(address creator_) ERC721A("Purge Game", "PG") {
         creator = creator_;
@@ -74,7 +77,18 @@ contract PurgeGameNFT is ERC721A {
     }
 
     function trophyAward(address to, uint256 tokenId) external onlyGame {
+        trophyToken[tokenId] = true;
         transferFrom(game, to, tokenId);
+    }
+
+    function _beforeTokenTransfers(
+        address from,
+        address to,
+        uint256 tokenId,
+        uint256 quantity
+    ) internal override {
+        if (to == address(0) && trophyToken[tokenId]) revert TrophyBurnNotAllowed();
+        super._beforeTokenTransfers(from, to, tokenId, quantity);
     }
 
     // --- Views ----------------------------------------------------------------
@@ -85,10 +99,6 @@ contract PurgeGameNFT is ERC721A {
         if (game == address(0)) revert GameNotLinked();
         metadataProvider.describeToken(tokenId);
         return super.ownerOf(tokenId);
-    }
-
-    function exists(uint256 tokenId) external view returns (bool) {
-        return _exists(tokenId);
     }
 
     function tokenURI(
