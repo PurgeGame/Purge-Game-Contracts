@@ -47,7 +47,7 @@ interface IPurgeRenderer {
 interface IPurgeGameNFT {
     function gameMint(address to, uint256 quantity) external returns (uint256 startTokenId);
 
-    function gameBurn(uint256 tokenId) external;
+    function purge(uint256 tokenId) external;
 
     function trophyAward(address to, uint256 tokenId) external;
 
@@ -538,7 +538,7 @@ contract PurgeGame {
                 }
             }
 
-            nft.gameBurn(tokenId);
+            nft.purge(tokenId);
 
             unchecked {
                 dailyPurgeCount[trait0 & 0x07] += 1;

@@ -2,6 +2,11 @@
 pragma solidity ^0.8.26;
 import "erc721a/contracts/ERC721A.sol";
 
+/**
+ * @title PurgeGameNFT
+ * @notice ERC721A collection controlled by the Purge game. Handles game-driven mint/burn flows,
+ *         trophy transfers, and MAP trophy emission claims while delegating metadata to renderer.
+ */
 interface IPurgeRenderer {
     function tokenURI(
         uint256 tokenId,
@@ -35,17 +40,18 @@ contract PurgeGameNFT is ERC721A {
     error NotMapTrophy();
     error ClaimNotReady();
     error CoinPaused();
+
     // Linked contracts ------------------------------------------------------
-    IPurgeGame private game;
-    IPurgeRenderer private immutable renderer;
-    IPurgecoin private immutable coin;
+    IPurgeGame private game; // Set once by the coin contract after deployment
+    IPurgeRenderer private immutable renderer; // On-chain renderer for metadata generation
+    IPurgecoin private immutable coin; // Purgecoin contract (authorizes wiring + coin drips)
 
-    mapping(uint256 => bool) private trophyToken;
-    mapping(uint256 => uint32) private mapTrophyLastClaim;
+    mapping(uint256 => bool) private trophyToken; // Tracks which tokenIds are trophies (non-burnable)
+    mapping(uint256 => uint32) private mapTrophyLastClaim; // MAP trophy -> last level claimed for drip
 
-    uint32 private constant COIN_DRIP_STEPS = 10;
+    uint32 private constant COIN_DRIP_STEPS = 10; // Number of levels across which MAP drips accrue
     uint256 private constant COIN_EMISSION_UNIT = 1_000 * 1_000_000; // 1000 PURGED (6 decimals)
-    uint256 private constant TROPHY_FLAG_MAP = uint256(1) << 200;
+    uint256 private constant TROPHY_FLAG_MAP = uint256(1) << 200; // Flag in trophy metadata for MAP origin
 
     constructor(address renderer_, address coin_) ERC721A("Purge Game", "PG") {
         renderer = IPurgeRenderer(renderer_);
@@ -54,6 +60,8 @@ contract PurgeGameNFT is ERC721A {
 
     // --- Admin ----------------------------------------------------------------
 
+    /// @notice Wire the game contract once the coin deployer approves it.
+    /// @dev Only callable by the coin contract to prevent arbitrary rewiring.
     function wireContracts(address game_) external {
         if (msg.sender != address(coin)) revert NotCoinContract();
         game = IPurgeGame(game_);
@@ -66,20 +74,24 @@ contract PurgeGameNFT is ERC721A {
         _;
     }
 
+    /// @notice Game-controlled batch mint. Returns the starting token id for caller bookkeeping.
     function gameMint(address to, uint256 quantity) external onlyGame returns (uint256 startTokenId) {
         startTokenId = _nextTokenId();
         _mint(to, quantity);
     }
 
-    function gameBurn(uint256 tokenId) external onlyGame {
+    /// @notice Game-controlled purge burn. Trophies are protected via `_beforeTokenTransfers`.
+    function purge(uint256 tokenId) external onlyGame {
         _burn(tokenId, false);
     }
 
+    /// @notice Transfer a trophy placeholder owned by the game to the awarded player.
     function trophyAward(address to, uint256 tokenId) external onlyGame {
         trophyToken[tokenId] = true;
         transferFrom(address(game), to, tokenId);
     }
 
+    /// @notice Claim accumulated Purgecoin drip for a MAP trophy. Callable once per level window.
     function claimMapTrophyCoin(uint256 tokenId) external {
         if (coin.isBettingPaused()) revert CoinPaused();
         if (ownerOf(tokenId) != msg.sender) revert NotTrophyOwner();
@@ -117,6 +129,7 @@ contract PurgeGameNFT is ERC721A {
         coin.bonusCoinflip(msg.sender, claimable);
     }
 
+    /// @dev Prevent trophies from being burned by overriding the ERC721A pre-transfer hook.
     function _beforeTokenTransfers(address from, address to, uint256 tokenId, uint256 quantity) internal override {
         if (to == address(0) && trophyToken[tokenId]) revert TrophyBurnNotAllowed();
         super._beforeTokenTransfers(from, to, tokenId, quantity);
@@ -124,12 +137,16 @@ contract PurgeGameNFT is ERC721A {
 
     // --- Views ----------------------------------------------------------------
 
+    /// @inheritdoc ERC721A
+    /// @dev Ensures the game has been wired and forwards to the game for descriptor liveness.
     function ownerOf(uint256 tokenId) public view override returns (address) {
         if (address(game) == address(0)) revert GameNotLinked();
         game.describeToken(tokenId);
         return super.ownerOf(tokenId);
     }
 
+    /// @inheritdoc ERC721A
+    /// @dev Delegates metadata building to the on-chain renderer using game-sourced descriptors.
     function tokenURI(uint256 tokenId) public view override returns (string memory) {
         if (address(game) == address(0) || address(renderer) == address(0)) revert GameNotLinked();
 
