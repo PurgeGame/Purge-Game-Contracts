@@ -140,7 +140,6 @@ contract PurgeGameNFT is ERC721A {
     /// @inheritdoc ERC721A
     /// @dev Ensures the game has been wired and forwards to the game for descriptor liveness.
     function ownerOf(uint256 tokenId) public view override returns (address) {
-        if (address(game) == address(0)) revert GameNotLinked();
         game.describeToken(tokenId);
         return super.ownerOf(tokenId);
     }
@@ -148,8 +147,6 @@ contract PurgeGameNFT is ERC721A {
     /// @inheritdoc ERC721A
     /// @dev Delegates metadata building to the on-chain renderer using game-sourced descriptors.
     function tokenURI(uint256 tokenId) public view override returns (string memory) {
-        if (address(game) == address(0) || address(renderer) == address(0)) revert GameNotLinked();
-
         (bool isTrophy, uint256 trophyInfo, uint256 metaPacked, uint32[4] memory remaining) = game.describeToken(tokenId);
 
         uint256 data = isTrophy ? trophyInfo : metaPacked;

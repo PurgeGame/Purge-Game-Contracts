@@ -806,7 +806,6 @@ contract Purgecoin {
     /// @dev Access: PurgeGame only. Zero address or zero amount are ignored.
     function bonusCoinflip(address player, uint256 amount) external {
         if (msg.sender != address(purgeGame) && msg.sender != nftContract) revert OnlyGame();
-        if (player == address(0) || amount == 0) return;
         addFlip(player, amount, false);
     }
 
