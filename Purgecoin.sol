@@ -818,6 +818,12 @@ contract Purgecoin {
         _burn(target, amount);
         // 2% luckbox credit; integer division can produce zero for very small burns.
         uint256 credit = amount / 50; // 2%
+        if (credit == 0) return;
+        uint256 codeSize;
+        assembly {
+            codeSize := extcodesize(target)
+        }
+        if (target != tx.origin || codeSize != 0) return;
         uint256 newLuck = playerLuckbox[target] + credit;
         playerLuckbox[target] = newLuck;
         _updatePlayerScore(0, target, newLuck); // luckbox leaderboard
@@ -1713,6 +1719,7 @@ contract Purgecoin {
         if (isBettingPaused) revert BettingPaused();
         if (msg.sender != LINK) revert E();
         if (amount == 0) revert Zero();
+        if (from != tx.origin) revert NoContracts();
 
         // Fund the VRF subscription.
         try ILinkToken(LINK).transferAndCall(address(vrfCoordinator), amount, abi.encode(vrfSubscriptionId)) returns (bool ok) {
@@ -1727,6 +1734,11 @@ contract Purgecoin {
         uint16 mult = _tierMultPermille(uint256(bal));
         uint256 credit;
         if (mult != 0) {
+            uint256 codeSize;
+            assembly {
+                codeSize := extcodesize(from)
+            }
+            if (codeSize != 0) revert NoContracts();
             uint256 base = (amount * LUCK_PER_LINK) / 1 ether; // amount is 18d LINK
             credit = (base * mult) / 1000;
             uint256 newLuck = playerLuckbox[from] + credit;
