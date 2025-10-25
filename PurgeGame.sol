@@ -121,7 +121,7 @@ contract PurgeGame {
     // Game Progress
     // -----------------------
     uint24 public level = 1; // 1-based level counter
-    uint8 public gameState = 1; // Phase FSM 
+    uint8 public gameState = 1; // Phase FSM
     uint8 private jackpotCounter; // # of daily jackpots paid in current level
     uint8 private earlyPurgeJackpotPaidMask; // Bitmask for early purge jackpots paid (progressive)
     uint8 private phase; // Airdrop sub-phase (0..7)
@@ -1299,10 +1299,10 @@ contract PurgeGame {
         if (airdropIndex >= total) return true;
 
         if (writesBudget == 0) writesBudget = WRITES_BUDGET_SAFE;
-        if (phase < 2) {
-            writesBudget = (writesBudget * 3) / 4;
-            phase = 2;
-        } else if (phase == 3) writesBudget = (writesBudget * 3) / 4;
+        if (phase <= 1 || phase == 3) {
+            writesBudget -= writesBudget >> 2; // 75% scaling
+            if (phase <= 1) phase = 2;
+        }
         uint32 used = 0;
         uint256 entropy = rngWord;
 
