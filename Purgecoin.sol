@@ -203,7 +203,7 @@ contract Purgecoin {
 
     IVRFCoordinator private immutable vrfCoordinator; // VRF coordinator handle
 
-    // LINK token (Chainlink ERC677) — network-specific address
+    // LINK token (Chainlink ERC677) - network-specific address
     address private constant LINK = 0x514910771AF9Ca656af840dff83E8264EcF986CA; // MAINNET LINK
 
     // ---------------------------------------------------------------------
@@ -214,7 +214,7 @@ contract Purgecoin {
 
     // Session flags
     bool public isBettingPaused; // set while VRF is pending unless explicitly allowed
-    bool private tbActive; // “tenth player” bonus active
+    bool private tbActive; // "tenth player" bonus active
     bool private rngFulfilled;
     uint8 private extMode; // external jackpot mode (state machine)
 
@@ -223,7 +223,7 @@ contract Purgecoin {
     uint8 private affiliateLen;
     uint8 private topLen;
 
-    // “tenth player” bonus fields
+    // "tenth player" bonus fields
     uint8 private tbMod; // wheel mod (0..9)
     uint32 private tbRemain; // remaining awards
     uint256 private tbPrize; // prize per tenth player
@@ -238,14 +238,14 @@ contract Purgecoin {
     uint256 private dailyCoinBurn;
     uint256 private currentTenthPlayerBonusPool;
 
-    // queue over storage we reuse every round
+    // Coinflip roster stored as a reusable ring buffer.
     address[] private cfPlayers;
     uint256 private cfHead; // next index to pay
     uint256 private cfTail; // next slot to write
 
     mapping(address => uint256) public coinflipAmount;
 
-    // O(1) “largest bettor” tracking
+    // Tracks headline bettors for bonus logic.
     PlayerScore[4] public topBettors;
 
     // Affiliates / luckbox
@@ -323,14 +323,13 @@ contract Purgecoin {
         _mint(creator, PRESALEAMOUNT);
     }
 
-    // Lucky burn + optional coinflip deposit
     /// @notice Burn PURGED to grow luckbox and (optionally) place a coinflip deposit in the same tx.
     /// @dev
     /// - Reverts if betting is paused.
-    /// - `amount` must be ≥ MIN; if `coinflipDeposit` > 0 it must be ≥ MIN and burn must be at least 2% of it.
+    /// - `amount` must be >= MIN; if `coinflipDeposit` > 0 it must be >= MIN and burn must be at least 2% of it.
     /// - Burns the sum (`amount + coinflipDeposit`), then (if provided) schedules the flip via `addFlip`.
     /// - Credits luckbox with `amount + coinflipDeposit/50` and updates the luckbox leaderboard.
-    /// - If the Decimator window is active, accumulates the caller’s burn for the current level.
+    /// - If the Decimator window is active, accumulates the caller's burn for the current level.
     function luckyCoinBurn(uint256 amount, uint256 coinflipDeposit) external {
         if (isBettingPaused) revert BettingPaused();
         if (amount < MIN) revert AmountLTMin();
@@ -389,7 +388,7 @@ contract Purgecoin {
         emit Affiliate(1, code_, msg.sender); // 1 = code created
     }
 
-    /// @notice Set the caller’s referrer once using a valid affiliate code.
+    /// @notice Set the caller's referrer once using a valid affiliate code.
     /// @dev Reverts if code is unknown, self-referral, or caller already has a referrer.
     function referPlayer(bytes32 code_) external {
         address referrer = affiliateCode[code_];
@@ -478,13 +477,13 @@ contract Purgecoin {
         revert StakeInvalid();
     }
 
-    /// @notice Burn PURGED to open a future “stake window” targeting `targetLevel` with a risk radius.
+    /// @notice Burn PURGED to open a future "stake window" targeting `targetLevel` with a risk radius.
     /// @dev
-    /// - `burnAmt` must be ≥ 250e6 (6d).
+    /// - `burnAmt` must be at least 250e6 base units (token has 6 decimals).
     /// - `targetLevel` must be at least 11 levels ahead of the current game level.
-    /// - `risk` ∈ [1..MAX_RISK] and cannot exceed the distance to `targetLevel`.
-    /// - Encodes stake as: whole-token principal (6‑decimal trimmed) + 8-bit risk code.
-    /// - Enforces no overlap/collision with caller’s existing stakes.
+    /// - `risk` must be between 1 and `MAX_RISK` and cannot exceed the distance to `targetLevel`.
+    /// - Encodes stake as whole-token principal (6-decimal trimmed) plus an 8-bit risk code.
+    /// - Enforces no overlap/collision with caller's existing stakes.
     function stake(uint256 burnAmt, uint24 targetLevel, uint8 risk) external {
         if (burnAmt < 250 * MILLION) revert AmountLTMin();
         if (isBettingPaused) revert BettingPaused();
@@ -588,14 +587,14 @@ contract Purgecoin {
     /// @notice Credit affiliate rewards for a purchase (invoked by the game contract).
     /// @dev
     /// Referral rules:
-    /// - If `referredBy[sender] == address(1)`: sender is “locked” and we no-op.
+    /// - If `referredBy[sender] == address(1)`: sender is "locked" and we no-op.
     /// - Else if a referrer already exists: pay that address (`affiliateAddr = referrer`).
     /// - Else if `code` resolves to a valid address different from `sender`: bind it and use it.
     /// - Else: lock the sender to `address(1)` (no future attempts) and return.
     /// Payout rules:
     /// - `amount` is optionally doubled on levels `level % 25 == 1`.
     /// - Direct ref gets a coinflip credit equal to `amount`; their upline (if any and already active
-    ///   this level) receives a 20% bonus coinflip credit of the same (post‑doubling) amount.
+    ///   this level) receives a 20% bonus coinflip credit of the same (post-doubling) amount.
     function payAffiliate(uint256 amount, bytes32 code, address sender, uint24 lvl) external onlyPurgeGameContract {
         address affiliateAddr = affiliateCode[code];
         address referrer = referredBy[sender];
@@ -701,7 +700,7 @@ contract Purgecoin {
 
     /// @notice Compute the tiered presale cost for `amount`, given `sold` units already sold.
     /// @dev Splits `amount` across tier buckets [T1..T4] using remaining capacity in order,
-    ///      then multiplies by per‑tier prices. All arithmetic uses base‑unit amounts (1e6).
+    ///      then multiplies by per-tier prices. All arithmetic uses base-unit amounts (1e6).
     function _computePresaleCostAtSold(uint256 amount, uint256 sold) internal pure returns (uint256 costWei) {
         unchecked {
             uint256 tier1Qty;
@@ -768,10 +767,9 @@ contract Purgecoin {
     function pullRng() external view returns (uint256) {
         return rngFulfilled ? rngWord : 0;
     }
-    /// @notice One‑time wiring of the PurgeGame contract address.
-    /// @dev Access: deployer/creator only; irreversible (no admin update).
-    /// @notice One-time wiring of the game, trophy/NFT wrapper, and renderer contracts.
-    /// @dev Access: deployer/creator only; callable once.
+
+    /// @notice Wire the game, NFT, and renderer contracts required by Purgecoin.
+    /// @dev Creator only; callable once.
     function wire(address game_, address nft_, address renderer_) external {
         if (msg.sender != creator) revert OnlyDeployer();
         if (nftContract != address(0) || address(purgeGame) != address(0)) revert OnlyDeployer();
@@ -782,7 +780,7 @@ contract Purgecoin {
         IPurgeLinkable(nft_).wireContracts(game_);
     }
 
-    /// @notice Credit the creator’s share of gameplay proceeds.
+    /// @notice Credit the creator's share of gameplay proceeds.
     /// @dev Access: PurgeGame only. Zero amounts are ignored.
     function burnie(uint256 amount) external payable onlyPurgeGameContract {
         if (amount != 0) _mint(creator, amount);
@@ -803,10 +801,10 @@ contract Purgecoin {
     /// @notice Burn PURGE from `target` during gameplay flows (purchases, fees),
     ///         and credit 2% of the burned amount to their luckbox.
     /// @dev Access: PurgeGame only. OZ ERC20 `_burn` reverts on zero address or insufficient balance.
-    ///      Leaderboard is refreshed only when a non‑zero credit is applied.
+    ///      Leaderboard is refreshed only when a non-zero credit is applied.
     function burnCoin(address target, uint256 amount) external onlyPurgeGameContract {
         _burn(target, amount);
-        // 2% luckbox credit; skip if too small to matter after integer division.
+        // 2% luckbox credit; integer division can produce zero for very small burns.
         uint256 credit = amount / 50; // 2%
         uint256 newLuck = playerLuckbox[target] + credit;
         playerLuckbox[target] = newLuck;
@@ -814,15 +812,15 @@ contract Purgecoin {
     }
 
     /// @notice Progress coinflip payouts for the current level in bounded slices.
-    /// @dev Called by PurgeGame. Operates in four phases per “day”:
-    ///      (1) Optional stake propagation (once per level/day; only if coinflip win).
-    ///      (2) Arm bounty & “tenth‑player” bonus on the first payout window.
-    ///      (3) Pay player flips (and tenth‑player bonuses) in batches.
-    ///      (4) Cleanup in batches; on completion, reset per‑round state and unpause betting.
+    /// @dev Called by PurgeGame; runs in four phases per settlement:
+    ///      1. Optionally propagate stakes when the flip outcome is a win.
+    ///      2. Arm bounty and tenth-player bonuses on the first payout window.
+    ///      3. Pay player flips (plus any tenth-player prizes) in batches.
+    ///      4. Perform cleanup and reopen betting.
     /// @param level Current PurgeGame level (used to gate 1/run and propagate stakes).
     /// @param cap   Work cap hint. cap==0 uses defaults; otherwise applies directly.
-    /// @param bonusFlip Applies 10% bonus to last flip of purchase phase
-    /// @return finished True once the entire cycle—including cleanup—has completed.
+    /// @param bonusFlip Apply a 10% bonus to the last flip of the purchase phase.
+    /// @return finished True when all payouts and cleanup are complete.
     function processCoinflipPayouts(
         uint24 level,
         uint32 cap,
@@ -837,7 +835,7 @@ contract Purgecoin {
         uint256 word = rngWord;
         bool win = (word & 1) == 1;
         if (!win) stepPayout <<= 2; // 4x work on losses to clear backlog faster
-        // --- (1) Stake propagation (once per level; only if coinflip result is win) --------
+        // --- Phase 1: stake propagation (only processed on wins) --------
         if (payoutIndex == 0 && stakeLevelComplete < level) {
             uint32 st = scanCursor;
             if (st == SS_IDLE) {
@@ -907,7 +905,7 @@ contract Purgecoin {
             }
         }
 
-        // --- (2) Bounty payout & tenth‑player bonus arming (first payout window only) -------
+        // --- Phase 2: bounty payout and tenth-player arming (first window only) -------
         uint256 totalPlayers = coinflipPlayersCount;
 
         // Bounty: convert any owed bounty into a flip credit on the first window.
@@ -920,7 +918,7 @@ contract Purgecoin {
             emit BountyPaid(to, amt);
         }
 
-        // “Every 10th player” bonus pool: arm once per round when win and enough players.
+        // Every tenth player bonus pool: arm once per round on wins when enough players exist.
         if (win && payoutIndex == 0 && currentTenthPlayerBonusPool > 0 && totalPlayers >= 10) {
             uint256 bonusPool = currentTenthPlayerBonusPool;
             currentTenthPlayerBonusPool = 0;
@@ -939,19 +937,19 @@ contract Purgecoin {
             tbMod = uint8(uint256(keccak256(abi.encodePacked(word, "tenthMod"))) % 10); // wheel offset 0..9
         }
 
-        // --- (3) Player payouts (windowed by stepPayout) -----------------------------------
+        // --- Phase 3: player payouts (windowed by stepPayout) -----------------------------------
         uint256 start = payoutIndex;
         uint256 end = start + stepPayout;
         if (end > totalPlayers) end = totalPlayers;
 
-        uint8 wheel = uint8(start % 10); // rolling 0..9 index for tenth‑player bonus
+        uint8 wheel = uint8(start % 10); // rolling 0..9 index for tenth-player bonus
 
         for (uint256 i = start; i < end; ) {
             address p = _playerAt(i);
 
             uint256 credit; // accumulate bonus + flip payout
 
-            // Tenth‑player bonus
+            // Tenth-player bonus.
             if (tbActive && tbRemain != 0 && wheel == tbMod) {
                 credit = tbPrize;
                 unchecked {
@@ -980,7 +978,7 @@ contract Purgecoin {
             }
         }
         payoutIndex = uint32(end);
-        // --- (4) Cleanup (single-shot) -------------------------------------------
+        // --- Phase 4: cleanup (single shot) -------------------------------------------
         if (end >= totalPlayers) {
             for (uint8 k; k < topLen; ) {
                 address q = topBettors[k].player;
@@ -1011,18 +1009,14 @@ contract Purgecoin {
 
         return false;
     }
-    /// @notice Distribute “coin jackpots” after the daily coinflip result is known.
-    /// @dev
-    /// Flow (only callable by PurgeGame):
-    ///  - If loss: reset `dailyCoinBurn` and exit.
-    ///  - If win:
-    ///     * Add 15% of (max(dailyCoinBurn, 8k PURGED)) to the bounty.
-    ///     * Pay 4 trait jackpots (15% total → 3.75% each) to the top‑luckbox among 5 candidates per trait,
-    ///       else roll that slice into the bounty if no candidate qualifies.
-    ///     * From 30% pool: credit the largest bettor, a random pick among #3/#4, arm the “every 10th player”
-    ///       bonus (paid during payouts), and split the remainder to luckbox leaderboard players with ≥ 1000 PURGED
-    ///       currently staked in flips. Any remainder dust is rolled into the bounty.
-    ///  - Finally, zero `dailyCoinBurn` for the next cycle.
+    /// @notice Distribute "coin jackpots" after the daily coinflip result is known.
+    /// @dev Sequence (PurgeGame only):
+    /// - If the flip loses, reset `dailyCoinBurn` and exit.
+    /// - On a win:
+    ///   1. Add 15% of `max(dailyCoinBurn, 8_000 PURGED)` to the bounty.
+    ///   2. Allocate four trait jackpots worth 3.75% each to the highest-luckbox candidate (or roll into the bounty if nobody qualifies).
+    ///   3. Use the 30% pool to reward the largest bettor, a random pick among ranks #3/#4, arm the tenth-player bonus, and share the remainder across luckbox leaders with >= 1000 PURGED staked in flips; any dust returns to the bounty.
+    /// - Reset `dailyCoinBurn` for the next cycle.
     function triggerCoinJackpot() external onlyPurgeGameContract {
         uint256 randWord = rngWord;
         bool flipWin = (rngWord & 1) == 1;
@@ -1037,7 +1031,7 @@ contract Purgecoin {
         // ----- (A) Always add 15% to the bounty -----
         _addToBounty((burnBase * 15) / 100);
 
-        // ----- (B) 4× trait jackpots from another 15% (3.75% each) -----
+        // ----- (B) 4x trait jackpots from another 15% (3.75% each) -----
         {
             uint256 traitPool = (burnBase * 15) / 100;
             if (traitPool != 0) {
@@ -1088,7 +1082,7 @@ contract Purgecoin {
                     coinflipAmount[midWinner] += midPrize;
                 }
 
-                // Luckbox leaderboard split (only those with ≥ 1000 PURGED in active flips).
+                // Luckbox leaderboard split (only those with >= 1000 PURGED in active flips).
                 if (lbPool != 0) {
                     address[10] memory eligible;
                     uint256 eligibleCount;
@@ -1164,17 +1158,17 @@ contract Purgecoin {
     /// @dev
     /// Lifecycle:
     /// - First call (not in progress): arms the run based on `kind`, snapshots limits, computes offsets,
-    ///   and optionally performs BAF “headline” allocations (largest bettor, etc.). When more work is
+    ///   and optionally performs BAF "headline" allocations (largest bettor, etc.). When more work is
     ///   required, returns (finished=false, partial winners/amounts, 0).
     /// - Subsequent calls stream through the remaining work in windowed batches until finished=true.
     /// Storage/Modes:
-    /// - `bafState.inProgress` gates the run. `extMode` encodes the sub‑phase:
+    /// - `bafState.inProgress` gates the run. `extMode` encodes the sub-phase:
     ///     0 = idle, 1 = BAF scatter pass, 2 = Decimator denom accumulation, 3 = Decimator payouts.
     /// - `scanCursor` walks the population starting at `bs.offset` then advancing in steps of 10.
     /// Returns:
     /// - `finished` signals completion of the whole external run.
     /// - `winners/amounts` are the credits to be applied by the caller on this step only.
-    /// - `returnAmountWei` is any ETH to send back to the game (unused mid‑run).
+    /// - `returnAmountWei` is any ETH to send back to the game (unused mid-run).
     function runExternalJackpot(
         uint8 kind,
         uint256 poolWei,
@@ -1199,7 +1193,7 @@ contract Purgecoin {
 
             uint32 limit = (kind == 0) ? uint32(coinflipPlayersCount) : uint32(decPlayersCount[lvl]);
 
-            // Randomize the stride modulo for the 10‑way sharded buckets
+            // Randomize the stride modulo for the 10-way sharded buckets
             bs.offset = uint8(executeWord % 10);
             bs.limit = limit;
             scanCursor = bs.offset;
@@ -1216,14 +1210,14 @@ contract Purgecoin {
             // ---------------------------
             if (kind == 0) {
                 uint256 P = poolWei;
-                uint256 lbMin = (ONEK / 4) * uint256(lvl); // minimum “active” threshold
+                uint256 lbMin = (ONEK / 4) * uint256(lvl); // minimum "active" threshold
                 address[6] memory tmpW;
                 uint256[6] memory tmpA;
                 uint256 n;
                 uint256 credited;
                 uint256 toReturn;
 
-                // (1) Largest bettor — 20%
+                // (1) Largest bettor: 20%
                 {
                     uint256 prize = (P * 20) / 100;
                     address w = topBettors[0].player;
@@ -1238,7 +1232,7 @@ contract Purgecoin {
                         toReturn += prize;
                     }
                 }
-                // (2) Random among #3/#4 — 10%
+                // (2) Random among #3/#4: 10%
                 {
                     uint256 prize = (P * 10) / 100;
                     address w = topBettors[2 + (uint256(keccak256(abi.encodePacked(executeWord, "p34"))) & 1)].player;
@@ -1253,7 +1247,7 @@ contract Purgecoin {
                         toReturn += prize;
                     }
                 }
-                // (3) Random eligible — 10%
+                // (3) Random eligible: 10%
                 {
                     uint256 prize = (P * 10) / 100;
                     address w = _randomEligible(uint256(keccak256(abi.encodePacked(executeWord, "re"))), lbMin);
@@ -1268,7 +1262,7 @@ contract Purgecoin {
                         toReturn += prize;
                     }
                 }
-                // (4) Luckbox LB #1/#2/#3 — 7%/5%/3%
+                // (4) Luckbox leaderboard #1/#2/#3: 7%/5%/3%
                 {
                     uint256 p1 = (P * 7) / 100;
                     uint256 p2 = (P * 5) / 100;
@@ -1308,14 +1302,14 @@ contract Purgecoin {
                     }
                 }
 
-                // Scatter the remainder equally across shard‑stride participants
+                // Scatter the remainder equally across shard-stride participants
                 uint256 scatter = P - credited - toReturn;
                 if (limit >= 10 && bs.offset < limit) {
                     uint256 occurrences = 1 + (uint256(limit) - 1 - bs.offset) / 10; // count of indices visited
                     uint256 perWei = scatter / occurrences;
                     bs.per = uint120(perWei);
 
-                    // Accumulate “toReturn” plus any scatter dust
+                    // Accumulate "toReturn" plus any scatter dust
                     uint256 rem = toReturn + (scatter - perWei * occurrences);
                     bafState.returnAmountWei = uint120(rem);
                 } else {
@@ -1430,7 +1424,7 @@ contract Purgecoin {
 
             if (end < bs.limit) return (false, new address[](0), new uint256[](0), 0);
 
-            // Nothing eligible → refund entire pool
+            // Nothing eligible -> refund entire pool
             if (extVar == 0) {
                 uint256 refund = uint256(bafState.totalPrizePoolWei);
                 delete bafState;
@@ -1516,7 +1510,7 @@ contract Purgecoin {
     }
 
     /// @notice Return addresses from a leaderboard.
-    /// @param which 0 = luckbox (≤10), 1 = affiliate (≤8), 2 = top bettors (≤4).
+    /// @param which 0 = luckbox (<=10), 1 = affiliate (<=8), 2 = top bettors (<=4).
     function getLeaderboardAddresses(uint8 which) external view returns (address[] memory out) {
         if (which == 0) {
             uint8 len = luckboxLen;
@@ -1550,12 +1544,12 @@ contract Purgecoin {
         }
     }
 
-    /// @notice Eligibility gate requiring both luckbox balance and active coinflip stake ≥ `min`.
+    /// @notice Eligibility gate requiring both luckbox balance and active coinflip stake >= `min`.
     function _eligible(address player, uint256 min) internal view returns (bool) {
         return playerLuckbox[player] >= min && coinflipAmount[player] >= min;
     }
 
-    /// @notice Eligibility gate requiring only luckbox balance ≥ `min` (no coinflip amount check).
+    /// @notice Eligibility gate requiring only luckbox balance >= `min` (no coinflip amount check).
     function _eligibleLuckbox(address player, uint256 min) internal view returns (bool) {
         return playerLuckbox[player] >= min;
     }
@@ -1601,7 +1595,7 @@ contract Purgecoin {
         return decBuckets[lvl][bucketIdx][offsetInBucket];
     }
 
-    // 2) Append to queue, reusing slots. Updates coinflipPlayersCount.
+    // Append to the queue, reusing storage slots and keeping coinflipPlayersCount in sync.
     function _pushPlayer(address p) internal {
         uint256 pos = cfTail;
         if (pos == cfPlayers.length) {
@@ -1615,7 +1609,7 @@ contract Purgecoin {
         }
     }
 
-    /// @notice Increase a player’s pending coinflip stake and possibly arm a bounty.
+    /// @notice Increase a player's pending coinflip stake and possibly arm a bounty.
     /// @param player           Target player.
     /// @param coinflipDeposit  Amount to add to their current pending flip stake.
     /// @param canArmBounty     If true, a sufficiently large deposit may arm a bounty.
@@ -1699,23 +1693,23 @@ contract Purgecoin {
         if (subBal < 600 ether) return 1000; //  0%
         if (subBal < 1000 ether) return 500; // -50%
         if (subBal < 2000 ether) return 100; // -90%
-        return 0; // ≥2000: no credit
+        return 0; // >=2000: no credit
     }
 
-    // Users call: LINK.transferAndCall(address(this), amount, "")
+    // Users call: LINK.transferAndCall(address(this), amount, "").
     function onTokenTransfer(address from, uint256 amount, bytes calldata) external {
         if (isBettingPaused) revert BettingPaused();
         if (msg.sender != LINK) revert E();
         if (amount == 0) revert Zero();
 
-        // fund VRF sub
+        // Fund the VRF subscription.
         try ILinkToken(LINK).transferAndCall(address(vrfCoordinator), amount, abi.encode(vrfSubscriptionId)) returns (bool ok) {
             if (!ok) revert E();
         } catch {
             revert E();
         }
 
-        // post‑fund subscription LINK balance
+        // Check subscription LINK balance after funding.
         (uint96 bal, , , , ) = vrfCoordinator.getSubscription(vrfSubscriptionId);
 
         uint16 mult = _tierMultPermille(uint256(bal));
@@ -1742,15 +1736,15 @@ contract Purgecoin {
             _updateBoard4(p, s);
         }
     }
-    /// @notice Insert/update `p` with score `s` on the luckbox top‑10 board.
-    /// @dev Keeps a 1‑based position map in `luckboxPos`. Returns true if the board changed.
+    /// @notice Insert/update `p` with score `s` on the luckbox top-10 board.
+    /// @dev Keeps a 1-based position map in `luckboxPos`. Returns true if the board changed.
     function _updateBoard10(address p, uint256 s) internal returns (bool) {
         PlayerScore[10] storage board = luckboxLeaderboard;
         uint8 curLen = luckboxLen;
         uint8 prevPos = luckboxPos[p]; // 1..curLen, or 0 if not present
         uint8 idx;
 
-        // Case 1: already on board — bubble up if improved
+        // Case 1: already on board - bubble up if improved
         if (prevPos != 0) {
             idx = prevPos - 1;
             if (s <= board[idx].score) return false; // no improvement
@@ -1766,7 +1760,7 @@ contract Purgecoin {
             return true;
         }
 
-        // Case 2: space available — insert and grow
+        // Case 2: space available - insert and grow
         if (curLen < 10) {
             idx = curLen;
             for (; idx > 0 && s > board[idx - 1].score; ) {
@@ -1784,7 +1778,7 @@ contract Purgecoin {
             return true;
         }
 
-        // Case 3: full — must beat the tail to enter
+        // Case 3: full - must beat the tail to enter
         if (s <= board[9].score) return false;
         address dropped = board[9].player;
         idx = 9;
@@ -1801,8 +1795,8 @@ contract Purgecoin {
         return true;
     }
 
-    /// @notice Insert/update `p` with score `s` on the affiliate top‑8 board.
-    /// @dev Keeps a 1‑based position map in `affiliatePos`. Returns true if the board changed.
+    /// @notice Insert/update `p` with score `s` on the affiliate top-8 board.
+    /// @dev Keeps a 1-based position map in `affiliatePos`. Returns true if the board changed.
     function _updateBoard8(address p, uint256 s) internal returns (bool) {
         PlayerScore[8] storage board = affiliateLeaderboard;
         uint8 curLen = affiliateLen;
@@ -1857,8 +1851,8 @@ contract Purgecoin {
         return true;
     }
 
-    /// @notice Insert/update `p` with score `s` on the top‑bettors top‑4 board.
-    /// @dev Keeps a 1‑based position map in `topPos`. Returns true if the board changed.
+    /// @notice Insert/update `p` with score `s` on the top-bettors top-4 board.
+    /// @dev Keeps a 1-based position map in `topPos`. Returns true if the board changed.
     function _updateBoard4(address p, uint256 s) internal returns (bool) {
         PlayerScore[4] storage board = topBettors;
         uint8 curLen = topLen;

@@ -85,10 +85,10 @@ contract PurgeGame {
     // Game Constants
     // -----------------------
     uint48 private constant JACKPOT_RESET_TIME = 82620; // Offset anchor for "daily" windows
-    uint32 private constant NFT_AIRDROP_PLAYER_BATCH_SIZE = 210; // Mint batch cap (# players)
-    uint32 private constant NFT_AIRDROP_TOKEN_CAP = 3_000; // Mint batch cap (# tokens)
-    uint32 private constant DEFAULT_PAYOUTS_PER_TX = 500; // ≤16M worst-case
-    uint32 private constant WRITES_BUDGET_SAFE = 800; // <16M gas  budget
+    uint32 private constant NFT_AIRDROP_PLAYER_BATCH_SIZE = 210; // Max unique recipients per airdrop batch
+    uint32 private constant NFT_AIRDROP_TOKEN_CAP = 3_000; // Max tokens distributed per airdrop batch
+    uint32 private constant DEFAULT_PAYOUTS_PER_TX = 500; // Keeps participant payouts under ~16M gas
+    uint32 private constant WRITES_BUDGET_SAFE = 800; // Keeps map batching within the ~16M gas budget
     uint72 private constant MAP_PERMILLE = 0x0A0A07060304050564; // Payout permilles packed (9 bytes)
     uint256 private constant TROPHY_FLAG_MAP = uint256(1) << 200; // Marks trophies sourced from MAP jackpots
     uint8 private constant TROPHY_DRIP_STEPS = 10; // # of level transitions to drip deferred trophies
@@ -106,8 +106,8 @@ contract PurgeGame {
     uint256 private levelPrizePool; // Snapshot for endgame distribution of current level
     uint256 private prizePool; // Live ETH pool for current level
     uint256 private nextPrizePool; // ETH collected during purge for upcoming level
-    uint256 private carryoverForNextLevel; // Saved carryover % for next level
-    uint256 private rngWord; // Cached fulfilled RNG word (game-level scope)
+    uint256 private carryoverForNextLevel; // Carryover amount reserved for the next level (wei)
+    uint256 private rngWord; // Last fulfilled VRF word for this level
 
     // -----------------------
     // Time / Session Tracking
@@ -140,11 +140,11 @@ contract PurgeGame {
     uint32 private airdropMapsProcessedCount; // Progress inside current map-mint player's queue
     uint32 private airdropIndex; // Progress across players in pending arrays
 
-    address[] private pendingNftMints; // Queue of players with owed NFTs
-    address[] private pendingMapMints; // Queue of players with owed "map" mints
+    address[] private pendingNftMints; // Queue of players awaiting NFT mints
+    address[] private pendingMapMints; // Queue of players awaiting map mints
 
     mapping(address => uint32) private playerTokensOwed; // Player => NFTs owed
-    mapping(address => uint32) private playerMapMintsOwed; // Player => Maps owed
+    mapping(address => uint32) private playerMapMintsOwed; // Player => map mints owed
 
     // -----------------------
     // Token / Trait State
@@ -152,17 +152,17 @@ contract PurgeGame {
     mapping(uint256 => uint32) private tokenTraits; // Packed 4×8-bit traits (low to high)
     mapping(address => uint256) private claimableWinnings; // ETH claims accumulated on-chain
     mapping(uint256 => uint256) private trophyData; // Trophy metadata by tokenId
-    uint256[] private trophyTokenIds; // Historical trophies
-    mapping(uint24 => address[][256]) private traitPurgeTicket; // level => trait => tickets
+    uint256[] private trophyTokenIds; // Historical trophy token IDs
+    mapping(uint24 => address[][256]) private traitPurgeTicket; // level => traitId => ticket holders
 
     // -----------------------
     // Daily / Trait Counters
     // -----------------------
-    uint32[80] internal dailyPurgeCount; // 8 + 8 + 64
+    uint32[80] internal dailyPurgeCount; // Layout: 8 symbol, 8 color, 64 trait buckets
     uint32[256] internal traitRemaining; // Remaining supply per trait (0..255)
 
-    uint256[] private activeTrophyDrips; // Trophy tokenIds with deferred payouts pending
-    mapping(uint256 => uint256) private trophyDripPerLevel; // Fixed wei streamed per level
+    uint256[] private activeTrophyDrips; // Trophy token IDs with deferred payouts pending
+    mapping(uint256 => uint256) private trophyDripPerLevel; // Deferred wei stream per level (per trophy)
 
     // -----------------------
     // Constructor
@@ -212,8 +212,8 @@ contract PurgeGame {
         price_ = price;
         carry_ = carryoverForNextLevel;
         prizePoolTarget = lastPrizePool;
-        prizePoolCurrent = (gameState == 4) ? levelPrizePool : (prizePool);
-        enoughPurchases = (purchaseCount >= 1500);
+        prizePoolCurrent = (gameState == 4) ? levelPrizePool : prizePool;
+        enoughPurchases = purchaseCount >= 1500;
         rngFulfilled_ = rngFulfilled;
         rngConsumed_ = rngConsumed;
     }
@@ -257,7 +257,7 @@ contract PurgeGame {
                 } else revert NotTimeYet();
             }
 
-            // luckbox rewards
+            // Luckbox rewards
             if (cap == 0 && coinContract.playerLuckbox(msg.sender) < priceCoin * lvl * (lvl / 100 + 1))
                 revert LuckboxTooSmall();
 
@@ -380,7 +380,8 @@ contract PurgeGame {
             if (msg.value != 0) revert E();
             _coinReceive(quantity * _priceCoin, lvl, bonusCoinReward);
         } else {
-            uint256 bonus = _ethReceive(quantity * 100, affiliateCode, quantity); // price × (quantity * 100) / 100
+            // Scale quantity by 100 so `_ethReceive` can keep integer math.
+            uint256 bonus = _ethReceive(quantity * 100, affiliateCode, quantity);
             if (ph == 3 && (lvl % 100) > 90) {
                 bonus += (quantity * _priceCoin) / 5;
             }
@@ -454,7 +455,7 @@ contract PurgeGame {
         _enforceCenturyLuckbox(lvl, priceUnit);
         // Pricing / rebates
         uint256 coinCost = quantity * (priceUnit / 4);
-        uint256 scaledQty = quantity * 25; // ETH path scale factor (÷100 later)
+        uint256 scaledQty = quantity * 25; // Scale to quarter units; divided by 100 within `_ethReceive`
         uint256 mapRebate = (quantity / 4) * (priceUnit / 10);
         uint256 mapBonus = (quantity / 40) * priceUnit;
 
@@ -686,8 +687,8 @@ contract PurgeGame {
     }
 
     /// @notice Resolve prior level endgame in bounded slices and advance to purchase when ready.
-    /// @dev Order: (A) participant payouts → (B) ticket wipes → (C) affiliate/trophy/exterminator
-    ///      → (D) finish coinflip payouts (jackpot end) and move to state 2.
+    /// @dev Order: (A) participant payouts -> (B) ticket wipes -> (C) affiliate/trophy/exterminator
+    ///      -> (D) finish coinflip payouts (jackpot end) and move to state 2.
     ///      Pass `cap` from advanceGame to keep tx gas ≤ target.
     function _finalizeEndgame(uint24 lvl, uint32 cap, uint48 day) internal {
         uint24 ph = phase;
@@ -834,8 +835,7 @@ contract PurgeGame {
     // --- Claiming winnings (ETH) --------------------------------------------------------------------
 
     /// @notice Claim the caller’s accrued ETH winnings (affiliates, jackpots, endgame payouts).
-    /// @dev Leaves a 1 wei sentinel so subsequent credits remain non-zero → cheaper SSTORE.
-
+    /// @dev Leaves a 1 wei sentinel so subsequent credits remain non-zero -> cheaper SSTORE.
     function claimWinnings() external {
         address player = msg.sender;
         uint256 amount = claimableWinnings[player];
@@ -1016,7 +1016,7 @@ contract PurgeGame {
                 traitPurgeTicket[lvl],
                 rndWord,
                 traitId,
-                winnersN, // odd idx → 1 big payout; even idx → 20 small payouts
+                winnersN, // Odd idx -> 1 big payout; even idx -> 20 smaller payouts
                 uint8(42 + idx)
             );
 
@@ -1501,7 +1501,7 @@ contract PurgeGame {
     // --- Trait weighting / helpers -------------------------------------------------------------------
 
     /// @notice Map a 32-bit random input to an 0..7 bucket with a fixed piecewise distribution.
-    /// @dev Distribution over 75 slots: [10,10,10,10,9,9,9,8] → buckets 0..7 respectively.
+    /// @dev Distribution over 75 slots: [10,10,10,10,9,9,9,8] -> buckets 0..7 respectively.
     function _w8(uint32 rnd) private pure returns (uint8) {
         unchecked {
             uint32 scaled = uint32((uint64(rnd) * 75) >> 32);
@@ -1517,7 +1517,7 @@ contract PurgeGame {
     }
 
     /// @notice Produce a 6-bit trait id from a 64-bit random value.
-    /// @dev High‑level: two weighted 3‑bit values (category, sub) → pack to a single 6‑bit trait.
+    /// @dev High‑level: two weighted 3‑bit values (category, sub) -> pack to a single 6‑bit trait.
     function _getTrait(uint64 rnd) private pure returns (uint8) {
         uint8 category = _w8(uint32(rnd));
         uint8 sub = _w8(uint32(rnd >> 32));
