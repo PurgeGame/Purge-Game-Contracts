@@ -152,7 +152,7 @@ contract PurgeGame {
     mapping(uint256 => uint32) private tokenTraits; // Packed 4×8-bit traits (low to high)
     mapping(address => uint256) private claimableWinnings; // ETH claims accumulated on-chain
     mapping(uint256 => uint256) private trophyData; // Trophy metadata by tokenId
-    uint256[] private trophyTokenIds; // Historical trophy token IDs
+    uint256[] private exterminationTrophyIds; // Historical trophy token IDs (level trophies only)
     mapping(uint24 => address[][256]) private traitPurgeTicket; // level => traitId => ticket holders
 
     // -----------------------
@@ -589,7 +589,8 @@ contract PurgeGame {
     /// - Start next level and seed `levelPrizePool`.
     ///
     /// When a non-trait end occurs (>=256, e.g. daily jackpots path):
-    /// - Carry the entire `prizePool` forward and reset leaderboards.
+    /// - Allocate 20% of the remaining `prizePool` to the MAP trophy holder for this level.
+    /// - Carry the remainder forward and reset leaderboards.
     /// - On L%100==0: adjust price and `lastPrizePool`.
     ///
     /// After either path:
@@ -629,7 +630,7 @@ contract PurgeGame {
 
             // Award trophy (transfer placeholder owned by contract)
             nft.trophyAward(exterminator, trophyId);
-            trophyTokenIds.push(trophyId);
+            exterminationTrophyIds.push(trophyId);
             trophyData[trophyId] = (uint256(exTrait) << 152) | (uint256(levelSnapshot) << 128);
 
             // Seed finalize() pool snapshot and book last trait
@@ -645,7 +646,15 @@ contract PurgeGame {
                 lastPrizePool = prizePool >> 3;
             }
 
-            carryoverForNextLevel += prizePool;
+            uint256 poolCarry = prizePool;
+            uint256 mapShare = poolCarry / 5; // 20%
+            uint256 mapTrophyId = trophyId - 1;
+            address mapOwner = nft.ownerOf(mapTrophyId);
+            _addClaimableEth(mapOwner, mapShare);
+            poolCarry -= mapShare;
+            carryoverForNextLevel += poolCarry;
+            prizePool = 0;
+            
 
             lastExterminatedTrait = 420;
         }
@@ -738,11 +747,11 @@ contract PurgeGame {
                     // Historical trophy bonus (5% across two past trophies)
                     if (prevLevel > 1) {
                         uint256 trophyPool = poolTotal / 20;
-                        uint256 trophiesLen = trophyTokenIds.length;
+                        uint256 trophiesLen = exterminationTrophyIds.length;
 
                         if (trophiesLen > 1) {
-                            uint256 idA = trophyTokenIds[rngWord % (trophiesLen - 1)];
-                            uint256 idB = trophyTokenIds[(rngWord >> 128) % (trophiesLen - 1)];
+                            uint256 idA = exterminationTrophyIds[rngWord % (trophiesLen - 1)];
+                            uint256 idB = exterminationTrophyIds[(rngWord >> 128) % (trophiesLen - 1)];
                             uint256 halfA = trophyPool >> 1;
                             uint256 halfB = trophyPool - halfA;
                             _addClaimableEth(nft.ownerOf(idA), halfA);
@@ -760,7 +769,7 @@ contract PurgeGame {
                     if ((prevLevel % 100) == 0) {
                         exterminatorShare += carryoverForNextLevel;
                     }
-                    uint256 levelTrophyId = trophyTokenIds[trophyTokenIds.length - 1];
+                    uint256 levelTrophyId = exterminationTrophyIds[exterminationTrophyIds.length - 1];
                     address exterminatorOwner = nft.ownerOf(levelTrophyId);
                     uint256 immediateEx = exterminatorShare >> 1;
                     _addClaimableEth(exterminatorOwner, immediateEx);
