@@ -19,7 +19,7 @@ pragma solidity ^0.8.26;
  */
 interface IPurgeCoinInterface {
     function grantCoinflipInGame(address player, uint256 amount) external;
-    function credit(uint256 amount) external;
+    function Burnie(uint256 amount) external;
     function burnInGame(address target, uint256 amount) external;
     function payAffiliate(
         uint256 amount,
@@ -505,11 +505,8 @@ contract PurgeGame {
         uint256 priceUnit = priceCoin;
         uint8 ph = phase;
         uint8 state = gameState;
-        if (
-            quantity == 0 ||
-            (state != 2 && state != 4) ||
-            !rngConsumed
-        ) revert NotTimeYet();
+        if (quantity == 0 || (state != 2 && state != 4) || !rngConsumed)
+            revert NotTimeYet();
         uint24 lvl = level;
         _enforceCenturyLuckbox(lvl, priceUnit);
         // Pricing / rebates
@@ -1067,7 +1064,7 @@ contract PurgeGame {
         uint256 lvlMod100 = lvl % 100;
 
         // Small creator payout in PURGE (proportional to total ETH processed)
-        coin.credit((totalWei * 5 * priceCoin) / 1 ether);
+        coin.Burnie((totalWei * 5 * priceCoin) / 1 ether);
 
         // Save % for next level (randomized bands per range)
         uint256 rndWord = uint256(keccak256(abi.encode(rngWord, uint8(3))));
