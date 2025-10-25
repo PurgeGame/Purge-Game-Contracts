@@ -2,12 +2,6 @@
 pragma solidity ^0.8.26;
 import "erc721a/contracts/ERC721A.sol";
 
-interface IPurgeGameMetadataProvider {
-    function describeToken(
-        uint256 tokenId
-    ) external view returns (bool isTrophy, uint256 trophyInfo, uint256 metaPacked, uint32[4] memory remaining);
-}
-
 interface IPurgeRenderer {
     function tokenURI(
         uint256 tokenId,
@@ -16,11 +10,15 @@ interface IPurgeRenderer {
     ) external view returns (string memory);
 }
 
-interface IPurgeGameView {
+interface IPurgeGame {
+    function describeToken(
+        uint256 tokenId
+    ) external view returns (bool isTrophy, uint256 trophyInfo, uint256 metaPacked, uint32[4] memory remaining);
+
     function level() external view returns (uint24);
 }
 
-interface IPurgeCoinBonus {
+interface IPurgecoin {
     function bonusCoinflip(address player, uint256 amount) external;
 
     function isBettingPaused() external view returns (bool);
@@ -28,25 +26,19 @@ interface IPurgeCoinBonus {
 
 contract PurgeGameNFT is ERC721A {
     // Errors -----------------------------------------------------------------
-    error NotCreator();
+    error NotCoinContract();
     error NotGame();
     error GameAlreadySet();
     error GameNotLinked();
     error TrophyBurnNotAllowed();
-    error CoinAlreadySet();
-    error CoinNotSet();
     error NotTrophyOwner();
     error NotMapTrophy();
     error ClaimNotReady();
     error CoinPaused();
-    // Immutable roles --------------------------------------------------------
-    address public immutable creator;
-
     // Linked contracts ------------------------------------------------------
-    address public game;
-    IPurgeRenderer public renderer;
-    IPurgeGameMetadataProvider public metadataProvider;
-    IPurgeCoinBonus public coin;
+    IPurgeGame private game;
+    IPurgeRenderer private immutable renderer;
+    IPurgecoin private immutable coin;
 
     mapping(uint256 => bool) private trophyToken;
     mapping(uint256 => uint32) private mapTrophyLastClaim;
@@ -55,25 +47,24 @@ contract PurgeGameNFT is ERC721A {
     uint256 private constant COIN_EMISSION_UNIT = 1_000 * 1_000_000; // 1000 PURGED (6 decimals)
     uint256 private constant TROPHY_FLAG_MAP = uint256(1) << 200;
 
-    constructor(address creator_) ERC721A("Purge Game", "PG") {
-        creator = creator_;
+    constructor(address renderer_, address coin_) ERC721A("Purge Game", "PG") {
+        renderer = IPurgeRenderer(renderer_);
+        coin = IPurgecoin(coin_);
     }
 
     // --- Admin ----------------------------------------------------------------
 
-    function wireContracts(address game_, address renderer_, address coin_) external {
-        if (msg.sender != creator) revert NotCreator();
-        if (game != address(0)) revert GameAlreadySet();
-        game = game_;
-        renderer = IPurgeRenderer(renderer_);
-        metadataProvider = IPurgeGameMetadataProvider(game_);
-        coin = IPurgeCoinBonus(coin_);
+    function wireContracts(address game_) external {
+        if (msg.sender != address(coin)) revert NotCoinContract();
+        if (game_ == address(0)) revert GameNotLinked();
+        if (address(game) != address(0)) revert GameAlreadySet();
+        game = IPurgeGame(game_);
     }
 
     // --- Game-restricted mint/burn -------------------------------------------
 
     modifier onlyGame() {
-        if (msg.sender != game) revert NotGame();
+        if (msg.sender != address(game)) revert NotGame();
         _;
     }
 
@@ -88,7 +79,7 @@ contract PurgeGameNFT is ERC721A {
 
     function trophyAward(address to, uint256 tokenId) external onlyGame {
         trophyToken[tokenId] = true;
-        transferFrom(game, to, tokenId);
+        transferFrom(address(game), to, tokenId);
     }
 
     function pendingMapTrophyCoin(uint256 tokenId) external view returns (uint256 claimable, uint24 claimThrough) {
@@ -109,12 +100,12 @@ contract PurgeGameNFT is ERC721A {
     }
 
     function _pendingMapTrophyCoin(uint256 tokenId) private view returns (uint256 claimable, uint32 claimThrough) {
-        (bool isTrophy, uint256 trophyInfo, , ) = metadataProvider.describeToken(tokenId);
+        (bool isTrophy, uint256 trophyInfo, , ) = game.describeToken(tokenId);
         if (!isTrophy || (trophyInfo & TROPHY_FLAG_MAP) == 0) revert NotMapTrophy();
 
         uint32 awardLevel = uint32((trophyInfo >> 128) & 0xFFFFFF);
         uint32 emissionStart = awardLevel + COIN_DRIP_STEPS + 1;
-        uint32 currentLevel = IPurgeGameView(game).level();
+        uint32 currentLevel = game.level();
 
         if (currentLevel < emissionStart) return (0, emissionStart - 1);
 
@@ -146,16 +137,15 @@ contract PurgeGameNFT is ERC721A {
     // --- Views ----------------------------------------------------------------
 
     function ownerOf(uint256 tokenId) public view override returns (address) {
-        if (game == address(0)) revert GameNotLinked();
-        metadataProvider.describeToken(tokenId);
+        if (address(game) == address(0)) revert GameNotLinked();
+        game.describeToken(tokenId);
         return super.ownerOf(tokenId);
     }
 
     function tokenURI(uint256 tokenId) public view override returns (string memory) {
-        if (game == address(0) || address(renderer) == address(0)) revert GameNotLinked();
+        if (address(game) == address(0) || address(renderer) == address(0)) revert GameNotLinked();
 
-        (bool isTrophy, uint256 trophyInfo, uint256 metaPacked, uint32[4] memory remaining) = metadataProvider
-            .describeToken(tokenId);
+        (bool isTrophy, uint256 trophyInfo, uint256 metaPacked, uint32[4] memory remaining) = game.describeToken(tokenId);
 
         uint256 data = isTrophy ? trophyInfo : metaPacked;
         return renderer.tokenURI(tokenId, data, remaining);

@@ -50,14 +50,13 @@ contract IconRenderer32 {
     ///         0 = no override; 1 = reset to default; valid range = [50_000 .. 1_000_000] (5%..100%).
     mapping(uint256 => uint32) private _trophyOuterPct1e6;
 
-    /// @notice Deployer retained for optional admin-only methods (if any).
-    address private immutable deployer;
+    address private immutable coin; // PURGE ERC20 implementing IPurgedRead (getReferrer)
 
     /// @dev Generic guard.
     error E();
 
-    constructor() {
-        deployer = msg.sender;
+    constructor(address coin_) {
+        coin = coin_;
     }
 
     // ---------------- Metadata helpers ----------------
@@ -287,7 +286,6 @@ contract IconRenderer32 {
 
     // Linked contracts (set once).
     address private game; // ERC721 implementing IERC721Lite
-    address private coin; // PURGE ERC20 implementing IPurgedRead (getReferrer)
 
     // Human‑readable labels (used in JSON metadata).
     string[8] private SYM_Q1_TITLE = ["XRP", "Tron", "Sui", "Monero", "Solana", "Chainlink", "Ethereum", "Bitcoin"]; // TL
@@ -313,13 +311,13 @@ contract IconRenderer32 {
         _;
     }
 
-    /// @notice One‑time link to the on‑chain game and coin contracts.
-    /// @dev Callable only by the deployer; cannot be re‑set after initialization.
-    function setPurgeGame(address g, address c) external returns (bool) {
-        if (msg.sender != deployer || game != address(0)) revert E();
-        game = g;
-        coin = c;
-        return true;
+    /// @notice One‑time link to the on-chain game contract.
+    /// @dev Callable only by the PURGE coin contract; cannot be re-set after initialization.
+    function wireContracts(address game_) external {
+        if (msg.sender != coin) revert E();
+        if (game_ == address(0)) revert E();
+        if (game != address(0)) revert E();
+        game = game_;
     }
 
     /// @notice Capture the starting trait‑remaining snapshot for the new epoch.

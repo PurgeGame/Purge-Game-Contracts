@@ -80,7 +80,6 @@ contract PurgeGame {
     IPurgeRenderer private immutable renderer; // Trusted renderer; used for tokenURI composition
     IPurgeCoinInterface private immutable coin; // Trusted coin/game-side coordinator (PURGE ERC20)
     IPurgeGameNFT private immutable nft; // ERC721 interface for mint/burn/metadata surface
-    address private immutable creator; // Receives protocol PURGE (end-game drains, etc.)
 
     // -----------------------
     // Game Constants
@@ -176,7 +175,6 @@ contract PurgeGame {
      * @dev ERC721 sentinel trophy token is minted lazily during the first transition to state 2.
      */
     constructor(address purgeCoinContract, address renderer_, address nftContract) {
-        creator = msg.sender;
         coin = IPurgeCoinInterface(purgeCoinContract);
         renderer = IPurgeRenderer(renderer_);
         nft = IPurgeGameNFT(nftContract);

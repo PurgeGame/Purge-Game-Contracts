@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+interface IPurgeWire {
+    function wireContracts(address game_) external;
+}
+
 contract Purgecoin {
     // ---------------------------------------------------------------------
     // Events
@@ -235,7 +239,7 @@ contract Purgecoin {
     // Game wiring & state
     // ---------------------------------------------------------------------
     address private purgeGameContract; // PurgeGame contract address (set once)
-    address public trophyWrapper; // Optional authorized contract for trophy coin drops
+    address public nftContract; // Authorized contract for trophy coin drops (PurgeGameNFT)
 
     // Session flags
     bool public isBettingPaused; // set while VRF is pending unless explicitly allowed
@@ -800,14 +804,16 @@ contract Purgecoin {
     }
     /// @notice One‑time wiring of the PurgeGame contract address.
     /// @dev Access: deployer/creator only; irreversible (no admin update).
-    /// @notice One-time wiring of the game and optional trophy wrapper contracts.
-    /// @dev Access: deployer/creator only; callable once for the game, and at most once to set the wrapper.
-    function wire(address game_, address wrapper_) external {
+    /// @notice One-time wiring of the game, trophy/NFT wrapper, and renderer contracts.
+    /// @dev Access: deployer/creator only; callable once.
+    function wire(address game_, address nft_, address renderer_) external {
         if (msg.sender != creator) revert OnlyDeployer();
-        if (trophyWrapper != address(0) || purgeGameContract != address(0)) revert OnlyDeployer();
+        if (nftContract != address(0) || purgeGameContract != address(0)) revert OnlyDeployer();
+        if (game_ == address(0) || nft_ == address(0) || renderer_ == address(0)) revert ZeroAddress();
         purgeGameContract = game_;
-        trophyWrapper = wrapper_;
-
+        nftContract = nft_;
+        IPurgeWire(renderer_).wireContracts(game_);
+        IPurgeWire(nft_).wireContracts(game_);
     }
 
     /// @notice Credit the creator’s share of gameplay proceeds.
@@ -823,7 +829,7 @@ contract Purgecoin {
     /// @notice Grant a pending coinflip stake during gameplay flows instead of minting PURGE.
     /// @dev Access: PurgeGame only. Zero address or zero amount are ignored.
     function bonusCoinflip(address player, uint256 amount) external {
-        if (msg.sender != purgeGameContract && msg.sender != trophyWrapper) revert OnlyGame();
+        if (msg.sender != purgeGameContract && msg.sender != nftContract) revert OnlyGame();
         if (player == address(0) || amount == 0) return;
         addFlip(player, amount, false);
     }
