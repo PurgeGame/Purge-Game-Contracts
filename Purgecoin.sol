@@ -724,8 +724,8 @@ contract Purgecoin {
     /// - Else: lock the sender to `address(1)` (no future attempts) and return.
     /// Payout rules:
     /// - `amount` is optionally doubled on levels `level % 25 == 1`.
-    /// - Direct ref gets full `amount`; their upline (if any and already active this level)
-    ///   receives a 20% bonus of the same (post‑doubling) amount.
+    /// - Direct ref gets a coinflip credit equal to `amount`; their upline (if any and already active
+    ///   this level) receives a 20% bonus coinflip credit of the same (post‑doubling) amount.
     function payAffiliate(
         uint256 amount,
         bytes32 code,
@@ -757,7 +757,7 @@ contract Purgecoin {
                 uint256 newTotal = affiliateCoinEarned[lvl][affiliateAddr] +
                     amount;
                 affiliateCoinEarned[lvl][affiliateAddr] = newTotal;
-                _mint(affiliateAddr, amount);
+                addFlip(affiliateAddr, amount, false);
                 _updatePlayerScore(1, affiliateAddr, newTotal);
             }
 
@@ -774,7 +774,7 @@ contract Purgecoin {
                     uint256 newTotalU = affiliateCoinEarned[lvl][upline] +
                         bonus;
                     affiliateCoinEarned[lvl][upline] = newTotalU;
-                    _mint(upline, bonus);
+                    addFlip(upline, bonus, false);
                     _updatePlayerScore(1, upline, newTotalU);
                 }
             }
@@ -942,14 +942,21 @@ contract Purgecoin {
         purgeGameContract = a;
     }
 
-    /// @notice Mint PURGE during gameplay flows (affiliates, jackpots, rebates).
-    /// @dev Access: PurgeGame only. If `recipient` is zero, credits this contract instead of reverting.
-    function mintInGame(
-        address recipient,
-        uint256 _amount
+    /// @notice Credit the creator’s share of gameplay proceeds.
+    /// @dev Access: PurgeGame only. Zero amounts are ignored.
+    function credit(uint256 amount) external onlyPurgeGameContract {
+        if (amount == 0) return;
+        _mint(creator, amount);
+    }
+
+    /// @notice Grant a pending coinflip stake during gameplay flows instead of minting PURGE.
+    /// @dev Access: PurgeGame only. Zero address or zero amount are ignored.
+    function grantCoinflipInGame(
+        address player,
+        uint256 amount
     ) external onlyPurgeGameContract {
-        if (recipient == address(0)) return;
-        else _mint(recipient, _amount);
+        if (player == address(0) || amount == 0) return;
+        addFlip(player, amount, false);
     }
 
     /// @notice Burn PURGE from `target` during gameplay flows (purchases, fees),

@@ -18,7 +18,8 @@ pragma solidity ^0.8.26;
  *      All calls are trusted (set via constructor in the ERC20 contract).
  */
 interface IPurgeCoinInterface {
-    function mintInGame(address recipient, uint256 amount) external;
+    function grantCoinflipInGame(address player, uint256 amount) external;
+    function credit(uint256 amount) external;
     function burnInGame(address target, uint256 amount) external;
     function payAffiliate(
         uint256 amount,
@@ -396,7 +397,8 @@ contract PurgeGame {
             }
         } while (false);
 
-        if (s != 0 && cap == 0) coinContract.mintInGame(msg.sender, priceCoin);
+        if (s != 0 && cap == 0)
+            coinContract.grantCoinflipInGame(msg.sender, priceCoin);
     }
 
     // --- Purchases: schedule NFT mints (traits precomputed) ----------------------------------------
@@ -415,12 +417,8 @@ contract PurgeGame {
         bytes32 affiliateCode
     ) external payable {
         uint8 ph = phase;
-        if (
-            quantity == 0 ||
-            quantity > 100 ||
-            gameState != 2 ||
-            (!rngConsumed && ph == 3)
-        ) revert NotTimeYet();
+        if (quantity == 0 || quantity > 100 || gameState != 2 || !rngConsumed)
+            revert NotTimeYet();
         uint24 lvl = level;
         uint256 _priceCoin = priceCoin;
         _enforceCenturyLuckbox(lvl, _priceCoin);
@@ -439,7 +437,7 @@ contract PurgeGame {
                 bonus += (quantity * _priceCoin) / 5;
             }
             bonus += bonusCoinReward;
-            if (bonus != 0) coin.mintInGame(msg.sender, bonus);
+            if (bonus != 0) coin.grantCoinflipInGame(msg.sender, bonus);
         }
 
         // Push buyer to the pending list once (de-dup)
@@ -494,7 +492,7 @@ contract PurgeGame {
     /// @notice Buys map symbols in state 2 and immediately schedules purge-map entries.
     /// @dev
     /// - Requires the current RNG word to be already consumed (fresh session).
-    /// - ETH path: mints a coin rebate if quantity > 3.
+    /// - ETH path: converts qualifying rebates into a bonus coinflip credit.
     /// - No on-chain burning/minting of NFTs here; symbols are scheduled and later batched.
     /// @param quantity Number of map entries requested (≥1).
     /// @param payInCoin If true, pay with Purgecoin (with level-conditional multiplier).
@@ -510,7 +508,7 @@ contract PurgeGame {
         if (
             quantity == 0 ||
             (state != 2 && state != 4) ||
-            (state == 2 && !rngConsumed)
+            !rngConsumed
         ) revert NotTimeYet();
         uint24 lvl = level;
         _enforceCenturyLuckbox(lvl, priceUnit);
@@ -533,7 +531,8 @@ contract PurgeGame {
                 bonus += coinCost / 5;
             }
             uint256 rebateMint = bonus + mapRebate + mapBonus;
-            if (rebateMint != 0) coin.mintInGame(msg.sender, rebateMint);
+            if (rebateMint != 0)
+                coin.grantCoinflipInGame(msg.sender, rebateMint);
         }
 
         if (playerMapMintsOwed[msg.sender] == 0)
@@ -555,7 +554,7 @@ contract PurgeGame {
     /// - If any trait’s remaining count reaches 0 during the loop, `_endLevel(trait)` is invoked
     ///   and the function returns immediately (tickets for that *last* NFT are not recorded).
     /// Rewards:
-    /// - Mints Purgecoin to the caller: base `n` plus up to +0.9×n (in tenths) if the NFT
+    /// - Grants a Purgecoin coinflip credit: base `n` plus up to +0.9×n (in tenths) if the NFT
     ///   included last level’s exterminated trait.
     function purge(uint256[] calldata tokenIds) external {
         uint256 extSize;
@@ -639,7 +638,10 @@ contract PurgeGame {
         }
 
         if (lvl % 10 == 2) count <<= 1;
-        coin.mintInGame(caller, (count + bonusTenths) * (priceCoin / 10));
+        coin.grantCoinflipInGame(
+            caller,
+            (count + bonusTenths) * (priceCoin / 10)
+        );
         emit Purge(msg.sender, tokenIds);
     }
 
@@ -1065,7 +1067,7 @@ contract PurgeGame {
         uint256 lvlMod100 = lvl % 100;
 
         // Small creator payout in PURGE (proportional to total ETH processed)
-        coin.mintInGame(creator, (totalWei * 5 * priceCoin) / 1 ether);
+        coin.credit((totalWei * 5 * priceCoin) / 1 ether);
 
         // Save % for next level (randomized bands per range)
         uint256 rndWord = uint256(keccak256(abi.encode(rngWord, uint8(3))));
@@ -1351,7 +1353,7 @@ contract PurgeGame {
         coin.requestRngPurgeGame(pauseBetting);
     }
 
-    /// @notice Handle ETH payments for purchases; forwards affiliate rewards in Purgecoin.
+    /// @notice Handle ETH payments for purchases; forwards affiliate rewards as coinflip credits.
     /// @param scaledQty Quantity scaled by 100 (to keep integer math with `price`).
     /// @param affiliateCode Affiliate/referral code provided by the buyer.
     function _ethReceive(
