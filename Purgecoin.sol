@@ -1,8 +1,19 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-interface IPurgeWire {
+interface IPurgeLinkable {
     function wireContracts(address game_) external;
+}
+
+interface IPurgeGame is IPurgeLinkable {
+    function gameState() external view returns (uint8);
+    function level() external view returns (uint24);
+    function getJackpotWinners(
+        uint256 randomWord,
+        uint8 trait,
+        uint8 numWinners,
+        uint8 salt
+    ) external view returns (address[] memory);
 }
 
 contract Purgecoin {
@@ -109,9 +120,6 @@ contract Purgecoin {
     bytes4 private constant VRF_GET_SUB_SELECTOR = bytes4(keccak256("getSubscription(uint256)"));
     bytes4 private constant LINK_TRANSFER_AND_CALL_SELECTOR =
         bytes4(keccak256("transferAndCall(address,uint256,bytes)"));
-    bytes4 private constant GAME_STATE_SELECTOR = bytes4(keccak256("gameState()"));
-    bytes4 private constant GAME_LEVEL_SELECTOR = bytes4(keccak256("level()"));
-    bytes4 private constant GAME_JACKPOT_SELECTOR = bytes4(keccak256("getJackpotWinners(uint256,uint8,uint8,uint8)"));
 
     function _vrfRequestRandomWords(VRFRandomWordsRequest memory req) private returns (uint256 requestId) {
         (bool ok, bytes memory data) = s_vrfCoordinator.call(abi.encodeWithSelector(VRF_REQUEST_SELECTOR, req));
@@ -135,17 +143,6 @@ contract Purgecoin {
         return ret.length == 0 || abi.decode(ret, (bool));
     }
 
-    function _gameState() private view returns (uint8) {
-        (bool ok, bytes memory data) = purgeGameContract.staticcall(abi.encodeWithSelector(GAME_STATE_SELECTOR));
-        if (!ok || data.length == 0) revert E();
-        return abi.decode(data, (uint8));
-    }
-
-    function _gameLevel() private view returns (uint24) {
-        (bool ok, bytes memory data) = purgeGameContract.staticcall(abi.encodeWithSelector(GAME_LEVEL_SELECTOR));
-        if (!ok || data.length == 0) revert E();
-        return abi.decode(data, (uint24));
-    }
 
     function _gameJackpotWinners(
         uint256 randomWord,
@@ -153,11 +150,7 @@ contract Purgecoin {
         uint8 numWinners,
         uint8 salt
     ) private view returns (address[] memory) {
-        (bool ok, bytes memory data) = purgeGameContract.staticcall(
-            abi.encodeWithSelector(GAME_JACKPOT_SELECTOR, randomWord, trait, numWinners, salt)
-        );
-        if (!ok) revert E();
-        return abi.decode(data, (address[]));
+        return purgeGame.getJackpotWinners(randomWord, trait, numWinners, salt);
     }
 
     // ---------------------------------------------------------------------
@@ -238,8 +231,8 @@ contract Purgecoin {
     // ---------------------------------------------------------------------
     // Game wiring & state
     // ---------------------------------------------------------------------
-    address private purgeGameContract; // PurgeGame contract address (set once)
-    address public nftContract; // Authorized contract for trophy coin drops (PurgeGameNFT)
+    IPurgeGame private purgeGame; // PurgeGame contract handle (set once)
+    address private nftContract; // Authorized contract for trophy coin drops (PurgeGameNFT)
 
     // Session flags
     bool public isBettingPaused; // set while VRF is pending unless explicitly allowed
@@ -326,7 +319,7 @@ contract Purgecoin {
     // Modifiers
     // ---------------------------------------------------------------------
     modifier onlyPurgeGameContract() {
-        if (msg.sender != purgeGameContract) revert OnlyGame();
+        if (msg.sender != address(purgeGame)) revert OnlyGame();
         _;
     }
 
@@ -517,7 +510,7 @@ contract Purgecoin {
     function stake(uint256 burnAmt, uint24 targetLevel, uint8 risk) external {
         if (burnAmt < 250 * MILLION) revert AmountLTMin();
         if (isBettingPaused) revert BettingPaused();
-        uint24 currLevel = _gameLevel();
+        uint24 currLevel = purgeGame.level();
         uint24 distance = targetLevel - currLevel;
         if (risk == 0 || risk > MAX_RISK || distance > 500 || distance < MAX_RISK) revert Insufficient();
 
@@ -808,12 +801,12 @@ contract Purgecoin {
     /// @dev Access: deployer/creator only; callable once.
     function wire(address game_, address nft_, address renderer_) external {
         if (msg.sender != creator) revert OnlyDeployer();
-        if (nftContract != address(0) || purgeGameContract != address(0)) revert OnlyDeployer();
+        if (nftContract != address(0) || address(purgeGame) != address(0)) revert OnlyDeployer();
         if (game_ == address(0) || nft_ == address(0) || renderer_ == address(0)) revert ZeroAddress();
-        purgeGameContract = game_;
+        purgeGame = IPurgeGame(game_);
         nftContract = nft_;
-        IPurgeWire(renderer_).wireContracts(game_);
-        IPurgeWire(nft_).wireContracts(game_);
+        IPurgeLinkable(renderer_).wireContracts(game_);
+        IPurgeLinkable(nft_).wireContracts(game_);
     }
 
     /// @notice Credit the creator’s share of gameplay proceeds.
@@ -829,7 +822,7 @@ contract Purgecoin {
     /// @notice Grant a pending coinflip stake during gameplay flows instead of minting PURGE.
     /// @dev Access: PurgeGame only. Zero address or zero amount are ignored.
     function bonusCoinflip(address player, uint256 amount) external {
-        if (msg.sender != purgeGameContract && msg.sender != nftContract) revert OnlyGame();
+        if (msg.sender != address(purgeGame) && msg.sender != nftContract) revert OnlyGame();
         if (player == address(0) || amount == 0) return;
         addFlip(player, amount, false);
     }
@@ -1710,9 +1703,9 @@ contract Purgecoin {
     /// @return on  True if level >= 25 and `level % 10 == 5` (Decimator checkpoint).
     /// @return lvl Current game level (0 if purge phase).
     function _decWindow() internal view returns (bool on, uint24 lvl) {
-        uint8 s = _gameState();
+        uint8 s = purgeGame.gameState();
         if (s == 4) return (false, 0);
-        lvl = _gameLevel();
+        lvl = purgeGame.level();
         on = (lvl >= 25 && (lvl % 10) == 5 && (lvl % 100) != 95);
     }
 
