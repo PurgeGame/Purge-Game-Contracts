@@ -8,3 +8,4 @@ hardhat.config.js
 tsconfig.json
 contracts/
 test/
+.prettierrc

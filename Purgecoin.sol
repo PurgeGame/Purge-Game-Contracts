@@ -6,30 +6,13 @@ contract Purgecoin {
     // Events
     // ---------------------------------------------------------------------
     event Transfer(address indexed from, address indexed to, uint256 amount);
-    event Approval(
-        address indexed owner,
-        address indexed spender,
-        uint256 amount
-    );
-    event StakeCreated(
-        address indexed player,
-        uint24 targetLevel,
-        uint8 risk,
-        uint256 principal
-    );
-    event LuckyCoinBurned(
-        address indexed player,
-        uint256 amount,
-        uint256 coinflipDeposit
-    );
+    event Approval(address indexed owner, address indexed spender, uint256 amount);
+    event StakeCreated(address indexed player, uint24 targetLevel, uint8 risk, uint256 principal);
+    event LuckyCoinBurned(address indexed player, uint256 amount, uint256 coinflipDeposit);
     event Affiliate(uint256 amount, bytes32 indexed code, address sender);
     event CoinflipFinished(bool result);
     event CoinJackpotPaid(uint16 trait, address winner, uint256 amount);
-    event BountyOwed(
-        address indexed to,
-        uint256 bountyAmount,
-        uint256 newRecordFlip
-    );
+    event BountyOwed(address indexed to, uint256 bountyAmount, uint256 newRecordFlip);
     event BountyPaid(address indexed to, uint256 amount);
 
     // ---------------------------------------------------------------------
@@ -73,11 +56,7 @@ contract Purgecoin {
         return true;
     }
 
-    function transferFrom(
-        address from,
-        address to,
-        uint256 amount
-    ) public returns (bool) {
+    function transferFrom(address from, address to, uint256 amount) public returns (bool) {
         uint256 allowed = allowance[from][msg.sender];
         if (allowed != type(uint256).max) {
             allowance[from][msg.sender] = allowed - amount;
@@ -120,77 +99,46 @@ contract Purgecoin {
         bytes extraArgs;
     }
 
-    bytes4 private constant EXTRA_ARGS_V1_TAG =
-        bytes4(keccak256("VRF ExtraArgsV1"));
+    bytes4 private constant EXTRA_ARGS_V1_TAG = bytes4(keccak256("VRF ExtraArgsV1"));
     bytes4 private constant VRF_REQUEST_SELECTOR =
-        bytes4(
-            keccak256(
-                "requestRandomWords((bytes32,uint256,uint16,uint32,uint32,bytes))"
-            )
-        );
-    bytes4 private constant VRF_GET_SUB_SELECTOR =
-        bytes4(keccak256("getSubscription(uint256)"));
+        bytes4(keccak256("requestRandomWords((bytes32,uint256,uint16,uint32,uint32,bytes))"));
+    bytes4 private constant VRF_GET_SUB_SELECTOR = bytes4(keccak256("getSubscription(uint256)"));
     bytes4 private constant LINK_TRANSFER_AND_CALL_SELECTOR =
         bytes4(keccak256("transferAndCall(address,uint256,bytes)"));
-    bytes4 private constant GAME_STATE_SELECTOR =
-        bytes4(keccak256("gameState()"));
+    bytes4 private constant GAME_STATE_SELECTOR = bytes4(keccak256("gameState()"));
     bytes4 private constant GAME_LEVEL_SELECTOR = bytes4(keccak256("level()"));
-    bytes4 private constant GAME_JACKPOT_SELECTOR =
-        bytes4(keccak256("getJackpotWinners(uint256,uint8,uint8,uint8)"));
+    bytes4 private constant GAME_JACKPOT_SELECTOR = bytes4(keccak256("getJackpotWinners(uint256,uint8,uint8,uint8)"));
 
-    function _vrfRequestRandomWords(
-        VRFRandomWordsRequest memory req
-    ) private returns (uint256 requestId) {
-        (bool ok, bytes memory data) = s_vrfCoordinator.call(
-            abi.encodeWithSelector(VRF_REQUEST_SELECTOR, req)
-        );
+    function _vrfRequestRandomWords(VRFRandomWordsRequest memory req) private returns (uint256 requestId) {
+        (bool ok, bytes memory data) = s_vrfCoordinator.call(abi.encodeWithSelector(VRF_REQUEST_SELECTOR, req));
         if (!ok || data.length == 0) revert E();
         requestId = abi.decode(data, (uint256));
     }
 
     function _vrfGetSubscription(
         uint256 subId
-    )
-        private
-        view
-        returns (uint96 bal, uint96, uint64, address, address[] memory)
-    {
-        (bool ok, bytes memory data) = s_vrfCoordinator.staticcall(
-            abi.encodeWithSelector(VRF_GET_SUB_SELECTOR, subId)
-        );
+    ) private view returns (uint96 bal, uint96, uint64, address, address[] memory) {
+        (bool ok, bytes memory data) = s_vrfCoordinator.staticcall(abi.encodeWithSelector(VRF_GET_SUB_SELECTOR, subId));
         if (!ok || data.length == 0) revert E();
         return abi.decode(data, (uint96, uint96, uint64, address, address[]));
     }
 
-    function _linkTransferAndCall(
-        address to,
-        uint256 amount,
-        bytes memory data
-    ) private returns (bool) {
+    function _linkTransferAndCall(address to, uint256 amount, bytes memory data) private returns (bool) {
         (bool ok, bytes memory ret) = LINK.call(
-            abi.encodeWithSelector(
-                LINK_TRANSFER_AND_CALL_SELECTOR,
-                to,
-                amount,
-                data
-            )
+            abi.encodeWithSelector(LINK_TRANSFER_AND_CALL_SELECTOR, to, amount, data)
         );
         if (!ok) return false;
         return ret.length == 0 || abi.decode(ret, (bool));
     }
 
     function _gameState() private view returns (uint8) {
-        (bool ok, bytes memory data) = purgeGameContract.staticcall(
-            abi.encodeWithSelector(GAME_STATE_SELECTOR)
-        );
+        (bool ok, bytes memory data) = purgeGameContract.staticcall(abi.encodeWithSelector(GAME_STATE_SELECTOR));
         if (!ok || data.length == 0) revert E();
         return abi.decode(data, (uint8));
     }
 
     function _gameLevel() private view returns (uint24) {
-        (bool ok, bytes memory data) = purgeGameContract.staticcall(
-            abi.encodeWithSelector(GAME_LEVEL_SELECTOR)
-        );
+        (bool ok, bytes memory data) = purgeGameContract.staticcall(abi.encodeWithSelector(GAME_LEVEL_SELECTOR));
         if (!ok || data.length == 0) revert E();
         return abi.decode(data, (uint24));
     }
@@ -202,13 +150,7 @@ contract Purgecoin {
         uint8 salt
     ) private view returns (address[] memory) {
         (bool ok, bytes memory data) = purgeGameContract.staticcall(
-            abi.encodeWithSelector(
-                GAME_JACKPOT_SELECTOR,
-                randomWord,
-                trait,
-                numWinners,
-                salt
-            )
+            abi.encodeWithSelector(GAME_JACKPOT_SELECTOR, randomWord, trait, numWinners, salt)
         );
         if (!ok) revert E();
         return abi.decode(data, (address[]));
@@ -256,19 +198,14 @@ contract Purgecoin {
     uint256 private constant LUCK_PER_LINK = 220 * MILLION; // 220 PURGE per 1 LINK
     uint8 private constant STAKE_MAX_LANES = 3;
     uint256 private constant STAKE_LANE_BITS = 86;
-    uint256 private constant STAKE_LANE_MASK =
-        (uint256(1) << STAKE_LANE_BITS) - 1;
+    uint256 private constant STAKE_LANE_MASK = (uint256(1) << STAKE_LANE_BITS) - 1;
     uint256 private constant STAKE_LANE_RISK_BITS = 8;
-    uint256 private constant STAKE_LANE_PRINCIPAL_BITS =
-        STAKE_LANE_BITS - STAKE_LANE_RISK_BITS;
-    uint256 private constant STAKE_LANE_PRINCIPAL_MASK =
-        (uint256(1) << STAKE_LANE_PRINCIPAL_BITS) - 1;
+    uint256 private constant STAKE_LANE_PRINCIPAL_BITS = STAKE_LANE_BITS - STAKE_LANE_RISK_BITS;
+    uint256 private constant STAKE_LANE_PRINCIPAL_MASK = (uint256(1) << STAKE_LANE_PRINCIPAL_BITS) - 1;
     uint256 private constant STAKE_LANE_RISK_SHIFT = STAKE_LANE_PRINCIPAL_BITS;
-    uint256 private constant STAKE_LANE_RISK_MASK =
-        ((uint256(1) << STAKE_LANE_RISK_BITS) - 1) << STAKE_LANE_RISK_SHIFT;
+    uint256 private constant STAKE_LANE_RISK_MASK = ((uint256(1) << STAKE_LANE_RISK_BITS) - 1) << STAKE_LANE_RISK_SHIFT;
     uint256 private constant STAKE_PRINCIPAL_FACTOR = MILLION;
-    uint256 private constant STAKE_MAX_PRINCIPAL =
-        STAKE_LANE_PRINCIPAL_MASK * STAKE_PRINCIPAL_FACTOR;
+    uint256 private constant STAKE_MAX_PRINCIPAL = STAKE_LANE_PRINCIPAL_MASK * STAKE_PRINCIPAL_FACTOR;
 
     // ---------------------------------------------------------------------
     // VRF configuration
@@ -443,10 +380,7 @@ contract Purgecoin {
         unchecked {
             // Track aggregate burn and grow caller luckbox (adds +2% of deposit).
             dailyCoinBurn += amount;
-            uint256 newLuck = playerLuckbox[caller] +
-                amount +
-                coinflipDeposit /
-                50;
+            uint256 newLuck = playerLuckbox[caller] + amount + coinflipDeposit / 50;
             playerLuckbox[caller] = newLuck;
 
             // Update luckbox leaderboard (board 0 = luckbox).
@@ -483,21 +417,14 @@ contract Purgecoin {
     /// @dev Reverts if code is unknown, self-referral, or caller already has a referrer.
     function referPlayer(bytes32 code_) external {
         address referrer = affiliateCode[code_];
-        if (
-            referrer == address(0) ||
-            referrer == msg.sender ||
-            referredBy[msg.sender] != address(0)
-        ) {
+        if (referrer == address(0) || referrer == msg.sender || referredBy[msg.sender] != address(0)) {
             revert Insufficient();
         }
         referredBy[msg.sender] = referrer;
         emit Affiliate(0, code_, msg.sender); // 0 = player referred
     }
     // Stake with encoded risk window
-    function _encodeStakeLane(
-        uint256 principalRounded,
-        uint8 risk
-    ) private pure returns (uint256) {
+    function _encodeStakeLane(uint256 principalRounded, uint8 risk) private pure returns (uint256) {
         if (risk == 0 || risk > MAX_RISK) revert StakeInvalid();
         if (principalRounded == 0) revert StakeInvalid();
 
@@ -509,29 +436,20 @@ contract Purgecoin {
         return normalized | (uint256(risk) << STAKE_LANE_RISK_SHIFT);
     }
 
-    function _decodeStakeLane(
-        uint256 lane
-    ) private pure returns (uint256 principalRounded, uint8 risk) {
+    function _decodeStakeLane(uint256 lane) private pure returns (uint256 principalRounded, uint8 risk) {
         if (lane == 0) return (0, 0);
         uint256 units = lane & STAKE_LANE_PRINCIPAL_MASK;
         principalRounded = units * STAKE_PRINCIPAL_FACTOR;
         risk = uint8((lane & STAKE_LANE_RISK_MASK) >> STAKE_LANE_RISK_SHIFT);
     }
 
-    function _laneAt(
-        uint256 encoded,
-        uint8 index
-    ) private pure returns (uint256) {
+    function _laneAt(uint256 encoded, uint8 index) private pure returns (uint256) {
         if (index >= STAKE_MAX_LANES) return 0;
         uint256 shift = uint256(index) * STAKE_LANE_BITS;
         return (encoded >> shift) & STAKE_LANE_MASK;
     }
 
-    function _setLane(
-        uint256 encoded,
-        uint8 index,
-        uint256 laneValue
-    ) private pure returns (uint256) {
+    function _setLane(uint256 encoded, uint8 index, uint256 laneValue) private pure returns (uint256) {
         uint256 shift = uint256(index) * STAKE_LANE_BITS;
         uint256 mask = STAKE_LANE_MASK << shift;
         return (encoded & ~mask) | (laneValue << shift);
@@ -540,8 +458,7 @@ contract Purgecoin {
     function _laneCount(uint256 encoded) private pure returns (uint8 count) {
         if ((encoded & STAKE_LANE_MASK) != 0) count++;
         if (((encoded >> STAKE_LANE_BITS) & STAKE_LANE_MASK) != 0) count++;
-        if (((encoded >> (2 * STAKE_LANE_BITS)) & STAKE_LANE_MASK) != 0)
-            count++;
+        if (((encoded >> (2 * STAKE_LANE_BITS)) & STAKE_LANE_MASK) != 0) count++;
     }
 
     function _ensureCompatible(uint256 encoded, uint8 expectRisk) private pure {
@@ -555,11 +472,7 @@ contract Purgecoin {
         }
     }
 
-    function _insertLane(
-        uint256 encoded,
-        uint256 laneValue,
-        bool strictCapacity
-    ) private pure returns (uint256) {
+    function _insertLane(uint256 encoded, uint256 laneValue, bool strictCapacity) private pure returns (uint256) {
         (, uint8 riskNew) = _decodeStakeLane(laneValue);
 
         uint8 lanes = _laneCount(encoded);
@@ -572,10 +485,8 @@ contract Purgecoin {
                 uint256 unitsExisting = target & STAKE_LANE_PRINCIPAL_MASK;
                 uint256 unitsNew = laneValue & STAKE_LANE_PRINCIPAL_MASK;
                 uint256 totalUnits = unitsExisting + unitsNew;
-                if (totalUnits >> STAKE_LANE_PRINCIPAL_BITS != 0)
-                    revert StakeInvalid();
-                uint256 mergedLane = (target & ~STAKE_LANE_PRINCIPAL_MASK) |
-                    totalUnits;
+                if (totalUnits >> STAKE_LANE_PRINCIPAL_BITS != 0) revert StakeInvalid();
+                uint256 mergedLane = (target & ~STAKE_LANE_PRINCIPAL_MASK) | totalUnits;
                 return _setLane(encoded, idx, mergedLane);
             }
             unchecked {
@@ -603,12 +514,7 @@ contract Purgecoin {
         if (isBettingPaused) revert BettingPaused();
         uint24 currLevel = _gameLevel();
         uint24 distance = targetLevel - currLevel;
-        if (
-            risk == 0 ||
-            risk > MAX_RISK ||
-            distance > 500 ||
-            distance < MAX_RISK
-        ) revert Insufficient();
+        if (risk == 0 || risk > MAX_RISK || distance > 500 || distance < MAX_RISK) revert Insufficient();
 
         // Starting level where this stake is placed (inclusive)
         uint24 placeLevel = uint24(targetLevel - (risk - 1));
@@ -621,8 +527,7 @@ contract Purgecoin {
             if (existingEncoded != 0) {
                 uint8 wantRisk = uint8(risk - offset);
                 _ensureCompatible(existingEncoded, wantRisk);
-                if (_laneCount(existingEncoded) >= STAKE_MAX_LANES)
-                    revert StakeInvalid();
+                if (_laneCount(existingEncoded) >= STAKE_MAX_LANES) revert StakeInvalid();
             }
             unchecked {
                 ++offset;
@@ -631,9 +536,7 @@ contract Purgecoin {
 
         // 2) Guard against overlap from earlier stakes that extend into placeLevel
         uint24 scanStart = currLevel;
-        uint24 scanFloor = placeLevel > (MAX_RISK - 1)
-            ? uint24(placeLevel - (MAX_RISK - 1))
-            : uint24(1);
+        uint24 scanFloor = placeLevel > (MAX_RISK - 1) ? uint24(placeLevel - (MAX_RISK - 1)) : uint24(1);
         if (scanStart < scanFloor) scanStart = scanFloor;
 
         for (uint24 scanLevel = scanStart; scanLevel < placeLevel; ) {
@@ -641,15 +544,11 @@ contract Purgecoin {
             if (existingAtScan != 0) {
                 uint8 lanes = _laneCount(existingAtScan);
                 for (uint8 li; li < lanes; ) {
-                    (, uint8 existingRisk) = _decodeStakeLane(
-                        _laneAt(existingAtScan, li)
-                    );
+                    (, uint8 existingRisk) = _decodeStakeLane(_laneAt(existingAtScan, li));
                     uint24 reachLevel = scanLevel + uint24(existingRisk) - 1;
                     if (reachLevel >= placeLevel) {
-                        uint24 impliedRiskAtPlace = uint24(existingRisk) -
-                            (placeLevel - scanLevel);
-                        if (uint8(impliedRiskAtPlace) != risk)
-                            revert StakeInvalid();
+                        uint24 impliedRiskAtPlace = uint24(existingRisk) - (placeLevel - scanLevel);
+                        if (uint8(impliedRiskAtPlace) != risk) revert StakeInvalid();
                     }
                     unchecked {
                         ++li;
@@ -687,8 +586,7 @@ contract Purgecoin {
         }
 
         // Encode and place the stake lane
-        uint256 principalRounded = boostedPrincipal -
-            (boostedPrincipal % STAKE_PRINCIPAL_FACTOR);
+        uint256 principalRounded = boostedPrincipal - (boostedPrincipal % STAKE_PRINCIPAL_FACTOR);
         if (principalRounded > STAKE_MAX_PRINCIPAL) {
             principalRounded = STAKE_MAX_PRINCIPAL;
         }
@@ -701,11 +599,7 @@ contract Purgecoin {
             stakeAddr[placeLevel].push(msg.sender);
         } else {
             _ensureCompatible(existingAtPlace, risk);
-            stakeAmt[placeLevel][msg.sender] = _insertLane(
-                existingAtPlace,
-                newLane,
-                true
-            );
+            stakeAmt[placeLevel][msg.sender] = _insertLane(existingAtPlace, newLane, true);
         }
 
         emit StakeCreated(msg.sender, targetLevel, risk, principalRounded);
@@ -726,12 +620,7 @@ contract Purgecoin {
     /// - `amount` is optionally doubled on levels `level % 25 == 1`.
     /// - Direct ref gets a coinflip credit equal to `amount`; their upline (if any and already active
     ///   this level) receives a 20% bonus coinflip credit of the same (post‑doubling) amount.
-    function payAffiliate(
-        uint256 amount,
-        bytes32 code,
-        address sender,
-        uint24 lvl
-    ) external onlyPurgeGameContract {
+    function payAffiliate(uint256 amount, bytes32 code, address sender, uint24 lvl) external onlyPurgeGameContract {
         address affiliateAddr = affiliateCode[code];
         address referrer = referredBy[sender];
 
@@ -754,8 +643,7 @@ contract Purgecoin {
 
             // Pay direct affiliate (skip sentinels)
             if (affiliateAddr != address(0) && affiliateAddr != address(1)) {
-                uint256 newTotal = affiliateCoinEarned[lvl][affiliateAddr] +
-                    amount;
+                uint256 newTotal = affiliateCoinEarned[lvl][affiliateAddr] + amount;
                 affiliateCoinEarned[lvl][affiliateAddr] = newTotal;
                 addFlip(affiliateAddr, amount, false);
                 _updatePlayerScore(1, affiliateAddr, newTotal);
@@ -764,15 +652,11 @@ contract Purgecoin {
             // Upline bonus (20%) only if upline is active this level
             address upline = referredBy[affiliateAddr];
             if (
-                upline != address(0) &&
-                upline != address(1) &&
-                upline != sender &&
-                affiliateCoinEarned[lvl][upline] > 0
+                upline != address(0) && upline != address(1) && upline != sender && affiliateCoinEarned[lvl][upline] > 0
             ) {
                 uint256 bonus = amount / 5;
                 if (bonus != 0) {
-                    uint256 newTotalU = affiliateCoinEarned[lvl][upline] +
-                        bonus;
+                    uint256 newTotalU = affiliateCoinEarned[lvl][upline] + bonus;
                     affiliateCoinEarned[lvl][upline] = newTotalU;
                     addFlip(upline, bonus, false);
                     _updatePlayerScore(1, upline, newTotalU);
@@ -829,9 +713,7 @@ contract Purgecoin {
 
     /// @notice Quote the ETH required to purchase `amount` at the current presale tier state.
     /// @dev Reverts if `amount` is zero, not a multiple of `1e6`, or exceeds remaining allocation.
-    function quotePresaleCost(
-        uint256 amount
-    ) external view returns (uint256 costWei) {
+    function quotePresaleCost(uint256 amount) external view returns (uint256 costWei) {
         if (amount == 0) revert Insufficient();
         if (amount % MILLION != 0) revert InvalidKind();
 
@@ -844,10 +726,7 @@ contract Purgecoin {
     /// @notice Compute the tiered presale cost for `amount`, given `sold` units already sold.
     /// @dev Splits `amount` across tier buckets [T1..T4] using remaining capacity in order,
     ///      then multiplies by per‑tier prices. All arithmetic uses base‑unit amounts (1e6).
-    function _computePresaleCostAtSold(
-        uint256 amount,
-        uint256 sold
-    ) internal pure returns (uint256 costWei) {
+    function _computePresaleCostAtSold(uint256 amount, uint256 sold) internal pure returns (uint256 costWei) {
         unchecked {
             uint256 tier1Qty;
             uint256 tier2Qty;
@@ -875,31 +754,21 @@ contract Purgecoin {
 
             // Divide by 1e6 at the end since amounts are in base units (decimals = 6).
             costWei =
-                (tier1Qty *
-                    TIER1_PRICE +
-                    tier2Qty *
-                    TIER2_PRICE +
-                    tier3Qty *
-                    TIER3_PRICE +
-                    remainingQty *
-                    TIER4_PRICE) /
-                MILLION;
+                (tier1Qty * TIER1_PRICE +
+                    tier2Qty * TIER2_PRICE +
+                    tier3Qty * TIER3_PRICE +
+                    remainingQty * TIER4_PRICE) / MILLION;
         }
     }
 
-    function rawFulfillRandomWords(
-        uint256 requestId,
-        uint256[] calldata randomWords
-    ) external {
+    function rawFulfillRandomWords(uint256 requestId, uint256[] calldata randomWords) external {
         if (msg.sender != s_vrfCoordinator) {
             revert OnlyCoordinatorCanFulfill(msg.sender, s_vrfCoordinator);
         }
         fulfillRandomWords(requestId, randomWords);
     }
 
-    function requestRngPurgeGame(
-        bool pauseBetting
-    ) external onlyPurgeGameContract {
+    function requestRngPurgeGame(bool pauseBetting) external onlyPurgeGameContract {
         uint256 id = _vrfRequestRandomWords(
             VRFRandomWordsRequest({
                 keyHash: vrfKeyHash,
@@ -907,10 +776,7 @@ contract Purgecoin {
                 requestConfirmations: vrfRequestConfirmations,
                 callbackGasLimit: vrfCallbackGasLimit,
                 numWords: 1,
-                extraArgs: abi.encodeWithSelector(
-                    EXTRA_ARGS_V1_TAG,
-                    VRFExtraArgsV1({nativePayment: false})
-                )
+                extraArgs: abi.encodeWithSelector(EXTRA_ARGS_V1_TAG, VRFExtraArgsV1({nativePayment: false}))
             })
         );
         rngFulfilled = false;
@@ -921,10 +787,7 @@ contract Purgecoin {
 
     /// @notice VRF callback: store the random word once for the expected request.
     /// @dev Reverts if `requestId` does not match the most recent request or if already fulfilled.
-    function fulfillRandomWords(
-        uint256 requestId,
-        uint256[] calldata randomWords
-    ) internal {
+    function fulfillRandomWords(uint256 requestId, uint256[] calldata randomWords) internal {
         if (requestId != rngRequestId || rngFulfilled) return;
         rngFulfilled = true;
         rngWord = randomWords[0];
@@ -937,8 +800,7 @@ contract Purgecoin {
     /// @notice One‑time wiring of the PurgeGame contract address.
     /// @dev Access: deployer/creator only; irreversible (no admin update).
     function addContractAddress(address a) external {
-        if (purgeGameContract != address(0) || msg.sender != creator)
-            revert OnlyDeployer();
+        if (purgeGameContract != address(0) || msg.sender != creator) revert OnlyDeployer();
         purgeGameContract = a;
     }
 
@@ -951,10 +813,7 @@ contract Purgecoin {
 
     /// @notice Grant a pending coinflip stake during gameplay flows instead of minting PURGE.
     /// @dev Access: PurgeGame only. Zero address or zero amount are ignored.
-    function grantCoinflipInGame(
-        address player,
-        uint256 amount
-    ) external onlyPurgeGameContract {
+    function grantCoinflipInGame(address player, uint256 amount) external onlyPurgeGameContract {
         if (player == address(0) || amount == 0) return;
         addFlip(player, amount, false);
     }
@@ -963,10 +822,7 @@ contract Purgecoin {
     ///         and credit 2% of the burned amount to their luckbox.
     /// @dev Access: PurgeGame only. OZ ERC20 `_burn` reverts on zero address or insufficient balance.
     ///      Leaderboard is refreshed only when a non‑zero credit is applied.
-    function burnInGame(
-        address target,
-        uint256 amount
-    ) external onlyPurgeGameContract {
+    function burnInGame(address target, uint256 amount) external onlyPurgeGameContract {
         _burn(target, amount);
         // 2% luckbox credit; skip if too small to matter after integer division.
         uint256 credit = amount / 50; // 2%
@@ -1027,38 +883,23 @@ contract Purgecoin {
                                 for (uint8 li; li < STAKE_MAX_LANES; ) {
                                     uint256 lane = _laneAt(enc, li);
                                     if (lane != 0) {
-                                        (
-                                            uint256 pr,
-                                            uint8 rf
-                                        ) = _decodeStakeLane(lane);
+                                        (uint256 pr, uint8 rf) = _decodeStakeLane(lane);
                                         if (rf <= 1) {
                                             uint256 fivePct = pr / 20;
-                                            uint256 newLuck = playerLuckbox[s] +
-                                                fivePct;
+                                            uint256 newLuck = playerLuckbox[s] + fivePct;
                                             playerLuckbox[s] = newLuck;
                                             _updatePlayerScore(0, s, newLuck);
                                             addFlip(s, fivePct * 19, false);
                                         } else {
                                             uint24 nextL = level + 1;
                                             uint8 newRf = rf - 1;
-                                            uint256 laneValue = _encodeStakeLane(
-                                                    pr * 2,
-                                                    newRf
-                                                );
-                                            uint256 nextEnc = stakeAmt[nextL][
-                                                s
-                                            ];
+                                            uint256 laneValue = _encodeStakeLane(pr * 2, newRf);
+                                            uint256 nextEnc = stakeAmt[nextL][s];
                                             if (nextEnc == 0) {
                                                 stakeAmt[nextL][s] = laneValue;
                                                 stakeAddr[nextL].push(s);
                                             } else {
-                                                stakeAmt[nextL][
-                                                    s
-                                                ] = _insertLane(
-                                                    nextEnc,
-                                                    laneValue,
-                                                    false
-                                                );
+                                                stakeAmt[nextL][s] = _insertLane(nextEnc, laneValue, false);
                                             }
                                         }
                                     }
@@ -1088,12 +929,7 @@ contract Purgecoin {
         uint256 totalPlayers = coinflipPlayersCount;
 
         // Bounty: convert any owed bounty into a flip credit on the first window.
-        if (
-            totalPlayers != 0 &&
-            payoutIndex == 0 &&
-            bountyOwedTo != address(0) &&
-            currentBounty > 0
-        ) {
+        if (totalPlayers != 0 && payoutIndex == 0 && bountyOwedTo != address(0) && currentBounty > 0) {
             address to = bountyOwedTo;
             uint256 amt = currentBounty;
             bountyOwedTo = address(0);
@@ -1103,12 +939,7 @@ contract Purgecoin {
         }
 
         // “Every 10th player” bonus pool: arm once per round when win and enough players.
-        if (
-            win &&
-            payoutIndex == 0 &&
-            currentTenthPlayerBonusPool > 0 &&
-            totalPlayers >= 10
-        ) {
+        if (win && payoutIndex == 0 && currentTenthPlayerBonusPool > 0 && totalPlayers >= 10) {
             uint256 bonusPool = currentTenthPlayerBonusPool;
             currentTenthPlayerBonusPool = 0;
             uint32 rem = uint32(totalPlayers / 10); // how many 10th slots exist
@@ -1123,9 +954,7 @@ contract Purgecoin {
                 _addToBounty(bonusPool);
                 tbActive = false;
             }
-            tbMod = uint8(
-                uint256(keccak256(abi.encodePacked(word, "tenthMod"))) % 10
-            ); // wheel offset 0..9
+            tbMod = uint8(uint256(keccak256(abi.encodePacked(word, "tenthMod"))) % 10); // wheel offset 0..9
         }
 
         // --- (3) Player payouts (windowed by stepPayout) -----------------------------------
@@ -1230,32 +1059,18 @@ contract Purgecoin {
         {
             uint256 traitPool = (burnBase * 15) / 100;
             if (traitPool != 0) {
-                uint256 traitRnd = uint256(
-                    keccak256(abi.encodePacked(randWord, "CoinJackpot"))
-                );
+                uint256 traitRnd = uint256(keccak256(abi.encodePacked(randWord, "CoinJackpot")));
                 uint256 perTraitPrize = traitPool / 4; // remainder intentionally not used
 
                 for (uint8 i; i < 4; ) {
-                    if (i > 0)
-                        traitRnd = uint256(
-                            keccak256(abi.encodePacked(traitRnd, i))
-                        );
+                    if (i > 0) traitRnd = uint256(keccak256(abi.encodePacked(traitRnd, i)));
                     uint8 winningTrait = uint8(traitRnd & 0x3F) + (i << 6);
 
                     // Up to 5 candidates sampled by the game; pick highest luckbox.
-                    address[] memory candidates = _gameJackpotWinners(
-                        randWord,
-                        winningTrait,
-                        5,
-                        uint8(42 + i)
-                    );
+                    address[] memory candidates = _gameJackpotWinners(randWord, winningTrait, 5, uint8(42 + i));
                     address winnerAddr = getTopLuckbox(candidates);
 
-                    emit CoinJackpotPaid(
-                        winningTrait,
-                        winnerAddr,
-                        perTraitPrize
-                    );
+                    emit CoinJackpotPaid(winningTrait, winnerAddr, perTraitPrize);
                     if (winnerAddr != address(0)) {
                         _mint(winnerAddr, perTraitPrize);
                     } else {
@@ -1277,10 +1092,7 @@ contract Purgecoin {
                 uint256 lbPrize = (playerPool * 35) / 100; // largest bettor
                 uint256 midPrize = (playerPool * 15) / 100; // random among #3 / #4 bettors
                 currentTenthPlayerBonusPool = (playerPool * 20) / 100; // paid during payouts
-                uint256 lbPool = playerPool -
-                    lbPrize -
-                    midPrize -
-                    currentTenthPlayerBonusPool;
+                uint256 lbPool = playerPool - lbPrize - midPrize - currentTenthPlayerBonusPool;
 
                 // Largest bettor gets credited now (paid when payouts run).
                 address largestBettor = topBettors[0].player;
@@ -1289,11 +1101,7 @@ contract Purgecoin {
                 }
 
                 // Randomly pick #3 or #4.
-                address midWinner = topBettors[
-                    2 +
-                        (uint256(keccak256(abi.encodePacked(randWord, "p34"))) &
-                            1)
-                ].player;
+                address midWinner = topBettors[2 + (uint256(keccak256(abi.encodePacked(randWord, "p34"))) & 1)].player;
                 if (midWinner != address(0)) {
                     coinflipAmount[midWinner] += midPrize;
                 }
@@ -1393,12 +1201,7 @@ contract Purgecoin {
     )
         external
         onlyPurgeGameContract
-        returns (
-            bool finished,
-            address[] memory winners,
-            uint256[] memory amounts,
-            uint256 returnAmountWei
-        )
+        returns (bool finished, address[] memory winners, uint256[] memory amounts, uint256 returnAmountWei)
     {
         uint32 batch = (cap == 0) ? BAF_BATCH : cap;
 
@@ -1412,9 +1215,7 @@ contract Purgecoin {
 
             bafState.inProgress = true;
 
-            uint32 limit = (kind == 0)
-                ? uint32(coinflipPlayersCount)
-                : uint32(decPlayersCount[lvl]);
+            uint32 limit = (kind == 0) ? uint32(coinflipPlayersCount) : uint32(decPlayersCount[lvl]);
 
             // Randomize the stride modulo for the 10‑way sharded buckets
             bs.offset = uint8(executeWord % 10);
@@ -1458,12 +1259,7 @@ contract Purgecoin {
                 // (2) Random among #3/#4 — 10%
                 {
                     uint256 prize = (P * 10) / 100;
-                    address w = topBettors[
-                        2 +
-                            (uint256(
-                                keccak256(abi.encodePacked(executeWord, "p34"))
-                            ) & 1)
-                    ].player;
+                    address w = topBettors[2 + (uint256(keccak256(abi.encodePacked(executeWord, "p34"))) & 1)].player;
                     if (_eligible(w, lbMin)) {
                         tmpW[n] = w;
                         tmpA[n] = prize;
@@ -1478,10 +1274,7 @@ contract Purgecoin {
                 // (3) Random eligible — 10%
                 {
                     uint256 prize = (P * 10) / 100;
-                    address w = _randomEligible(
-                        uint256(keccak256(abi.encodePacked(executeWord, "re"))),
-                        lbMin
-                    );
+                    address w = _randomEligible(uint256(keccak256(abi.encodePacked(executeWord, "re"))), lbMin);
                     if (w != address(0)) {
                         tmpW[n] = w;
                         tmpA[n] = prize;
@@ -1536,9 +1329,7 @@ contract Purgecoin {
                 // Scatter the remainder equally across shard‑stride participants
                 uint256 scatter = P - credited - toReturn;
                 if (limit >= 10 && bs.offset < limit) {
-                    uint256 occurrences = 1 +
-                        (uint256(limit) - 1 - bs.offset) /
-                        10; // count of indices visited
+                    uint256 occurrences = 1 + (uint256(limit) - 1 - bs.offset) / 10; // count of indices visited
                     uint256 perWei = scatter / occurrences;
                     bs.per = uint120(perWei);
 
@@ -1655,8 +1446,7 @@ contract Purgecoin {
             }
             scanCursor = end;
 
-            if (end < bs.limit)
-                return (false, new address[](0), new uint256[](0), 0);
+            if (end < bs.limit) return (false, new address[](0), new uint256[](0), 0);
 
             // Nothing eligible → refund entire pool
             if (extVar == 0) {
@@ -1740,19 +1530,12 @@ contract Purgecoin {
     /// @dev Defensive check ensures mapping hint matches current leaderboard slot.
     function getPlayerRank(address player) external view returns (uint16) {
         uint8 pos = luckboxPos[player]; // 1..luckboxLen or 0 (not present)
-        return
-            (pos != 0 &&
-                pos <= luckboxLen &&
-                luckboxLeaderboard[pos - 1].player == player)
-                ? pos
-                : RANK_NOT_FOUND;
+        return (pos != 0 && pos <= luckboxLen && luckboxLeaderboard[pos - 1].player == player) ? pos : RANK_NOT_FOUND;
     }
 
     /// @notice Return addresses from a leaderboard.
     /// @param which 0 = luckbox (≤10), 1 = affiliate (≤8), 2 = top bettors (≤4).
-    function getLeaderboardAddresses(
-        uint8 which
-    ) external view returns (address[] memory out) {
+    function getLeaderboardAddresses(uint8 which) external view returns (address[] memory out) {
         if (which == 0) {
             uint8 len = luckboxLen;
             out = new address[](len);
@@ -1786,27 +1569,18 @@ contract Purgecoin {
     }
 
     /// @notice Eligibility gate requiring both luckbox balance and active coinflip stake ≥ `min`.
-    function _eligible(
-        address player,
-        uint256 min
-    ) internal view returns (bool) {
+    function _eligible(address player, uint256 min) internal view returns (bool) {
         return playerLuckbox[player] >= min && coinflipAmount[player] >= min;
     }
 
     /// @notice Eligibility gate requiring only luckbox balance ≥ `min` (no coinflip amount check).
-    function _eligibleLuckbox(
-        address player,
-        uint256 min
-    ) internal view returns (bool) {
+    function _eligibleLuckbox(address player, uint256 min) internal view returns (bool) {
         return playerLuckbox[player] >= min;
     }
 
     /// @notice Pick the first eligible player when scanning up to 300 candidates from a pseudo-random start.
     /// @dev Uses stride 2 for odd N to cover the ring without repeats; stride 1 for even N (contiguous window).
-    function _randomEligible(
-        uint256 seed,
-        uint256 min
-    ) internal view returns (address) {
+    function _randomEligible(uint256 seed, uint256 min) internal view returns (address) {
         uint256 total = coinflipPlayersCount;
         if (total == 0) return address(0);
 
@@ -1836,11 +1610,7 @@ contract Purgecoin {
     /// @param kind 0 = coinflip roster, 1 = decimator roster for `lvl`.
     /// @param lvl  Level to read when `kind == 1`.
     /// @param idx  Global flattened index (0..N-1).
-    function _srcPlayer(
-        uint8 kind,
-        uint24 lvl,
-        uint256 idx
-    ) internal view returns (address) {
+    function _srcPlayer(uint8 kind, uint24 lvl, uint256 idx) internal view returns (address) {
         if (kind == 0) {
             return cfPlayers[cfHead + idx];
         }
@@ -1867,11 +1637,7 @@ contract Purgecoin {
     /// @param player           Target player.
     /// @param coinflipDeposit  Amount to add to their current pending flip stake.
     /// @param canArmBounty     If true, a sufficiently large deposit may arm a bounty.
-    function addFlip(
-        address player,
-        uint256 coinflipDeposit,
-        bool canArmBounty
-    ) internal {
+    function addFlip(address player, uint256 coinflipDeposit, bool canArmBounty) internal {
         uint256 prevStake = coinflipAmount[player];
         if (prevStake == 0) _pushPlayer(player);
 
@@ -1884,9 +1650,7 @@ contract Purgecoin {
             biggestFlipEver = newStake;
 
             if (canArmBounty) {
-                uint256 threshold = (bountyOwedTo != address(0))
-                    ? (record + record / 100)
-                    : record;
+                uint256 threshold = (bountyOwedTo != address(0)) ? (record + record / 100) : record;
                 if (newStake >= threshold) {
                     bountyOwedTo = player;
                     emit BountyOwed(player, currentBounty, newStake);
@@ -1907,9 +1671,7 @@ contract Purgecoin {
     /// @notice Pick the address with the highest luckbox from a candidate list.
     /// @param players Candidate addresses (may include address(0)).
     /// @return best Address with the maximum `playerLuckbox` value among `players` (zero if none).
-    function getTopLuckbox(
-        address[] memory players
-    ) internal view returns (address best) {
+    function getTopLuckbox(address[] memory players) internal view returns (address best) {
         uint256 top;
         uint256 len = players.length;
         for (uint256 i; i < len; ) {
@@ -1959,23 +1721,13 @@ contract Purgecoin {
     }
 
     // Users call: LINK.transferAndCall(address(this), amount, "")
-    function onTokenTransfer(
-        address from,
-        uint256 amount,
-        bytes calldata
-    ) external {
+    function onTokenTransfer(address from, uint256 amount, bytes calldata) external {
         if (isBettingPaused) revert BettingPaused();
         if (msg.sender != LINK) revert E();
         if (amount == 0) revert Zero();
 
         // fund VRF sub
-        if (
-            !_linkTransferAndCall(
-                s_vrfCoordinator,
-                amount,
-                abi.encode(vrfSubscriptionId)
-            )
-        ) {
+        if (!_linkTransferAndCall(s_vrfCoordinator, amount, abi.encode(vrfSubscriptionId))) {
             revert E();
         }
 

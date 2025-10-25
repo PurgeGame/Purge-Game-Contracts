@@ -5,15 +5,7 @@ import "erc721a/contracts/ERC721A.sol";
 interface IPurgeGameMetadataProvider {
     function describeToken(
         uint256 tokenId
-    )
-        external
-        view
-        returns (
-            bool isTrophy,
-            uint256 trophyInfo,
-            uint256 metaPacked,
-            uint32[4] memory remaining
-        );
+    ) external view returns (bool isTrophy, uint256 trophyInfo, uint256 metaPacked, uint32[4] memory remaining);
 }
 
 interface IPurgeRenderer {
@@ -64,10 +56,7 @@ contract PurgeGameNFT is ERC721A {
         _;
     }
 
-    function gameMint(
-        address to,
-        uint256 quantity
-    ) external onlyGame returns (uint256 startTokenId) {
+    function gameMint(address to, uint256 quantity) external onlyGame returns (uint256 startTokenId) {
         startTokenId = _nextTokenId();
         _mint(to, quantity);
     }
@@ -81,37 +70,24 @@ contract PurgeGameNFT is ERC721A {
         transferFrom(game, to, tokenId);
     }
 
-    function _beforeTokenTransfers(
-        address from,
-        address to,
-        uint256 tokenId,
-        uint256 quantity
-    ) internal override {
+    function _beforeTokenTransfers(address from, address to, uint256 tokenId, uint256 quantity) internal override {
         if (to == address(0) && trophyToken[tokenId]) revert TrophyBurnNotAllowed();
         super._beforeTokenTransfers(from, to, tokenId, quantity);
     }
 
     // --- Views ----------------------------------------------------------------
 
-    function ownerOf(
-        uint256 tokenId
-    ) public view override returns (address) {
+    function ownerOf(uint256 tokenId) public view override returns (address) {
         if (game == address(0)) revert GameNotLinked();
         metadataProvider.describeToken(tokenId);
         return super.ownerOf(tokenId);
     }
 
-    function tokenURI(
-        uint256 tokenId
-    ) public view override returns (string memory) {
+    function tokenURI(uint256 tokenId) public view override returns (string memory) {
         if (game == address(0) || address(renderer) == address(0)) revert GameNotLinked();
 
-        (
-            bool isTrophy,
-            uint256 trophyInfo,
-            uint256 metaPacked,
-            uint32[4] memory remaining
-        ) = metadataProvider.describeToken(tokenId);
+        (bool isTrophy, uint256 trophyInfo, uint256 metaPacked, uint32[4] memory remaining) = metadataProvider
+            .describeToken(tokenId);
 
         uint256 data = isTrophy ? trophyInfo : metaPacked;
         return renderer.tokenURI(tokenId, data, remaining);
