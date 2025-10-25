@@ -75,8 +75,6 @@ interface IPurgeGameNFT {
     function trophyAward(address to, uint256 tokenId) external;
 
     function ownerOf(uint256 tokenId) external view returns (address);
-
-    
 }
 
 // ===========================================================================
@@ -577,14 +575,24 @@ contract PurgeGame {
 
         for (uint256 i; i < count; ) {
             uint256 tokenId = tokenIds[i];
-        if (nft.ownerOf(tokenId) != caller || trophyData[tokenId] != 0)
-            revert E();
+            if (nft.ownerOf(tokenId) != caller || trophyData[tokenId] != 0)
+                revert E();
 
             uint32 traits = tokenTraits[tokenId];
             uint8 trait0 = uint8(traits & 0xFF);
             uint8 trait1 = (uint8(traits >> 8) & 0xFF);
             uint8 trait2 = (uint8(traits >> 16) & 0xFF);
             uint8 trait3 = (uint8(traits >> 24) & 0xFF);
+
+            uint8 color0 = trait0 >> 3;
+            uint8 color1 = (trait1 & 0x3F) >> 3;
+            uint8 color2 = (trait2 & 0x3F) >> 3;
+            uint8 color3 = (trait3 & 0x3F) >> 3;
+            if (color0 == color1 && color0 == color2 && color0 == color3) {
+                unchecked {
+                    bonusTenths += 49;
+                }
+            }
 
             if (
                 uint16(trait0) == prevExterminated ||
@@ -631,10 +639,7 @@ contract PurgeGame {
         }
 
         if (lvl % 10 == 2) count <<= 1;
-        coin.mintInGame(
-            caller,
-            (count + bonusTenths) * (priceCoin / 10)
-        );
+        coin.mintInGame(caller, (count + bonusTenths) * (priceCoin / 10));
         emit Purge(msg.sender, tokenIds);
     }
 
@@ -990,19 +995,23 @@ contract PurgeGame {
             uint256 elapsed = level - awardLevel;
 
             if (elapsed == 0) {
-                unchecked { ++i; }
+                unchecked {
+                    ++i;
+                }
                 continue;
             }
 
-        _addClaimableEth(nft.ownerOf(tokenId), perLevel);
+            _addClaimableEth(nft.ownerOf(tokenId), perLevel);
 
-        if (elapsed >= TROPHY_DRIP_STEPS) {
-            _clearTrophyDripEntry(i);
-            len = activeTrophyDrips.length;
-            continue;
-        }
+            if (elapsed >= TROPHY_DRIP_STEPS) {
+                _clearTrophyDripEntry(i);
+                len = activeTrophyDrips.length;
+                continue;
+            }
 
-            unchecked { ++i; }
+            unchecked {
+                ++i;
+            }
         }
     }
 
@@ -1056,10 +1065,7 @@ contract PurgeGame {
         uint256 lvlMod100 = lvl % 100;
 
         // Small creator payout in PURGE (proportional to total ETH processed)
-        coin.mintInGame(
-            creator,
-            (totalWei * 5 * priceCoin) / 1 ether
-        );
+        coin.mintInGame(creator, (totalWei * 5 * priceCoin) / 1 ether);
 
         // Save % for next level (randomized bands per range)
         uint256 rndWord = uint256(keccak256(abi.encode(rngWord, uint8(3))));
@@ -1286,11 +1292,7 @@ contract PurgeGame {
         bool pauseBetting
     ) private returns (bool ok) {
         if (pauseBetting) {
-            ok = coin.processCoinflipPayouts(
-                lvl,
-                cap,
-                bonusFlip
-            );
+            ok = coin.processCoinflipPayouts(lvl, cap, bonusFlip);
             if (!ok) return false;
         }
         dailyIdx = dayIdx;
@@ -1409,10 +1411,8 @@ contract PurgeGame {
 
     function _enforceCenturyLuckbox(uint24 lvl, uint256 unit) private view {
         if (lvl % 100 == 0) {
-            if (
-                coin.playerLuckbox(msg.sender) <
-                10 * unit * ((lvl / 100) + 1)
-            ) revert LuckboxTooSmall();
+            if (coin.playerLuckbox(msg.sender) < 10 * unit * ((lvl / 100) + 1))
+                revert LuckboxTooSmall();
         }
     }
 
@@ -1701,12 +1701,7 @@ contract PurgeGame {
             address[] memory winnersArr,
             uint256[] memory amountsArr,
             uint256 returnWei
-        ) = coin.runExternalJackpot(
-                kind,
-                poolWei,
-                cap,
-                lvl
-            );
+        ) = coin.runExternalJackpot(kind, poolWei, cap, lvl);
 
         for (uint256 i; i < winnersArr.length; ) {
             _addClaimableEth(winnersArr[i], amountsArr[i]);
