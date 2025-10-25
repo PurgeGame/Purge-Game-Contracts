@@ -235,6 +235,7 @@ contract Purgecoin {
     // Game wiring & state
     // ---------------------------------------------------------------------
     address private purgeGameContract; // PurgeGame contract address (set once)
+    address public trophyWrapper; // Optional authorized contract for trophy coin drops
 
     // Session flags
     bool public isBettingPaused; // set while VRF is pending unless explicitly allowed
@@ -799,9 +800,14 @@ contract Purgecoin {
     }
     /// @notice One‑time wiring of the PurgeGame contract address.
     /// @dev Access: deployer/creator only; irreversible (no admin update).
-    function addContractAddress(address a) external {
-        if (purgeGameContract != address(0) || msg.sender != creator) revert OnlyDeployer();
-        purgeGameContract = a;
+    /// @notice One-time wiring of the game and optional trophy wrapper contracts.
+    /// @dev Access: deployer/creator only; callable once for game, optional second call to set wrapper.
+    function wire(address game_, address wrapper_) external {
+        if (msg.sender != creator) revert OnlyDeployer();
+        if (purgeGameContract == address(0)) {
+            purgeGameContract = game_;
+        }
+        if (wrapper_ != address(0)) trophyWrapper = wrapper_;
     }
 
     /// @notice Credit the creator’s share of gameplay proceeds.
@@ -816,7 +822,8 @@ contract Purgecoin {
 
     /// @notice Grant a pending coinflip stake during gameplay flows instead of minting PURGE.
     /// @dev Access: PurgeGame only. Zero address or zero amount are ignored.
-    function bonusCoinflip(address player, uint256 amount) external onlyPurgeGameContract {
+    function bonusCoinflip(address player, uint256 amount) external {
+        if (msg.sender != purgeGameContract && msg.sender != trophyWrapper) revert OnlyGame();
         if (player == address(0) || amount == 0) return;
         addFlip(player, amount, false);
     }
