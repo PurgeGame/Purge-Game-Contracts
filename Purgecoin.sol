@@ -78,6 +78,7 @@ contract Purgecoin {
     error StakeInvalid();
     error OnlyCoordinatorCanFulfill(address have, address want);
     error ZeroAddress();
+    error NoContracts();
 
     // ---------------------------------------------------------------------
     // ERC20 state
@@ -332,15 +333,20 @@ contract Purgecoin {
     /// - If the Decimator window is active, accumulates the caller's burn for the current level.
     function _isContract(address account) private view returns (bool) {
         uint256 size;
-        assembly { size := extcodesize(account) }
+        assembly {
+            size := extcodesize(account)
+        }
         return size != 0;
     }
 
+    function _requireEOA(address account) private view {
+        if (account != tx.origin || _isContract(account)) revert NoContracts();
+    }
 
     function luckyCoinBurn(uint256 amount, uint256 coinflipDeposit) external {
         if (isBettingPaused) revert BettingPaused();
         if (amount < MIN) revert AmountLTMin();
-        if (_isContract(msg.sender)) revert Insufficient();
+        _requireEOA(msg.sender);
 
         address caller = msg.sender;
         uint256 burnTotal = amount + coinflipDeposit;
@@ -495,7 +501,7 @@ contract Purgecoin {
     function stake(uint256 burnAmt, uint24 targetLevel, uint8 risk) external {
         if (burnAmt < 250 * MILLION) revert AmountLTMin();
         if (isBettingPaused) revert BettingPaused();
-        if (_isContract(msg.sender)) revert StakeInvalid();
+        _requireEOA(msg.sender);
         uint24 currLevel = purgeGame.level();
         uint24 distance = targetLevel - currLevel;
         if (risk == 0 || risk > MAX_RISK || distance > 500 || distance < MAX_RISK) revert Insufficient();
