@@ -330,9 +330,17 @@ contract Purgecoin {
     /// - Burns the sum (`amount + coinflipDeposit`), then (if provided) schedules the flip via `addFlip`.
     /// - Credits luckbox with `amount + coinflipDeposit/50` and updates the luckbox leaderboard.
     /// - If the Decimator window is active, accumulates the caller's burn for the current level.
+    function _isContract(address account) private view returns (bool) {
+        uint256 size;
+        assembly { size := extcodesize(account) }
+        return size != 0;
+    }
+
+
     function luckyCoinBurn(uint256 amount, uint256 coinflipDeposit) external {
         if (isBettingPaused) revert BettingPaused();
         if (amount < MIN) revert AmountLTMin();
+        if (_isContract(msg.sender)) revert Insufficient();
 
         address caller = msg.sender;
         uint256 burnTotal = amount + coinflipDeposit;
@@ -487,6 +495,7 @@ contract Purgecoin {
     function stake(uint256 burnAmt, uint24 targetLevel, uint8 risk) external {
         if (burnAmt < 250 * MILLION) revert AmountLTMin();
         if (isBettingPaused) revert BettingPaused();
+        if (_isContract(msg.sender)) revert StakeInvalid();
         uint24 currLevel = purgeGame.level();
         uint24 distance = targetLevel - currLevel;
         if (risk == 0 || risk > MAX_RISK || distance > 500 || distance < MAX_RISK) revert Insufficient();
