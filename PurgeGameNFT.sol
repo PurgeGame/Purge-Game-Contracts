@@ -82,51 +82,41 @@ contract PurgeGameNFT is ERC721A {
         transferFrom(address(game), to, tokenId);
     }
 
-    function pendingMapTrophyCoin(uint256 tokenId) external view returns (uint256 claimable, uint24 claimThrough) {
-        (claimable, uint32 through) = _pendingMapTrophyCoin(tokenId);
-        return (claimable, uint24(through));
-    }
-
     function claimMapTrophyCoin(uint256 tokenId) external {
+        if (coin.isBettingPaused()) revert CoinPaused();
         if (ownerOf(tokenId) != msg.sender) revert NotTrophyOwner();
 
-        (uint256 claimable, uint32 claimThrough) = _pendingMapTrophyCoin(tokenId);
-        if (claimable == 0) revert ClaimNotReady();
-
-        if (coin.isBettingPaused()) revert CoinPaused();
-
-        mapTrophyLastClaim[tokenId] = claimThrough;
-        coin.bonusCoinflip(msg.sender, claimable);
-    }
-
-    function _pendingMapTrophyCoin(uint256 tokenId) private view returns (uint256 claimable, uint32 claimThrough) {
         (bool isTrophy, uint256 trophyInfo, , ) = game.describeToken(tokenId);
         if (!isTrophy || (trophyInfo & TROPHY_FLAG_MAP) == 0) revert NotMapTrophy();
 
-        uint32 awardLevel = uint32((trophyInfo >> 128) & 0xFFFFFF);
-        uint32 emissionStart = awardLevel + COIN_DRIP_STEPS + 1;
-        uint32 currentLevel = game.level();
+        uint32 start = uint32((trophyInfo >> 128) & 0xFFFFFF) + COIN_DRIP_STEPS + 1;
+        uint32 levelNow = game.level();
+        uint32 floor = start - 1;
 
-        if (currentLevel < emissionStart) return (0, emissionStart - 1);
+        if (levelNow <= floor) revert ClaimNotReady();
 
-        uint32 lastClaim = mapTrophyLastClaim[tokenId];
-        if (lastClaim < emissionStart - 1) lastClaim = emissionStart - 1;
-        if (currentLevel <= lastClaim) return (0, lastClaim);
+        uint32 last = mapTrophyLastClaim[tokenId];
+        if (last < floor) last = floor;
+        if (levelNow <= last) revert ClaimNotReady();
 
-        uint32 fromLevel = lastClaim + 1;
-        if (fromLevel < emissionStart) fromLevel = emissionStart;
-        if (fromLevel > currentLevel) return (0, fromLevel - 1);
+        uint32 from = last + 1;
+        uint32 offsetStart = from - start;
+        uint32 offsetEnd = levelNow - start;
 
-        uint32 toLevel = currentLevel;
-        uint32 a = fromLevel - emissionStart;
-        uint32 b = toLevel - emissionStart;
+        uint256 span = uint256(offsetEnd - offsetStart + 1);
 
-        uint256 count = uint256(b) - uint256(a) + 1;
-        uint256 floorSum = _prefixFloor(b);
-        if (a != 0) floorSum -= _prefixFloor(a - 1);
+        uint256 blocksEnd = offsetEnd / 10;
+        uint256 blocksStart = offsetStart / 10;
+        uint256 remEnd = offsetEnd % 10;
+        uint256 remStart = offsetStart % 10;
 
-        uint256 total = COIN_EMISSION_UNIT * (count + floorSum);
-        return (total, toLevel);
+        uint256 prefixEnd = ((blocksEnd * (blocksEnd - 1)) / 2) * 10 + blocksEnd * (remEnd + 1);
+        uint256 prefixStart = ((blocksStart * (blocksStart - 1)) / 2) * 10 + blocksStart * (remStart + 1);
+
+        uint256 claimable = COIN_EMISSION_UNIT * (span + (prefixEnd - prefixStart));
+
+        mapTrophyLastClaim[tokenId] = levelNow;
+        coin.bonusCoinflip(msg.sender, claimable);
     }
 
     function _beforeTokenTransfers(address from, address to, uint256 tokenId, uint256 quantity) internal override {
@@ -151,9 +141,4 @@ contract PurgeGameNFT is ERC721A {
         return renderer.tokenURI(tokenId, data, remaining);
     }
 
-    function _prefixFloor(uint32 n) private pure returns (uint256) {
-        uint256 m = n / 10;
-        uint256 r = n % 10;
-        return ((m * (m - 1)) / 2) * 10 + m * (r + 1);
-    }
 }
