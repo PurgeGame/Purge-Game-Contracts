@@ -512,12 +512,12 @@ contract IconRenderer32 {
 
             string memory head = _svgHeader(borderColor, _resolve(tokenId, /*square*/ 3, "#d9d9d9"));
             string memory ringColor = COLOR_HEX[ringIdx];
-            string memory flameColor = _resolve(tokenId, /*flame*/ 1, "#111");
+            string memory placeholderFlameColor = _resolve(tokenId, /*flame*/ 1, "#111");
             string memory rings = _rings(
                 /*outer*/
                 ringColor,
                 /*middle*/
-                flameColor,
+                placeholderFlameColor,
                 /*inner*/
                 _resolve(tokenId, /*diamond*/ 2, "#fff"),
                 rOut,
@@ -542,7 +542,7 @@ contract IconRenderer32 {
                 abi.encodePacked(
                     '<g clip-path="url(#ct)">',
                     '<path fill="',
-                    flameColor,
+                    placeholderFlameColor,
                     '" stroke="none" transform="matrix(0.13 0 0 0.13 -56 -41)" d="',
                     diamondPath,
                     '"/>',
@@ -556,7 +556,7 @@ contract IconRenderer32 {
                     rings,
                     clip,
                     flame,
-                    isMap ? "" : _cornerFlame(flameColor),
+                    isMap ? "" : _cornerFlame(placeholderFlameColor),
                     _svgFooter()
                 )
             );
