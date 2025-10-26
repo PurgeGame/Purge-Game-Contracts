@@ -548,20 +548,21 @@ contract PurgeGame {
                 dailyPurgeCount[trait0 & 0x07] += 1;
                 dailyPurgeCount[((trait1 - 64) >> 3) + 8] += 1;
                 dailyPurgeCount[trait2 - 128 + 16] += 1;
+                uint32 endLevel = (lvl % 10 == 4) ? 1 : 0;
 
-                if (--traitRemaining[trait0] == 0) {
+                if (--traitRemaining[trait0] == endLevel) {
                     _endLevel(trait0);
                     return;
                 }
-                if (--traitRemaining[trait1] == 0) {
+                if (--traitRemaining[trait1] == endLevel) {
                     _endLevel(trait1);
                     return;
                 }
-                if (--traitRemaining[trait2] == 0) {
+                if (--traitRemaining[trait2] == endLevel) {
                     _endLevel(trait2);
                     return;
                 }
-                if (--traitRemaining[trait3] == 0) {
+                if (--traitRemaining[trait3] == endLevel) {
                     _endLevel(trait3);
                     return;
                 }
