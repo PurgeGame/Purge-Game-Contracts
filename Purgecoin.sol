@@ -837,7 +837,7 @@ contract Purgecoin {
         uint32 stepStake = (cap == 0) ? 200 : cap;
 
         uint256 word = rngWord;
-        bool win = (word & 1) == 1;
+        bool win = (word & 1) == 1 || bonusActive;
         if (!win) stepPayout <<= 2; // 4x work on losses to clear backlog faster
         // --- Phase 1: stake propagation (only processed on wins) --------
         if (payoutIndex == 0 && stakeLevelComplete < level) {
@@ -849,7 +849,7 @@ contract Purgecoin {
 
             if (st != SS_DONE) {
                 // If loss: mark complete; no propagation.
-                if (!win && !bonusActive) {
+                if (!win) {
                     scanCursor = SS_DONE;
                     stakeLevelComplete = level;
                 } else {
