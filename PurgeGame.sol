@@ -29,7 +29,7 @@ interface IPurgeCoinInterface {
         uint32 cap,
         uint24 lvl
     ) external returns (bool finished, address[] memory winners, uint256[] memory amounts, uint256 returnAmountWei);
-    function resetAffiliateLeaderboard() external;
+    function resetAffiliateLeaderboard(uint24 lvl) external;
     function getLeaderboardAddresses(uint8 which) external view returns (address[] memory);
     function playerLuckbox(address player) external view returns (uint256);
 }
@@ -806,7 +806,7 @@ contract PurgeGame {
             // on completion move to purchase state
             if (lvl > 1) {
                 _clearDailyPurgeCount();
-                coin.resetAffiliateLeaderboard();
+                coin.resetAffiliateLeaderboard(lvl);
 
                 prizePool = 0;
                 phase = 0;

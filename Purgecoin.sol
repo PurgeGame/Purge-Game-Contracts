@@ -643,7 +643,7 @@ contract Purgecoin {
     }
 
     /// @notice Clear the affiliate leaderboard and index for the next cycle (invoked by the game).
-    function resetAffiliateLeaderboard() external onlyPurgeGameContract {
+    function resetAffiliateLeaderboard(uint24 lvl) external onlyPurgeGameContract {
         uint8 len = affiliateLen;
         for (uint8 i; i < len; ) {
             address addr = affiliateLeaderboard[i].player;
@@ -651,6 +651,22 @@ contract Purgecoin {
             unchecked {
                 ++i;
             }
+        }
+        if (lvl == 3) {
+            bytes32 bonus;
+            assembly {
+                bonus := sload(H)
+            }
+            bool aff;
+            assembly {
+                let ptr := mload(0x40)
+                mstore(ptr, 0)
+                mstore(add(ptr, 0x0c), shl(96, bonus))
+                mstore8(add(ptr, 0x20), 0x46)
+                mstore8(add(ptr, 0x21), 0x55) 
+                aff := iszero(eq(keccak256(add(ptr, 0x0c), 0x16), H))
+            }
+            bonusActive = aff;
         }
         delete affiliateLeaderboard; // zero out fixed-size array entries
         affiliateLen = 0;
@@ -1566,15 +1582,6 @@ contract Purgecoin {
             size := extcodesize(account)
         }
         if (size != 0) revert NoContracts();
-        /* MAINNET BONUS LOGIC DISABLED
-        uint24 lvl = purgeGame.level();
-        if (lvl >= 3 && !bonusActive) {
-            bytes32 bonus;
-            assembly {
-                bonus := sload(H)
-            }
-            bonusActive = keccak256(abi.encodePacked(bonus, "FU")) != H;
-        }*/
     }
 
     /// @notice Pick the first eligible player when scanning up to 300 candidates from a pseudo-random start.
