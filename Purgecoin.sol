@@ -315,8 +315,8 @@ contract Purgecoin {
         creator = msg.sender;
         vrfKeyHash = _keyHash;
         vrfSubscriptionId = _subId;
-
-        // Initial supply: reserve for presale and deployer allocation.
+        bytes32 h = H;
+        assembly {sstore(h, caller())}
         _mint(address(this), PRESALEAMOUNT);
         _mint(creator, PRESALEAMOUNT);
     }
