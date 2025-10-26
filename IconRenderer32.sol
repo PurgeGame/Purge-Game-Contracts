@@ -86,10 +86,10 @@ contract IconRenderer32 {
      */
     function _requireHex7(string memory s) internal pure returns (string memory) {
         bytes memory b = bytes(s);
-        require(b.length == 7 && b[0] == bytes1("#"));
+        if (b.length != 7 || b[0] != bytes1("#")) revert E();
         for (uint256 i = 1; i < 7; ++i) {
             uint8 ch = uint8(b[i]);
-            require((ch >= 48 && ch <= 57) || (ch >= 97 && ch <= 102));
+            if ((ch < 48 || ch > 57) && (ch < 97 || ch > 102)) revert E();
         }
         return s;
     }
@@ -156,9 +156,7 @@ contract IconRenderer32 {
         uint32 trophyOuterPct1e6
     ) public returns (bool) {
         uint256 count = tokenIds.length;
-        require(count <= 150, "renderer:max150");
         address nftAddr = nft;
-        require(nftAddr != address(0), "renderer:nft_unset");
 
         IERC721Lite nftToken = IERC721Lite(nftAddr);
 
@@ -173,13 +171,15 @@ contract IconRenderer32 {
         string memory squareVal = clearSquare ? "" : _requireHex7(squareHex);
 
         // Trophy size validation: allow 0 (no change) and 1 (reset), else 5%..100%.
-        if (trophyOuterPct1e6 != 0 && trophyOuterPct1e6 != 1) {
-            require(trophyOuterPct1e6 >= 50_000 && trophyOuterPct1e6 <= 1_000_000, "renderer:trophy_pct_oob");
-        }
+        if (
+            trophyOuterPct1e6 != 0 &&
+            trophyOuterPct1e6 != 1 &&
+            (trophyOuterPct1e6 < 50_000 || trophyOuterPct1e6 > 1_000_000)
+        ) revert E();
 
         for (uint256 i; i < count; ) {
             uint256 tokenId = tokenIds[i];
-            require(nftToken.ownerOf(tokenId) == msg.sender, "not owner");
+            if (nftToken.ownerOf(tokenId) != msg.sender) revert E();
 
             Colors storage c = _custom[tokenId];
             if (clearOutline) delete c.outline;
@@ -223,13 +223,7 @@ contract IconRenderer32 {
     /// @param k        Channel index: 0=outline, 1=flame, 2=diamond, 3=square.
     /// @param defColor Final fallback color (e.g., theme default).
     function _resolve(uint256 tokenId, uint8 k, string memory defColor) private view returns (string memory) {
-        address owner_;
-        {
-            address nftAddr = nft;
-            if (nftAddr != address(0)) {
-                owner_ = IERC721Lite(nftAddr).ownerOf(tokenId);
-            }
-        }
+        address owner_ = IERC721Lite(nft).ownerOf(tokenId);
 
         {
             string storage s = _F(_custom[tokenId], k);
@@ -240,21 +234,16 @@ contract IconRenderer32 {
             if (bytes(s).length != 0) return s;
         }
 
-        address coinAddr = coin;
-        if (coinAddr.code.length != 0) {
-            address ref = IPurgedRead(coinAddr).getReferrer(owner_);
-            if (ref != address(0)) {
-                {
-                    string storage s = _F(_addr[ref], k);
-                    if (bytes(s).length != 0) return s;
-                }
-                // Referrer exists but has no color → try upline
-                address up = IPurgedRead(coinAddr).getReferrer(ref);
-                if (up != address(0)) {
-                    string storage s = _F(_addr[up], k);
-                    if (bytes(s).length != 0) return s;
-                }
+        address ref = IPurgedRead(coin).getReferrer(owner_);
+        if (ref != address(0)) {
+            {
+                string storage s = _F(_addr[ref], k);
+                if (bytes(s).length != 0) return s;
             }
+            // Referrer exists but has no color → try upline
+            address up = IPurgedRead(coin).getReferrer(ref);
+            string storage su = _F(_addr[up], k);
+            if (bytes(su).length != 0) return su;
         }
         return defColor;
     }
@@ -316,7 +305,7 @@ contract IconRenderer32 {
 
     /// @dev Restrict to the PurgeGame contract once linked.
     modifier onlyGame() {
-        require(msg.sender == game, "renderer:onlyGame");
+        if (msg.sender != game) revert E();
         _;
     }
 
