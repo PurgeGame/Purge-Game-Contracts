@@ -723,8 +723,8 @@ contract PurgeGame {
         // Mint next level’s trophy placeholders (map + level) to the contract
         uint256 startId = nft.gameMint(address(this), 2);
         uint256 levelPlaceholderId = startId + 1;
-        trophyData[startId] = (0xFFFF << 152) | TROPHY_FLAG_MAP;
-        trophyData[levelPlaceholderId] = (0xFFFF << 152);
+        trophyData[startId] = (0xFFFF << 152) | (uint256(level) << 128) | TROPHY_FLAG_MAP;
+        trophyData[levelPlaceholderId] = (0xFFFF << 152) | (uint256(level) << 128);
         _baseTokenId = uint64(levelPlaceholderId + 1);
 
         // Price schedule
@@ -750,8 +750,8 @@ contract PurgeGame {
         if (lvl == 1 && _baseTokenId <= 1) {
             uint256 startId = nft.gameMint(address(this), 2);
             uint256 levelPlaceholderId = startId + 1;
-            trophyData[startId] = (0xFFFF << 152) | TROPHY_FLAG_MAP;
-            trophyData[levelPlaceholderId] = (0xFFFF << 152);
+            trophyData[startId] = (0xFFFF << 152) | (uint256(lvl) << 128) | TROPHY_FLAG_MAP;
+            trophyData[levelPlaceholderId] = (0xFFFF << 152) | (uint256(lvl) << 128);
             _baseTokenId = uint64(levelPlaceholderId + 1);
         }
         if (ph > 3) {

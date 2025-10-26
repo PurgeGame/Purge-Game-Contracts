@@ -270,13 +270,24 @@ contract IconRenderer32 {
             bool isMap = (data & MAP_TROPHY_FLAG) != 0;
             string memory lvlStr = (lvl == 0) ? "TBD" : uint256(lvl).toString();
             string memory trophyType = isMap ? "Map" : "Winner's";
+            string memory trophyLabel = isMap ? "MAP Trophy" : "Winner's Trophy";
 
             string memory desc;
             if (exTr == 0xFFFF) {
-                desc = string.concat("Unawarded ", trophyType, " trophy placeholder.");
+                if (lvl == 0) {
+                    desc = string.concat("Reserved Purge Game ", trophyLabel);
+                    desc = string.concat(desc, ".");
+                } else {
+                    desc = string.concat("Reserved for Level ", lvlStr);
+                    desc = string.concat(desc, " ");
+                    desc = string.concat(desc, trophyLabel);
+                    desc = string.concat(desc, ".");
+                }
             } else {
+                desc = string.concat("Awarded for Level ", lvlStr);
                 desc = string.concat(
-                    "Awarded for Level ", lvlStr, isMap ? " MAP jackpot dominance." : " final extermination victory."
+                    desc,
+                    isMap ? " MAP jackpot." : " extermination victory."
                 );
             }
 
@@ -501,11 +512,12 @@ contract IconRenderer32 {
 
             string memory head = _svgHeader(borderColor, _resolve(tokenId, /*square*/ 3, "#d9d9d9"));
             string memory ringColor = COLOR_HEX[ringIdx];
+            string memory flameColor = _resolve(tokenId, /*flame*/ 1, "#111");
             string memory rings = _rings(
                 /*outer*/
                 ringColor,
                 /*middle*/
-                _resolve(tokenId, /*flame*/ 1, "#111"),
+                flameColor,
                 /*inner*/
                 _resolve(tokenId, /*diamond*/ 2, "#fff"),
                 rOut,
@@ -530,7 +542,7 @@ contract IconRenderer32 {
                 abi.encodePacked(
                     '<g clip-path="url(#ct)">',
                     '<path fill="',
-                    _resolve(tokenId, /*flame*/ 1, "#111"),
+                    flameColor,
                     '" stroke="none" transform="matrix(0.13 0 0 0.13 -56 -41)" d="',
                     diamondPath,
                     '"/>',
@@ -538,7 +550,16 @@ contract IconRenderer32 {
                 )
             );
 
-            return string(abi.encodePacked(head, rings, clip, flame, _svgFooter()));
+            return string(
+                abi.encodePacked(
+                    head,
+                    rings,
+                    clip,
+                    flame,
+                    isMap ? "" : _cornerFlame(flameColor),
+                    _svgFooter()
+                )
+            );
         }
 
         // ---------------- Won trophy ---------------------------------------
