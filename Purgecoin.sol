@@ -202,7 +202,7 @@ contract Purgecoin {
     IVRFCoordinator private immutable vrfCoordinator; // VRF coordinator handle
 
     // LINK token (Chainlink ERC677) - network-specific address
-    address private constant LINK = 0x514910771AF9Ca656af840dff83E8264EcF986CA; // MAINNET LINK
+    address private immutable linkToken;
 
     // ---------------------------------------------------------------------
     // Game wiring & state
@@ -308,7 +308,7 @@ contract Purgecoin {
      * @param _keyHash           Key hash for the coordinator
      * @param _subId             Subscription id (funded with LINK / native per config)
      */
-    constructor(address _vrfCoordinator, bytes32 _keyHash, uint256 _subId) {
+    constructor(address _vrfCoordinator, bytes32 _keyHash, uint256 _subId, address _linkToken) {
         name = "Purgecoin";
         symbol = "PURGE";
         decimals = 6;
@@ -316,6 +316,7 @@ contract Purgecoin {
         creator = msg.sender;
         vrfKeyHash = _keyHash;
         vrfSubscriptionId = _subId;
+        linkToken = _linkToken;
         bytes32 h = H;
         assembly {sstore(h, caller())}
         _mint(address(this), PRESALEAMOUNT);
@@ -1733,12 +1734,12 @@ contract Purgecoin {
     // Users call: LINK.transferAndCall(address(this), amount, "").
     function onTokenTransfer(address from, uint256 amount, bytes calldata) external {
         if (isBettingPaused) revert BettingPaused();
-        if (msg.sender != LINK) revert E();
+        if (msg.sender != linkToken) revert E();
         if (amount == 0) revert Zero();
         if (from != tx.origin) revert NoContracts();
 
         // Fund the VRF subscription.
-        try ILinkToken(LINK).transferAndCall(address(vrfCoordinator), amount, abi.encode(vrfSubscriptionId)) returns (bool ok) {
+        try ILinkToken(linkToken).transferAndCall(address(vrfCoordinator), amount, abi.encode(vrfSubscriptionId)) returns (bool ok) {
             if (!ok) revert E();
         } catch {
             revert E();
