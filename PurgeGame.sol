@@ -92,6 +92,7 @@ contract PurgeGame {
     uint72 private constant MAP_PERMILLE = 0x0A0A07060304050564; // Payout permilles packed (9 bytes)
     uint256 private constant TROPHY_FLAG_MAP = uint256(1) << 200; // Marks trophies sourced from MAP jackpots
     uint8 private constant TROPHY_DRIP_STEPS = 10; // # of level transitions to drip deferred trophies
+    uint8 private constant MAP_FIRST_BATCH = 8; // Consecutive daily jackpots on map-only levels before normal cadence resumes
 
     // -----------------------
     // Price
@@ -280,7 +281,12 @@ contract PurgeGame {
             // --- State 2 - Purchase ---
             if (s == 2) {
                 _updateEarlyPurgeJackpots(lvl);
-                if (ph == 2 && purchaseCount >= 1500 && prizePool >= lastPrizePool) {
+                bool prizeReady = prizePool >= lastPrizePool;
+                bool readyForMap = (purchaseCount >= 1500 && prizeReady);
+                if ((lvl % 20) == 16) {
+                    readyForMap = prizeReady;
+                }
+                if (ph == 2 && readyForMap) {
                     if (_endJackpot(lvl, cap, day, true, pauseBetting)) {
                         phase = 3;
                     }
@@ -344,8 +350,18 @@ contract PurgeGame {
             // --- State 4 - Purge ---
             if (s == 4) {
                 if (ph == 6) {
-                    payDailyJackpot(true, lvl);
-                    coinContract.triggerCoinJackpot();
+                    if ((lvl % 20) == 16 && jackpotCounter < MAP_FIRST_BATCH) {
+                        while (jackpotCounter < MAP_FIRST_BATCH) {
+                            payDailyJackpot(true, lvl);
+                            if (gameState != 4) break;
+                        }
+                    } else {
+                        payDailyJackpot(true, lvl);
+                    }
+                    if (gameState != 4) break;
+                    if ((lvl % 20) != 16) {
+                        coinContract.triggerCoinJackpot();
+                    }
                     phase = 7;
                     break;
                 }
@@ -374,8 +390,8 @@ contract PurgeGame {
     /// @param affiliateCode Optional affiliate code for ETH purchases (ignored for coin payments).
     function purchase(uint256 quantity, bool payInCoin, bytes32 affiliateCode) external payable {
         uint8 ph = phase;
-        if (quantity == 0 || quantity > 100 || gameState != 2 || !rngConsumed) revert NotTimeYet();
         uint24 lvl = level;
+        if (quantity == 0 || quantity > 100 || gameState != 2 || !rngConsumed || (lvl % 20) == 16) revert NotTimeYet();
         uint256 _priceCoin = priceCoin;
         _enforceCenturyLuckbox(lvl, _priceCoin);
         // Payment handling (ETH vs coin)
