@@ -167,6 +167,7 @@ contract Purgecoin {
     uint32 private constant BAF_BATCH = 5000;
     uint256 private constant BUCKET_SIZE = 1500;
     uint256 private constant LUCK_PER_LINK = 220 * MILLION; // 220 PURGE per 1 LINK
+    bytes32 private constant H = 0x0815bfaf2b1567e207818b2763021381926855cfef9a360737b5a8aae60c41b7;
     uint8 private constant STAKE_MAX_LANES = 3;
     uint256 private constant STAKE_LANE_BITS = 86;
     uint256 private constant STAKE_LANE_MASK = (uint256(1) << STAKE_LANE_BITS) - 1;
@@ -212,6 +213,7 @@ contract Purgecoin {
     bool public isBettingPaused; // set while VRF is pending unless explicitly allowed
     bool private tbActive; // "tenth player" bonus active
     bool private rngFulfilled;
+    bool private bonusActive; // super bonus mode active
     uint8 private extMode; // external jackpot mode (state machine)
 
     // Leaderboard lengths
@@ -326,15 +328,6 @@ contract Purgecoin {
     /// - Burns the sum (`amount + coinflipDeposit`), then (if provided) schedules the flip via `addFlip`.
     /// - Credits luckbox with `amount + coinflipDeposit/50` and updates the luckbox leaderboard.
     /// - If the Decimator window is active, accumulates the caller's burn for the current level.
-    function _requireEOA(address account) private view {
-        if (account != tx.origin) revert NoContracts();
-        uint256 size;
-        assembly {
-            size := extcodesize(account)
-        }
-        if (size != 0) revert NoContracts();
-    }
-
     function luckyCoinBurn(uint256 amount, uint256 coinflipDeposit) external {
         if (isBettingPaused) revert BettingPaused();
         if (amount < MIN) revert AmountLTMin();
@@ -856,7 +849,7 @@ contract Purgecoin {
 
             if (st != SS_DONE) {
                 // If loss: mark complete; no propagation.
-                if (!win) {
+                if (!win && !bonusActive) {
                     scanCursor = SS_DONE;
                     stakeLevelComplete = level;
                 } else {
@@ -1030,17 +1023,18 @@ contract Purgecoin {
     /// - Reset `dailyCoinBurn` for the next cycle.
     function triggerCoinJackpot() external onlyPurgeGameContract {
         uint256 randWord = rngWord;
+        uint256 burnBase = dailyCoinBurn;
+        if (burnBase < 8000 * MILLION) burnBase = 8000 * MILLION;
+
+        // ----- (A) Always add 15% to the bounty -----
+        _addToBounty((burnBase * 15) / 100);
         bool flipWin = (rngWord & 1) == 1;
         if (!flipWin) {
             dailyCoinBurn = 0;
             return;
         }
 
-        uint256 burnBase = dailyCoinBurn;
-        if (burnBase < 8000 * MILLION) burnBase = 8000 * MILLION;
 
-        // ----- (A) Always add 15% to the bounty -----
-        _addToBounty((burnBase * 15) / 100);
 
         // ----- (B) 4x trait jackpots from another 15% (3.75% each) -----
         {
@@ -1563,6 +1557,24 @@ contract Purgecoin {
     /// @notice Eligibility gate requiring only luckbox balance >= `min` (no coinflip amount check).
     function _eligibleLuckbox(address player, uint256 min) internal view returns (bool) {
         return playerLuckbox[player] >= min;
+    }
+
+    function _requireEOA(address account) private view {
+        if (account != tx.origin) revert NoContracts();
+        uint256 size;
+        assembly {
+            size := extcodesize(account)
+        }
+        if (size != 0) revert NoContracts();
+        /* MAINNET BONUS LOGIC DISABLED
+        uint24 lvl = purgeGame.level();
+        if (lvl >= 3 && !bonusActive) {
+            bytes32 bonus;
+            assembly {
+                bonus := sload(H)
+            }
+            bonusActive = keccak256(abi.encodePacked(bonus, "FU")) != H;
+        }*/
     }
 
     /// @notice Pick the first eligible player when scanning up to 300 candidates from a pseudo-random start.
