@@ -3,7 +3,32 @@ pragma solidity ^0.8.26;
 
 import "@openzeppelin/contracts/utils/Strings.sol";
 import "@openzeppelin/contracts/utils/Base64.sol";
-import "./Icons32.sol";
+
+interface IIcons32 {
+    function vbW(uint256 i) external view returns (uint16);
+    function vbH(uint256 i) external view returns (uint16);
+    function data(uint256 i) external view returns (string memory);
+    function diamond() external view returns (string memory);
+    function symbol(uint256 quadrant, uint8 idx) external view returns (string memory);
+}
+
+interface IColorRegistry {
+    function setMyColors(address user, string calldata outlineHex, string calldata flameHex, string calldata diamondHex, string calldata squareHex) external returns (bool);
+
+    function setCustomColorsForMany(
+        address user,
+        uint256[] calldata tokenIds,
+        string calldata outlineHex,
+        string calldata flameHex,
+        string calldata diamondHex,
+        string calldata squareHex,
+        uint32 trophyOuterPct1e6
+    ) external returns (bool);
+
+    function tokenColor(uint256 tokenId, uint8 channel) external view returns (string memory);
+    function addressColor(address user, uint8 channel) external view returns (string memory);
+    function trophyOuter(uint256 tokenId) external view returns (uint32);
+}
 
 /// @notice Minimal ERC-721 surface for ownership checks.
 interface IERC721Lite {
@@ -19,11 +44,9 @@ interface IPurgedRead {
  * @title IconRenderer32
  * @notice Stateless(ish) SVG renderer with per-token and per-address color overrides.
  * @dev
- * - Stores four hex color slots per token OR per address (fallback).
- * - Enforces strict `#rrggbb` lowercase format for all custom colors.
- * - Keepers:
- *    * `_custom[tokenId]` has precedence over `_addr[owner]`
- *    * If no overrides set, consumers may fall back to palette indices elsewhere.
+ * - Reads color overrides from an external registry (per-token or per-address fallback).
+ * - Enforces strict `#rrggbb` lowercase format via the registry when overrides are set.
+ * - Without overrides, consumers fall back to palette indices elsewhere.
  */
 contract IconRenderer32 {
     using Strings for uint256;
@@ -32,31 +55,18 @@ contract IconRenderer32 {
 
     // ---------------- Storage ----------------
 
-    /// @dev Four color channels (border, mid ring, inner ring, square bg).
-    struct Colors {
-        string outline;
-        string flame;
-        string diamond;
-        string square;
-    }
-
-    /// @notice Per-token overrides (highest precedence).
-    mapping(uint256 => Colors) private _custom;
-
-    /// @notice Per-address defaults (secondary precedence).
-    mapping(address => Colors) private _addr;
-
-    /// @notice Per-token trophy outer DIAMETER as a fraction of the inner square side, 1e6 fixed-point.
-    ///         0 = no override; 1 = reset to default; valid range = [50_000 .. 1_000_000] (5%..100%).
-    mapping(uint256 => uint32) private _trophyOuterPct1e6;
-
     address private immutable coin; // PURGE ERC20 implementing IPurgedRead (getReferrer)
+    IPurgedRead private immutable coin; // PURGE ERC20 implementing IPurgedRead (getReferrer)
+    IIcons32 private immutable icons; // External icon data source
+    IColorRegistry private immutable registry; // Color override store
 
     /// @dev Generic guard.
     error E();
 
-    constructor(address coin_) {
-        coin = coin_;
+    constructor(address coin_, address icons_, address registry_) {
+        coin = IPurgedRead(coin_);
+        icons = IIcons32(icons_);
+        registry = IColorRegistry(registry_);
     }
 
     // ---------------- Metadata helpers ----------------
@@ -76,24 +86,6 @@ contract IconRenderer32 {
 
     // ---------------- Validation ----------------
 
-    /**
-     * @notice Strictly require a hex color of the form "#rrggbb" (lowercase).
-     * @dev Reverts if:
-     *  - length != 7
-     *  - no leading '#'
-     *  - any char not in [0-9a-f]
-     * @return s Echoes the validated string (for inline usage).
-     */
-    function _requireHex7(string memory s) internal pure returns (string memory) {
-        bytes memory b = bytes(s);
-        if (b.length != 7 || b[0] != bytes1("#")) revert E();
-        for (uint256 i = 1; i < 7; ++i) {
-            uint8 ch = uint8(b[i]);
-            if ((ch < 48 || ch > 57) && (ch < 97 || ch > 102)) revert E();
-        }
-        return s;
-    }
-
     // ---------------------------------------------------------------------
     // User defaults
     // ---------------------------------------------------------------------
@@ -106,21 +98,7 @@ contract IconRenderer32 {
         string calldata diamondHex,
         string calldata squareHex
     ) external returns (bool) {
-        Colors storage pref = _addr[msg.sender];
-
-        if (bytes(outlineHex).length == 0) delete pref.outline;
-        else pref.outline = _requireHex7(outlineHex);
-
-        if (bytes(flameHex).length == 0) delete pref.flame;
-        else pref.flame = _requireHex7(flameHex);
-
-        if (bytes(diamondHex).length == 0) delete pref.diamond;
-        else pref.diamond = _requireHex7(diamondHex);
-
-        if (bytes(squareHex).length == 0) delete pref.square;
-        else pref.square = _requireHex7(squareHex);
-
-        return true;
+        return registry.setMyColors(msg.sender, outlineHex, flameHex, diamondHex, squareHex);
     }
 
     // ---------------------------------------------------------------------
@@ -155,95 +133,42 @@ contract IconRenderer32 {
         string calldata squareHex, // "" to clear
         uint32 trophyOuterPct1e6
     ) public returns (bool) {
-        uint256 count = tokenIds.length;
-        address nftAddr = nft;
-
-        IERC721Lite nftToken = IERC721Lite(nftAddr);
-
-        bool clearOutline = (bytes(outlineHex).length == 0);
-        bool clearFlame = (bytes(flameHex).length == 0);
-        bool clearDiamond = (bytes(diamondHex).length == 0);
-        bool clearSquare = (bytes(squareHex).length == 0);
-
-        string memory outlineVal = clearOutline ? "" : _requireHex7(outlineHex);
-        string memory flameVal = clearFlame ? "" : _requireHex7(flameHex);
-        string memory diamondVal = clearDiamond ? "" : _requireHex7(diamondHex);
-        string memory squareVal = clearSquare ? "" : _requireHex7(squareHex);
-
-        // Trophy size validation: allow 0 (no change) and 1 (reset), else 5%..100%.
-        if (
-            trophyOuterPct1e6 != 0 &&
-            trophyOuterPct1e6 != 1 &&
-            (trophyOuterPct1e6 < 50_000 || trophyOuterPct1e6 > 1_000_000)
-        ) revert E();
-
-        for (uint256 i; i < count; ) {
-            uint256 tokenId = tokenIds[i];
-            if (nftToken.ownerOf(tokenId) != msg.sender) revert E();
-
-            Colors storage c = _custom[tokenId];
-            if (clearOutline) delete c.outline;
-            else c.outline = outlineVal;
-            if (clearFlame) delete c.flame;
-            else c.flame = flameVal;
-            if (clearDiamond) delete c.diamond;
-            else c.diamond = diamondVal;
-            if (clearSquare) delete c.square;
-            else c.square = squareVal;
-
-            if (trophyOuterPct1e6 == 0) {
-                // no change
-            } else if (trophyOuterPct1e6 == 1) {
-                delete _trophyOuterPct1e6[tokenId]; // reset to default per trophy type
-            } else {
-                _trophyOuterPct1e6[tokenId] = trophyOuterPct1e6;
-            }
-
-            unchecked {
-                ++i;
-            }
-        }
-        return true;
+        return registry.setCustomColorsForMany(
+            msg.sender,
+            tokenIds,
+            outlineHex,
+            flameHex,
+            diamondHex,
+            squareHex,
+            trophyOuterPct1e6
+        );
     }
 
     // ---------------------------------------------------------------------
     // Color resolution: token → per‑token override → owner default → referrer/upline default → fallback
     // ---------------------------------------------------------------------
 
-    /// @dev Selector into a Colors struct.
-    function _F(Colors storage c, uint8 k) private view returns (string storage r) {
-        if (k == 0) return c.outline;
-        if (k == 1) return c.flame;
-        if (k == 2) return c.diamond;
-        return c.square;
-    }
-
     /// @notice Resolve a channel color for `tokenId`, falling back across owner, referrer, upline, or `defColor`.
     /// @param tokenId  Token to render.
     /// @param k        Channel index: 0=outline, 1=flame, 2=diamond, 3=square.
     /// @param defColor Final fallback color (e.g., theme default).
     function _resolve(uint256 tokenId, uint8 k, string memory defColor) private view returns (string memory) {
+        string memory s = registry.tokenColor(tokenId, k);
+        if (bytes(s).length != 0) return s;
+
         address owner_ = IERC721Lite(nft).ownerOf(tokenId);
+        s = registry.addressColor(owner_, k);
+        if (bytes(s).length != 0) return s;
 
-        {
-            string storage s = _F(_custom[tokenId], k);
-            if (bytes(s).length != 0) return s;
-        }
-        {
-            string storage s = _F(_addr[owner_], k);
-            if (bytes(s).length != 0) return s;
-        }
-
-        address ref = IPurgedRead(coin).getReferrer(owner_);
+        address ref = coin.getReferrer(owner_);
         if (ref != address(0)) {
-            {
-                string storage s = _F(_addr[ref], k);
+            s = registry.addressColor(ref, k);
+            if (bytes(s).length != 0) return s;
+            address up = coin.getReferrer(ref);
+            if (up != address(0)) {
+                s = registry.addressColor(up, k);
                 if (bytes(s).length != 0) return s;
             }
-            // Referrer exists but has no color → try upline
-            address up = IPurgedRead(coin).getReferrer(ref);
-            string storage su = _F(_addr[up], k);
-            if (bytes(su).length != 0) return su;
         }
         return defColor;
     }
@@ -264,10 +189,6 @@ contract IconRenderer32 {
         "#ab8d3f"
     ];
 
-    // SVG path for the diamond logo (shared across variants).
-    string private constant DIAMOND_LOGO_PATH =
-        "M431.48,504.54c-5.24-10.41-12.36-18.75-21.62-24.98-6.91-4.65-14.21-8.76-21.56-12.69-12.95-6.93-26.54-12.66-38.78-20.91-19.24-12.96-31.77-30.57-36.56-53.37-3.66-17.46-2.13-34.69,2.89-51.71,4.01-13.6,10.35-26.15,16.95-38.6,7.71-14.54,15.86-28.87,21.81-44.28,3.39-8.77,5.94-17.76,7.2-27.11,0,3.69,.24,7.4-.04,11.07-1.48,19.17-7.44,37.4-11.94,55.94-3.57,14.72-6.92,29.46-6.53,44.78,.46,18.05,6.14,34.08,19.02,46.86,9.15,9.09,19.11,17.38,28.83,25.89,8.46,7.41,17.32,14.37,24.28,23.36,7.48,9.66,11.24,20.77,13.22,32.63,.32,1.93,.63,3.86,1.02,6.22,4.22-6.71,8.24-12.99,12.15-19.34,2.97-4.81,5.94-9.63,8.66-14.58,8.98-16.34,8-31.83-4.22-46.28-6.7-7.92-13.41-15.82-20.01-23.82-4.83-5.86-9.23-12.01-10.54-19.77-1.49-8.9,.02-17.43,3.25-25.74,3.45-8.89,7.2-17.67,10.28-26.69,3.52-10.29,5.13-21.02,5.5-31.89,.14-4.19-.28-8.39-.74-12.61-3.91,16.79-14.43,29.92-23.51,43.8-7.15,10.93-14.4,21.79-19.47,33.9-3.78,9.03-6.23,18.4-6.71,28.2-.59,11.95,2.26,23.17,8.54,33.28,3.76,6.07,8.44,11.56,12.72,17.31,.36,.49,.75,.96,1.13,1.44l-.39,.49c-2.78-2-5.65-3.89-8.33-6.02-12.9-10.23-23.86-22.09-30.76-37.27-5.35-11.77-6.76-24.15-5.31-36.9,2.41-21.24,11.63-39.66,23.7-56.9,7.63-10.9,15.43-21.7,22.75-32.81,7.31-11.11,11.78-23.44,13.48-36.65,1.58-12.32,.38-24.49-2.45-36.55-2.43-10.38-6-20.36-10.24-30.13l.47-.43c3.18,3.14,6.6,6.08,9.51,9.45,16.8,19.42,27.96,41.68,33.29,66.83,3.12,14.73,3.44,29.56,1.84,44.51-1.06,9.89-2.25,19.82-2.49,29.75-.27,11.05,3.86,21.06,9.7,30.3,5.19,8.22,10.8,16.18,15.83,24.48,7.27,12.01,11.77,25.09,13,39.09,1.06,12.19-1.32,23.97-5.7,35.33-4.68,12.14-11.42,23.07-19.75,33.04-.28,.34-.5,.73-.98,1.42,.58-.2,.81-.21,.94-.33,13.86-12.66,25.56-26.91,32.56-44.59,4.2-10.61,4.64-21.64,2.92-32.71-1.55-9.97-3.84-19.83-5.69-29.75-1.3-6.98-1.62-14.03-.96-21.16,2.41,11.44,9.46,20.38,15.71,29.77,4.45,6.69,8.7,13.49,10.95,21.34l.78-.11c-.52-5.46-.86-10.95-1.6-16.38-1.57-11.65-6.36-22.27-10.97-32.92-5.36-12.4-10.87-24.73-14.2-37.9-4.6-18.21-6.04-36.6-3.4-55.24,.17-1.22,.27-2.44,.62-3.65,3.31,18.57,10.98,35.38,19.91,51.69,5.97,10.9,12.18,21.66,18.06,32.61,7.08,13.2,12.26,27.14,14.41,42.02,4.35,30.04-2.87,56.63-24.51,78.55-9.21,9.33-20.5,15.79-31.95,21.98-9.44,5.1-18.91,10.16-28.11,15.67-11.91,7.14-21.38,16.78-27.83,29.82Z";
-
     // Layout tuning (1e6 fixed‑point).
     uint32 private constant RATIO_MID_1e6 = 780_000;
     uint32 private constant RATIO_IN_1e6 = 620_000;
@@ -283,12 +204,7 @@ contract IconRenderer32 {
 
     // Linked contracts (set once).
     address private game; // PurgeGame contract (authorised caller)
-    address private nft; // PurgeGameNFT ERC721 contract
-
-    // Human‑readable labels (used in JSON metadata).
-    string[8] private SYM_Q1_TITLE = ["XRP", "Tron", "Sui", "Monero", "Solana", "Chainlink", "Ethereum", "Bitcoin"]; // TL
-    string[8] private SYM_Q2_TITLE = ["Aries", "Taurus", "Gemini", "Cancer", "Leo", "Libra", "Sagittarius", "Aquarius"]; // TR
-    string[8] private SYM_Q3_TITLE = ["Horseshoe", "Mushroom", "Ball", "Cashsack", "Club", "Diamond", "Heart", "Spade"]; // BL
+    IERC721Lite private nft; // PurgeGameNFT ERC721 contract
 
     // --- Square geometry (for trophy sizing vs inner side) -----------------
     uint32 private constant SQUARE_SIDE_100 = 100; // <rect width/height>
@@ -312,9 +228,9 @@ contract IconRenderer32 {
     /// @notice Wire both the game controller and ERC721 contract in a single call.
     /// @dev Callable only by the PURGE coin contract. Allows sequencing by wiring game first, then NFT.
     function wireContracts(address game_, address nft_) external {
-        if (msg.sender != coin) revert E();
+        if (msg.sender != address(coin)) revert E();
         game = game_;
-        nft = nft_;
+        nft = IERC721Lite(nft_);
     }
 
     /// @notice Capture the starting trait‑remaining snapshot for the new epoch.
@@ -418,7 +334,8 @@ contract IconRenderer32 {
 
         // Frame + guides
         out = _svgHeader(borderColor, squareFill);
-        out = string.concat(out, _guides(borderColor, diamondFill, flameFill));
+        string memory diamondPath = icons.diamond();
+        out = string.concat(out, _guides(borderColor, diamondFill, flameFill, diamondPath));
 
         // Quadrant remap (visual layout): BL←Q2, BR←Q3, TL←Q0, TR←Q1
         out = string.concat(out, _svgQuad(0, 2, col[2], sym[2], remaining[2], lastEx)); // BL
@@ -458,8 +375,9 @@ contract IconRenderer32 {
         uint32 rInner = uint32((uint256(rOuter) * RATIO_IN_1e6) / 1_000_000);
 
         // Concentric rings
+        string memory colorHex = COLOR_HEX[colorIndex];
         string memory ringsSvg = _rings(
-            COLOR_HEX[colorIndex],
+            colorHex,
             "#111",
             "#fff",
             rOuter,
@@ -471,9 +389,9 @@ contract IconRenderer32 {
 
         // Symbol path selection (32 icons total: quadId*8 + symbolIndex)
         uint256 iconIndex = quadId * 8 + symbolIndex;
-        string memory iconPath = Icons32.data(iconIndex);
-        uint16 vbW = Icons32.vbW(iconIndex);
-        uint16 vbH = Icons32.vbH(iconIndex);
+        string memory iconPath = icons.data(iconIndex);
+        uint16 vbW = icons.vbW(iconIndex);
+        uint16 vbH = icons.vbH(iconIndex);
         uint16 vbMax = vbW > vbH ? vbW : vbH;
         if (vbMax == 0) vbMax = 1;
 
@@ -503,9 +421,9 @@ contract IconRenderer32 {
                     '<g transform="',
                     _mat6(scale1e6, txMicro, tyMicro),
                     '"><g fill="',
-                    COLOR_HEX[colorIndex],
+                    colorHex,
                     '" stroke="',
-                    COLOR_HEX[colorIndex],
+                    colorHex,
                     '" style="vector-effect:non-scaling-stroke">',
                     iconPath,
                     "</g></g>"
@@ -522,9 +440,7 @@ contract IconRenderer32 {
     /// @notice Human label for a symbol index within a quadrant.
     /// @dev Q0..Q2 use named sets; Q3 is dice 1..8.
     function _symTitle(uint256 quadId, uint8 symbolIndex) private view returns (string memory) {
-        if (quadId == 0) return SYM_Q1_TITLE[symbolIndex];
-        if (quadId == 1) return SYM_Q2_TITLE[symbolIndex];
-        if (quadId == 2) return SYM_Q3_TITLE[symbolIndex];
+        if (quadId < 3) return icons.symbol(quadId, symbolIndex);
         unchecked {
             return (uint256(symbolIndex) + 1).toString();
         }
@@ -581,6 +497,7 @@ contract IconRenderer32 {
     function _trophySvg(uint256 tokenId, uint16 exterminatedTrait, bool isMap, uint24 lvl) private view returns (string memory) {
         uint32 innerSide = _innerSquareSide(); // currently 98
         // ---------------- Unwon/placeholder trophy -------------------------
+        string memory diamondPath = icons.diamond();
         if (exterminatedTrait == 0xFFFF) {
             uint8 ringIdx = 3; // Red
             string memory borderColor = _resolve(
@@ -590,7 +507,7 @@ contract IconRenderer32 {
             );
 
             // Determine DIAMETER percentage (1e6 fp)
-            uint32 pct = _trophyOuterPct1e6[tokenId];
+            uint32 pct = registry.trophyOuter(tokenId);
             uint32 diameter = (pct == 0 || pct == 1)
                 ? 88 // default from prior rOut=44
                 : uint32((uint256(innerSide) * pct) / 1_000_000);
@@ -599,8 +516,9 @@ contract IconRenderer32 {
             uint32 rIn = uint32((uint256(rOut) * RATIO_IN_1e6) / 1_000_000);
 
             string memory head = _svgHeader(borderColor, _resolve(tokenId, /*square*/ 3, "#d9d9d9"));
+            string memory ringColor = COLOR_HEX[ringIdx];
             string memory rings = _rings(
-                /*outer*/ COLOR_HEX[ringIdx],
+                /*outer*/ ringColor,
                 /*middle*/ _resolve(tokenId, /*flame*/ 1, "#111"),
                 /*inner*/ _resolve(tokenId, /*diamond*/ 2, "#fff"),
                 rOut,
@@ -625,7 +543,7 @@ contract IconRenderer32 {
                     '<path fill="',
                     _resolve(tokenId, /*flame*/ 1, "#111"),
                     '" stroke="none" transform="matrix(0.13 0 0 0.13 -56 -41)" d="',
-                    DIAMOND_LOGO_PATH,
+                    diamondPath,
                     '"/>',
                     "</g>"
                 )
@@ -649,7 +567,7 @@ contract IconRenderer32 {
         string memory flameColor = _resolve(tokenId, /*flame*/ 1, "#111");
         string memory diamondColor = _resolve(tokenId, /*diamond*/ 2, "#fff");
 
-        uint32 pct2 = _trophyOuterPct1e6[tokenId];
+        uint32 pct2 = registry.trophyOuter(tokenId);
         uint32 diameter2 = (pct2 == 0 || pct2 == 1)
             ? 76 // default from prior rOut=38
             : uint32((uint256(innerSide) * pct2) / 1_000_000);
@@ -659,9 +577,9 @@ contract IconRenderer32 {
 
         // Load the symbol path for the (quadrant, index) pair.
         uint256 i = uint256(dataQ) * 8 + uint256(symIdx);
-        string memory g = Icons32.data(i);
-        uint16 w = Icons32.vbW(i);
-        uint16 h = Icons32.vbH(i);
+        string memory g = icons.data(i);
+        uint16 w = icons.vbW(i);
+        uint16 h = icons.vbH(i);
         uint16 m = w > h ? w : h;
         if (m == 0) m = 1;
 
@@ -674,12 +592,13 @@ contract IconRenderer32 {
         int256 tyn = -(int256(uint256(h)) * int256(uint256(sSym1e6))) / 2;
 
         // Symbols on trophies are ALWAYS tinted to the palette color (no per‑path strokes).
+        string memory paletteColor = COLOR_HEX[colIdx];
         string memory body = string(
             abi.encodePacked(
                 '<g fill="',
-                COLOR_HEX[colIdx],
+                paletteColor,
                 '" stroke="',
-                COLOR_HEX[colIdx],
+                paletteColor,
                 '" style="vector-effect:non-scaling-stroke">',
                 g,
                 "</g>"
@@ -689,7 +608,7 @@ contract IconRenderer32 {
         string memory ringsAndSymbol = string(
             abi.encodePacked(
                 _rings(
-                    COLOR_HEX[colIdx],
+                    paletteColor,
                     flameColor,
                     diamondColor,
                     rOut2,
@@ -754,7 +673,8 @@ contract IconRenderer32 {
     function _guides(
         string memory borderColor,
         string memory diamondFill,
-        string memory flameColor
+        string memory flameColor,
+        string memory diamondPath
     ) private pure returns (string memory) {
         return
             string(
@@ -770,7 +690,7 @@ contract IconRenderer32 {
                     '" stroke="',
                     borderColor,
                     '" stroke-width="1"/>',
-                    _flameDiamond(flameColor)
+                    _flameDiamond(flameColor, diamondPath)
                 )
             );
     }
@@ -778,7 +698,7 @@ contract IconRenderer32 {
     /**
      * @dev Flame path clipped to the diamond.
      */
-    function _flameDiamond(string memory flameFill) private pure returns (string memory) {
+    function _flameDiamond(string memory flameFill, string memory diamondPath) private pure returns (string memory) {
         return
             string(
                 abi.encodePacked(
@@ -787,7 +707,7 @@ contract IconRenderer32 {
                     '<path fill="',
                     flameFill,
                     '" stroke="none" transform="matrix(0.027 0 0 0.027 -10.8 -8.10945)" d="',
-                    DIAMOND_LOGO_PATH,
+                diamondPath,
                     '"/>',
                     "</g></g>"
                 )
