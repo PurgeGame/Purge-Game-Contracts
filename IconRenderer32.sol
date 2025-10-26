@@ -157,8 +157,10 @@ contract IconRenderer32 {
     ) public returns (bool) {
         uint256 count = tokenIds.length;
         require(count <= 150, "renderer:max150");
+        address nftAddr = nft;
+        require(nftAddr != address(0), "renderer:nft_unset");
 
-        IERC721Lite nft = IERC721Lite(game); // NOTE: `game` must be defined in this contract.
+        IERC721Lite nftToken = IERC721Lite(nftAddr);
 
         bool clearOutline = (bytes(outlineHex).length == 0);
         bool clearFlame = (bytes(flameHex).length == 0);
@@ -177,7 +179,7 @@ contract IconRenderer32 {
 
         for (uint256 i; i < count; ) {
             uint256 tokenId = tokenIds[i];
-            require(nft.ownerOf(tokenId) == msg.sender, "not owner");
+            require(nftToken.ownerOf(tokenId) == msg.sender, "not owner");
 
             Colors storage c = _custom[tokenId];
             if (clearOutline) delete c.outline;
@@ -221,7 +223,13 @@ contract IconRenderer32 {
     /// @param k        Channel index: 0=outline, 1=flame, 2=diamond, 3=square.
     /// @param defColor Final fallback color (e.g., theme default).
     function _resolve(uint256 tokenId, uint8 k, string memory defColor) private view returns (string memory) {
-        address owner_ = _ownerOf(tokenId); // NOTE: expects an internal helper or use IERC721Lite(game).ownerOf(tokenId)
+        address owner_;
+        {
+            address nftAddr = nft;
+            if (nftAddr != address(0)) {
+                owner_ = IERC721Lite(nftAddr).ownerOf(tokenId);
+            }
+        }
 
         {
             string storage s = _F(_custom[tokenId], k);
@@ -285,7 +293,8 @@ contract IconRenderer32 {
     uint32[256] private startTR;
 
     // Linked contracts (set once).
-    address private game; // ERC721 implementing IERC721Lite
+    address private game; // PurgeGame contract (authorised caller)
+    address private nft; // PurgeGameNFT ERC721 contract
 
     // Human‑readable labels (used in JSON metadata).
     string[8] private SYM_Q1_TITLE = ["XRP", "Tron", "Sui", "Monero", "Solana", "Chainlink", "Ethereum", "Bitcoin"]; // TL
@@ -311,11 +320,12 @@ contract IconRenderer32 {
         _;
     }
 
-    /// @notice One‑time link to the on-chain game contract.
-    /// @dev Callable only by the PURGE coin contract; cannot be re-set after initialization.
-    function wireContracts(address game_) external {
+    /// @notice Wire both the game controller and ERC721 contract in a single call.
+    /// @dev Callable only by the PURGE coin contract. Allows sequencing by wiring game first, then NFT.
+    function wireContracts(address game_, address nft_) external {
         if (msg.sender != coin) revert E();
         game = game_;
+        nft = nft_;
     }
 
     /// @notice Capture the starting trait‑remaining snapshot for the new epoch.
@@ -329,18 +339,6 @@ contract IconRenderer32 {
     // ---------------------------------------------------------------------
     // Owner lookup (robust)
     // ---------------------------------------------------------------------
-
-    /// @dev Resolve current owner using a low‑level staticcall to `ownerOf(uint256)`.
-    ///      Returns address(0) if the call fails or the game is not set/deployed.
-    function _ownerOf(uint256 tokenId) private view returns (address a) {
-        address g = game;
-        if (g.code.length == 0) return address(0);
-        (bool ok, bytes memory ret) = g.staticcall(abi.encodeWithSelector(0x6352211e, tokenId)); // ownerOf(uint256)
-        if (!ok || ret.length < 32) return address(0);
-        assembly {
-            a := mload(add(ret, 32))
-        }
-    }
 
     // ---------------------------------------------------------------------
     // Trophy helpers

@@ -12,9 +12,10 @@ struct VRFRandomWordsRequest {
 
 interface IPurgeLinkable {
     function wireContracts(address game_) external;
+    function wireContracts(address game_, address nft_) external;
 }
 
-interface IPurgeGame is IPurgeLinkable {
+interface IPurgeGame {
     function level() external view returns (uint24);
     function getJackpotWinners(
         uint256 randomWord,
@@ -792,7 +793,8 @@ contract Purgecoin {
         if (game_ == address(0) || nft_ == address(0) || renderer_ == address(0)) revert ZeroAddress();
         purgeGame = IPurgeGame(game_);
         nftContract = nft_;
-        IPurgeLinkable(renderer_).wireContracts(game_);
+        IPurgeLinkable renderer = IPurgeLinkable(renderer_);
+        renderer.wireContracts(game_, nft_);
         IPurgeLinkable(nft_).wireContracts(game_);
     }
 
