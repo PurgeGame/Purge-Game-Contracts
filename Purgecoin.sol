@@ -812,8 +812,13 @@ contract Purgecoin {
     /// @dev Access: PurgeGame only. Zero address or zero amount are ignored.
     function bonusCoinflip(address player, uint256 amount) external {
         if (msg.sender != address(purgeGame) && msg.sender != nftContract) revert OnlyGame();
-        addFlip(player, amount, false);
+        if (isBettingPaused) {
+            _mint(player, amount);
+        } else {
+            addFlip(player, amount, false);
+        }
     }
+
 
     /// @notice Burn PURGE from `target` during gameplay flows (purchases, fees),
     ///         and credit 2% of the burned amount to their luckbox.
