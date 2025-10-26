@@ -641,9 +641,9 @@ contract PurgeGame {
 
             // Participant vs exterminator split
             uint256 ninetyPercent = (pool * 90) / 100;
-            uint256 exterminatorShare = (levelSnapshot % 10 == 7 && levelSnapshot >= 25)
-                ? (pool * 40) / 100
-                : (pool * 20) / 100;
+                uint256 exterminatorShare = (levelSnapshot % 10 == 7)
+                    ? (pool * 40) / 100
+                    : (pool * 20) / 100;
             uint256 participantShare = ninetyPercent - exterminatorShare;
 
             // Cache per-ticket payout into prizePool (payEach). Payout happens in state 1.
@@ -782,7 +782,7 @@ contract PurgeGame {
                 }
 
                 // Exterminator’s share (20% or 40%), plus epoch carry if prevLevel%100==0
-                uint256 exterminatorShare = (prevLevel % 10 == 7 && prevLevel >= 25)
+                uint256 exterminatorShare = (prevLevel % 10 == 7)
                     ? (poolTotal * 40) / 100
                     : (poolTotal * 20) / 100;
                 if ((prevLevel % 100) == 0) {
