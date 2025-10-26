@@ -388,13 +388,16 @@ contract IconRenderer32 {
                 );
             }
 
-            string memory img = _trophySvg(tokenId, exTr, isMap);
+            string memory img = _trophySvg(tokenId, exTr, isMap, lvl);
             return _pack(tokenId, true, img, lvl, desc, trophyType);
         }
 
         // ----- Regular token path -----
         lvl = uint24((data >> 32) & 0xFFFFFF);
         uint16 lastEx = uint16((data >> 56) & 0xFFFF); // 0..255 valid; 420 = sentinel “none”
+        if (lvl == 90) {
+            lastEx = 0xFFFF; // special case: level 90 renders all quadrants inverted
+        }
         uint32 traits = uint32(data);
 
         (uint8[4] memory col, uint8[4] memory sym) = _decodeTraits(traits);
@@ -453,9 +456,8 @@ contract IconRenderer32 {
         uint8 traitId = _traitId(uint8(quadId), colorIndex, symbolIndex);
 
         // Highlight by inversion when this trait was exterminated last level.
-        bool highlightInvert = (lastExterminated != 420 &&
-            lastExterminated <= 255 &&
-            traitId == uint8(lastExterminated));
+        bool highlightInvert = (lastExterminated == 0xFFFF) ||
+            (lastExterminated != 420 && lastExterminated <= 255 && traitId == uint8(lastExterminated));
 
         // Radius computation: derive scarcity‑scaled outer/mid/inner radii
         uint32 rMax = _rMaxAt(quadPos);
@@ -589,7 +591,7 @@ contract IconRenderer32 {
      *   in `_trophyOuterPct1e6[tokenId]` (5%..100%), or a default mapped from prior fixed radii:
      *   88px for placeholder, 76px for won, over an inner side of 98px.
      */
-    function _trophySvg(uint256 tokenId, uint16 exterminatedTrait, bool isMap) private view returns (string memory) {
+    function _trophySvg(uint256 tokenId, uint16 exterminatedTrait, bool isMap, uint24 lvl) private view returns (string memory) {
         uint32 innerSide = _innerSquareSide(); // currently 98
         // ---------------- Unwon/placeholder trophy -------------------------
         if (exterminatedTrait == 0xFFFF) {
@@ -697,34 +699,37 @@ contract IconRenderer32 {
             )
         );
 
-        return
-            string(
-                abi.encodePacked(
-                    _svgHeader(border, _resolve(tokenId, /*square*/ 3, "#d9d9d9")),
-                    _rings(
-                        COLOR_HEX[colIdx],
-                        flameColor,
-                        diamondColor,
-                        rOut2,
-                        rMid2,
-                        rIn2,
-                        /*cx=*/ 0,
-                        /*cy=*/ 0
-                    ),
-                    '<defs><clipPath id="ct2"><circle cx="0" cy="0" r="',
-                    uint256(rIn2).toString(),
-                    '"/></clipPath></defs>',
-                    '<g clip-path="url(#ct2)">',
-                    '<g transform="',
-                    _mat6(sSym1e6, txm, tyn),
-                    '">',
-                    body,
-                    "</g>",
-                    "</g>",
-                    isMap ? "" : _cornerFlame(flameColor),
-                    _svgFooter()
-                )
-            );
+        string memory ringsAndSymbol = string(
+            abi.encodePacked(
+                _rings(
+                    COLOR_HEX[colIdx],
+                    flameColor,
+                    diamondColor,
+                    rOut2,
+                    rMid2,
+                    rIn2,
+                    /*cx=*/ 0,
+                    /*cy=*/ 0
+                ),
+                '<defs><clipPath id="ct2"><circle cx="0" cy="0" r="',
+                uint256(rIn2).toString(),
+                '"/></clipPath></defs>',
+                '<g clip-path="url(#ct2)">',
+                '<g transform="',
+                _mat6(sSym1e6, txm, tyn),
+                '">',
+                body,
+                "</g>",
+                "</g>"
+            )
+        );
+
+        bool invertTrophy = !isMap && (exterminatedTrait <= 255 || lvl == 90);
+        if (invertTrophy) {
+            ringsAndSymbol = string(abi.encodePacked('<g filter="url(#inv)">', ringsAndSymbol, "</g>"));
+        }
+
+        return string(abi.encodePacked(_svgHeader(border, _resolve(tokenId, /*square*/ 3, "#d9d9d9")), ringsAndSymbol, isMap ? "" : _cornerFlame(flameColor), _svgFooter()));
     }
 
     /**

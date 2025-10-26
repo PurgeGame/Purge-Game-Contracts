@@ -547,7 +547,11 @@ contract PurgeGame {
                 }
             }
 
-            if (
+            if (lvl == 90) {
+                unchecked {
+                    bonusTenths += 9;
+                }
+            } else if (
                 uint16(trait0) == prevExterminated ||
                 uint16(trait1) == prevExterminated ||
                 uint16(trait2) == prevExterminated ||
@@ -630,6 +634,7 @@ contract PurgeGame {
             uint8 exTrait = uint8(exterminated);
 
             uint256 pool = prizePool;
+            uint256 poolInitial = pool;
 
             // Halving if same trait as prior level
             uint16 prev = lastExterminatedTrait;
@@ -637,6 +642,15 @@ contract PurgeGame {
                 uint256 keep = pool >> 1;
                 carryoverForNextLevel += keep;
                 pool -= keep;
+            }
+
+            if (levelSnapshot == 90) {
+                uint256 target = poolInitial >> 1;
+                if (pool > target) {
+                    uint256 extra = pool - target;
+                    carryoverForNextLevel += extra;
+                    pool = target;
+                }
             }
 
             // Participant vs exterminator split
