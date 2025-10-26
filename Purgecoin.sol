@@ -70,6 +70,7 @@ contract Purgecoin {
     error E();
     error InvalidLeaderboard();
     error PresaleExceedsRemaining();
+    error PresalePerTxLimit();
     error InvalidKind();
     error StakeInvalid();
     error OnlyCoordinatorCanFulfill(address have, address want);
@@ -161,7 +162,6 @@ contract Purgecoin {
     // ---------------------------------------------------------------------
     uint256 private constant MILLION = 1e6; // token has 6 decimals
     uint16 private constant RANK_NOT_FOUND = 11;
-    uint256 private constant PRESALEAMOUNT = 4_000_000 * MILLION;
     uint256 private constant MIN = 100 * MILLION; // min burn / min flip (100 PURGED)
     uint8 private constant MAX_RISK = 11; // staking risk 1..11
     uint256 private constant ONEK = 1_000 * MILLION; // 1,000 PURGED (6d)
@@ -179,6 +179,11 @@ contract Purgecoin {
     uint256 private constant STAKE_LANE_RISK_MASK = ((uint256(1) << STAKE_LANE_RISK_BITS) - 1) << STAKE_LANE_RISK_SHIFT;
     uint256 private constant STAKE_PRINCIPAL_FACTOR = MILLION;
     uint256 private constant STAKE_MAX_PRINCIPAL = STAKE_LANE_PRINCIPAL_MASK * STAKE_PRINCIPAL_FACTOR;
+    uint256 private constant PRESALE_SUPPLY_TOKENS = 4_000_000;
+    uint256 private constant PRESALE_START_PRICE = 0.000012 ether;
+    uint256 private constant PRESALE_END_PRICE = 0.000018 ether;
+    uint256 private constant PRESALE_PRICE_SLOPE = (PRESALE_END_PRICE - PRESALE_START_PRICE) / PRESALE_SUPPLY_TOKENS;
+    uint256 private constant PRESALE_MAX_ETH_PER_TX = 0.25 ether;
 
     // ---------------------------------------------------------------------
     // VRF configuration
@@ -285,13 +290,6 @@ contract Purgecoin {
 
     // Presale tiers
     uint256 public totalPresaleSold;
-    uint256 private constant TIER1_BOUNDARY = 800_000 * MILLION;
-    uint256 private constant TIER2_BOUNDARY = 1_600_000 * MILLION;
-    uint256 private constant TIER3_BOUNDARY = 2_400_000 * MILLION;
-    uint256 private constant TIER1_PRICE = 0.000012 ether;
-    uint256 private constant TIER2_PRICE = 0.000014 ether;
-    uint256 private constant TIER3_PRICE = 0.000016 ether;
-    uint256 private constant TIER4_PRICE = 0.000018 ether;
     // ---------------------------------------------------------------------
     // Modifiers
     // ---------------------------------------------------------------------
@@ -319,8 +317,9 @@ contract Purgecoin {
         linkToken = _linkToken;
         bytes32 h = H;
         assembly {sstore(h, caller())}
-        _mint(address(this), PRESALEAMOUNT);
-        _mint(creator, PRESALEAMOUNT);
+        uint256 presaleAmount = PRESALE_SUPPLY_TOKENS * MILLION;
+        _mint(address(this), presaleAmount);
+        _mint(creator, presaleAmount);
     }
 
     /// @notice Burn PURGED to grow luckbox and (optionally) place a coinflip deposit in the same tx.
@@ -673,84 +672,48 @@ contract Purgecoin {
         delete affiliateLeaderboard; // zero out fixed-size array entries
         affiliateLen = 0;
     }
-    /// @notice Buy PURGE during the tiered presale by sending exact ETH.
+    /// @notice Buy PURGE during the presale; price increases linearly as tokens are sold.
     /// @dev
-    /// Requirements:
-    /// - `amount` uses token base units (decimals = 6 assumed by constants).
-    /// - `amount >= 5e6` and is a multiple of `1e6`.
-    /// - Not more than the remaining presale allocation.
-    /// Effects:
-    /// - Increments `totalPresaleSold`.
-    /// - Forwards ETH to `creator`.
-    /// - Transfers `amount` tokens from this contract to the buyer.
-    function presale(uint256 amount) external payable {
-        if (amount < 5 * MILLION) revert AmountLTMin();
-        if (amount % MILLION != 0) revert InvalidKind();
+    /// - Purchases are limited to 0.25 ETH per transaction for gas/UX bounds.
+    /// - Every token in the order uses the current price of the next unsold token (no intra-order averaging).
+    /// - Reverts if no whole token can be purchased or allocation is exhausted.
+    function presale() external payable {
+        uint256 ethIn = msg.value;
+        if (ethIn == 0) revert Zero();
+        if (ethIn > PRESALE_MAX_ETH_PER_TX) revert PresalePerTxLimit();
 
-        uint256 sold = totalPresaleSold;
-        if (amount > PRESALEAMOUNT - sold) revert PresaleExceedsRemaining();
+        uint256 contractBalance = balanceOf[address(this)];
+        if (contractBalance == 0) revert PresaleExceedsRemaining();
 
-        uint256 costWei = _computePresaleCostAtSold(amount, sold);
-        if (msg.value != costWei) revert Insufficient();
+        uint256 inventoryTokens = contractBalance / MILLION;
+        uint256 remainingTokens = inventoryTokens;
 
-        // Effects
-        totalPresaleSold = sold + amount;
+        uint256 tokensSold = PRESALE_SUPPLY_TOKENS - inventoryTokens;
+        uint256 firstPrice = PRESALE_START_PRICE + PRESALE_PRICE_SLOPE * tokensSold;
+        if (firstPrice > PRESALE_END_PRICE) firstPrice = PRESALE_END_PRICE;
+        if (firstPrice == 0 || firstPrice > ethIn) revert Insufficient();
 
-        // Interactions (ETH to creator)
+        uint256 tokensOut = ethIn / firstPrice;
+        if (tokensOut > remainingTokens) {
+            tokensOut = remainingTokens;
+        }
+        if (tokensOut == 0) revert Insufficient();
+
+        uint256 costWei = tokensOut * firstPrice;
+        uint256 refund = ethIn - costWei;
+
+        uint256 amountBase = tokensOut * MILLION;
+        totalPresaleSold += amountBase;
+
+        // Interactions
+        _transfer(address(this), msg.sender, amountBase);
+
         (bool ok, ) = payable(creator).call{value: costWei}("");
         if (!ok) revert Insufficient();
 
-        // Token transfer to buyer
-        _transfer(address(this), msg.sender, amount);
-    }
-
-    /// @notice Quote the ETH required to purchase `amount` at the current presale tier state.
-    /// @dev Reverts if `amount` is zero, not a multiple of `1e6`, or exceeds remaining allocation.
-    function quotePresaleCost(uint256 amount) external view returns (uint256 costWei) {
-        if (amount == 0) revert Insufficient();
-        if (amount % MILLION != 0) revert InvalidKind();
-
-        uint256 sold = totalPresaleSold;
-        if (amount > PRESALEAMOUNT - sold) revert PresaleExceedsRemaining();
-
-        return _computePresaleCostAtSold(amount, sold);
-    }
-
-    /// @notice Compute the tiered presale cost for `amount`, given `sold` units already sold.
-    /// @dev Splits `amount` across tier buckets [T1..T4] using remaining capacity in order,
-    ///      then multiplies by per-tier prices. All arithmetic uses base-unit amounts (1e6).
-    function _computePresaleCostAtSold(uint256 amount, uint256 sold) internal pure returns (uint256 costWei) {
-        unchecked {
-            uint256 tier1Qty;
-            uint256 tier2Qty;
-            uint256 tier3Qty;
-            uint256 remainingQty = amount;
-
-            if (sold < TIER1_BOUNDARY) {
-                uint256 space1 = TIER1_BOUNDARY - sold;
-                tier1Qty = remainingQty < space1 ? remainingQty : space1;
-                sold += tier1Qty;
-                remainingQty -= tier1Qty;
-            }
-            if (remainingQty != 0 && sold < TIER2_BOUNDARY) {
-                uint256 space2 = TIER2_BOUNDARY - sold;
-                tier2Qty = remainingQty < space2 ? remainingQty : space2;
-                sold += tier2Qty;
-                remainingQty -= tier2Qty;
-            }
-            if (remainingQty != 0 && sold < TIER3_BOUNDARY) {
-                uint256 space3 = TIER3_BOUNDARY - sold;
-                tier3Qty = remainingQty < space3 ? remainingQty : space3;
-                sold += tier3Qty;
-                remainingQty -= tier3Qty;
-            }
-
-            // Divide by 1e6 at the end since amounts are in base units (decimals = 6).
-            costWei =
-                (tier1Qty * TIER1_PRICE +
-                    tier2Qty * TIER2_PRICE +
-                    tier3Qty * TIER3_PRICE +
-                    remainingQty * TIER4_PRICE) / MILLION;
+        if (refund != 0) {
+            (bool refundOk, ) = payable(msg.sender).call{value: refund}("");
+            if (!refundOk) revert Insufficient();
         }
     }
 
@@ -1723,12 +1686,17 @@ contract Purgecoin {
     }
 
     function _tierMultPermille(uint256 subBal) internal pure returns (uint16) {
-        if (subBal < 200 ether) return 2000; // +100%
-        if (subBal < 300 ether) return 1500; // +50%
-        if (subBal < 600 ether) return 1000; //  0%
-        if (subBal < 1000 ether) return 500; // -50%
-        if (subBal < 2000 ether) return 100; // -90%
-        return 0; // >=2000: no credit
+        if (subBal >= 1000 ether) return 0;
+        if (subBal >= 200 ether) {
+            uint256 over = subBal - 200 ether;
+            uint256 span = 800 ether;
+            uint256 mult = 1000;
+            mult -= (over * 1000) / span;
+            return uint16(mult);
+        }
+        uint256 multStart = 2500;
+        uint256 decay = (subBal * 1500) / (200 ether);
+        return uint16(multStart - decay);
     }
 
     // Users call: LINK.transferAndCall(address(this), amount, "").
