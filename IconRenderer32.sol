@@ -13,7 +13,13 @@ interface IIcons32 {
 }
 
 interface IColorRegistry {
-    function setMyColors(address user, string calldata outlineHex, string calldata flameHex, string calldata diamondHex, string calldata squareHex) external returns (bool);
+    function setMyColors(
+        address user,
+        string calldata outlineHex,
+        string calldata flameHex,
+        string calldata diamondHex,
+        string calldata squareHex
+    ) external returns (bool);
 
     function setCustomColorsForMany(
         address user,
@@ -55,7 +61,6 @@ contract IconRenderer32 {
 
     // ---------------- Storage ----------------
 
-    address private immutable coin; // PURGE ERC20 implementing IPurgedRead (getReferrer)
     IPurgedRead private immutable coin; // PURGE ERC20 implementing IPurgedRead (getReferrer)
     IIcons32 private immutable icons; // External icon data source
     IColorRegistry private immutable registry; // Color override store
@@ -134,13 +139,7 @@ contract IconRenderer32 {
         uint32 trophyOuterPct1e6
     ) public returns (bool) {
         return registry.setCustomColorsForMany(
-            msg.sender,
-            tokenIds,
-            outlineHex,
-            flameHex,
-            diamondHex,
-            squareHex,
-            trophyOuterPct1e6
+            msg.sender, tokenIds, outlineHex, flameHex, diamondHex, squareHex, trophyOuterPct1e6
         );
     }
 
@@ -156,7 +155,7 @@ contract IconRenderer32 {
         string memory s = registry.tokenColor(tokenId, k);
         if (bytes(s).length != 0) return s;
 
-        address owner_ = IERC721Lite(nft).ownerOf(tokenId);
+        address owner_ = nft.ownerOf(tokenId);
         s = registry.addressColor(owner_, k);
         if (bytes(s).length != 0) return s;
 
@@ -178,16 +177,8 @@ contract IconRenderer32 {
     // ---------------------------------------------------------------------
 
     // Canonical palette (indexed 0..7). Stored intentionally (non‑zero) for direct lookup.
-    string[8] private COLOR_HEX = [
-        "#f409cd",
-        "#7c2bff",
-        "#30d100",
-        "#ed0e11",
-        "#1317f7",
-        "#f7931a",
-        "#5e5e5e",
-        "#ab8d3f"
-    ];
+    string[8] private COLOR_HEX =
+        ["#f409cd", "#7c2bff", "#30d100", "#ed0e11", "#1317f7", "#f7931a", "#5e5e5e", "#ab8d3f"];
 
     // Layout tuning (1e6 fixed‑point).
     uint32 private constant RATIO_MID_1e6 = 780_000;
@@ -265,11 +256,11 @@ contract IconRenderer32 {
     ///                  - Regular: bits [63:48] last exterminated trait (0..255 or 420 sentinel),
     ///                             bits [47:24] level, bits [23:00] packed traits.
     /// @param remaining Live remaining counts for this token’s four traits (regular only).
-    function tokenURI(
-        uint256 tokenId,
-        uint256 data,
-        uint32[4] calldata remaining
-    ) external view returns (string memory) {
+    function tokenURI(uint256 tokenId, uint256 data, uint32[4] calldata remaining)
+        external
+        view
+        returns (string memory)
+    {
         uint24 lvl;
 
         // ----- Trophy path: presence of bits above 128 indicates trophy layout -----
@@ -285,9 +276,7 @@ contract IconRenderer32 {
                 desc = string.concat("Unawarded ", trophyType, " trophy placeholder.");
             } else {
                 desc = string.concat(
-                    "Awarded for Level ",
-                    lvlStr,
-                    isMap ? " MAP jackpot dominance." : " final extermination victory."
+                    "Awarded for Level ", lvlStr, isMap ? " MAP jackpot dominance." : " final extermination victory."
                 );
             }
 
@@ -360,8 +349,8 @@ contract IconRenderer32 {
         uint8 traitId = _traitId(uint8(quadId), colorIndex, symbolIndex);
 
         // Highlight by inversion when this trait was exterminated last level.
-        bool highlightInvert = (lastExterminated == 0xFFFF) ||
-            (lastExterminated != 420 && lastExterminated <= 255 && traitId == uint8(lastExterminated));
+        bool highlightInvert = (lastExterminated == 0xFFFF)
+            || (lastExterminated != 420 && lastExterminated <= 255 && traitId == uint8(lastExterminated));
 
         // Radius computation: derive scarcity‑scaled outer/mid/inner radii
         uint32 rMax = _rMaxAt(quadPos);
@@ -376,16 +365,7 @@ contract IconRenderer32 {
 
         // Concentric rings
         string memory colorHex = COLOR_HEX[colorIndex];
-        string memory ringsSvg = _rings(
-            colorHex,
-            "#111",
-            "#fff",
-            rOuter,
-            rMiddle,
-            rInner,
-            CX[quadPos],
-            CY[quadPos]
-        );
+        string memory ringsSvg = _rings(colorHex, "#111", "#fff", rOuter, rMiddle, rInner, CX[quadPos], CY[quadPos]);
 
         // Symbol path selection (32 icons total: quadId*8 + symbolIndex)
         uint256 iconIndex = quadId * 8 + symbolIndex;
@@ -452,32 +432,31 @@ contract IconRenderer32 {
     }
 
     /// @notice Build a 4‑line description showing remaining counts per quadrant.
-    function _descFromRem(
-        uint8[4] memory col,
-        uint8[4] memory sym,
-        uint32[4] memory rem
-    ) private view returns (string memory) {
-        return
-            string(
-                abi.encodePacked(
-                    _label(0, col[0], sym[0]),
-                    " : ",
-                    uint256(rem[0]).toString(),
-                    " remaining\\n",
-                    _label(1, col[1], sym[1]),
-                    " : ",
-                    uint256(rem[1]).toString(),
-                    " remaining\\n",
-                    _label(2, col[2], sym[2]),
-                    " : ",
-                    uint256(rem[2]).toString(),
-                    " remaining\\n",
-                    _label(3, col[3], sym[3]),
-                    " : ",
-                    uint256(rem[3]).toString(),
-                    " remaining"
-                )
-            );
+    function _descFromRem(uint8[4] memory col, uint8[4] memory sym, uint32[4] memory rem)
+        private
+        view
+        returns (string memory)
+    {
+        return string(
+            abi.encodePacked(
+                _label(0, col[0], sym[0]),
+                " : ",
+                uint256(rem[0]).toString(),
+                " remaining\\n",
+                _label(1, col[1], sym[1]),
+                " : ",
+                uint256(rem[1]).toString(),
+                " remaining\\n",
+                _label(2, col[2], sym[2]),
+                " : ",
+                uint256(rem[2]).toString(),
+                " remaining\\n",
+                _label(3, col[3], sym[3]),
+                " : ",
+                uint256(rem[3]).toString(),
+                " remaining"
+            )
+        );
     }
 
     // ---------------- Trophy / SVG helpers -----------------------------------------------------------
@@ -494,7 +473,11 @@ contract IconRenderer32 {
      *   in `_trophyOuterPct1e6[tokenId]` (5%..100%), or a default mapped from prior fixed radii:
      *   88px for placeholder, 76px for won, over an inner side of 98px.
      */
-    function _trophySvg(uint256 tokenId, uint16 exterminatedTrait, bool isMap, uint24 lvl) private view returns (string memory) {
+    function _trophySvg(uint256 tokenId, uint16 exterminatedTrait, bool isMap, uint24 lvl)
+        private
+        view
+        returns (string memory)
+    {
         uint32 innerSide = _innerSquareSide(); // currently 98
         // ---------------- Unwon/placeholder trophy -------------------------
         string memory diamondPath = icons.diamond();
@@ -502,7 +485,8 @@ contract IconRenderer32 {
             uint8 ringIdx = 3; // Red
             string memory borderColor = _resolve(
                 tokenId,
-                /*k=*/ 0, // outline/border
+                /*k=*/
+                0, // outline/border
                 _borderColor(tokenId, /*traitsPacked=*/ 0, _repeat4(ringIdx))
             );
 
@@ -518,14 +502,19 @@ contract IconRenderer32 {
             string memory head = _svgHeader(borderColor, _resolve(tokenId, /*square*/ 3, "#d9d9d9"));
             string memory ringColor = COLOR_HEX[ringIdx];
             string memory rings = _rings(
-                /*outer*/ ringColor,
-                /*middle*/ _resolve(tokenId, /*flame*/ 1, "#111"),
-                /*inner*/ _resolve(tokenId, /*diamond*/ 2, "#fff"),
+                /*outer*/
+                ringColor,
+                /*middle*/
+                _resolve(tokenId, /*flame*/ 1, "#111"),
+                /*inner*/
+                _resolve(tokenId, /*diamond*/ 2, "#fff"),
                 rOut,
                 rMid,
                 rIn,
-                /*cx=*/ 0,
-                /*cy=*/ 0
+                /*cx=*/
+                0,
+                /*cy=*/
+                0
             );
 
             // Clip the central diamond area and paint the “flame” inside.
@@ -560,7 +549,8 @@ contract IconRenderer32 {
 
         string memory border = _resolve(
             tokenId,
-            /*k=*/ 0,
+            /*k=*/
+            0,
             _borderColor(tokenId, /*traitsPacked=*/ uint32(six), _repeat4(colIdx))
         );
 
@@ -614,8 +604,10 @@ contract IconRenderer32 {
                     rOut2,
                     rMid2,
                     rIn2,
-                    /*cx=*/ 0,
-                    /*cy=*/ 0
+                    /*cx=*/
+                    0,
+                    /*cy=*/
+                    0
                 ),
                 '<defs><clipPath id="ct2"><circle cx="0" cy="0" r="',
                 uint256(rIn2).toString(),
@@ -635,7 +627,14 @@ contract IconRenderer32 {
             ringsAndSymbol = string(abi.encodePacked('<g filter="url(#inv)">', ringsAndSymbol, "</g>"));
         }
 
-        return string(abi.encodePacked(_svgHeader(border, _resolve(tokenId, /*square*/ 3, "#d9d9d9")), ringsAndSymbol, isMap ? "" : _cornerFlame(flameColor), _svgFooter()));
+        return string(
+            abi.encodePacked(
+                _svgHeader(border, _resolve(tokenId, /*square*/ 3, "#d9d9d9")),
+                ringsAndSymbol,
+                isMap ? "" : _cornerFlame(flameColor),
+                _svgFooter()
+            )
+        );
     }
 
     /**
@@ -645,26 +644,25 @@ contract IconRenderer32 {
      */
     function _svgHeader(string memory borderColor, string memory squareFill) private pure returns (string memory) {
         // Note: stroke-width is 2; inner usable side = 100 - 2 = 98.
-        return
-            string(
-                abi.encodePacked(
-                    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="-60 -60 120 120">',
-                    // Define a reusable inversion filter for quadrant “negative” effect (used ONLY in _svgQuad).
-                    '<defs><filter id="inv" color-interpolation-filters="sRGB">',
-                    '<feColorMatrix type="matrix" values="',
-                    "-1 0 0 0 1 ",
-                    "0 -1 0 0 1 ",
-                    "0 0 -1 0 1 ",
-                    "0 0 0  1 0",
-                    '"/>',
-                    "</filter></defs>",
-                    '<rect x="-50" y="-50" width="100" height="100" rx="12" fill="',
-                    squareFill,
-                    '" stroke="',
-                    borderColor,
-                    '" stroke-width="2"/>'
-                )
-            );
+        return string(
+            abi.encodePacked(
+                '<svg xmlns="http://www.w3.org/2000/svg" viewBox="-60 -60 120 120">',
+                // Define a reusable inversion filter for quadrant “negative” effect (used ONLY in _svgQuad).
+                '<defs><filter id="inv" color-interpolation-filters="sRGB">',
+                '<feColorMatrix type="matrix" values="',
+                "-1 0 0 0 1 ",
+                "0 -1 0 0 1 ",
+                "0 0 -1 0 1 ",
+                "0 0 0  1 0",
+                '"/>',
+                "</filter></defs>",
+                '<rect x="-50" y="-50" width="100" height="100" rx="12" fill="',
+                squareFill,
+                '" stroke="',
+                borderColor,
+                '" stroke-width="2"/>'
+            )
+        );
     }
 
     /**
@@ -676,58 +674,55 @@ contract IconRenderer32 {
         string memory flameColor,
         string memory diamondPath
     ) private pure returns (string memory) {
-        return
-            string(
-                abi.encodePacked(
-                    '<g stroke="',
-                    borderColor,
-                    '" stroke-width="1" fill="none" opacity="1">',
-                    '<line x1="0" y1="-50" x2="0" y2="50"/>',
-                    '<line x1="-50" y1="0" x2="50" y2="0"/>',
-                    "</g>",
-                    '<path d="M0,15.5 L15.5,0 0,-15.5 -15.5,0 Z" fill="',
-                    diamondFill,
-                    '" stroke="',
-                    borderColor,
-                    '" stroke-width="1"/>',
-                    _flameDiamond(flameColor, diamondPath)
-                )
-            );
+        return string(
+            abi.encodePacked(
+                '<g stroke="',
+                borderColor,
+                '" stroke-width="1" fill="none" opacity="1">',
+                '<line x1="0" y1="-50" x2="0" y2="50"/>',
+                '<line x1="-50" y1="0" x2="50" y2="0"/>',
+                "</g>",
+                '<path d="M0,15.5 L15.5,0 0,-15.5 -15.5,0 Z" fill="',
+                diamondFill,
+                '" stroke="',
+                borderColor,
+                '" stroke-width="1"/>',
+                _flameDiamond(flameColor, diamondPath)
+            )
+        );
     }
 
     /**
      * @dev Flame path clipped to the diamond.
      */
     function _flameDiamond(string memory flameFill, string memory diamondPath) private pure returns (string memory) {
-        return
-            string(
-                abi.encodePacked(
-                    '<defs><clipPath id="cd"><path d="M0,15.5 L15.5,0 0,-15.5 -15.5,0 Z"/></clipPath></defs>',
-                    '<g clip-path="url(#cd)"><g transform="translate(-1.596,-1.664) scale(2)">',
-                    '<path fill="',
-                    flameFill,
-                    '" stroke="none" transform="matrix(0.027 0 0 0.027 -10.8 -8.10945)" d="',
+        return string(
+            abi.encodePacked(
+                '<defs><clipPath id="cd"><path d="M0,15.5 L15.5,0 0,-15.5 -15.5,0 Z"/></clipPath></defs>',
+                '<g clip-path="url(#cd)"><g transform="translate(-1.596,-1.664) scale(2)">',
+                '<path fill="',
+                flameFill,
+                '" stroke="none" transform="matrix(0.027 0 0 0.027 -10.8 -8.10945)" d="',
                 diamondPath,
-                    '"/>',
-                    "</g></g>"
-                )
-            );
+                '"/>',
+                "</g></g>"
+            )
+        );
     }
 
     function _cornerFlame(string memory flameFill) private pure returns (string memory) {
-        return
-            string(
-                abi.encodePacked(
-                    '<g transform="translate(32 32)" opacity="0.9">',
-                    '<path fill="',
-                    flameFill,
-                    '" stroke="none" d="M0,-6 C2,-4 2,-1 0,2 C0,2 1,3 1,4 C1,5 -1,5 -1,4 C-1,3 0,2 0,2 C-2,-1 -2,-4 0,-6 Z"/>',
-                    '<circle cx="0" cy="4.2" r="1.4" fill="',
-                    flameFill,
-                    '" stroke="none"/>',
-                    "</g>"
-                )
-            );
+        return string(
+            abi.encodePacked(
+                '<g transform="translate(32 32)" opacity="0.9">',
+                '<path fill="',
+                flameFill,
+                '" stroke="none" d="M0,-6 C2,-4 2,-1 0,2 C0,2 1,3 1,4 C1,5 -1,5 -1,4 C-1,3 0,2 0,2 C-2,-1 -2,-4 0,-6 Z"/>',
+                '<circle cx="0" cy="4.2" r="1.4" fill="',
+                flameFill,
+                '" stroke="none"/>',
+                "</g>"
+            )
+        );
     }
 
     /**
@@ -817,38 +812,37 @@ contract IconRenderer32 {
     ) private pure returns (string memory) {
         string memory cxs = _i(cx);
         string memory cys = _i(cy);
-        return
-            string(
-                abi.encodePacked(
-                    '<circle cx="',
-                    cxs,
-                    '" cy="',
-                    cys,
-                    '" r="',
-                    uint256(rOut).toString(),
-                    '" fill="',
-                    outer,
-                    '"/>',
-                    '<circle cx="',
-                    cxs,
-                    '" cy="',
-                    cys,
-                    '" r="',
-                    uint256(rMid).toString(),
-                    '" fill="',
-                    mid,
-                    '"/>',
-                    '<circle cx="',
-                    cxs,
-                    '" cy="',
-                    cys,
-                    '" r="',
-                    uint256(rIn).toString(),
-                    '" fill="',
-                    inner,
-                    '"/>'
-                )
-            );
+        return string(
+            abi.encodePacked(
+                '<circle cx="',
+                cxs,
+                '" cy="',
+                cys,
+                '" r="',
+                uint256(rOut).toString(),
+                '" fill="',
+                outer,
+                '"/>',
+                '<circle cx="',
+                cxs,
+                '" cy="',
+                cys,
+                '" r="',
+                uint256(rMid).toString(),
+                '" fill="',
+                mid,
+                '"/>',
+                '<circle cx="',
+                cxs,
+                '" cy="',
+                cys,
+                '" r="',
+                uint256(rIn).toString(),
+                '" fill="',
+                inner,
+                '"/>'
+            )
+        );
     }
 
     /// @dev Signed small‑int to string (for SVG positions). Safe for int16 domain.
