@@ -568,7 +568,7 @@ contract PurgeGame {
                 dailyPurgeCount[trait0 & 0x07] += 1;
                 dailyPurgeCount[((trait1 - 64) >> 3) + 8] += 1;
                 dailyPurgeCount[trait2 - 128 + 16] += 1;
-                uint32 endLevel = (lvl % 10 == 4) ? 1 : 0;
+                uint32 endLevel = (lvl % 10 == 7) ? 1 : 0;
 
                 if (--traitRemaining[trait0] == endLevel) {
                     _endLevel(trait0);
@@ -655,9 +655,9 @@ contract PurgeGame {
 
             // Participant vs exterminator split
             uint256 ninetyPercent = (pool * 90) / 100;
-                uint256 exterminatorShare = (levelSnapshot % 10 == 7)
-                    ? (pool * 40) / 100
-                    : (pool * 20) / 100;
+            uint256 exterminatorShare = (levelSnapshot % 10 == 4 && levelSnapshot != 4)
+                ? (pool * 40) / 100
+                : (pool * 20) / 100;
             uint256 participantShare = ninetyPercent - exterminatorShare;
 
             // Cache per-ticket payout into prizePool (payEach). Payout happens in state 1.
@@ -689,7 +689,12 @@ contract PurgeGame {
             uint256 mapShare = poolCarry / 10; // 10% to current MAP trophy
             uint256 randomShare = poolCarry / 20; // 5% slices for MAP trophies still dripping
 
-            _addClaimableEth(mapOwner, mapShare);
+            uint256 immediateMap = mapShare >> 1;
+            uint256 dripPortion = mapShare - immediateMap;
+            _addClaimableEth(mapOwner, immediateMap);
+            uint256 perLevelAdd = dripPortion / TROPHY_DRIP_STEPS;
+            trophyDripPerLevel[mapTrophyId] += perLevelAdd;
+
             uint256 distributed = mapShare;
             distributed += _sampleTrophies(false, randomShare, rngWord);
 
@@ -796,7 +801,7 @@ contract PurgeGame {
                 }
 
                 // Exterminator’s share (20% or 40%), plus epoch carry if prevLevel%100==0
-                uint256 exterminatorShare = (prevLevel % 10 == 7)
+                uint256 exterminatorShare = (prevLevel % 10 == 4 && prevLevel != 4)
                     ? (poolTotal * 40) / 100
                     : (poolTotal * 20) / 100;
                 if ((prevLevel % 100) == 0) {
@@ -931,7 +936,7 @@ contract PurgeGame {
     function _startTrophyDrip(uint256 tokenId, uint256 deferredWei) private {
         uint256 perLevel = deferredWei / TROPHY_DRIP_STEPS;
         trophyDripPerLevel[tokenId] = perLevel;
-        activeTrophyDrips.push(tokenId);
+            activeTrophyDrips.push(tokenId);
     }
 
     function _clearTrophyDripEntry(uint256 index) private {
