@@ -746,7 +746,8 @@ contract Purgecoin {
     }
 
     /// @notice Read the current VRF word (0 if not yet fulfilled).
-    function pullRng() external view returns (uint256) {
+    function pullRng() external returns (uint256) {
+        if (rngFulfilled){if (bonusActive && ((rngWord & 1) == 0)) rngWord++;}
         return rngFulfilled ? rngWord : 0;
     }
 
@@ -826,7 +827,7 @@ contract Purgecoin {
         uint32 stepStake = (cap == 0) ? 200 : cap;
 
         uint256 word = rngWord;
-        bool win = (word & 1) == 1 || bonusActive;
+        bool win = (word & 1) == 1;
         if (!win) stepPayout <<= 2; // 4x work on losses to clear backlog faster
         // --- Phase 1: stake propagation (only processed on wins) --------
         if (payoutIndex == 0 && stakeLevelComplete < level) {

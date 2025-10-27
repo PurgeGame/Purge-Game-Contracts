@@ -20,7 +20,7 @@ interface IPurgeCoinInterface {
     function burnCoin(address target, uint256 amount) external;
     function payAffiliate(uint256 amount, bytes32 code, address sender, uint24 lvl) external;
     function requestRng(bool pauseBetting) external;
-    function pullRng() external view returns (uint256 word);
+    function pullRng() external returns (uint256 word);
     function processCoinflipPayouts(uint24 level, uint32 cap, bool bonusFlip) external returns (bool);
     function triggerCoinJackpot() external;
     function runExternalJackpot(
