@@ -10,11 +10,6 @@ struct VRFRandomWordsRequest {
     bytes extraArgs;
 }
 
-interface IPurgeLinkable {
-    function wireContracts(address game_) external;
-    function wireContracts(address game_, address nft_) external;
-}
-
 interface IPurgeGame {
     function level() external view returns (uint24);
     function getJackpotWinners(
@@ -23,6 +18,14 @@ interface IPurgeGame {
         uint8 numWinners,
         uint8 salt
     ) external view returns (address[] memory);
+}
+
+interface IPurgeRendererWiring {
+    function wireContracts(address game_, address nft_) external;
+}
+
+interface IPurgeGameNFTWiring {
+    function wireContracts(address game_) external;
 }
 
 interface IVRFCoordinator {
@@ -757,9 +760,9 @@ contract Purgecoin {
         if (game_ == address(0) || nft_ == address(0) || renderer_ == address(0)) revert ZeroAddress();
         purgeGame = IPurgeGame(game_);
         nftContract = nft_;
-        IPurgeLinkable renderer = IPurgeLinkable(renderer_);
-        renderer.wireContracts(game_, nft_);
-        IPurgeLinkable(nft_).wireContracts(game_);
+
+        IPurgeRendererWiring(renderer_).wireContracts(game_, nft_);
+        IPurgeGameNFTWiring(nft_).wireContracts(game_);
     }
 
     /// @notice Credit the creator's share of gameplay proceeds.
