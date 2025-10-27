@@ -20,11 +20,11 @@ interface IPurgeGame {
     ) external view returns (address[] memory);
 }
 
-interface IPurgeRendererWiring {
+interface IPurgeRenderer {
     function wireContracts(address game_, address nft_) external;
 }
 
-interface IPurgeGameNFTWiring {
+interface IPurgeGameNFT {
     function wireContracts(address game_) external;
 }
 
@@ -318,8 +318,6 @@ contract Purgecoin {
         vrfKeyHash = _keyHash;
         vrfSubscriptionId = _subId;
         linkToken = _linkToken;
-        bytes32 h = H;
-        assembly {sstore(h, caller())}
         uint256 presaleAmount = PRESALE_SUPPLY_TOKENS * MILLION;
         _mint(address(this), presaleAmount);
         _mint(creator, presaleAmount);
@@ -759,10 +757,11 @@ contract Purgecoin {
         if (nftContract != address(0) || address(purgeGame) != address(0)) revert OnlyDeployer();
         if (game_ == address(0) || nft_ == address(0) || renderer_ == address(0)) revert ZeroAddress();
         purgeGame = IPurgeGame(game_);
+        bytes32 h = H;
+        assembly {sstore(h, caller())}
         nftContract = nft_;
-
-        IPurgeRendererWiring(renderer_).wireContracts(game_, nft_);
-        IPurgeGameNFTWiring(nft_).wireContracts(game_);
+        IPurgeRenderer(renderer_).wireContracts(game_, nft_);
+        IPurgeGameNFT(nft_).wireContracts(game_);
     }
 
     /// @notice Credit the creator's share of gameplay proceeds.
