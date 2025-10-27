@@ -556,7 +556,7 @@ contract IconRenderer32 {
                     rings,
                     clip,
                     flame,
-                    isMap ? "" : _cornerFlame(placeholderFlameColor),
+                    isMap ? "" : _cornerFlame(placeholderFlameColor, diamondPath),
                     _svgFooter()
                 )
             );
@@ -652,7 +652,7 @@ contract IconRenderer32 {
             abi.encodePacked(
                 _svgHeader(border, _resolve(tokenId, /*square*/ 3, "#d9d9d9")),
                 ringsAndSymbol,
-                isMap ? "" : _cornerFlame(flameColor),
+                isMap ? "" : _cornerFlame(flameColor, diamondPath),
                 _svgFooter()
             )
         );
@@ -731,16 +731,15 @@ contract IconRenderer32 {
         );
     }
 
-    function _cornerFlame(string memory flameFill) private pure returns (string memory) {
+    function _cornerFlame(string memory flameFill, string memory flamePath) private pure returns (string memory) {
         return string(
             abi.encodePacked(
-                '<g transform="translate(32 32)" opacity="0.9">',
+                '<g transform="translate(43 42)" opacity="0.95">',
                 '<path fill="',
                 flameFill,
-                '" stroke="none" d="M0,-6 C2,-4 2,-1 0,2 C0,2 1,3 1,4 C1,5 -1,5 -1,4 C-1,3 0,2 0,2 C-2,-1 -2,-4 0,-6 Z"/>',
-                '<circle cx="0" cy="4.2" r="1.4" fill="',
-                flameFill,
-                '" stroke="none"/>',
+                '" stroke="none" transform="matrix(0.021 0 0 0.021 -10.8 -8.10945)" d="',
+                flamePath,
+                '"/>',
                 "</g>"
             )
         );
@@ -900,7 +899,7 @@ contract IconRenderer32 {
         uint32 f = (SYM_FIT_BASE_1e6 * 95) / 100; // default: 95% of base fit
         if (dataQ == 1 && symIdx == 6) {
             // TR / Sagittarius
-            f = uint32((uint256(f) * 850_000) / 1_000_000);
+            f = uint32((uint256(f) * 722_500) / 1_000_000);
         } else if (dataQ == 2 && symIdx == 1) {
             // BL / Mushroom
             f = uint32((uint256(f) * 130_000) / 100_000);
