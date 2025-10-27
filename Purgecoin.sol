@@ -192,7 +192,7 @@ contract Purgecoin {
     // VRF configuration
     // ---------------------------------------------------------------------
     uint32 private constant vrfCallbackGasLimit = 200_000;
-    uint16 private constant vrfRequestConfirmations = 5;
+    uint16 private constant vrfRequestConfirmations = 10;
 
     // ---------------------------------------------------------------------
     // Scan sentinels
