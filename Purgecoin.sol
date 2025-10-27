@@ -541,10 +541,10 @@ contract Purgecoin {
         _burn(msg.sender, burnAmt);
 
         // Base credit and compounded boost factors
-        uint256 levelBps = 5 * uint256(distance);
-        if (levelBps > 300) levelBps = 300;
-        uint256 riskBps = 30 * uint256(risk - 1);
-        if (riskBps > 300) riskBps = 300;
+        uint256 levelBps;
+        if (distance >= 90) levelBps = 200;
+        else levelBps = (uint256(distance) * 200) / 90;
+        uint256 riskBps = 25 * uint256(risk - 1);
         uint256 stepBps = levelBps + riskBps; // per-level growth in bps
 
         // Luckbox: +5% of burn
