@@ -675,6 +675,7 @@ contract PurgeGame {
         } else {
             // Non-trait end (e.g., daily jackpot progression end)
             trophyData[trophyId] = 0;
+            nft.purge(trophyId);
 
             if (levelSnapshot % 100 == 0) {
                 price = 0.05 ether;
