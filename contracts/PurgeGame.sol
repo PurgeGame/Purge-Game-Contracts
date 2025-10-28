@@ -1418,9 +1418,18 @@ contract PurgeGame {
         if (airdropIndex >= total) return true;
 
         if (writesBudget == 0) writesBudget = WRITES_BUDGET_SAFE;
-        if (phase <= 1 || phase == 3) {
+        bool throttleWrites;
+        if (phase <= 1) {
+            throttleWrites = true;
+            phase = 2;
+        }else if (phase == 3) {
+            bool firstStateThreeBatch = (gameState == 3 && airdropMapsProcessedCount == 0);
+            if (firstStateThreeBatch) {
+                throttleWrites = true;
+            }
+        }
+        if (throttleWrites) {
             writesBudget -= writesBudget >> 2; // 75% scaling
-            if (phase <= 1) phase = 2;
         }
         uint32 used = 0;
         uint256 entropy = rngWord;
