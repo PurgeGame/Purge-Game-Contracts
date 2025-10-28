@@ -723,9 +723,14 @@ contract IconRenderer32 {
         if (m == 0) m = 1;
 
         // Fit crypto icons a touch larger for two specific cases; otherwise the standard fit.
-        uint32 fitSym1e6 = (dataQ == 0 && (symIdx == 3 || symIdx == 7))
-            ? 1_030_000
-            : 800_000;
+        uint32 fitSym1e6;
+        if (dataQ == 0 && (symIdx == 3 || symIdx == 7)) {
+            fitSym1e6 = 1_030_000;
+        } else if (dataQ == 1 && symIdx == 6) {
+            fitSym1e6 = 600_000; // Sagittarius trophy; reduce 25% for better framing
+        } else {
+            fitSym1e6 = 800_000;
+        }
         uint32 sSym1e6 = uint32((uint256(2) * rIn2 * fitSym1e6) / m);
 
         // Center the symbol in the inner circle.
