@@ -6,6 +6,5 @@ package-lock.json
 package.json
 hardhat.config.js
 tsconfig.json
-contracts/
 test/
 .prettierrc
