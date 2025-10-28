@@ -52,6 +52,16 @@ interface IPurgeGameNFT {
     function trophyAward(address to, uint256 tokenId) external;
 
     function ownerOf(uint256 tokenId) external view returns (address);
+
+    function sampleTrophies(
+        bool isExtermination,
+        uint256 payout,
+        uint256 randomWord,
+        uint256[] calldata pool
+    )
+        external
+        view
+        returns (address[] memory recipients, uint256[] memory amounts, uint256 count, uint256 distributed);
 }
 
 // ===========================================================================
@@ -697,7 +707,15 @@ contract PurgeGame {
             trophyDripPerLevel[mapTrophyId] += perLevelAdd;
 
             uint256 distributed = mapShare;
-            distributed += _sampleTrophies(false, randomShare, rngWord);
+            (address[] memory mapRecipients, uint256[] memory mapAmounts, uint256 mapCount, uint256 trophyPaid) =
+                nft.sampleTrophies(false, randomShare, rngWord, _eligibleTrophies(false));
+            for (uint256 t; t < mapCount; ) {
+                _addClaimableEth(mapRecipients[t], mapAmounts[t]);
+                unchecked {
+                    ++t;
+                }
+            }
+            distributed += trophyPaid;
 
             poolCarry -= distributed;
             carryoverForNextLevel += poolCarry;
@@ -795,7 +813,14 @@ contract PurgeGame {
                 // Historical trophy bonus (5% across up to three active level trophies)
                 if (prevLevel > 1) {
                     uint256 trophyPool = poolTotal / 20;
-                    uint256 paid = _sampleTrophies(true, trophyPool, rngWord);
+                    (address[] memory trophyRecipients, uint256[] memory trophyAmounts, uint256 trophyCount, uint256 paid) =
+                        nft.sampleTrophies(true, trophyPool, rngWord, _eligibleTrophies(true));
+                    for (uint256 t; t < trophyCount; ) {
+                        _addClaimableEth(trophyRecipients[t], trophyAmounts[t]);
+                        unchecked {
+                            ++t;
+                        }
+                    }
                     if (paid < trophyPool) {
                         carryoverForNextLevel += trophyPool - paid;
                     }
@@ -916,7 +941,7 @@ contract PurgeGame {
     /// @notice Credit ETH winnings to a player’s claimable balance and emit an accounting event.
     /// @param beneficiary Player to credit.
     /// @param weiAmount   Amount in wei to add.
-    function _addClaimableEth(address beneficiary, uint256 weiAmount) private {
+    function _addClaimableEth(address beneficiary, uint256 weiAmount) internal {
         unchecked {
             claimableWinnings[beneficiary] += weiAmount;
         }
@@ -1004,49 +1029,6 @@ contract PurgeGame {
         assembly {
             mstore(pool, count)
         }
-    }
-
-    function _sampleTrophies(
-        bool isExtermination,
-        uint256 payout,
-        uint256 randomWord
-    ) private returns (uint256 distributed) {
-        if (payout == 0) return 0;
-
-        uint256[] memory pool = _eligibleTrophies(isExtermination);
-        uint256 len = pool.length;
-
-        if (len == 0) return 0;
-
-        uint256 mask = type(uint64).max;
-        uint256 baseShare;
-        uint256 remainder;
-
-        if (isExtermination) {
-            baseShare = payout / 3;
-            remainder = payout - (baseShare * 3);
-        }
-
-        for (uint256 draw; draw < 3; ) {
-            uint256 idx = len == 1 ? 0 : (randomWord & mask) % len;
-            randomWord >>= 64;
-            uint256 tokenId = pool[idx];
-
-            uint256 amount = isExtermination
-                ? (draw < 2 ? baseShare : baseShare + remainder)
-                : payout;
-
-            if (amount != 0) {
-                _addClaimableEth(nft.ownerOf(tokenId), amount);
-                distributed += amount;
-            }
-
-            unchecked {
-                ++draw;
-            }
-        }
-
-        return distributed;
     }
 
     /// @notice Expose trait-ticket sampling (view helper for coinJackpot).

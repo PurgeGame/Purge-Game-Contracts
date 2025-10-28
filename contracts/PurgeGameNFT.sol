@@ -153,4 +153,58 @@ contract PurgeGameNFT is ERC721A {
         return renderer.tokenURI(tokenId, data, remaining);
     }
 
+    function sampleTrophies(
+        bool isExtermination,
+        uint256 payout,
+        uint256 randomWord,
+        uint256[] calldata pool
+    )
+        external
+        view
+        returns (address[] memory recipients, uint256[] memory amounts, uint256 count, uint256 distributed)
+    {
+        if (msg.sender != address(game)) revert NotGame();
+
+        recipients = new address[](3);
+        amounts = new uint256[](3);
+
+        if (payout == 0) return (recipients, amounts, 0, 0);
+
+        uint256 len = pool.length;
+        if (len == 0) return (recipients, amounts, 0, 0);
+
+        uint256 mask = type(uint64).max;
+        uint256 baseShare;
+        uint256 remainder;
+
+        if (isExtermination) {
+            baseShare = payout / 3;
+            remainder = payout - (baseShare * 3);
+        }
+
+        for (uint256 draw; draw < 3; ) {
+            uint256 idx = len == 1 ? 0 : (randomWord & mask) % len;
+            randomWord >>= 64;
+            uint256 tokenId = pool[idx];
+
+            uint256 amount = isExtermination
+                ? (draw < 2 ? baseShare : baseShare + remainder)
+                : payout;
+
+            if (amount != 0) {
+                recipients[count] = ownerOf(tokenId);
+                amounts[count] = amount;
+                distributed += amount;
+                unchecked {
+                    ++count;
+                }
+            }
+
+            unchecked {
+                ++draw;
+            }
+        }
+
+        return (recipients, amounts, count, distributed);
+    }
 }
