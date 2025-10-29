@@ -166,8 +166,7 @@ contract PurgeGameNFT is ERC721A {
         } else {
             uint256 poolCarry = req.pool;
             uint256 mapShare = poolCarry / 10;
-            uint256 immediateMap = mapShare >> 1;
-            uint256 mapDeferred = mapShare - immediateMap;
+            uint256 mapSplit = mapShare >> 1;
             uint256 mapRandomShare = poolCarry / 20;
             uint256 currentBase = baseTokenId;
             uint256 mapTokenId = currentBase - 2;
@@ -179,7 +178,7 @@ contract PurgeGameNFT is ERC721A {
             _clearAndBurnTrophy(levelTokenId);
             
 
-            _addTrophyReward(mapTokenId, mapDeferred, nextLevel);
+            _addTrophyReward(mapTokenId, mapSplit, nextLevel);
         
 
 
@@ -338,16 +337,14 @@ event TrophyRewardClaimed(uint256 indexed tokenId, address indexed claimant, uin
             } else {
                 levelTrophyIds.push(tokenId);
             }
-        } else if (currentOwner != to) {
-            revert NotTrophyOwner();
-        }
+        } 
 
         trophyData[tokenId] = data;
 
         if (deferredWei != 0) {
             trophyOwedWei[tokenId] += deferredWei;
         }
-        trophyLastClaimLevel[tokenId] = 0;
+
     }
 
     function _addTrophyReward(uint256 tokenId, uint256 amountWei, uint24 startLevel) private {
@@ -426,6 +423,5 @@ event TrophyRewardClaimed(uint256 indexed tokenId, address indexed claimant, uin
     }
 
     receive() external payable {
-        revert NoRewards();
     }
 }
