@@ -108,6 +108,7 @@ contract PurgeGame {
     uint32 private constant PURCHASE_MINIMUM = 1_500; // Minimum purchases to unlock game start
     uint32 private constant WRITES_BUDGET_SAFE = 800; // Keeps map batching within the ~16M gas budget
     uint72 private constant MAP_PERMILLE = 0x0A0A07060304050564; // Payout permilles packed (9 bytes)
+    uint64 private constant MAP_LCG_MULT = 0x5851F42D4C957F2D; // LCG multiplier for map RNG slices
     uint256 private constant TROPHY_FLAG_MAP = uint256(1) << 200; // Marks trophies sourced from MAP jackpots
     uint8 private constant MAP_FIRST_BATCH = 8; // Consecutive daily jackpots on map-only levels before normal cadence resumes
 
@@ -443,9 +444,14 @@ contract PurgeGame {
         uint256 randomWord = rngWord; // 0 is allowed by design here
         uint256 baseTokenId = nft.currentBaseTokenId();
         uint256 tokenIdStart = baseTokenId + uint256(purchaseCount);
+        uint256 randSeed = randomWord | 1;
         for (uint32 i; i < quantity; ) {
             uint256 _tokenId = tokenIdStart + i;
-            uint256 rand = uint256(keccak256(abi.encodePacked(_tokenId, randomWord)));
+            unchecked {
+                randSeed = randSeed * 0x9E3779B97F4A7C15 + _tokenId;
+                randSeed ^= randSeed >> 128;
+            }
+            uint256 rand = randSeed;
             uint8 tA = _getTrait(uint64(rand));
             uint8 tB = _getTrait(uint64(rand >> 64)) | 64;
             uint8 tC = _getTrait(uint64(rand >> 128)) | 128;
@@ -497,7 +503,7 @@ contract PurgeGame {
                 ++lvl;
             }
         }
-                _enforceCenturyLuckbox(lvl, priceUnit);
+        _enforceCenturyLuckbox(lvl, priceUnit);
         // Pricing / rebates
         uint256 coinCost = quantity * (priceUnit / 4);
         uint256 scaledQty = quantity * 25; // Scale to quarter units; divided by 100 within `_ethReceive`
@@ -1112,7 +1118,12 @@ contract PurgeGame {
     /// - Per‑group allocation is an equal split of `dailyTotal / 4` across sampled winners (integer division).
     /// - Updates `jackpotCounter` up/down depending on the mode and emits a `Jackpot(kind=4, traits...)` event.
     function payDailyJackpot(bool isDaily, uint24 lvl) internal {
-        uint256 randWord = isDaily ? rngWord : uint256(keccak256(abi.encode(rngWord, uint8(5), jackpotCounter)));
+        uint256 randWord = rngWord;
+        if (!isDaily) {
+            unchecked {
+                randWord = ((randWord << 64) | (randWord >> 192)) ^ (uint256(jackpotCounter) << 128) ^ 0x05;
+            }
+        }
 
         uint8[4] memory winningTraits = isDaily
             ? _getWinningTraits(randWord, dailyPurgeCount)
@@ -1348,8 +1359,8 @@ contract PurgeGame {
         uint256 entropy = rngWord;
 
         while (airdropIndex < total && used < writesBudget) {
-            address p = pendingMapMints[airdropIndex];
-            uint32 owed = playerMapMintsOwed[p];
+            address player = pendingMapMints[airdropIndex];
+            uint32 owed = playerMapMintsOwed[player];
             if (owed == 0) {
                 unchecked {
                     ++airdropIndex;
@@ -1374,8 +1385,8 @@ contract PurgeGame {
             if (take == 0) break;
 
             // do the work
-            uint256 baseKey = (uint256(lvl) << 224) | (uint256(airdropIndex) << 192) | (uint256(uint160(p)) << 32);
-            _raritySymbolBatch(p, baseKey, airdropMapsProcessedCount, take, entropy);
+            uint256 baseKey = (uint256(lvl) << 224) | (uint256(airdropIndex) << 192) | (uint256(uint160(player)) << 32);
+            _raritySymbolBatch(player, baseKey, airdropMapsProcessedCount, take, entropy);
 
             // writes accounting: ticket writes + per-address overhead + finish overhead
             uint32 writesThis = (take <= 256) ? (take * 2) : (take + 256);
@@ -1385,10 +1396,10 @@ contract PurgeGame {
             }
 
             unchecked {
-                playerMapMintsOwed[p] = owed - take;
+                playerMapMintsOwed[player] = owed - take;
                 airdropMapsProcessedCount += take;
                 used += writesThis;
-                if (playerMapMintsOwed[p] == 0) {
+                if (playerMapMintsOwed[player] == 0) {
                     ++airdropIndex;
                     airdropMapsProcessedCount = 0;
                 }
@@ -1473,29 +1484,16 @@ contract PurgeGame {
             uint32 groupIdx = i >> 4; // per 16 symbols
 
             uint256 seed;
-            assembly {
-                mstore(0x00, add(baseKey, groupIdx))
-                mstore(0x20, entropyWord)
-                seed := keccak256(0x00, 0x40)
+            unchecked {
+                seed = (baseKey + groupIdx) ^ entropyWord;
             }
             uint64 s = uint64(seed) | 1;
-
             uint8 offset = uint8(i & 15);
-            unchecked {
-                for (uint8 skip; skip < offset; ++skip) {
-                    s ^= (s >> 12);
-                    s ^= (s << 25);
-                    s ^= (s >> 27);
-                    s *= 2685821657736338717;
-                }
-            }
 
             for (uint8 j = offset; j < 16 && i < endIndex; ) {
                 unchecked {
-                    s ^= (s >> 12);
-                    s ^= (s << 25);
-                    s ^= (s >> 27);
-                    uint64 rnd64 = s * 2685821657736338717;
+                    s = s * MAP_LCG_MULT + 1;
+                    uint64 rnd64 = s;
 
                     uint8 quadrant = uint8(i & 3);
                     uint8 traitId = _getTrait(rnd64) + (quadrant << 6);
@@ -1511,33 +1509,27 @@ contract PurgeGame {
 
         uint24 lvl = level; // NEW: write into the current level’s buckets
 
+        uint256 levelSlot;
+        assembly {
+            mstore(0x00, lvl)
+            mstore(0x20, traitPurgeTicket.slot)
+            levelSlot := keccak256(0x00, 0x40)
+        }
+
         // One length SSTORE per touched trait, then contiguous ticket writes
         for (uint16 u; u < touchedLen; ) {
             uint8 traitId = touchedTraits[u];
             uint32 occurrences = counts[traitId];
 
             assembly {
-                // mapping(uint24 => address[][256]) traitPurgeTicket;
-                // base slot for this level: keccak256(level, traitPurgeTicket.slot)
-                mstore(0x00, lvl)
-                mstore(0x20, traitPurgeTicket.slot)
-                let base := keccak256(0x00, 0x40)
-
-                // fixed-size array element slot = base + traitId
-                let elem := add(base, traitId)
+                let elem := add(levelSlot, traitId)
                 let len := sload(elem)
-                sstore(elem, add(len, occurrences)) // grow once
+                sstore(elem, add(len, occurrences))
 
-                // data area for the dynamic array: keccak256(elem)
                 mstore(0x00, elem)
                 let data := keccak256(0x00, 0x20)
-                let addr := player
-                for {
-                    let k := 0
-                } lt(k, occurrences) {
-                    k := add(k, 1)
-                } {
-                    sstore(add(data, add(len, k)), addr)
+                for { let k := 0 } lt(k, occurrences) { k := add(k, 1) } {
+                    sstore(add(data, add(len, k)), player)
                 }
             }
             unchecked {
@@ -1626,12 +1618,13 @@ contract PurgeGame {
         if (len == 0 || numWinners == 0) return new address[](0);
 
         winners = new address[](numWinners);
-        bytes32 base = keccak256(abi.encode(randomWord, salt, trait));
+        uint256 slice = randomWord ^ (uint256(trait) << 128) ^ (uint256(salt) << 192);
         for (uint256 i; i < numWinners; ) {
-            uint256 idx = uint256(keccak256(abi.encode(base, i))) % len;
+            uint256 idx = slice % len;
             winners[i] = holders[idx];
             unchecked {
                 ++i;
+                slice = (slice >> 16) | (slice << 240);
             }
         }
     }
@@ -1647,20 +1640,19 @@ contract PurgeGame {
         uint256 randomWord,
         uint32[80] storage counters
     ) internal view returns (uint8[4] memory w) {
-        uint256 seed = uint256(keccak256(abi.encodePacked(randomWord, uint256(0xBAF))));
-
         uint8 sym = _maxIdxInRange(counters, 0, 8);
-        uint8 col0 = uint8(uint256(keccak256(abi.encodePacked(seed, uint256(0)))) & 7);
+
+        uint8 col0 = uint8(randomWord & 7);
         w[0] = (col0 << 3) | sym;
 
         uint8 maxColor = _maxIdxInRange(counters, 8, 8);
-        uint8 randSym = uint8(uint256(keccak256(abi.encodePacked(seed, uint256(1)))) & 7);
+        uint8 randSym = uint8((randomWord >> 3) & 7);
         w[1] = 64 + ((maxColor << 3) | randSym);
 
         uint8 maxTrait = _maxIdxInRange(counters, 16, 64);
         w[2] = 128 + maxTrait;
 
-        w[3] = 192 + uint8(uint256(keccak256(abi.encodePacked(seed, uint256(2)))) & 63);
+        w[3] = 192 + uint8((randomWord >> 6) & 63);
     }
 
     function _maxIdxInRange(uint32[80] storage counters, uint8 base, uint8 len) private view returns (uint8) {
