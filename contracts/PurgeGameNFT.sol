@@ -32,6 +32,7 @@ contract PurgeGameNFT is ERC721A {
     // ---------------------------------------------------------------------
     error E();
     error NotTokenOwner();
+    error NotTrophyOwner();
     error ClaimNotReady();
     error CoinPaused();
     error OnlyCoin();
@@ -48,9 +49,7 @@ contract PurgeGameNFT is ERC721A {
     // Trophy bookkeeping
     // ---------------------------------------------------------------------
     uint256 private baseTokenId; // Mirrors game-side _baseTokenId for guard checks
-    mapping(uint256 => uint256) private trophyData; // Metadata (level + flags) per trophy token
-    mapping(uint256 => uint256) private trophyOwedWei; // Outstanding deferred ETH per trophy
-    mapping(uint256 => uint32) private trophyLastClaimLevel; // Last level processed for vesting/claims
+    mapping(uint256 => uint256) private trophyData; // Packed metadata + owed + claim bookkeeping per trophy
 
     struct EndLevelRequest {
         address exterminator;
@@ -67,6 +66,11 @@ contract PurgeGameNFT is ERC721A {
     uint32 private constant COIN_DRIP_STEPS = 10; // MAP coin drip cadence
     uint256 private constant COIN_EMISSION_UNIT = 1_000 * 1_000_000; // 1000 PURGED (6 decimals)
     uint256 private constant TROPHY_FLAG_MAP = uint256(1) << 200;
+    uint256 private constant TROPHY_OWED_MASK = (uint256(1) << 128) - 1;
+    uint256 private constant TROPHY_BASE_LEVEL_SHIFT = 128;
+    uint256 private constant TROPHY_BASE_LEVEL_MASK = uint256(0xFFFFFF) << TROPHY_BASE_LEVEL_SHIFT;
+    uint256 private constant TROPHY_LAST_CLAIM_SHIFT = 168;
+    uint256 private constant TROPHY_LAST_CLAIM_MASK = uint256(0xFFFFFF) << TROPHY_LAST_CLAIM_SHIFT;
 
 
     constructor(address renderer_, address coin_) ERC721A("Purge Game", "PG") {
@@ -103,8 +107,9 @@ contract PurgeGameNFT is ERC721A {
         _mint(address(game), 2);
         uint256 mapTokenId = startId;
         uint256 levelTokenId = startId + 1;
-        trophyData[mapTokenId] = (uint256(0xFFFF) << 152) | (uint256(level) << 128) | TROPHY_FLAG_MAP;
-        trophyData[levelTokenId] = (uint256(0xFFFF) << 152) | (uint256(level) << 128);
+        trophyData[mapTokenId] =
+            (uint256(0xFFFF) << 152) | (uint256(level) << TROPHY_BASE_LEVEL_SHIFT) | TROPHY_FLAG_MAP;
+        trophyData[levelTokenId] = (uint256(0xFFFF) << 152) | (uint256(level) << TROPHY_BASE_LEVEL_SHIFT);
         baseTokenId = levelTokenId + 1;
     }
 
@@ -131,7 +136,7 @@ contract PurgeGameNFT is ERC721A {
         uint256 randomWord = req.randomWord;
 
         if (traitWin) {
-            uint256 traitData = (uint256(req.traitId) << 152) | (uint256(req.level) << 128);
+            uint256 traitData = (uint256(req.traitId) << 152) | (uint256(req.level) << TROPHY_BASE_LEVEL_SHIFT);
             uint256 legacyPool = (req.level > 1) ? (req.pool / 20) : 0;
             uint256 deferredAward = msg.value;
             if (legacyPool != 0) {
@@ -153,16 +158,18 @@ contract PurgeGameNFT is ERC721A {
                     }
                 }
             }
+
+            _mintTrophyPlaceholders(nextLevel);
         } else {
             uint256 poolCarry = req.pool;
             uint256 mapUnit = poolCarry / 20;
             uint256 currentBase = baseTokenId;
             uint256 mapTokenId = currentBase - 2;
-
+            uint256 levelTokenId = currentBase - 1;
 
             mapImmediateRecipient = ownerOf(mapTokenId);
 
-            delete trophyData[currentBase - 1];
+            _clearTrophy(levelTokenId);
 
             uint256 valueIn = msg.value;
             _addTrophyReward(mapTokenId, mapUnit, nextLevel);
@@ -171,6 +178,7 @@ contract PurgeGameNFT is ERC721A {
             uint256 draws = valueIn / mapUnit;
             uint256 seed = randomWord;
             uint256 mapCount = mapTrophyIds.length;
+            if (mapCount == 0) revert InvalidToken();
             for (uint256 j; j < draws; ) {
                 uint256 idx = mapCount == 1 ? 0 : (seed & 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF) % mapCount;
                 uint256 tokenId = mapTrophyIds[idx];
@@ -182,42 +190,41 @@ contract PurgeGameNFT is ERC721A {
                     ++j;
                 }
             }
+
+            uint256 postBase = baseTokenId;
+            uint256 placeholderData = trophyData[postBase - 1];
+            uint24 placeholderLevel = uint24((placeholderData >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF);
+            if (placeholderData == 0 || placeholderLevel != nextLevel) {
+                _mintTrophyPlaceholders(nextLevel);
+            }
         }
-
-        uint256 postBase = baseTokenId;
-
-        uint256 placeholderData = trophyData[postBase - 1];
-        uint24 placeholderLevel = uint24((placeholderData >> 128) & 0xFFFFFF);
-        if (placeholderData == 0 || placeholderLevel != nextLevel) {
-            _mintTrophyPlaceholders(nextLevel);
-        }
-
-
     }
 
     function claimTrophyReward(uint256 tokenId) external {
-        if (ownerOf(tokenId) != msg.sender) revert NotTokenOwner();
-
-        uint256 owed = trophyOwedWei[tokenId];
-        if (owed == 0) revert ClaimNotReady();
-
-        uint24 currentLevel = game.level();
-        uint32 lastClaim = trophyLastClaimLevel[tokenId];
-        if (currentLevel <= lastClaim) revert ClaimNotReady();
+        if (ownerOf(tokenId) != msg.sender) revert NotTrophyOwner();
 
         uint256 info = trophyData[tokenId];
         if (info == 0) revert InvalidToken();
 
-        uint24 baseStartLevel = uint24((info >> 128) & 0xFFFFFF) + 1;
+        uint256 owed = info & TROPHY_OWED_MASK;
+        if (owed == 0) revert ClaimNotReady();
+
+        uint24 currentLevel = game.level();
+        uint24 lastClaim = uint24((info >> TROPHY_LAST_CLAIM_SHIFT) & 0xFFFFFF);
+        if (currentLevel <= lastClaim) revert ClaimNotReady();
+
+        uint24 baseStartLevel = uint24((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF) + 1;
         if (currentLevel < baseStartLevel) revert ClaimNotReady();
 
         uint32 vestEnd = uint32(baseStartLevel) + COIN_DRIP_STEPS;
-        uint32 denom = vestEnd > currentLevel ? vestEnd - currentLevel : 1;
+        uint256 denom = vestEnd > currentLevel ? vestEnd - currentLevel : 1;
         uint256 payout = owed / denom;
         if (payout == 0) payout = owed;
 
-        trophyOwedWei[tokenId] = owed - payout;
-        trophyLastClaimLevel[tokenId] = currentLevel;
+        info = (info & ~(TROPHY_OWED_MASK | TROPHY_LAST_CLAIM_MASK))
+            | ((owed - payout) & TROPHY_OWED_MASK)
+            | (uint256(currentLevel & 0xFFFFFF) << TROPHY_LAST_CLAIM_SHIFT);
+        trophyData[tokenId] = info;
 
         (bool ok, ) = msg.sender.call{value: payout}("");
         if (!ok) revert E();
@@ -241,18 +248,18 @@ event TrophyRewardClaimed(uint256 indexed tokenId, address indexed claimant, uin
 
     function claimMapTrophyCoin(uint256 tokenId) external {
         if (coin.isBettingPaused()) revert CoinPaused();
-        if (ownerOf(tokenId) != msg.sender) revert NotTokenOwner();
+        if (ownerOf(tokenId) != msg.sender) revert NotTrophyOwner();
 
         uint256 info = trophyData[tokenId];
         if (info == 0 || (info & TROPHY_FLAG_MAP) == 0) revert ClaimNotReady();
 
-        uint32 start = uint32((info >> 128) & 0xFFFFFF) + COIN_DRIP_STEPS + 1;
+        uint32 start = uint32((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF) + COIN_DRIP_STEPS + 1;
         uint32 levelNow = game.level();
         uint32 floor = start - 1;
 
         if (levelNow <= floor) revert ClaimNotReady();
 
-        uint32 last = trophyLastClaimLevel[tokenId];
+        uint32 last = uint32((info >> TROPHY_LAST_CLAIM_SHIFT) & 0xFFFFFF);
         if (last < floor) last = floor;
         if (levelNow <= last) revert ClaimNotReady();
 
@@ -272,7 +279,8 @@ event TrophyRewardClaimed(uint256 indexed tokenId, address indexed claimant, uin
 
         uint256 claimable = COIN_EMISSION_UNIT * (span + (prefixEnd - prefixStart));
 
-        trophyLastClaimLevel[tokenId] = levelNow;
+        info = (info & ~TROPHY_LAST_CLAIM_MASK) | (uint256(levelNow & 0xFFFFFF) << TROPHY_LAST_CLAIM_SHIFT);
+        trophyData[tokenId] = info;
         coin.bonusCoinflip(msg.sender, claimable);
     }
 
@@ -304,7 +312,7 @@ event TrophyRewardClaimed(uint256 indexed tokenId, address indexed claimant, uin
     }
 
     function trophyOwed(uint256 tokenId) external view returns (uint256) {
-        return trophyOwedWei[tokenId];
+        return trophyData[tokenId] & TROPHY_OWED_MASK;
     }
 
     // ---------------------------------------------------------------------
@@ -323,24 +331,28 @@ event TrophyRewardClaimed(uint256 indexed tokenId, address indexed claimant, uin
             } else {
                 levelTrophyIds.push(tokenId);
             }
-        } 
-
-        trophyData[tokenId] = data;
-
-        if (deferredWei != 0) {
-            trophyOwedWei[tokenId] += deferredWei;
         }
 
+        uint256 newData = data & ~(TROPHY_OWED_MASK | TROPHY_LAST_CLAIM_MASK);
+        if (deferredWei != 0) {
+            uint256 owed = deferredWei & TROPHY_OWED_MASK;
+            newData |= owed;
+        }
+        trophyData[tokenId] = newData;
     }
 
     function _addTrophyReward(uint256 tokenId, uint256 amountWei, uint24 startLevel) private {
         if (amountWei == 0) return;
-        trophyOwedWei[tokenId] += amountWei;
         uint256 info = trophyData[tokenId];
-        if (info != 0) {
-            uint256 cleared = info & ~(uint256(0xFFFFFF) << 128);
-            trophyData[tokenId] = cleared | (uint256(startLevel - 1) << 128);
-        }
+        uint256 owed = (info & TROPHY_OWED_MASK) + amountWei;
+        uint256 base = uint256((startLevel - 1) & 0xFFFFFF);
+        uint256 updated = (info & ~TROPHY_OWED_MASK) | (owed & TROPHY_OWED_MASK);
+        updated = (updated & ~TROPHY_BASE_LEVEL_MASK) | (base << TROPHY_BASE_LEVEL_SHIFT);
+        trophyData[tokenId] = updated;
+    }
+
+    function _clearTrophy(uint256 tokenId) private {
+        delete trophyData[tokenId];
     }
 
     function _sampleTrophies(bool isExtermination, uint256 payout, uint256 randomWord)
