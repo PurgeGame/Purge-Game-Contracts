@@ -231,7 +231,6 @@ contract PurgeGameNFT is ERC721A {
         uint32 vestEnd = uint32(baseStartLevel) + COIN_DRIP_STEPS;
         uint256 denom = vestEnd > currentLevel ? vestEnd - currentLevel : 1;
         uint256 payout = owed / denom;
-        if (payout == 0) payout = owed;
 
         info = (info & ~(TROPHY_OWED_MASK | TROPHY_LAST_CLAIM_MASK))
             | ((owed - payout) & TROPHY_OWED_MASK)
@@ -354,15 +353,12 @@ event TrophyRewardClaimed(uint256 indexed tokenId, address indexed claimant, uin
         }
 
         uint256 newData = data & ~(TROPHY_OWED_MASK | TROPHY_LAST_CLAIM_MASK);
-        if (deferredWei != 0) {
-            uint256 owed = deferredWei & TROPHY_OWED_MASK;
-            newData |= owed;
-        }
+        uint256 owed = deferredWei & TROPHY_OWED_MASK;
+        newData |= owed;
         trophyData[tokenId] = newData;
     }
 
     function _addTrophyReward(uint256 tokenId, uint256 amountWei, uint24 startLevel) private {
-        if (amountWei == 0) return;
         uint256 info = trophyData[tokenId];
         uint256 owed = (info & TROPHY_OWED_MASK) + amountWei;
         uint256 base = uint256((startLevel - 1) & 0xFFFFFF);
