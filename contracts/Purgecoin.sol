@@ -138,7 +138,7 @@ contract Purgecoin {
     // ---------------------------------------------------------------------
     struct PlayerScore {
         address player;
-        uint256 score;
+        uint96 score; // stores whole-token totals (PURGE units without 6d fractional component)
     }
 
     /// @dev BAF jackpot accounting
@@ -1738,17 +1738,22 @@ contract Purgecoin {
     /// @param p   Player address.
     /// @param s   New score for that board.
     function _updatePlayerScore(uint8 lid, address p, uint256 s) internal {
+        uint256 wholeTokens = s / MILLION;
+        if (wholeTokens > type(uint96).max) {
+            wholeTokens = type(uint96).max;
+        }
+        uint96 score = uint96(wholeTokens);
         if (lid == 0) {
-            _updateBoard10(p, s);
+            _updateBoard10(p, score);
         } else if (lid == 1) {
-            _updateBoard8(p, s);
+            _updateBoard8(p, score);
         } else {
-            _updateBoard4(p, s);
+            _updateBoard4(p, score);
         }
     }
     /// @notice Insert/update `p` with score `s` on the luckbox top-10 board.
     /// @dev Keeps a 1-based position map in `luckboxPos`. Returns true if the board changed.
-    function _updateBoard10(address p, uint256 s) internal returns (bool) {
+    function _updateBoard10(address p, uint96 s) internal returns (bool) {
         PlayerScore[10] storage board = luckboxLeaderboard;
         uint8 curLen = luckboxLen;
         uint8 prevPos = luckboxPos[p]; // 1..curLen, or 0 if not present
@@ -1765,7 +1770,7 @@ contract Purgecoin {
                     --idx;
                 }
             }
-            board[idx] = PlayerScore(p, s);
+            board[idx] = PlayerScore({player: p, score: s});
             luckboxPos[p] = idx + 1;
             return true;
         }
@@ -1780,7 +1785,7 @@ contract Purgecoin {
                     --idx;
                 }
             }
-            board[idx] = PlayerScore(p, s);
+            board[idx] = PlayerScore({player: p, score: s});
             luckboxPos[p] = idx + 1;
             unchecked {
                 luckboxLen = curLen + 1;
@@ -1799,7 +1804,7 @@ contract Purgecoin {
                 --idx;
             }
         }
-        board[idx] = PlayerScore(p, s);
+        board[idx] = PlayerScore({player: p, score: s});
         luckboxPos[p] = idx + 1;
         if (dropped != address(0)) luckboxPos[dropped] = 0;
         return true;
@@ -1807,7 +1812,7 @@ contract Purgecoin {
 
     /// @notice Insert/update `p` with score `s` on the affiliate top-8 board.
     /// @dev Keeps a 1-based position map in `affiliatePos`. Returns true if the board changed.
-    function _updateBoard8(address p, uint256 s) internal returns (bool) {
+    function _updateBoard8(address p, uint96 s) internal returns (bool) {
         PlayerScore[8] storage board = affiliateLeaderboard;
         uint8 curLen = affiliateLen;
         uint8 prevPos = affiliatePos[p];
@@ -1823,7 +1828,7 @@ contract Purgecoin {
                     --idx;
                 }
             }
-            board[idx] = PlayerScore(p, s);
+            board[idx] = PlayerScore({player: p, score: s});
             affiliatePos[p] = idx + 1;
             return true;
         }
@@ -1837,7 +1842,7 @@ contract Purgecoin {
                     --idx;
                 }
             }
-            board[idx] = PlayerScore(p, s);
+            board[idx] = PlayerScore({player: p, score: s});
             affiliatePos[p] = idx + 1;
             unchecked {
                 affiliateLen = curLen + 1;
@@ -1855,7 +1860,7 @@ contract Purgecoin {
                 --idx;
             }
         }
-        board[idx] = PlayerScore(p, s);
+        board[idx] = PlayerScore({player: p, score: s});
         affiliatePos[p] = idx + 1;
         if (dropped != address(0)) affiliatePos[dropped] = 0;
         return true;
@@ -1863,7 +1868,7 @@ contract Purgecoin {
 
     /// @notice Insert/update `p` with score `s` on the top-bettors top-4 board.
     /// @dev Keeps a 1-based position map in `topPos`. Returns true if the board changed.
-    function _updateBoard4(address p, uint256 s) internal returns (bool) {
+    function _updateBoard4(address p, uint96 s) internal returns (bool) {
         PlayerScore[4] storage board = topBettors;
         uint8 curLen = topLen;
         uint8 prevPos = topPos[p];
@@ -1879,7 +1884,7 @@ contract Purgecoin {
                     --idx;
                 }
             }
-            board[idx] = PlayerScore(p, s);
+            board[idx] = PlayerScore({player: p, score: s});
             topPos[p] = idx + 1;
             return true;
         }
@@ -1893,7 +1898,7 @@ contract Purgecoin {
                     --idx;
                 }
             }
-            board[idx] = PlayerScore(p, s);
+            board[idx] = PlayerScore({player: p, score: s});
             topPos[p] = idx + 1;
             unchecked {
                 topLen = curLen + 1;
@@ -1911,7 +1916,7 @@ contract Purgecoin {
                 --idx;
             }
         }
-        board[idx] = PlayerScore(p, s);
+        board[idx] = PlayerScore({player: p, score: s});
         topPos[p] = idx + 1;
         if (dropped != address(0)) topPos[dropped] = 0;
         return true;
