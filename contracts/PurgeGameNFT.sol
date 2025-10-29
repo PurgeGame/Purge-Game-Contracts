@@ -366,8 +366,9 @@ event TrophyRewardClaimed(uint256 indexed tokenId, address indexed claimant, uin
         uint256 info = trophyData[tokenId];
         uint256 owed = (info & TROPHY_OWED_MASK) + amountWei;
         uint256 base = uint256((startLevel - 1) & 0xFFFFFF);
-        uint256 updated = (info & ~TROPHY_OWED_MASK) | (owed & TROPHY_OWED_MASK);
-        updated = (updated & ~TROPHY_BASE_LEVEL_MASK) | (base << TROPHY_BASE_LEVEL_SHIFT);
+        uint256 updated = (info & ~(TROPHY_OWED_MASK | TROPHY_BASE_LEVEL_MASK))
+            | (owed & TROPHY_OWED_MASK)
+            | (base << TROPHY_BASE_LEVEL_SHIFT);
         trophyData[tokenId] = updated;
     }
 
