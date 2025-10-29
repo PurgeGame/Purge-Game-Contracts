@@ -259,10 +259,10 @@ contract PurgeGame {
         }
 
         uint24 lvl = level;
-        uint8 twenty = uint8(lvl % 20);
+        uint8 modTwenty = uint8(lvl % 20);
         uint8 s = gameState;
         uint8 ph = phase;
-        bool pauseBetting = !((s == 2) && (ph < 3) && (twenty == 0));
+        bool pauseBetting = !((s == 2) && (ph < 3) && (modTwenty == 0));
 
         IPurgeCoinInterface coinContract = coin;
         uint48 day = uint48((ts - JACKPOT_RESET_TIME) / 1 days);
@@ -307,7 +307,7 @@ contract PurgeGame {
                 _updateEarlyPurgeJackpots(lvl);
                 bool prizeReady = prizePool >= lastPrizePool;
                 bool readyForMap = (purchaseCount >= PURCHASE_MINIMUM && prizeReady);
-                if (twenty == 16) {
+                if (modTwenty == 16) {
                     readyForMap = prizeReady;
                 }
                 if (ph == 2 && readyForMap) {
@@ -374,7 +374,7 @@ contract PurgeGame {
             // --- State 4 - Purge ---
             if (s == 4) {
                 if (ph == 6) {
-                    if (twenty == 16 && jackpotCounter < MAP_FIRST_BATCH) {
+                    if (modTwenty == 16 && jackpotCounter < MAP_FIRST_BATCH) {
                         while (jackpotCounter < MAP_FIRST_BATCH) {
                             payDailyJackpot(true, lvl);
                             if (gameState != 4) break;
@@ -383,7 +383,7 @@ contract PurgeGame {
                         payDailyJackpot(true, lvl);
                     }
                     if (gameState != 4) break;
-                    if (twenty != 16) {
+                    if (modTwenty != 16) {
                         coinContract.triggerCoinJackpot();
                     }
                     phase = 7;
@@ -415,7 +415,7 @@ contract PurgeGame {
     function purchase(uint256 quantity, bool payInCoin, bytes32 affiliateCode) external payable {
         uint8 ph = phase;
         uint24 lvl = level;
-        if (quantity == 0 || quantity > 100 || gameState != 2 || !rngConsumed || (lvl % 20) == 16) revert NotTimeYet();
+                if (quantity == 0 || quantity > 100 || gameState != 2 || !rngConsumed || (lvl % 20) == 16) revert NotTimeYet();
         uint256 _priceCoin = priceCoin;
         _enforceCenturyLuckbox(lvl, _priceCoin);
         // Payment handling (ETH vs coin)
@@ -497,7 +497,7 @@ contract PurgeGame {
                 ++lvl;
             }
         }
-        _enforceCenturyLuckbox(lvl, priceUnit);
+                _enforceCenturyLuckbox(lvl, priceUnit);
         // Pricing / rebates
         uint256 coinCost = quantity * (priceUnit / 4);
         uint256 scaledQty = quantity * 25; // Scale to quarter units; divided by 100 within `_ethReceive`
