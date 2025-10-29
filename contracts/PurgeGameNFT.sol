@@ -145,13 +145,17 @@ contract PurgeGameNFT is ERC721A {
 
         if (traitWin) {
             uint256 traitData = (uint256(req.traitId) << 152) | (uint256(req.level) << 128);
-            _awardTrophy(req.exterminator, traitData, msg.value);
+            uint256 legacyPool = (req.level > 1) ? (req.pool / 20) : 0;
+            uint256 deferredAward = msg.value;
+            if (legacyPool != 0) {
+                deferredAward -= legacyPool;
+            }
+            _awardTrophy(req.exterminator, traitData, deferredAward);
 
-            uint256 trophyPool = (req.level > 1) ? (req.pool / 20) : 0;
-            if (trophyPool != 0) {
+            if (legacyPool != 0) {
                 uint256 salted = uint256(keccak256(abi.encode(randomWord, uint8(5))));
                 (uint256[] memory trophyTokens, , uint256[] memory trophyAmounts, ) =
-                    _sampleTrophies(true, trophyPool, salted);
+                    _sampleTrophies(true, legacyPool, salted);
                 uint256 len = trophyTokens.length;
                 for (uint256 i; i < len; ) {
                     uint256 amount = trophyAmounts[i];

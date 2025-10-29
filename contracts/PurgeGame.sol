@@ -853,10 +853,9 @@ contract PurgeGame {
         } else {
             uint256 poolCarry = poolValue;
             uint256 mapShare = poolCarry / 10;
-            uint256 immediateMap = mapShare >> 1;
+            uint256 mapSplit = mapShare >> 1;
             uint256 mapRandomShare = poolCarry / 20;
-            uint256 mapDeferred = mapShare - immediateMap;
-            uint256 mapPayoutValue = mapDeferred + mapRandomShare;
+            uint256 mapPayoutValue = mapSplit + mapRandomShare;
 
 
             address mapRecipient = nft.processEndLevel{value: mapPayoutValue}(
@@ -868,7 +867,7 @@ contract PurgeGame {
                     randomWord: rngWord
                 })
             );
-            _addClaimableEth(mapRecipient, immediateMap);
+            _addClaimableEth(mapRecipient, mapSplit);
         }
 
         delete pendingEndLevel;
