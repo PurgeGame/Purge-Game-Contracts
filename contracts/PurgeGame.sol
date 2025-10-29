@@ -105,6 +105,7 @@ contract PurgeGame {
     uint32 private constant NFT_AIRDROP_PLAYER_BATCH_SIZE = 210; // Max unique recipients per airdrop batch
     uint32 private constant NFT_AIRDROP_TOKEN_CAP = 3_000; // Max tokens distributed per airdrop batch
     uint32 private constant DEFAULT_PAYOUTS_PER_TX = 500; // Keeps participant payouts under ~16M gas
+    uint32 private constant PURCHASE_MINIMUM = 1_500; // Minimum purchases to unlock game start
     uint32 private constant WRITES_BUDGET_SAFE = 800; // Keeps map batching within the ~16M gas budget
     uint72 private constant MAP_PERMILLE = 0x0A0A07060304050564; // Payout permilles packed (9 bytes)
     uint256 private constant TROPHY_FLAG_MAP = uint256(1) << 200; // Marks trophies sourced from MAP jackpots
@@ -236,7 +237,7 @@ contract PurgeGame {
         carry_ = carryoverForNextLevel;
         prizePoolTarget = lastPrizePool;
         prizePoolCurrent = (gameState == 4) ? levelPrizePool : prizePool;
-        enoughPurchases = purchaseCount >= 1500;
+        enoughPurchases = purchaseCount >= PURCHASE_MINIMUM;
         rngFulfilled_ = rngFulfilled;
         rngConsumed_ = rngConsumed;
     }
@@ -258,13 +259,18 @@ contract PurgeGame {
         }
 
         uint24 lvl = level;
+        uint8 twenty = uint8(lvl % 20);
         uint8 s = gameState;
         uint8 ph = phase;
-        bool pauseBetting = !((s == 2) && (ph < 3) && (lvl % 20 == 0));
+        bool pauseBetting = !((s == 2) && (ph < 3) && (twenty == 0));
 
         IPurgeCoinInterface coinContract = coin;
         uint48 day = uint48((ts - JACKPOT_RESET_TIME) / 1 days);
         uint48 dayIdx = dailyIdx;
+        uint256 luckboxThreshold;
+        if (cap == 0) {
+            luckboxThreshold = priceCoin * lvl * (lvl / 100 + 1);
+        }
 
         do {
             // RNG pull / SLA
@@ -281,7 +287,7 @@ contract PurgeGame {
             }
 
             // Luckbox rewards
-            if (cap == 0 && coinContract.playerLuckbox(msg.sender) < priceCoin * lvl * (lvl / 100 + 1))
+            if (cap == 0 && coinContract.playerLuckbox(msg.sender) < luckboxThreshold)
                 revert LuckboxTooSmall();
 
             // Arm VRF when due/new (reward allowed)
@@ -300,8 +306,8 @@ contract PurgeGame {
             if (s == 2) {
                 _updateEarlyPurgeJackpots(lvl);
                 bool prizeReady = prizePool >= lastPrizePool;
-                bool readyForMap = (purchaseCount >= 1500 && prizeReady);
-                if ((lvl % 20) == 16) {
+                bool readyForMap = (purchaseCount >= PURCHASE_MINIMUM && prizeReady);
+                if (twenty == 16) {
                     readyForMap = prizeReady;
                 }
                 if (ph == 2 && readyForMap) {
@@ -368,7 +374,7 @@ contract PurgeGame {
             // --- State 4 - Purge ---
             if (s == 4) {
                 if (ph == 6) {
-                    if ((lvl % 20) == 16 && jackpotCounter < MAP_FIRST_BATCH) {
+                    if (twenty == 16 && jackpotCounter < MAP_FIRST_BATCH) {
                         while (jackpotCounter < MAP_FIRST_BATCH) {
                             payDailyJackpot(true, lvl);
                             if (gameState != 4) break;
@@ -377,7 +383,7 @@ contract PurgeGame {
                         payDailyJackpot(true, lvl);
                     }
                     if (gameState != 4) break;
-                    if ((lvl % 20) != 16) {
+                    if (twenty != 16) {
                         coinContract.triggerCoinJackpot();
                     }
                     phase = 7;
