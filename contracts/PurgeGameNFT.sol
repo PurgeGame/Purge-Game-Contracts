@@ -169,9 +169,7 @@ contract PurgeGameNFT is ERC721A {
             }
         } else {
             uint256 poolCarry = req.pool;
-            uint256 mapShare = poolCarry / 10;
-            uint256 mapSplit = mapShare >> 1;
-            uint256 mapRandomShare = poolCarry / 20;
+            uint256 mapUnit = poolCarry / 20;
             uint256 currentBase = baseTokenId;
             uint256 mapTokenId = currentBase - 2;
             uint256 levelTokenId = currentBase - 1;
@@ -180,25 +178,26 @@ contract PurgeGameNFT is ERC721A {
 
 
             _clearAndBurnTrophy(levelTokenId);
-            
 
-            _addTrophyReward(mapTokenId, mapSplit, nextLevel);
-        
+            uint256 valueIn = msg.value;
+            _addTrophyReward(mapTokenId, mapUnit, nextLevel);
+            valueIn -= mapUnit;
 
-
-            (uint256[] memory trophyTokens, , uint256[] memory trophyAmounts, ) =
-                _sampleTrophies(false, mapRandomShare, randomWord);
-            uint256 len = trophyTokens.length;
-            for (uint256 i; i < len; ) {
-                uint256 amount = trophyAmounts[i];
-                if (amount != 0) {
-                    _addTrophyReward(trophyTokens[i], amount, nextLevel);
-                }
+            uint256 draws = valueIn / mapUnit;
+            uint256 seed = randomWord;
+            uint256 mapCount = mapTrophyIds.length;
+            if (mapCount == 0) revert InvalidToken();
+            for (uint256 j; j < draws; ) {
+                uint256 idx = mapCount == 1 ? 0 : (seed & 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF) % mapCount;
+                uint256 tokenId = mapTrophyIds[idx];
+                uint256 amount = (j + 1 == draws) ? (valueIn - (mapUnit * j)) : mapUnit;
+                _addTrophyReward(tokenId, amount, nextLevel);
+                seed >>= 64;
+                if (seed == 0) seed = uint256(keccak256(abi.encodePacked(randomWord, j + 1)));
                 unchecked {
-                    ++i;
+                    ++j;
                 }
             }
-        
         }
 
         uint256 postBase = baseTokenId;

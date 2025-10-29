@@ -927,8 +927,6 @@ contract Purgecoin {
             uint32 rem = uint32(totalPlayers / 10); // how many 10th slots exist
             if (rem != 0) {
                 uint256 prize = bonusPool / rem;
-                uint256 dust = bonusPool - prize * rem;
-                if (dust > 0) _addToBounty(dust);
                 tbPrize = prize;
                 tbRemain = rem;
                 tbActive = (prize != 0);
@@ -1119,36 +1117,28 @@ contract Purgecoin {
 
                             uint256 rem = lbPool - topCut;
                             uint256 each = rem / (eligibleCount - 1);
-                            uint256 paid;
 
                             for (uint256 i; i < eligibleCount; ) {
                                 address w = eligible[i];
                                 if (w != topLuck) {
                                     _mint(w, each);
                                     emit CoinJackpotPaid(420, w, each);
-                                    paid += each;
                                 }
                                 unchecked {
                                     ++i;
                                 }
                             }
-                            uint256 dust = lbPool - (paid + topCut);
-                            if (dust != 0) _addToBounty(dust);
                         }
                     } else {
                         uint256 each = lbPool / eligibleCount;
-                        uint256 paid;
                         for (uint256 i; i < eligibleCount; ) {
                             address w = eligible[i];
                             _mint(w, each);
                             emit CoinJackpotPaid(420, w, each);
-                            paid += each;
                             unchecked {
                                 ++i;
                             }
                         }
-                        uint256 dust = lbPool - paid;
-                        if (dust != 0) _addToBounty(dust);
                     }
                 }
             }

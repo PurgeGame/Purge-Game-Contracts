@@ -852,10 +852,8 @@ contract PurgeGame {
             // mapImmediateRecipient is unused for trait wins
         } else {
             uint256 poolCarry = poolValue;
-            uint256 mapShare = poolCarry / 10;
-            uint256 mapSplit = mapShare >> 1;
-            uint256 mapRandomShare = poolCarry / 20;
-            uint256 mapPayoutValue = mapSplit + mapRandomShare;
+            uint256 mapUnit = poolCarry / 20;
+            uint256 mapPayoutValue = mapUnit * 4;
 
 
             address mapRecipient = nft.processEndLevel{value: mapPayoutValue}(
@@ -867,7 +865,7 @@ contract PurgeGame {
                     randomWord: rngWord
                 })
             );
-            _addClaimableEth(mapRecipient, mapSplit);
+            _addClaimableEth(mapRecipient, mapUnit);
         }
 
         delete pendingEndLevel;
