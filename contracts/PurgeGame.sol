@@ -892,7 +892,10 @@ contract PurgeGame {
         uint32 end = i + cap;
         if (end > len) end = len;
 
-        uint256 payEach = prizePool; // cached unit payout
+        uint256 unitPayout = prizePool;
+        if (end == len) {
+            prizePool = 0;
+        }
 
         while (i < end) {
             address w = arr[i];
@@ -900,7 +903,7 @@ contract PurgeGame {
             unchecked {
                 while (i + run < end && arr[i + run] == w) ++run; // coalesce contiguous
             }
-            _addClaimableEth(w, payEach * run);
+            _addClaimableEth(w, unitPayout * run);
             unchecked {
                 i += run;
             }
@@ -908,7 +911,6 @@ contract PurgeGame {
 
         airdropIndex = i;
         if (i == len) {
-            prizePool = 0;
             airdropIndex = 0;
         } // finished (tickets can be wiped)
     }
@@ -980,9 +982,10 @@ contract PurgeGame {
     /// - `_mapSpec(idx)` drives winners count & permille for each bucket.
     function payMapJackpot(uint32 cap, uint24 lvl) internal returns (bool finished) {
         uint256 carryWei = carryoverForNextLevel;
+        uint8 lvlMod20 = uint8(lvl % 20);
 
         // External jackpots first (may need multiple calls)
-        if (lvl % 20 == 0) {
+        if (lvlMod20 == 0) {
             uint256 bafPoolWei = (carryWei * 24) / 100;
             (bool finishedBaf, ) = _progressExternal(0, bafPoolWei, cap, lvl);
             if (!finishedBaf) return false;
@@ -991,10 +994,11 @@ contract PurgeGame {
 
         uint256 totalWei = carryWei + prizePool;
         uint256 lvlMod100 = lvl % 100;
+        uint8 lvlMod10 = uint8(lvlMod100 % 10);
         coin.burnie((totalWei * 5 * priceCoin) / 1 ether);
 
         // Save % for next level (randomized bands per range)
-        uint256 rndWord = uint256(keccak256(abi.encode(rngWord, uint8(3))));
+        uint256 rndWord = rngWord;
         uint256 savePct;
         if ((rndWord % 1_000_000_000) == 420) {
             savePct = 10;
@@ -1005,7 +1009,7 @@ contract PurgeGame {
         else if (lvl < 80) savePct = 60 + (rndWord % 26);
         else if (lvl == 99) savePct = 93;
         else savePct = 65 + (rndWord % 26);
-        if (lvl % 10 == 9) savePct += 5;
+        if (lvlMod10 == 9) savePct += 5;
 
         uint256 effectiveWei;
         if (lvlMod100 == 0) {
@@ -1044,7 +1048,7 @@ contract PurgeGame {
             // idx 0 = full range; then pairs per quadrant: (1,2)=Q0, (3,4)=Q1, (5,6)=Q2, (7,8)=Q3
             uint8 traitId = (idx == 0) ? fullTrait : quadTrait[(idx - 1) >> 1];
 
-            packedTraits |= uint256(traitId) << (idx * 8);
+            packedTraits |= uint256(traitId) << (uint256(idx) << 3);
 
             address[] memory winners = _randTraitTicket(
                 traitPurgeTicket[lvl],
@@ -1056,8 +1060,9 @@ contract PurgeGame {
 
             uint256 bucketWei = (effectiveWei * permille) / 1000;
             if (doubleMap) bucketWei <<= 1;
+            uint256 winnersLen = winners.length;
 
-            if (idx == 0 && winners.length != 0) {
+            if (idx == 0 && winnersLen != 0) {
                 uint256 immediatePool = bucketWei >> 1;
                 uint256 deferredAmount = bucketWei - immediatePool;
                 unchecked {
@@ -1067,8 +1072,7 @@ contract PurgeGame {
                 _addClaimableEth(trophyWinner, immediatePool);
                 uint256 trophyData = (uint256(traitId) << 152) | (uint256(lvl) << 128) | TROPHY_FLAG_MAP;
                 nft.awardTrophy{value: deferredAmount}(trophyWinner, trophyData, deferredAmount);
-            } else if (winners.length != 0) {
-                uint256 winnersLen = winners.length;
+            } else if (winnersLen != 0) {
                 uint256 prizeEachWei = bucketWei / winnersLen;
                 uint256 paidWei = prizeEachWei * winnersLen;
                 unchecked {
@@ -1086,10 +1090,12 @@ contract PurgeGame {
             }
         }
 
+        uint256 newPrizePool;
         unchecked {
-            prizePool -= totalPaidWei;
-            levelPrizePool = prizePool;
+            newPrizePool = prizePool - totalPaidWei;
         }
+        prizePool = newPrizePool;
+        levelPrizePool = newPrizePool;
 
         emit Jackpot((uint256(9) << 248) | packedTraits);
         return true;
