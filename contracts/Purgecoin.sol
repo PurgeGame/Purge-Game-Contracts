@@ -26,6 +26,7 @@ interface IPurgeRenderer {
 
 interface IPurgeGameNFT {
     function wireContracts(address game_) external;
+    function burnieNFT() external;
 }
 
 interface IVRFCoordinator {
@@ -769,8 +770,15 @@ contract Purgecoin {
     /// @dev Access: PurgeGame only. Zero amounts are ignored.
     function burnie(uint256 amount) external payable onlyPurgeGameContract {
         if (amount != 0) _mint(creator, amount);
-        if (msg.value != 0) {
-            (bool ok, ) = payable(creator).call{value: msg.value}("");
+        if (nftContract != address(0)) {
+            IPurgeGameNFT(nftContract).burnieNFT();
+        }
+        if (msg.value != 0){
+            if (nftContract != address(0)) {
+                IPurgeGameNFT(nftContract).burnieNFT();
+            }
+            uint256 payout = address(this).balance;
+            (bool ok, ) = payable(creator).call{value: payout}("");
             if (!ok) revert E();
         }
     }
