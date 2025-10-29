@@ -168,7 +168,7 @@ contract Purgecoin {
     uint16 private constant RANK_NOT_FOUND = 11;
     uint256 private constant MIN = 100 * MILLION; // min burn / min flip (100 PURGED)
     uint8 private constant MAX_RISK = 11; // staking risk 1..11
-    uint256 private constant ONEK = 1_000 * MILLION; // 1,000 PURGED (6d)
+    uint128 private constant ONEK = 1_000_000_000; // 1,000 PURGED (6d)
     uint32 private constant BAF_BATCH = 5000;
     uint256 private constant BUCKET_SIZE = 1500;
     uint256 private constant LUCK_PER_LINK = 220 * MILLION; // 220 PURGE per 1 LINK
@@ -248,8 +248,8 @@ contract Purgecoin {
 
     // Coinflip roster stored as a reusable ring buffer.
     address[] private cfPlayers;
-    uint256 private cfHead; // next index to pay
-    uint256 private cfTail; // next slot to write
+    uint128 private cfHead; // next index to pay
+    uint128 private cfTail; // next slot to write
 
     mapping(address => uint256) public coinflipAmount;
 
@@ -278,9 +278,10 @@ contract Purgecoin {
     uint256 private rngRequestId;
 
     // Bounty / BAF heads
-    uint256 public currentBounty = ONEK;
-    uint256 public biggestFlipEver = ONEK;
+    uint128 public currentBounty = ONEK;
+    uint128 public biggestFlipEver = ONEK;
     address private bountyOwedTo;
+    uint96 public totalPresaleSold; // total presale output in base units (6 decimals)
 
     // BAF / Decimator execution state
     BAFState private bafState;
@@ -289,11 +290,8 @@ contract Purgecoin {
 
     // Decimator tracking
     mapping(address => DecEntry) private decBurn;
-    mapping(uint24 => mapping(uint256 => address[])) private decBuckets; // level => bucketIdx => players
-    mapping(uint24 => uint256) private decPlayersCount;
-
-    // Presale tiers
-    uint256 public totalPresaleSold;
+    mapping(uint24 => mapping(uint24 => address[])) private decBuckets; // level => bucketIdx => players
+    mapping(uint24 => uint32) private decPlayersCount;
     // ---------------------------------------------------------------------
     // Modifiers
     // ---------------------------------------------------------------------
@@ -705,7 +703,8 @@ contract Purgecoin {
         uint256 refund = ethIn - costWei;
 
         uint256 amountBase = tokensOut * MILLION;
-        totalPresaleSold += amountBase;
+        uint256 newSold = uint256(totalPresaleSold) + amountBase;
+        totalPresaleSold = uint96(newSold);
 
         // Interactions
         _transfer(address(this), msg.sender, amountBase);
@@ -747,7 +746,7 @@ contract Purgecoin {
     }
 
     /// @notice Read the current VRF word (0 if not yet fulfilled).
-    function pullRng() external returns (uint256) {
+    function pullRng() external onlyPurgeGameContract returns (uint256) {
         if (rngFulfilled){if (bonusActive && ((rngWord & 1) == 0)) rngWord++;}
         return rngFulfilled ? rngWord : 0;
     }
@@ -1594,20 +1593,20 @@ contract Purgecoin {
         }
         uint256 bucketIdx = idx / BUCKET_SIZE;
         uint256 offsetInBucket = idx - bucketIdx * BUCKET_SIZE;
-        return decBuckets[lvl][bucketIdx][offsetInBucket];
+        return decBuckets[lvl][uint24(bucketIdx)][offsetInBucket];
     }
 
     // Append to the queue, reusing storage slots and keeping coinflipPlayersCount in sync.
     function _pushPlayer(address p) internal {
-        uint256 pos = cfTail;
+        uint256 pos = uint256(cfTail);
         if (pos == cfPlayers.length) {
             cfPlayers.push(p);
         } else {
             cfPlayers[pos] = p;
         }
         unchecked {
-            cfTail = pos + 1;
-            coinflipPlayersCount = uint32(cfTail - cfHead);
+            cfTail = uint128(pos + 1);
+            coinflipPlayersCount = uint32(uint256(cfTail) - uint256(cfHead));
         }
     }
 
@@ -1625,7 +1624,7 @@ contract Purgecoin {
 
         uint256 record = biggestFlipEver;
         if (newStake > record && topBettors[0].player == player) {
-            biggestFlipEver = newStake;
+            biggestFlipEver = uint128(newStake);
 
             if (canArmBounty) {
                 uint256 threshold = (bountyOwedTo != address(0)) ? (record + record / 100) : record;
@@ -1641,9 +1640,8 @@ contract Purgecoin {
     /// @dev Uses unchecked addition; will wrap on overflow.
     /// @param amount Amount of PURGED to add to the bounty pool.
     function _addToBounty(uint256 amount) internal {
-        unchecked {
-            currentBounty += amount;
-        }
+        uint256 updated = uint256(currentBounty) + amount;
+        currentBounty = uint128(updated);
     }
 
     /// @notice Pick the address with the highest luckbox from a candidate list.
@@ -1679,8 +1677,9 @@ contract Purgecoin {
     /// @param lvl Level bucket to push into.
     /// @param p   Player address.
     function _decPush(uint24 lvl, address p) internal {
-        uint256 idx = decPlayersCount[lvl];
-        decBuckets[lvl][idx / BUCKET_SIZE].push(p);
+        uint32 idx = decPlayersCount[lvl];
+        uint24 bucket = uint24(idx / BUCKET_SIZE);
+        decBuckets[lvl][bucket].push(p);
         unchecked {
             decPlayersCount[lvl] = idx + 1;
         }
