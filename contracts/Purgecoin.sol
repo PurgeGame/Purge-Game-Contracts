@@ -436,10 +436,12 @@ contract Purgecoin {
         if (((encoded >> (2 * STAKE_LANE_BITS)) & STAKE_LANE_MASK) != 0) count++;
     }
 
-    function _ensureCompatible(uint256 encoded, uint8 expectRisk) private pure {
-        uint8 lanes = _laneCount(encoded);
-        for (uint8 i; i < lanes; ) {
-            (, uint8 haveRisk) = _decodeStakeLane(_laneAt(encoded, i));
+    function _ensureCompatible(uint256 encoded, uint8 expectRisk) private pure returns (uint8 lanes) {
+        for (uint8 i; i < STAKE_MAX_LANES; ) {
+            uint256 lane = _laneAt(encoded, i);
+            if (lane == 0) break;
+            lanes++;
+            (, uint8 haveRisk) = _decodeStakeLane(lane);
             if (haveRisk != expectRisk) revert StakeInvalid();
             unchecked {
                 ++i;
@@ -450,11 +452,13 @@ contract Purgecoin {
     function _insertLane(uint256 encoded, uint256 laneValue, bool strictCapacity) private pure returns (uint256) {
         (, uint8 riskNew) = _decodeStakeLane(laneValue);
 
-        uint8 lanes = _laneCount(encoded);
+        uint8 lanes;
 
         // Try to merge with an existing lane carrying the same risk
-        for (uint8 idx; idx < lanes; ) {
+        for (uint8 idx; idx < STAKE_MAX_LANES; ) {
             uint256 target = _laneAt(encoded, idx);
+            if (target == 0) break;
+            lanes++;
             (, uint8 riskExisting) = _decodeStakeLane(target);
             if (riskExisting == riskNew) {
                 uint256 unitsExisting = target & STAKE_LANE_PRINCIPAL_MASK;
@@ -487,7 +491,8 @@ contract Purgecoin {
     function stake(uint256 burnAmt, uint24 targetLevel, uint8 risk) external {
         if (burnAmt < 250 * MILLION) revert AmountLTMin();
         if (isBettingPaused) revert BettingPaused();
-        _requireEOA(msg.sender);
+        address sender = msg.sender;
+        _requireEOA(sender);
         uint24 currLevel = purgeGame.level();
         uint24 distance = targetLevel - currLevel;
         if (risk == 0 || risk > MAX_RISK || distance > 500 || distance < MAX_RISK) revert Insufficient();
@@ -499,11 +504,11 @@ contract Purgecoin {
         uint256 existingEncoded;
         for (uint24 offset = 0; offset < risk; ) {
             uint24 checkLevel = uint24(placeLevel + offset);
-            existingEncoded = stakeAmt[checkLevel][msg.sender];
+            existingEncoded = stakeAmt[checkLevel][sender];
             if (existingEncoded != 0) {
                 uint8 wantRisk = uint8(risk - offset);
-                _ensureCompatible(existingEncoded, wantRisk);
-                if (_laneCount(existingEncoded) >= STAKE_MAX_LANES) revert StakeInvalid();
+                uint8 lanes = _ensureCompatible(existingEncoded, wantRisk);
+                if (lanes >= STAKE_MAX_LANES) revert StakeInvalid();
             }
             unchecked {
                 ++offset;
@@ -516,11 +521,12 @@ contract Purgecoin {
         if (scanStart < scanFloor) scanStart = scanFloor;
 
         for (uint24 scanLevel = scanStart; scanLevel < placeLevel; ) {
-            uint256 existingAtScan = stakeAmt[scanLevel][msg.sender];
+            uint256 existingAtScan = stakeAmt[scanLevel][sender];
             if (existingAtScan != 0) {
-                uint8 lanes = _laneCount(existingAtScan);
-                for (uint8 li; li < lanes; ) {
-                    (, uint8 existingRisk) = _decodeStakeLane(_laneAt(existingAtScan, li));
+                for (uint8 li; li < STAKE_MAX_LANES; ) {
+                    uint256 lane = _laneAt(existingAtScan, li);
+                    if (lane == 0) break;
+                    (, uint8 existingRisk) = _decodeStakeLane(lane);
                     uint24 reachLevel = scanLevel + uint24(existingRisk) - 1;
                     if (reachLevel >= placeLevel) {
                         uint24 impliedRiskAtPlace = uint24(existingRisk) - (placeLevel - scanLevel);
@@ -537,20 +543,19 @@ contract Purgecoin {
         }
 
         // Burn principal
-        _burn(msg.sender, burnAmt);
+        _burn(sender, burnAmt);
 
         // Base credit and compounded boost factors
-        uint256 levelBps;
-        if (distance >= 90) levelBps = 200;
-        else levelBps = 100 + (uint256(distance) * 200) / 120;
+        uint256 cappedDist = distance > 200 ? 200 : distance;
+        uint256 levelBps = 100 + (uint256(cappedDist) * 200) / 200;
         uint256 riskBps = 25 * uint256(risk - 1);
         uint256 stepBps = levelBps + riskBps; // per-level growth in bps
 
         // Luckbox: +5% of burn
         uint256 fivePercent = burnAmt / 20;
-        playerLuckbox[msg.sender] += fivePercent;
-        uint256 newLuck = playerLuckbox[msg.sender];
-        _updatePlayerScore(0, msg.sender, newLuck);
+        uint256 updatedLuck = playerLuckbox[sender] + fivePercent;
+        playerLuckbox[sender] = updatedLuck;
+        _updatePlayerScore(0, sender, updatedLuck);
 
         // Compounded boost starting from 95% of burn (fivePercent * 19)
         uint256 boostedPrincipal = fivePercent * 19;
@@ -569,16 +574,16 @@ contract Purgecoin {
         if (principalRounded == 0) principalRounded = STAKE_PRINCIPAL_FACTOR;
         uint256 newLane = _encodeStakeLane(principalRounded, risk);
 
-        uint256 existingAtPlace = stakeAmt[placeLevel][msg.sender];
+        uint256 existingAtPlace = stakeAmt[placeLevel][sender];
         if (existingAtPlace == 0) {
-            stakeAmt[placeLevel][msg.sender] = newLane;
-            stakeAddr[placeLevel].push(msg.sender);
+            stakeAmt[placeLevel][sender] = newLane;
+            stakeAddr[placeLevel].push(sender);
         } else {
             _ensureCompatible(existingAtPlace, risk);
-            stakeAmt[placeLevel][msg.sender] = _insertLane(existingAtPlace, newLane, true);
+            stakeAmt[placeLevel][sender] = _insertLane(existingAtPlace, newLane, true);
         }
 
-        emit StakeCreated(msg.sender, targetLevel, risk, principalRounded);
+        emit StakeCreated(sender, targetLevel, risk, principalRounded);
     }
 
     /// @notice Return the recorded referrer for `player` (zero address if none).
@@ -617,23 +622,23 @@ contract Purgecoin {
         if (amount != 0) {
             if (lvl % 25 == 1) amount <<= 1;
 
+            mapping(address => uint256) storage earned = affiliateCoinEarned[lvl];
+
             // Pay direct affiliate (skip sentinels)
             if (affiliateAddr != address(0) && affiliateAddr != address(1)) {
-                uint256 newTotal = affiliateCoinEarned[lvl][affiliateAddr] + amount;
-                affiliateCoinEarned[lvl][affiliateAddr] = newTotal;
+                uint256 newTotal = earned[affiliateAddr] + amount;
+                earned[affiliateAddr] = newTotal;
                 addFlip(affiliateAddr, amount, false);
                 _updatePlayerScore(1, affiliateAddr, newTotal);
             }
 
             // Upline bonus (20%) only if upline is active this level
             address upline = referredBy[affiliateAddr];
-            if (
-                upline != address(0) && upline != address(1) && upline != sender && affiliateCoinEarned[lvl][upline] > 0
-            ) {
+            if (upline != address(0) && upline != address(1) && upline != sender && earned[upline] > 0) {
                 uint256 bonus = amount / 5;
                 if (bonus != 0) {
-                    uint256 newTotalU = affiliateCoinEarned[lvl][upline] + bonus;
-                    affiliateCoinEarned[lvl][upline] = newTotalU;
+                    uint256 newTotalU = earned[upline] + bonus;
+                    earned[upline] = newTotalU;
                     addFlip(upline, bonus, false);
                     _updatePlayerScore(1, upline, newTotalU);
                 }
@@ -646,8 +651,9 @@ contract Purgecoin {
     /// @notice Clear the affiliate leaderboard and index for the next cycle (invoked by the game).
     function resetAffiliateLeaderboard(uint24 lvl) external onlyPurgeGameContract {
         uint8 len = affiliateLen;
+        PlayerScore[8] storage board = affiliateLeaderboard;
         for (uint8 i; i < len; ) {
-            address addr = affiliateLeaderboard[i].player;
+            address addr = board[i].player;
             delete affiliatePos[addr];
             unchecked {
                 ++i;
@@ -768,18 +774,17 @@ contract Purgecoin {
     /// @notice Credit the creator's share of gameplay proceeds.
     /// @dev Access: PurgeGame only. Zero amounts are ignored.
     function burnie(uint256 amount) external payable onlyPurgeGameContract {
-        if (amount != 0) _mint(creator, amount);
-        if (nftContract != address(0)) {
+        if (msg.value != 0) {
             IPurgeGameNFT(nftContract).burnieNFT();
-        }
-        if (msg.value != 0){
-            if (nftContract != address(0)) {
-                IPurgeGameNFT(nftContract).burnieNFT();
-            }
+
             uint256 payout = address(this).balance;
             (bool ok, ) = payable(creator).call{value: payout}("");
             if (!ok) revert E();
+            return;
         }
+
+        _mint(creator, amount);
+
     }
 
     /// @notice Grant a pending coinflip stake during gameplay flows instead of minting PURGE.
@@ -851,42 +856,40 @@ contract Purgecoin {
                     stakeLevelComplete = level;
                 } else {
                     // Win: process stakers at this level in slices.
-                    address[] storage a = stakeAddr[level];
-                    uint32 len = uint32(a.length);
+                    address[] storage roster = stakeAddr[level];
+                    uint32 len = uint32(roster.length);
                     if (st < len) {
                         uint32 en = st + stepStake;
                         if (en > len) en = len;
 
                         for (uint32 i = st; i < en; ) {
-                            address s = a[i];
-                            uint256 enc = stakeAmt[level][s];
-                            if (enc != 0) {
-                                for (uint8 li; li < STAKE_MAX_LANES; ) {
-                                    uint256 lane = _laneAt(enc, li);
-                                    if (lane != 0) {
-                                        (uint256 pr, uint8 rf) = _decodeStakeLane(lane);
-                                        if (rf <= 1) {
-                                            uint256 fivePct = pr / 20;
-                                            uint256 newLuck = playerLuckbox[s] + fivePct;
-                                            playerLuckbox[s] = newLuck;
-                                            _updatePlayerScore(0, s, newLuck);
-                                            addFlip(s, fivePct * 19, false);
+                            address player = roster[i];
+                            uint256 enc = stakeAmt[level][player];
+                            for (uint8 li; li < STAKE_MAX_LANES; ) {
+                                uint256 lane = _laneAt(enc, li);
+                                if (lane != 0) {
+                                    (uint256 principal, uint8 riskFactor) = _decodeStakeLane(lane);
+                                    if (riskFactor <= 1) {
+                                        uint256 fivePct = principal / 20;
+                                        uint256 newLuck = playerLuckbox[player] + fivePct;
+                                        playerLuckbox[player] = newLuck;
+                                        _updatePlayerScore(0, player, newLuck);
+                                        addFlip(player, fivePct * 19, false);
+                                    } else {
+                                        uint24 nextL = level + 1;
+                                        uint8 newRf = riskFactor - 1;
+                                        uint256 laneValue = _encodeStakeLane(principal * 2, newRf);
+                                        uint256 nextEnc = stakeAmt[nextL][player];
+                                        if (nextEnc == 0) {
+                                            stakeAmt[nextL][player] = laneValue;
+                                            stakeAddr[nextL].push(player);
                                         } else {
-                                            uint24 nextL = level + 1;
-                                            uint8 newRf = rf - 1;
-                                            uint256 laneValue = _encodeStakeLane(pr * 2, newRf);
-                                            uint256 nextEnc = stakeAmt[nextL][s];
-                                            if (nextEnc == 0) {
-                                                stakeAmt[nextL][s] = laneValue;
-                                                stakeAddr[nextL].push(s);
-                                            } else {
-                                                stakeAmt[nextL][s] = _insertLane(nextEnc, laneValue, false);
-                                            }
+                                            stakeAmt[nextL][player] = _insertLane(nextEnc, laneValue, false);
                                         }
                                     }
-                                    unchecked {
-                                        ++li;
-                                    }
+                                }
+                                unchecked {
+                                    ++li;
                                 }
                             }
                             unchecked {
@@ -1640,8 +1643,9 @@ contract Purgecoin {
     /// @dev Uses unchecked addition; will wrap on overflow.
     /// @param amount Amount of PURGED to add to the bounty pool.
     function _addToBounty(uint256 amount) internal {
-        uint256 updated = uint256(currentBounty) + amount;
-        currentBounty = uint128(updated);
+        unchecked {
+            currentBounty += uint128(amount);
+        }
     }
 
     /// @notice Pick the address with the highest luckbox from a candidate list.
