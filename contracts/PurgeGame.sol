@@ -731,9 +731,11 @@ contract PurgeGame {
     function _finalizeEndgame(uint24 lvl, uint32 cap, uint48 day) internal {
         PendingEndLevel storage pend = pendingEndLevel;
 
-        uint24 ph = phase;
+        uint8 ph = phase;
 
         uint24 prevLevel = lvl - 1;
+        uint8 prevMod10 = uint8(prevLevel % 10);
+        uint8 prevMod100 = uint8(prevLevel % 100);
 
         if (ph > 3) {
             if (lastExterminatedTrait != 420) {
@@ -744,10 +746,10 @@ contract PurgeGame {
 
                 uint256 poolTotal = levelPrizePool;
 
-                uint256 exterminatorShare = (prevLevel % 10 == 4 && prevLevel != 4)
+                uint256 exterminatorShare = (prevMod10 == 4 && prevLevel != 4)
                     ? (poolTotal * 40) / 100
                     : (poolTotal * 20) / 100;
-                if ((prevLevel % 100) == 0) {
+                if (prevMod100 == 0) {
                     exterminatorShare += carryoverForNextLevel;
                 }
 
@@ -756,7 +758,7 @@ contract PurgeGame {
 
                 levelPrizePool = 0;
 
-                if ((prevLevel % 100) == 0) {
+                if (prevMod100 == 0) {
                     gameState = 0;
                 }
             }
@@ -766,7 +768,7 @@ contract PurgeGame {
                 return;
             }
         } else {
-            bool decWindow = prevLevel >= 25 && (prevLevel % 10) == 5 && (prevLevel % 100) != 95;
+            bool decWindow = prevLevel >= 25 && prevMod10 == 5 && prevMod100 != 95;
             if (decWindow) {
                 uint256 decPoolWei = (carryoverForNextLevel * 15) / 100;
                 (bool decFinished, ) = _progressExternal(1, decPoolWei, cap, prevLevel);
