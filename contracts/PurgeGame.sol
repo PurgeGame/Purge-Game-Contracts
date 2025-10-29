@@ -595,9 +595,7 @@ contract PurgeGame {
             nft.purge(caller, tokenId);
 
             unchecked {
-                dailyPurgeCount[trait0 & 0x07] += 1;
-                dailyPurgeCount[((trait1 - 64) >> 3) + 8] += 1;
-                dailyPurgeCount[trait2 - 128 + 16] += 1;
+
                 uint32 endLevel = (lvl % 10 == 7) ? 1 : 0;
 
                 if (--traitRemaining[trait0] == endLevel) {
@@ -616,7 +614,9 @@ contract PurgeGame {
                     _endLevel(trait3);
                     return;
                 }
-
+                dailyPurgeCount[trait0 & 0x07] += 1;
+                dailyPurgeCount[((trait1 - 64) >> 3) + 8] += 1;
+                dailyPurgeCount[trait2 - 128 + 16] += 1;
                 ++i;
             }
 
