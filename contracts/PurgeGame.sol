@@ -1489,14 +1489,17 @@ contract PurgeGame {
             }
             uint64 s = uint64(seed) | 1;
             uint8 offset = uint8(i & 15);
+            unchecked {
+                s = s * (MAP_LCG_MULT + uint64(offset)) + uint64(offset);
+            }
 
             for (uint8 j = offset; j < 16 && i < endIndex; ) {
                 unchecked {
                     s = s * MAP_LCG_MULT + 1;
-                    uint64 rnd64 = s;
+
 
                     uint8 quadrant = uint8(i & 3);
-                    uint8 traitId = _getTrait(rnd64) + (quadrant << 6);
+                    uint8 traitId = _getTrait(s) + (quadrant << 6);
 
                     if (counts[traitId]++ == 0) {
                         touchedTraits[touchedLen++] = traitId;

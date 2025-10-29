@@ -30,18 +30,10 @@ contract PurgeGameNFT is ERC721A {
     // ---------------------------------------------------------------------
     // Errors
     // ---------------------------------------------------------------------
-    error NotCoinContract();
-    error NotGame();
-    error GameAlreadySet();
-    error GameNotLinked();
-    error TrophyBurnNotAllowed();
-    error NotTrophyOwner();
+    error E();
     error NotTokenOwner();
-    error NotMapTrophy();
     error ClaimNotReady();
     error CoinPaused();
-    error NoRewards();
-    error TransferFailed();
     error OnlyCoin();
     error InvalidToken();
 
@@ -86,18 +78,14 @@ contract PurgeGameNFT is ERC721A {
     // Wiring / access control
     // ---------------------------------------------------------------------
     modifier onlyGame() {
-        if (msg.sender != address(game)) revert NotGame();
+        if (msg.sender != address(game)) revert E();
         _;
     }
 
     function wireContracts(address game_) external {
-        if (msg.sender != address(coin)) revert NotCoinContract();
-        if (address(game) != address(0)) revert GameAlreadySet();
-        if (game_ == address(0)) revert NotGame();
+        if (msg.sender != address(coin)) revert E();
         game = IPurgeGame(game_);
-        if (baseTokenId == 0) {
-            _mintTrophyPlaceholders(1);
-        }
+        _mintTrophyPlaceholders(1);
     }
 
     // ---------------------------------------------------------------------
@@ -211,7 +199,7 @@ contract PurgeGameNFT is ERC721A {
     }
 
     function claimTrophyReward(uint256 tokenId) external {
-        if (ownerOf(tokenId) != msg.sender) revert NotTrophyOwner();
+        if (ownerOf(tokenId) != msg.sender) revert NotTokenOwner();
 
         uint256 owed = trophyOwedWei[tokenId];
         if (owed == 0) revert ClaimNotReady();
@@ -235,7 +223,7 @@ contract PurgeGameNFT is ERC721A {
         trophyLastClaimLevel[tokenId] = currentLevel;
 
         (bool ok, ) = msg.sender.call{value: payout}("");
-        if (!ok) revert TransferFailed();
+        if (!ok) revert E();
 
         emit TrophyRewardClaimed(tokenId, msg.sender, payout);
     }
@@ -247,7 +235,7 @@ event TrophyRewardClaimed(uint256 indexed tokenId, address indexed claimant, uin
         uint256 bal = address(this).balance;
         if (bal == 0) return;
         (bool ok, ) = payable(msg.sender).call{value: bal}("");
-        if (!ok) revert TransferFailed();
+        if (!ok) revert E();
     }
 
     // ---------------------------------------------------------------------
@@ -256,10 +244,10 @@ event TrophyRewardClaimed(uint256 indexed tokenId, address indexed claimant, uin
 
     function claimMapTrophyCoin(uint256 tokenId) external {
         if (coin.isBettingPaused()) revert CoinPaused();
-        if (ownerOf(tokenId) != msg.sender) revert NotTrophyOwner();
+        if (ownerOf(tokenId) != msg.sender) revert NotTokenOwner();
 
         uint256 info = trophyData[tokenId];
-        if (info == 0 || (info & TROPHY_FLAG_MAP) == 0) revert NotMapTrophy();
+        if (info == 0 || (info & TROPHY_FLAG_MAP) == 0) revert ClaimNotReady();
 
         uint32 start = uint32((info >> 128) & 0xFFFFFF) + COIN_DRIP_STEPS + 1;
         uint32 levelNow = game.level();
@@ -296,7 +284,6 @@ event TrophyRewardClaimed(uint256 indexed tokenId, address indexed claimant, uin
     // ---------------------------------------------------------------------
 
     function ownerOf(uint256 tokenId) public view override returns (address) {
-        if (address(game) == address(0)) revert GameNotLinked();
         uint256 info = trophyData[tokenId];
         if (info == 0 && tokenId < baseTokenId) revert InvalidToken();
         return super.ownerOf(tokenId);
@@ -420,7 +407,7 @@ event TrophyRewardClaimed(uint256 indexed tokenId, address indexed claimant, uin
     // ---------------------------------------------------------------------
 
     function _beforeTokenTransfers(address from, address to, uint256 tokenId, uint256 quantity) internal override {
-        if (to == address(0) && trophyData[tokenId] != 0) revert TrophyBurnNotAllowed();
+        if (to == address(0) && trophyData[tokenId] != 0) revert E();
         super._beforeTokenTransfers(from, to, tokenId, quantity);
     }
 
