@@ -259,12 +259,6 @@ contract PurgeGameNFT is ERC721A {
     // Trophy reward claims (ETH)
     // ---------------------------------------------------------------------
 
-    /// @notice View helper returning claimable ETH for `tokenId`.
-    function pendingTrophyReward(uint256 tokenId) public view returns (uint256) {
-        (uint256 amount, , ) = _calculateTrophyPayout(tokenId, game.level());
-        return amount;
-    }
-
     /// @notice Claim vested ETH for a trophy.
     function claimTrophyReward(uint256 tokenId) public {
         if (ownerOf(tokenId) != msg.sender) revert NotTrophyOwner();

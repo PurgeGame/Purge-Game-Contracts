@@ -652,22 +652,13 @@ contract PurgeGame {
         if (exterminated < 256) {
             uint8 exTrait = uint8(exterminated);
             uint256 pool = prizePool;
-            uint256 poolInitial = pool;
+
 
             uint16 prev = lastExterminatedTrait;
-            if (exterminated == prev) {
+            if (exterminated == prev ||levelSnapshot == 90) {
                 uint256 keep = pool >> 1;
                 carryoverForNextLevel += keep;
                 pool -= keep;
-            }
-
-            if (levelSnapshot == 90) {
-                uint256 target = poolInitial >> 1;
-                if (pool > target) {
-                    uint256 extra = pool - target;
-                    carryoverForNextLevel += extra;
-                    pool = target;
-                }
             }
 
             uint256 ninetyPercent = (pool * 90) / 100;
