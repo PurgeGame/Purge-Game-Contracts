@@ -140,9 +140,8 @@ contract PurgeGameNFT is ERC721A {
             _awardTrophy(req.exterminator, traitData, deferredAward);
 
             if (legacyPool != 0) {
-                uint256 salted = uint256(keccak256(abi.encode(randomWord, uint8(5))));
                 (uint256[] memory trophyTokens, , uint256[] memory trophyAmounts, ) =
-                    _sampleTrophies(true, legacyPool, salted);
+                    _sampleTrophies(true, legacyPool, randomWord);
                 uint256 len = trophyTokens.length;
                 for (uint256 i; i < len; ) {
                     uint256 amount = trophyAmounts[i];
@@ -159,12 +158,11 @@ contract PurgeGameNFT is ERC721A {
             uint256 mapUnit = poolCarry / 20;
             uint256 currentBase = baseTokenId;
             uint256 mapTokenId = currentBase - 2;
-            uint256 levelTokenId = currentBase - 1;
+
 
             mapImmediateRecipient = ownerOf(mapTokenId);
 
-
-            _clearAndBurnTrophy(levelTokenId);
+            delete trophyData[currentBase - 1];
 
             uint256 valueIn = msg.value;
             _addTrophyReward(mapTokenId, mapUnit, nextLevel);
@@ -173,14 +171,13 @@ contract PurgeGameNFT is ERC721A {
             uint256 draws = valueIn / mapUnit;
             uint256 seed = randomWord;
             uint256 mapCount = mapTrophyIds.length;
-            if (mapCount == 0) revert InvalidToken();
             for (uint256 j; j < draws; ) {
                 uint256 idx = mapCount == 1 ? 0 : (seed & 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF) % mapCount;
                 uint256 tokenId = mapTrophyIds[idx];
                 uint256 amount = (j + 1 == draws) ? (valueIn - (mapUnit * j)) : mapUnit;
                 _addTrophyReward(tokenId, amount, nextLevel);
                 seed >>= 64;
-                if (seed == 0) seed = uint256(keccak256(abi.encodePacked(randomWord, j + 1)));
+                if (seed == 0) seed = (randomWord ^ uint256(j + 1)) | 1;
                 unchecked {
                     ++j;
                 }
@@ -344,13 +341,6 @@ event TrophyRewardClaimed(uint256 indexed tokenId, address indexed claimant, uin
             uint256 cleared = info & ~(uint256(0xFFFFFF) << 128);
             trophyData[tokenId] = cleared | (uint256(startLevel - 1) << 128);
         }
-    }
-
-    function _clearAndBurnTrophy(uint256 tokenId) private {
-        delete trophyData[tokenId];
-        delete trophyOwedWei[tokenId];
-        delete trophyLastClaimLevel[tokenId];
-        _burn(tokenId, false);
     }
 
     function _sampleTrophies(bool isExtermination, uint256 payout, uint256 randomWord)
