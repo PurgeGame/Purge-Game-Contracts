@@ -982,15 +982,17 @@ contract Purgecoin {
         payoutIndex = uint32(end);
         // --- Phase 4: cleanup (single shot) -------------------------------------------
         if (end >= totalPlayers) {
-            for (uint8 k; k < topLen; ) {
-                address q = topBettors[k].player;
+            PlayerScore[4] memory cached = topBettors;
+            uint8 len = topLen;
+            delete topBettors;
+            topLen = 0;
+            for (uint8 k; k < len; ) {
+                address q = cached[k].player;
                 if (q != address(0)) topPos[q] = 0;
                 unchecked {
                     ++k;
                 }
             }
-            delete topBettors;
-            topLen = 0;
 
             tbActive = false;
             tbRemain = 0;
@@ -1767,8 +1769,9 @@ contract Purgecoin {
             idx = prevPos - 1;
             if (s <= board[idx].score) return false; // no improvement
             for (; idx > 0 && s > board[idx - 1].score; ) {
-                board[idx] = board[idx - 1];
-                luckboxPos[board[idx].player] = idx + 1;
+                PlayerScore memory prev = board[idx - 1];
+                board[idx] = prev;
+                luckboxPos[prev.player] = idx + 1;
                 unchecked {
                     --idx;
                 }
@@ -1782,8 +1785,9 @@ contract Purgecoin {
         if (curLen < 10) {
             idx = curLen;
             for (; idx > 0 && s > board[idx - 1].score; ) {
-                board[idx] = board[idx - 1];
-                luckboxPos[board[idx].player] = idx + 1;
+                PlayerScore memory prev = board[idx - 1];
+                board[idx] = prev;
+                luckboxPos[prev.player] = idx + 1;
                 unchecked {
                     --idx;
                 }
@@ -1801,8 +1805,9 @@ contract Purgecoin {
         address dropped = board[9].player;
         idx = 9;
         for (; idx > 0 && s > board[idx - 1].score; ) {
-            board[idx] = board[idx - 1];
-            luckboxPos[board[idx].player] = idx + 1;
+            PlayerScore memory prev = board[idx - 1];
+            board[idx] = prev;
+            luckboxPos[prev.player] = idx + 1;
             unchecked {
                 --idx;
             }
@@ -1825,8 +1830,9 @@ contract Purgecoin {
             idx = prevPos - 1;
             if (s <= board[idx].score) return false;
             for (; idx > 0 && s > board[idx - 1].score; ) {
-                board[idx] = board[idx - 1];
-                affiliatePos[board[idx].player] = idx + 1;
+                PlayerScore memory prev = board[idx - 1];
+                board[idx] = prev;
+                affiliatePos[prev.player] = idx + 1;
                 unchecked {
                     --idx;
                 }
@@ -1839,8 +1845,9 @@ contract Purgecoin {
         if (curLen < 8) {
             idx = curLen;
             for (; idx > 0 && s > board[idx - 1].score; ) {
-                board[idx] = board[idx - 1];
-                affiliatePos[board[idx].player] = idx + 1;
+                PlayerScore memory prev = board[idx - 1];
+                board[idx] = prev;
+                affiliatePos[prev.player] = idx + 1;
                 unchecked {
                     --idx;
                 }
@@ -1857,8 +1864,9 @@ contract Purgecoin {
         address dropped = board[7].player;
         idx = 7;
         for (; idx > 0 && s > board[idx - 1].score; ) {
-            board[idx] = board[idx - 1];
-            affiliatePos[board[idx].player] = idx + 1;
+            PlayerScore memory prev = board[idx - 1];
+            board[idx] = prev;
+            affiliatePos[prev.player] = idx + 1;
             unchecked {
                 --idx;
             }
@@ -1881,8 +1889,9 @@ contract Purgecoin {
             idx = prevPos - 1;
             if (s <= board[idx].score) return false;
             for (; idx > 0 && s > board[idx - 1].score; ) {
-                board[idx] = board[idx - 1];
-                topPos[board[idx].player] = idx + 1;
+                PlayerScore memory prev = board[idx - 1];
+                board[idx] = prev;
+                topPos[prev.player] = idx + 1;
                 unchecked {
                     --idx;
                 }
@@ -1895,8 +1904,9 @@ contract Purgecoin {
         if (curLen < 4) {
             idx = curLen;
             for (; idx > 0 && s > board[idx - 1].score; ) {
-                board[idx] = board[idx - 1];
-                topPos[board[idx].player] = idx + 1;
+                PlayerScore memory prev = board[idx - 1];
+                board[idx] = prev;
+                topPos[prev.player] = idx + 1;
                 unchecked {
                     --idx;
                 }
@@ -1913,8 +1923,9 @@ contract Purgecoin {
         address dropped = board[3].player;
         idx = 3;
         for (; idx > 0 && s > board[idx - 1].score; ) {
-            board[idx] = board[idx - 1];
-            topPos[board[idx].player] = idx + 1;
+            PlayerScore memory prev = board[idx - 1];
+            board[idx] = prev;
+            topPos[prev.player] = idx + 1;
             unchecked {
                 --idx;
             }

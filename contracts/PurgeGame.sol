@@ -561,6 +561,8 @@ contract PurgeGame {
         address caller = msg.sender;
         uint256 bonusTenths;
 
+        address[][256] storage tickets = traitPurgeTicket[lvl];
+
         for (uint256 i; i < count; ) {
             uint256 tokenId = tokenIds[i];
 
@@ -623,10 +625,10 @@ contract PurgeGame {
                 ++i;
             }
 
-            traitPurgeTicket[lvl][trait0].push(caller);
-            traitPurgeTicket[lvl][trait1].push(caller);
-            traitPurgeTicket[lvl][trait2].push(caller);
-            traitPurgeTicket[lvl][trait3].push(caller);
+            tickets[trait0].push(caller);
+            tickets[trait1].push(caller);
+            tickets[trait2].push(caller);
+            tickets[trait3].push(caller);
         }
 
         if (lvl % 10 == 2) count <<= 1;
