@@ -3,7 +3,7 @@ pragma solidity ^0.8.26;
 
 
 
-interface ERC721A__IERC721Receiver {
+interface IERC721Receiver {
     function onERC721Received(
         address operator,
         address from,
@@ -38,7 +38,9 @@ interface IPurgecoin {
 }
 
 contract PurgeGameNFT {
-    // ERC721 errors
+    // ---------------------------------------------------------------------
+    // Errors
+    // ---------------------------------------------------------------------
     error ApprovalCallerNotOwnerNorApproved();
     error ApprovalQueryForNonexistentToken();
     error BalanceQueryForZeroAddress();
@@ -50,60 +52,6 @@ contract PurgeGameNFT {
     error URIQueryForNonexistentToken();
     error OwnershipNotInitializedForExtraData();
 
-    // ERC721 events
-    event Transfer(address indexed from, address indexed to, uint256 indexed tokenId);
-    event Approval(address indexed owner, address indexed approved, uint256 indexed tokenId);
-    event ApprovalForAll(address indexed owner, address indexed operator, bool approved);
-    event ConsecutiveTransfer(uint256 indexed fromTokenId, uint256 toTokenId, address indexed from, address indexed to);
-    struct TokenApprovalRef {
-        address value;
-    }
-
-
-    uint256 private constant _BITMASK_ADDRESS_DATA_ENTRY = (1 << 64) - 1;
-
-    uint256 private constant _BITPOS_NUMBER_MINTED = 64;
-
-    uint256 private constant _BITPOS_NUMBER_BURNED = 128;
-
-    uint256 private constant _BITPOS_START_TIMESTAMP = 160;
-
-    uint256 private constant _BITMASK_BURNED = 1 << 224;
-
-    uint256 private constant _BITPOS_NEXT_INITIALIZED = 225;
-
-    uint256 private constant _BITMASK_NEXT_INITIALIZED = 1 << 225;
-
-    uint256 private constant _BITPOS_EXTRA_DATA = 232;
-
-    uint256 private constant _BITMASK_EXTRA_DATA_COMPLEMENT = (1 << 232) - 1;
-
-    uint256 private constant _BITMASK_ADDRESS = (1 << 160) - 1;
-
-    bytes32 private constant _TRANSFER_EVENT_SIGNATURE =
-        0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef;
-
-    address private constant _TROPHY_BURN_ADDRESS = 0x000000000000000000000000000000000000dEaD;
-
-    uint256 private _currentIndex;
-
-    uint256 private _burnCounter;
-
-    string private _name;
-
-    string private _symbol;
-
-    mapping(uint256 => uint256) private _packedOwnerships;
-
-    mapping(address => uint256) private _packedAddressData;
-
-    mapping(uint256 => TokenApprovalRef) private _tokenApprovals;
-
-    mapping(address => mapping(address => bool)) private _operatorApprovals;
-
-    // ---------------------------------------------------------------------
-    // Purge game state
-    // ---------------------------------------------------------------------
     error E();
     error NotTokenOwner();
     error NotTrophyOwner();
@@ -112,12 +60,12 @@ contract PurgeGameNFT {
     error OnlyCoin();
     error InvalidToken();
 
-    IPurgeGame private game;
-    IPurgeRenderer private immutable renderer;
-    IPurgecoin private immutable coin;
-
-    uint256 private basePointers; // high 128 bits = previous base token id, low 128 bits = current base token id
-    mapping(uint256 => uint256) private trophyData; // Packed metadata + owed + claim bookkeeping per trophy
+    // ---------------------------------------------------------------------
+    // Events & types
+    // ---------------------------------------------------------------------
+    event Transfer(address indexed from, address indexed to, uint256 indexed tokenId);
+    event Approval(address indexed owner, address indexed approved, uint256 indexed tokenId);
+    event ApprovalForAll(address indexed owner, address indexed operator, bool approved);
 
     struct EndLevelRequest {
         address exterminator;
@@ -126,6 +74,43 @@ contract PurgeGameNFT {
         uint256 pool;
         uint256 randomWord;
     }
+
+    // ---------------------------------------------------------------------
+    // ERC721 storage
+    // ---------------------------------------------------------------------
+    uint256 private constant _BITMASK_ADDRESS_DATA_ENTRY = (1 << 64) - 1;
+    uint256 private constant _BITPOS_NUMBER_MINTED = 64;
+    uint256 private constant _BITPOS_NUMBER_BURNED = 128;
+    uint256 private constant _BITPOS_START_TIMESTAMP = 160;
+    uint256 private constant _BITMASK_BURNED = 1 << 224;
+    uint256 private constant _BITPOS_NEXT_INITIALIZED = 225;
+    uint256 private constant _BITMASK_NEXT_INITIALIZED = 1 << 225;
+    uint256 private constant _BITPOS_EXTRA_DATA = 232;
+    uint256 private constant _BITMASK_EXTRA_DATA_COMPLEMENT = (1 << 232) - 1;
+    uint256 private constant _BITMASK_ADDRESS = (1 << 160) - 1;
+
+    bytes32 private constant _TRANSFER_EVENT_SIGNATURE =
+        0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef;
+
+    uint256 private _currentIndex;
+
+    string private _name;
+    string private _symbol;
+
+    mapping(uint256 => uint256) private _packedOwnerships;
+    mapping(address => uint256) private _packedAddressData;
+    mapping(uint256 => address) private _tokenApprovals;
+    mapping(address => mapping(address => bool)) private _operatorApprovals;
+
+    // ---------------------------------------------------------------------
+    // Purge game storage
+    // ---------------------------------------------------------------------
+    IPurgeGame private game;
+    IPurgeRenderer private immutable renderer;
+    IPurgecoin private immutable coin;
+
+    uint256 private basePointers; // high 128 bits = previous base token id, low 128 bits = current base token id
+    mapping(uint256 => uint256) private trophyData; // Packed metadata + owed + claim bookkeeping per trophy
 
     uint256[] private mapTrophyIds;
     uint256[] private levelTrophyIds;
@@ -231,7 +216,6 @@ contract PurgeGameNFT {
         }
 
         if (packed & _BITMASK_BURNED != 0 || (packed & _BITMASK_ADDRESS) == 0) {
-            if (trophyData[tokenId] != 0) return uint256(uint160(_TROPHY_BURN_ADDRESS));
             revert OwnerQueryForNonexistentToken();
         }
 
@@ -259,7 +243,7 @@ contract PurgeGameNFT {
     function getApproved(uint256 tokenId) public view virtual returns (address) {
         if (!_exists(tokenId)) revert ApprovalQueryForNonexistentToken();
 
-        return _tokenApprovals[tokenId].value;
+        return _tokenApprovals[tokenId];
     }
 
     function setApprovalForAll(address operator, bool approved) public virtual {
@@ -301,19 +285,6 @@ contract PurgeGameNFT {
         }
     }
 
-    function _getApprovedSlotAndAddress(uint256 tokenId)
-        private
-        view
-        returns (uint256 approvedAddressSlot, address approvedAddress)
-    {
-        TokenApprovalRef storage tokenApproval = _tokenApprovals[tokenId];
-        assembly {
-            approvedAddressSlot := tokenApproval.slot
-            approvedAddress := sload(approvedAddressSlot)
-        }
-    }
-
-
     function transferFrom(
         address from,
         address to,
@@ -325,17 +296,13 @@ contract PurgeGameNFT {
 
         if (address(uint160(prevOwnershipPacked)) != from) revert TransferFromIncorrectOwner();
 
-        (uint256 approvedAddressSlot, address approvedAddress) = _getApprovedSlotAndAddress(tokenId);
+        address approvedAddress = _tokenApprovals[tokenId];
 
         if (!_isSenderApprovedOrOwner(approvedAddress, from, _msgSenderERC721A()))
             if (!isApprovedForAll(from, _msgSenderERC721A())) revert TransferCallerNotOwnerNorApproved();
 
-
-
-        assembly {
-            if approvedAddress {
-                sstore(approvedAddressSlot, 0)
-            }
+        if (approvedAddress != address(0)) {
+            delete _tokenApprovals[tokenId];
         }
 
         unchecked {
@@ -399,10 +366,10 @@ contract PurgeGameNFT {
         uint256 tokenId,
         bytes memory _data
     ) private returns (bool) {
-        try ERC721A__IERC721Receiver(to).onERC721Received(_msgSenderERC721A(), from, tokenId, _data) returns (
+        try IERC721Receiver(to).onERC721Received(_msgSenderERC721A(), from, tokenId, _data) returns (
             bytes4 retval
         ) {
-            return retval == ERC721A__IERC721Receiver(to).onERC721Received.selector;
+            return retval == IERC721Receiver(to).onERC721Received.selector;
         } catch (bytes memory reason) {
             if (reason.length == 0) {
                 revert TransferToNonERC721ReceiverImplementer();
@@ -467,61 +434,9 @@ contract PurgeGameNFT {
                 revert ApprovalCallerNotOwnerNorApproved();
             }
 
-        _tokenApprovals[tokenId].value = to;
+        _tokenApprovals[tokenId] = to;
         emit Approval(owner, to, tokenId);
     }
-
-
-    function _burn(uint256 tokenId) internal virtual {
-        _burn(tokenId, false);
-    }
-
-    function _burn(uint256 tokenId, bool approvalCheck) internal virtual {
-        uint256 prevOwnershipPacked = _packedOwnershipOf(tokenId);
-
-        address from = address(uint160(prevOwnershipPacked));
-
-        (uint256 approvedAddressSlot, address approvedAddress) = _getApprovedSlotAndAddress(tokenId);
-
-        if (approvalCheck) {
-            if (!_isSenderApprovedOrOwner(approvedAddress, from, _msgSenderERC721A()))
-                if (!isApprovedForAll(from, _msgSenderERC721A())) revert TransferCallerNotOwnerNorApproved();
-        }
-
-
-
-        assembly {
-            if approvedAddress {
-                sstore(approvedAddressSlot, 0)
-            }
-        }
-
-        unchecked {
-            _packedAddressData[from] += (1 << _BITPOS_NUMBER_BURNED) - 1;
-
-            _packedOwnerships[tokenId] = _packOwnershipData(
-                from,
-                (_BITMASK_BURNED | _BITMASK_NEXT_INITIALIZED) | _nextExtraData(from, address(0), prevOwnershipPacked)
-            );
-
-            if (prevOwnershipPacked & _BITMASK_NEXT_INITIALIZED == 0) {
-                uint256 nextTokenId = tokenId + 1;
-                if (_packedOwnerships[nextTokenId] == 0) {
-                    if (nextTokenId != _currentIndex) {
-                        _packedOwnerships[nextTokenId] = prevOwnershipPacked;
-                    }
-                }
-            }
-        }
-
-        emit Transfer(from, address(0), tokenId);
-
-        unchecked {
-            _burnCounter++;
-        }
-    }
-
-
     function _setExtraDataAt(uint256 index, uint24 extraData) internal virtual {
         uint256 packed = _packedOwnerships[index];
         if (packed == 0) revert OwnershipNotInitializedForExtraData();
@@ -654,14 +569,10 @@ contract PurgeGameNFT {
 
     function _burnPacked(uint256 tokenId, uint256 prevOwnershipPacked) private {
         address from = address(uint160(prevOwnershipPacked));
-        (uint256 approvedAddressSlot, address approvedAddress) = _getApprovedSlotAndAddress(tokenId);
+        address approvedAddress = _tokenApprovals[tokenId];
 
-
-
-        assembly {
-            if approvedAddress {
-                sstore(approvedAddressSlot, 0)
-            }
+        if (approvedAddress != address(0)) {
+            delete _tokenApprovals[tokenId];
         }
 
         unchecked {
@@ -681,10 +592,6 @@ contract PurgeGameNFT {
         }
 
         emit Transfer(from, address(0), tokenId);
-
-        unchecked {
-            _burnCounter++;
-        }
     }
 
     function awardTrophy(address to, uint256 data, uint256 deferredWei) external payable onlyGame {
