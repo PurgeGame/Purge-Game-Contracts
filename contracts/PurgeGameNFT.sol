@@ -169,7 +169,7 @@ contract PurgeGameNFT is ERC721A {
 
             mapImmediateRecipient = ownerOf(mapTokenId);
 
-            _clearTrophy(levelTokenId);
+            delete trophyData[tokenId];
 
             uint256 valueIn = msg.value;
             _addTrophyReward(mapTokenId, mapUnit, nextLevel);
@@ -351,9 +351,6 @@ event TrophyRewardClaimed(uint256 indexed tokenId, address indexed claimant, uin
         trophyData[tokenId] = updated;
     }
 
-    function _clearTrophy(uint256 tokenId) private {
-        delete trophyData[tokenId];
-    }
 
     function _sampleTrophies(bool isExtermination, uint256 payout, uint256 randomWord)
         private
