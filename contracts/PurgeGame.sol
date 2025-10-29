@@ -20,6 +20,7 @@ interface IPurgeCoinInterface {
     function burnCoin(address target, uint256 amount) external;
     function payAffiliate(uint256 amount, bytes32 code, address sender, uint24 lvl) external;
     function requestRng(bool pauseBetting) external;
+    function rngFulfilled() external view returns (bool);
     function pullRng() external returns (uint256 word);
     function processCoinflipPayouts(uint24 level, uint32 cap, bool bonusFlip) external returns (bool);
     function triggerCoinJackpot() external;
@@ -215,6 +216,7 @@ contract PurgeGame {
     /// @return prizePoolTarget  Last level's prize pool snapshot (wei)
     /// @return prizePoolCurrent Active prize pool (levelPrizePool when purging)
     /// @return enoughPurchases  True if purchaseCount >= 1,500
+    /// @return earlyPurgeMask   Bitmask of early-purge jackpot thresholds crossed (10/20/30/40/50/75%)
     /// @return rngFulfilled_    Last VRF request fulfilled
     /// @return rngConsumed_     Current RNG word consumed
     function gameInfo()
@@ -229,6 +231,7 @@ contract PurgeGame {
             uint256 prizePoolTarget,
             uint256 prizePoolCurrent,
             bool enoughPurchases,
+            uint8 earlyPurgeMask,
             bool rngFulfilled_,
             bool rngConsumed_
         )
@@ -241,7 +244,8 @@ contract PurgeGame {
         prizePoolTarget = lastPrizePool;
         prizePoolCurrent = (gameState == 4) ? levelPrizePool : prizePool;
         enoughPurchases = purchaseCount >= PURCHASE_MINIMUM;
-        rngFulfilled_ = rngFulfilled;
+        earlyPurgeMask = earlyPurgeJackpotPaidMask;
+        rngFulfilled_ = coin.rngFulfilled();
         rngConsumed_ = rngConsumed;
     }
 
@@ -253,12 +257,12 @@ contract PurgeGame {
     ///            Using cap removes Purgecoin payment.
     function advanceGame(uint32 cap) external {
         uint48 ts = uint48(block.timestamp);
-
+        IPurgeCoinInterface coinContract = coin;
         // Liveness drain
         if (ts - 365 days > levelStartTime) {
             gameState = 0;
             uint256 bal = address(this).balance;
-            if (bal > 0) coin.burnie{value: bal}(0);
+            if (bal > 0) coinContract.burnie{value: bal}(0);
         }
 
         uint24 lvl = level;
@@ -267,7 +271,7 @@ contract PurgeGame {
         uint8 _phase = phase;
         bool pauseBetting = !((_gameState == 2) && (_phase < 3) && (modTwenty == 0));
 
-        IPurgeCoinInterface coinContract = coin;
+        
         uint48 day = uint48((ts - JACKPOT_RESET_TIME) / 1 days);
         uint48 dayIdx = dailyIdx;
         uint256 luckboxThreshold;

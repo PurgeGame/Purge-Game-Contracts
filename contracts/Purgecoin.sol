@@ -222,7 +222,7 @@ contract Purgecoin {
     // Session flags
     bool public isBettingPaused; // set while VRF is pending unless explicitly allowed
     bool private tbActive; // "tenth player" bonus active
-    bool private rngFulfilled;
+    bool public rngFulfilled;
     bool private bonusActive; // super bonus mode active
     uint8 private extMode; // external jackpot mode (state machine)
 
