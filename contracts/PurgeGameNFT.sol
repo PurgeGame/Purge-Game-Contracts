@@ -180,21 +180,21 @@ contract PurgeGameNFT is ERC721A {
             _addTrophyReward(mapTokenId, mapUnit, nextLevel);
             valueIn -= mapUnit;
 
-            uint256 draws = valueIn / mapUnit;
-            uint256 seed = randomWord;
-            uint256 mapCount = mapTrophyIds.length;
-            if (mapCount == 0) revert InvalidToken();
-            for (uint256 j; j < draws; ) {
-                uint256 idx = mapCount == 1 ? 0 : (seed & 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF) % mapCount;
-                uint256 tokenId = mapTrophyIds[idx];
-                uint256 amount = (j + 1 == draws) ? (valueIn - (mapUnit * j)) : mapUnit;
-                _addTrophyReward(tokenId, amount, nextLevel);
-                seed >>= 64;
-                if (seed == 0) seed = (randomWord ^ uint256(j + 1)) | 1;
-                unchecked {
-                    ++j;
-                }
+        uint256 draws = valueIn / mapUnit;
+        uint256 seed = randomWord;
+        uint256 mapCount = mapTrophyIds.length;
+
+        for (uint256 j; j < draws; ) {
+            uint256 idx = mapCount == 1 ? 0 : (seed & 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF) % mapCount;
+            uint256 tokenId = mapTrophyIds[idx];
+            uint256 amount = (j + 1 == draws) ? (valueIn - (mapUnit * j)) : mapUnit;
+            _addTrophyReward(tokenId, amount, nextLevel);
+            seed >>= 64;
+            if (seed == 0) seed = (randomWord ^ uint256(j + 1)) | 1;
+            unchecked {
+                ++j;
             }
+        }
         }
         pendingBaseTokenId = 0;
     }
