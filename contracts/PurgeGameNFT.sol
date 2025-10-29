@@ -24,8 +24,6 @@ interface IPurgecoin {
     function bonusCoinflip(address player, uint256 amount) external;
 
     function isBettingPaused() external view returns (bool);
-
-    function pullRng() external returns (uint256);
 }
 
 contract PurgeGameNFT is ERC721A {
@@ -138,11 +136,6 @@ contract PurgeGameNFT is ERC721A {
         _awardTrophy(to, data, deferredWei, startLevel);
     }
 
-    /// @notice Clear metadata and burn a trophy placeholder (used when a level times out).
-    function clearAndBurnTrophy(uint256 tokenId) external onlyGame {
-        _clearAndBurnTrophy(tokenId);
-    }
-
     function processEndLevel(EndLevelRequest calldata req)
         external
         payable
@@ -242,9 +235,7 @@ contract PurgeGameNFT is ERC721A {
         if (currentLevel <= lastClaim) return (0, lastClaim, 0);
 
         uint256 stepsCompleted = lastClaim > startStep ? uint256(lastClaim - startStep) : 0;
-        if (stepsCompleted >= ETH_VEST_DURATION) {
-            return (owed, lastClaim, 0);
-        }
+        if (stepsCompleted >= ETH_VEST_DURATION) return (owed, lastClaim, 0);
 
         uint256 remainingSteps = ETH_VEST_DURATION - stepsCompleted;
         uint256 elapsed = uint256(currentLevel - lastClaim);
