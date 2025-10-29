@@ -739,28 +739,6 @@ contract PurgeGame {
 
                 uint256 poolTotal = levelPrizePool;
 
-                uint256 affPool = (prevLevel == 1) ? (poolTotal * 10) / 100 : (poolTotal * 5) / 100;
-                address[] memory affLeaders = coin.getLeaderboardAddresses(1);
-                uint256 affLen = affLeaders.length;
-                if (affLen != 0) {
-                    uint256 top = affLen < 3 ? affLen : 3;
-                    for (uint256 i; i < top; ) {
-                        uint256 pct = i == 0
-                            ? 50
-                            : i == 1
-                                ? 25
-                                : 15;
-                        _addClaimableEth(affLeaders[i], (affPool * pct) / 100);
-                        unchecked {
-                            ++i;
-                        }
-                    }
-                    if (affLen > 3) {
-                        address rndAddr = affLeaders[3 + (rngWord % (affLen - 3))];
-                        _addClaimableEth(rndAddr, (affPool * 10) / 100);
-                    }
-                }
-
                 uint256 exterminatorShare = (prevLevel % 10 == 4 && prevLevel != 4)
                     ? (poolTotal * 40) / 100
                     : (poolTotal * 20) / 100;
@@ -823,9 +801,46 @@ contract PurgeGame {
 
             uint256 immediate = exterminatorShare >> 1;
             uint256 deferredWei = exterminatorShare - immediate;
-            if (immediate != 0) _addClaimableEth(pend.exterminator, immediate);
+            _addClaimableEth(pend.exterminator, immediate);
 
-            nft.processEndLevel{value: deferredWei}(
+            uint256 sharedPool = poolValue / 20;
+            uint256 affiliatePool = sharedPool;
+            if (affiliatePool != 0) {
+                address[] memory affLeaders = coin.getLeaderboardAddresses(1);
+                uint256 affLen = affLeaders.length;
+                if (affLen != 0) {
+                    uint256 top = affLen < 3 ? affLen : 3;
+                    for (uint256 i; i < top; ) {
+                        uint256 pct = i == 0
+                            ? 50
+                            : i == 1
+                                ? 25
+                                : 15;
+                        _addClaimableEth(affLeaders[i], (affiliatePool * pct) / 100);
+                        unchecked {
+                            ++i;
+                        }
+                    }
+                    if (affLen > 3) {
+                        address rndAddr = affLeaders[3 + (rngWord % (affLen - 3))];
+                        _addClaimableEth(rndAddr, (affiliatePool * 10) / 100);
+                    }
+                } else {
+                    carryoverForNextLevel += affiliatePool;
+                    affiliatePool = 0;
+                }
+            }
+
+            uint256 legacyTrophyPool;
+            if (prevLevelPending > 1) {
+                legacyTrophyPool = sharedPool;
+            } else {
+                deferredWei += sharedPool;
+                legacyTrophyPool = 0;
+            }
+            uint256 forwardWei = deferredWei + legacyTrophyPool;
+
+            nft.processEndLevel{value: forwardWei}(
                 IPurgeGameNFT.EndLevelRequest({
                     exterminator: pend.exterminator,
                     traitId: pend.traitId,
