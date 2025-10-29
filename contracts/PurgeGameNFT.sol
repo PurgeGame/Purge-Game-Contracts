@@ -29,14 +29,6 @@ interface IERC721A {
     error OwnershipNotInitializedForExtraData();
 
 
-    struct TokenOwnership {
-        address addr;
-        uint64 startTimestamp;
-        bool burned;
-        uint24 extraData;
-    }
-
-
     function totalSupply() external view returns (uint256);
 
 
@@ -258,29 +250,6 @@ contract PurgeGameNFT is IERC721A {
         return _packedAddressData[owner] & _BITMASK_ADDRESS_DATA_ENTRY;
     }
 
-    function _numberMinted(address owner) internal view returns (uint256) {
-        return (_packedAddressData[owner] >> _BITPOS_NUMBER_MINTED) & _BITMASK_ADDRESS_DATA_ENTRY;
-    }
-
-    function _numberBurned(address owner) internal view returns (uint256) {
-        return (_packedAddressData[owner] >> _BITPOS_NUMBER_BURNED) & _BITMASK_ADDRESS_DATA_ENTRY;
-    }
-
-    function _getAux(address owner) internal view returns (uint64) {
-        return uint64(_packedAddressData[owner] >> _BITPOS_AUX);
-    }
-
-    function _setAux(address owner, uint64 aux) internal virtual {
-        uint256 packed = _packedAddressData[owner];
-        uint256 auxCasted;
-        assembly {
-            auxCasted := aux
-        }
-        packed = (packed & _BITMASK_AUX_COMPLEMENT) | (auxCasted << _BITPOS_AUX);
-        _packedAddressData[owner] = packed;
-    }
-
-
     function supportsInterface(bytes4 interfaceId) public view virtual override returns (bool) {
         return
             interfaceId == 0x01ffc9a7 || // ERC165 interface ID for ERC165.
@@ -310,31 +279,8 @@ contract PurgeGameNFT is IERC721A {
         return renderer.tokenURI(tokenId, metaPacked, remaining);
     }
 
-    function _baseURI() internal view virtual returns (string memory) {
-        return '';
-    }
-
-
     function ownerOf(uint256 tokenId) public view virtual override returns (address) {
         return address(uint160(_packedOwnershipOf(tokenId)));
-    }
-
-    function _ownershipOf(uint256 tokenId) internal view virtual returns (TokenOwnership memory) {
-        return _unpackedOwnership(_packedOwnershipOf(tokenId));
-    }
-
-    function _ownershipAt(uint256 index) internal view virtual returns (TokenOwnership memory) {
-        return _unpackedOwnership(_packedOwnerships[index]);
-    }
-
-    function _ownershipIsInitialized(uint256 index) internal view virtual returns (bool) {
-        return _packedOwnerships[index] != 0;
-    }
-
-    function _initializeOwnershipAt(uint256 index) internal virtual {
-        if (_packedOwnerships[index] == 0) {
-            _packedOwnerships[index] = _packedOwnershipOf(index);
-        }
     }
 
     function _packedOwnershipOf(uint256 tokenId) private view returns (uint256 packed) {
@@ -363,13 +309,6 @@ contract PurgeGameNFT is IERC721A {
                 }
             }
         }
-    }
-
-    function _unpackedOwnership(uint256 packed) private pure returns (TokenOwnership memory ownership) {
-        ownership.addr = address(uint160(packed));
-        ownership.startTimestamp = uint64(packed >> _BITPOS_START_TIMESTAMP);
-        ownership.burned = packed & _BITMASK_BURNED != 0;
-        ownership.extraData = uint24(packed >> _BITPOS_EXTRA_DATA);
     }
 
     function _packOwnershipData(address owner, uint256 flags) private view returns (uint256 result) {
