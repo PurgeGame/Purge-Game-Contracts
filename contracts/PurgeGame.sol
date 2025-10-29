@@ -56,7 +56,7 @@ interface IPurgeGameNFT {
 
     function gameMint(address to, uint256 quantity) external returns (uint256 startTokenId);
 
-    function purge(address owner, uint256 tokenId) external;
+    function purge(address owner, uint256[] calldata tokenIds) external;
 
     function awardTrophy(
         address to,
@@ -72,6 +72,8 @@ interface IPurgeGameNFT {
     function prepareNextLevel(uint24 nextLevel) external;
 
     function currentBaseTokenId() external view returns (uint256);
+
+    function recordSeasonMinted(uint256 minted) external;
 }
 
 // ===========================================================================
@@ -142,7 +144,7 @@ contract PurgeGame {
     // Game Progress
     // -----------------------
     uint24 public level = 1; // 1-based level counter
-    uint8 private gameState = 1; // Phase FSM
+    uint8 public gameState = 1; // Phase FSM
     uint8 private jackpotCounter; // # of daily jackpots paid in current level
     uint8 private earlyPurgeJackpotPaidMask; // Bitmask for early purge jackpots paid (progressive)
     uint8 private phase; // Airdrop sub-phase (0..7)
@@ -373,6 +375,7 @@ contract PurgeGame {
                     break;
                 }
                 if (_endJackpot(lvl, cap, day, false, pauseBetting)) {
+                    nft.recordSeasonMinted(purchaseCount);
                     levelStartTime = ts;
                     gameState = 4;
                 }
@@ -559,10 +562,12 @@ contract PurgeGame {
 
         uint256 count = tokenIds.length;
         if (count == 0 || count > 75) revert E();
+        address caller = msg.sender;
+        nft.purge(caller, tokenIds);
+
         uint24 lvl = level;
 
         uint16 prevExterminated = lastExterminatedTrait;
-        address caller = msg.sender;
         uint256 bonusTenths;
 
         address[][256] storage tickets = traitPurgeTicket[lvl];
@@ -600,8 +605,6 @@ contract PurgeGame {
                     bonusTenths += 9;
                 }
             }
-
-            nft.purge(caller, tokenId);
 
             unchecked {
 

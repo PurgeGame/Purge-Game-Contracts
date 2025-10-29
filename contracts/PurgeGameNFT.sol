@@ -28,10 +28,6 @@ interface IERC721A {
 
     error OwnershipNotInitializedForExtraData();
 
-    error SequentialUpToTooSmall();
-
-    error SequentialMintExceedsLimit();
-
 
     struct TokenOwnership {
         address addr;
@@ -122,6 +118,8 @@ interface IPurgeGame {
         returns (uint256 metaPacked, uint32[4] memory remaining);
 
     function level() external view returns (uint24);
+
+    function gameState() external view returns (uint8);
 }
 
 interface IPurgecoin {
@@ -209,6 +207,9 @@ contract PurgeGameNFT is IERC721A {
     uint256[] private mapTrophyIds;
     uint256[] private levelTrophyIds;
 
+    uint256 private seasonMintedSnapshot;
+    uint256 private seasonPurgedCount;
+
     uint32 private constant COIN_DRIP_STEPS = 10; // MAP coin drip cadence
     uint256 private constant COIN_EMISSION_UNIT = 1_000 * 1_000_000; // 1000 PURGED (6 decimals)
     uint256 private constant TROPHY_FLAG_MAP = uint256(1) << 200;
@@ -235,8 +236,6 @@ contract PurgeGameNFT is IERC721A {
         _name = "Purge Game";
         _symbol = "PG";
         _currentIndex = _startTokenId();
-
-        if (_sequentialUpTo() < _startTokenId()) _revert(SequentialUpToTooSmall.selector);
         renderer = IPurgeRenderer(renderer_);
         coin = IPurgecoin(coin_);
     }
@@ -246,18 +245,25 @@ contract PurgeGameNFT is IERC721A {
         return 0;
     }
 
-    function _sequentialUpTo() internal view virtual returns (uint256) {
-        return type(uint256).max;
-    }
-
     function _nextTokenId() internal view virtual returns (uint256) {
         return _currentIndex;
     }
 
-    function totalSupply() public view virtual override returns (uint256 result) {
-        unchecked {
-            result = _currentIndex - _burnCounter - _startTokenId();
+    function totalSupply() public view virtual override returns (uint256) {
+        uint256 trophyCount = mapTrophyIds.length + levelTrophyIds.length;
+        IPurgeGame gameRef = game;
+        if (address(gameRef) == address(0)) {
+            return trophyCount;
         }
+
+        if (gameRef.gameState() == 4) {
+            uint256 minted = seasonMintedSnapshot;
+            uint256 purged = seasonPurgedCount;
+            uint256 active = minted > purged ? minted - purged : 0;
+            return trophyCount + active;
+        }
+
+        return trophyCount;
     }
 
     function _totalMinted() internal view virtual returns (uint256 result) {
@@ -361,11 +367,6 @@ contract PurgeGameNFT is IERC721A {
         if (_startTokenId() <= tokenId) {
             packed = _packedOwnerships[tokenId];
 
-            if (tokenId > _sequentialUpTo()) {
-                if (_packedOwnershipExists(packed)) return packed;
-                _revert(OwnerQueryForNonexistentToken.selector);
-            }
-
             if (packed == 0) {
                 if (tokenId >= _currentIndex) _revert(OwnerQueryForNonexistentToken.selector);
                 for (;;) {
@@ -438,12 +439,6 @@ contract PurgeGameNFT is IERC721A {
         }
 
         return false;
-    }
-
-    function _packedOwnershipExists(uint256 packed) private pure returns (bool result) {
-        assembly {
-            result := gt(and(packed, _BITMASK_ADDRESS), and(packed, _BITMASK_BURNED))
-        }
     }
 
     function _isSenderApprovedOrOwner(
@@ -608,8 +603,6 @@ contract PurgeGameNFT is IERC721A {
 
             uint256 end = startTokenId + quantity;
             uint256 tokenId = startTokenId;
-
-            if (end - 1 > _sequentialUpTo()) _revert(SequentialMintExceedsLimit.selector);
 
             do {
                 assembly {
@@ -792,6 +785,11 @@ contract PurgeGameNFT is IERC721A {
         _setBasePointers(previousBase, currentBase);
     }
 
+    function recordSeasonMinted(uint256 minted) external onlyGame {
+        seasonMintedSnapshot = minted;
+        seasonPurgedCount = 0;
+    }
+
     function _mintTrophyPlaceholders(uint24 level) private returns (uint256 newBaseTokenId) {
         uint256 startId = _nextTokenId();
         _mint(address(game), 2);
@@ -803,9 +801,69 @@ contract PurgeGameNFT is IERC721A {
         newBaseTokenId = levelTokenId + 1;
     }
 
-    function purge(address owner, uint256 tokenId) external onlyGame {
-        if (ownerOf(tokenId) != owner) revert NotTokenOwner();
-        _burn(tokenId, false);
+    function purge(address owner, uint256[] calldata tokenIds) external onlyGame {
+        uint256 purged;
+        uint256 len = tokenIds.length;
+        for (uint256 i; i < len; ) {
+            _purgeToken(owner, tokenIds[i]);
+            unchecked {
+                ++purged;
+                ++i;
+            }
+        }
+        if (purged != 0) {
+            uint256 snapshot = seasonMintedSnapshot;
+            uint256 current = seasonPurgedCount;
+            uint256 cap = snapshot > current ? snapshot - current : 0;
+            uint256 add = purged > cap ? cap : purged;
+            if (add != 0) {
+                seasonPurgedCount = current + add;
+            }
+        }
+    }
+
+    function _purgeToken(address owner, uint256 tokenId) private {
+        if (trophyData[tokenId] != 0) revert InvalidToken();
+        if (!_exists(tokenId)) revert InvalidToken();
+        uint256 packed = _packedOwnershipOf(tokenId);
+        if (address(uint160(packed)) != owner) revert NotTokenOwner();
+        _burnPacked(tokenId, packed);
+    }
+
+    function _burnPacked(uint256 tokenId, uint256 prevOwnershipPacked) private {
+        address from = address(uint160(prevOwnershipPacked));
+        (uint256 approvedAddressSlot, address approvedAddress) = _getApprovedSlotAndAddress(tokenId);
+
+        _beforeTokenTransfers(from, address(0), tokenId, 1);
+
+        assembly {
+            if approvedAddress {
+                sstore(approvedAddressSlot, 0)
+            }
+        }
+
+        unchecked {
+            _packedAddressData[from] += (1 << _BITPOS_NUMBER_BURNED) - 1;
+
+            _packedOwnerships[tokenId] = _packOwnershipData(
+                from,
+                (_BITMASK_BURNED | _BITMASK_NEXT_INITIALIZED) | _nextExtraData(from, address(0), prevOwnershipPacked)
+            );
+
+            if (prevOwnershipPacked & _BITMASK_NEXT_INITIALIZED == 0) {
+                uint256 nextTokenId = tokenId + 1;
+                if (_packedOwnerships[nextTokenId] == 0 && nextTokenId != _currentIndex) {
+                    _packedOwnerships[nextTokenId] = prevOwnershipPacked;
+                }
+            }
+        }
+
+        emit Transfer(from, address(0), tokenId);
+        _afterTokenTransfers(from, address(0), tokenId, 1);
+
+        unchecked {
+            _burnCounter++;
+        }
     }
 
     function awardTrophy(address to, uint256 data, uint256 deferredWei) external payable onlyGame {
