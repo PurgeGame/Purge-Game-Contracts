@@ -169,16 +169,20 @@ contract PurgeGameNFT is ERC721A {
             _awardTrophy(req.exterminator, traitData, deferredAward, levelTokenId);
 
             if (legacyPool != 0) {
-                (uint256[] memory trophyTokens, , uint256[] memory trophyAmounts, ) =
-                    _sampleTrophies(true, legacyPool, randomWord);
-                uint256 len = trophyTokens.length;
-                for (uint256 i; i < len; ) {
-                    uint256 amount = trophyAmounts[i];
-                    if (amount != 0) {
-                        _addTrophyReward(trophyTokens[i], amount, nextLevel);
-                    }
-                    unchecked {
-                        ++i;
+                uint256[] storage source = levelTrophyIds;
+                uint256 trophyCount = source.length;
+                if (trophyCount != 0) {
+                    uint256 draws = trophyCount < 3 ? trophyCount : 3;
+                    uint256 baseShare = legacyPool / draws;
+                    uint256 rand = randomWord;
+                    uint256 mask = type(uint64).max;
+                    for (uint256 i; i < draws; ) {
+                        uint256 idx = trophyCount == 1 ? 0 : (rand & mask) % trophyCount;
+                        rand >>= 64;
+                        _addTrophyReward(source[idx], baseShare, nextLevel);
+                        unchecked {
+                            ++i;
+                        }
                     }
                 }
             }
@@ -194,21 +198,18 @@ contract PurgeGameNFT is ERC721A {
             _addTrophyReward(mapTokenId, mapUnit, nextLevel);
             valueIn -= mapUnit;
 
-        uint256 draws = valueIn / mapUnit;
-        uint256 seed = randomWord;
-        uint256 mapCount = mapTrophyIds.length;
-
-        for (uint256 j; j < draws; ) {
-            uint256 idx = mapCount == 1 ? 0 : (seed & 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF) % mapCount;
-            uint256 tokenId = mapTrophyIds[idx];
-            uint256 amount = (j + 1 == draws) ? (valueIn - (mapUnit * j)) : mapUnit;
-            _addTrophyReward(tokenId, amount, nextLevel);
-            seed >>= 64;
-            if (seed == 0) seed = (randomWord ^ uint256(j + 1)) | 1;
-            unchecked {
-                ++j;
+            uint256 draws = valueIn / mapUnit;
+            for (uint256 j; j < draws; ) {
+                uint256 idx = mapTrophyIds.length == 1
+                    ? 0
+                    : (randomWord & 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF) % mapTrophyIds.length;
+                uint256 tokenId = mapTrophyIds[idx];
+                _addTrophyReward(tokenId, mapUnit, nextLevel);
+                randomWord >>= 64;
+                unchecked {
+                    ++j;
+                }
             }
-        }
         }
     }
 
@@ -371,57 +372,6 @@ event TrophyRewardClaimed(uint256 indexed tokenId, address indexed claimant, uin
             | (base << TROPHY_BASE_LEVEL_SHIFT);
         trophyData[tokenId] = updated;
     }
-
-
-    function _sampleTrophies(bool isExtermination, uint256 payout, uint256 randomWord)
-        private
-        view
-        returns (uint256[] memory tokenIds, address[] memory owners, uint256[] memory amounts, uint256 distributed)
-    {
-        if (payout == 0) return (new uint256[](0), new address[](0), new uint256[](0), 0);
-
-        uint256[] storage source = isExtermination ? levelTrophyIds : mapTrophyIds;
-        uint256 len = source.length;
-        if (len == 0) return (new uint256[](0), new address[](0), new uint256[](0), 0);
-
-        uint256 draws = len < 3 ? len : 3;
-        tokenIds = new uint256[](draws);
-        owners = new address[](draws);
-        amounts = new uint256[](draws);
-
-        uint256 baseShare = payout / draws;
-        uint256 remainder = payout - (baseShare * draws);
-
-        bool[] memory used = new bool[](len);
-        uint256 mask = type(uint64).max;
-
-        for (uint256 i; i < draws; ) {
-            uint256 idx = len == 1 ? 0 : (randomWord & mask) % len;
-            randomWord >>= 64;
-            while (used[idx]) {
-                idx = (idx + 1) % len;
-            }
-            used[idx] = true;
-
-            uint256 tokenId = source[idx];
-            address owner = super.ownerOf(tokenId);
-            tokenIds[i] = tokenId;
-            owners[i] = owner;
-
-            uint256 share = baseShare;
-            if (remainder != 0) {
-                share += remainder;
-                remainder = 0;
-            }
-            amounts[i] = share;
-            distributed += share;
-
-            unchecked {
-                ++i;
-            }
-        }
-    }
-
     // ---------------------------------------------------------------------
     // Internal overrides
     // ---------------------------------------------------------------------
