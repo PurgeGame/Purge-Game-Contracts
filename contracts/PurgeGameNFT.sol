@@ -235,28 +235,15 @@ contract PurgeGameNFT is IERC721A {
     constructor(address renderer_, address coin_) {
         _name = "Purge Game";
         _symbol = "PG";
-        _currentIndex = _startTokenId();
         renderer = IPurgeRenderer(renderer_);
         coin = IPurgecoin(coin_);
     }
 
 
-    function _startTokenId() internal view virtual returns (uint256) {
-        return 0;
-    }
-
-    function _nextTokenId() internal view virtual returns (uint256) {
-        return _currentIndex;
-    }
-
     function totalSupply() public view virtual override returns (uint256) {
         uint256 trophyCount = mapTrophyIds.length + levelTrophyIds.length;
-        IPurgeGame gameRef = game;
-        if (address(gameRef) == address(0)) {
-            return trophyCount;
-        }
 
-        if (gameRef.gameState() == 4) {
+        if (game.gameState() == 4) {
             uint256 minted = seasonMintedSnapshot;
             uint256 purged = seasonPurgedCount;
             uint256 active = minted > purged ? minted - purged : 0;
@@ -265,17 +252,6 @@ contract PurgeGameNFT is IERC721A {
 
         return trophyCount;
     }
-
-    function _totalMinted() internal view virtual returns (uint256 result) {
-        unchecked {
-            result = _currentIndex - _startTokenId();
-        }
-    }
-
-    function _totalBurned() internal view virtual returns (uint256) {
-        return _burnCounter;
-    }
-
 
     function balanceOf(address owner) public view virtual override returns (uint256) {
         if (owner == address(0)) _revert(BalanceQueryForZeroAddress.selector);
@@ -340,8 +316,6 @@ contract PurgeGameNFT is IERC721A {
 
 
     function ownerOf(uint256 tokenId) public view virtual override returns (address) {
-        uint256 info = trophyData[tokenId];
-        if (info == 0 && tokenId < _currentBaseTokenId()) revert InvalidToken();
         return address(uint160(_packedOwnershipOf(tokenId)));
     }
 
@@ -364,23 +338,31 @@ contract PurgeGameNFT is IERC721A {
     }
 
     function _packedOwnershipOf(uint256 tokenId) private view returns (uint256 packed) {
-        if (_startTokenId() <= tokenId) {
-            packed = _packedOwnerships[tokenId];
+        if (tokenId >= _currentIndex) {
+            _revert(OwnerQueryForNonexistentToken.selector);
+        }
 
-            if (packed == 0) {
-                if (tokenId >= _currentIndex) _revert(OwnerQueryForNonexistentToken.selector);
-                for (;;) {
-                    unchecked {
-                        packed = _packedOwnerships[--tokenId];
-                    }
-                    if (packed == 0) continue;
+        uint256 baseLimit = _currentBaseTokenId();
+        if (tokenId < baseLimit && trophyData[tokenId] == 0) {
+            _revert(OwnerQueryForNonexistentToken.selector);
+        }
+
+        packed = _packedOwnerships[tokenId];
+        if (packed != 0) {
+            if (packed & _BITMASK_BURNED == 0) return packed;
+            _revert(OwnerQueryForNonexistentToken.selector);
+        }
+
+        unchecked {
+            uint256 curr = tokenId;
+            while (true) {
+                packed = _packedOwnerships[--curr];
+                if (packed != 0) {
                     if (packed & _BITMASK_BURNED == 0) return packed;
                     _revert(OwnerQueryForNonexistentToken.selector);
                 }
             }
-            if (packed & _BITMASK_BURNED == 0) return packed;
         }
-        _revert(OwnerQueryForNonexistentToken.selector);
     }
 
     function _unpackedOwnership(uint256 packed) private pure returns (TokenOwnership memory ownership) {
@@ -428,7 +410,7 @@ contract PurgeGameNFT is IERC721A {
             return trophyData[tokenId] != 0;
         }
 
-        if (_startTokenId() <= tokenId && tokenId < _currentIndex) {
+        if (tokenId < _currentIndex) {
             uint256 packed;
             while ((packed = _packedOwnerships[tokenId]) == 0) {
                 unchecked {
@@ -521,8 +503,6 @@ contract PurgeGameNFT is IERC721A {
             )
         }
         if (toMasked == 0) _revert(TransferToZeroAddress.selector);
-
-        _afterTokenTransfers(from, to, tokenId, 1);
     }
 
     function safeTransferFrom(
@@ -554,13 +534,6 @@ contract PurgeGameNFT is IERC721A {
     ) internal virtual {
         if (to == address(0) && quantity == 1 && trophyData[startTokenId] != 0) revert E();
     }
-
-    function _afterTokenTransfers(
-        address from,
-        address to,
-        uint256 startTokenId,
-        uint256 quantity
-    ) internal virtual {}
 
     function _checkContractOnERC721Received(
         address from,
@@ -619,7 +592,6 @@ contract PurgeGameNFT is IERC721A {
 
             _currentIndex = end;
         }
-        _afterTokenTransfers(address(0), to, startTokenId, quantity);
     }
 
     function _approve(address to, uint256 tokenId) internal virtual {
@@ -686,7 +658,6 @@ contract PurgeGameNFT is IERC721A {
         }
 
         emit Transfer(from, address(0), tokenId);
-        _afterTokenTransfers(from, address(0), tokenId, 1);
 
         unchecked {
             _burnCounter++;
@@ -775,7 +746,7 @@ contract PurgeGameNFT is IERC721A {
     // ---------------------------------------------------------------------
 
     function gameMint(address to, uint256 quantity) external onlyGame returns (uint256 startTokenId) {
-        startTokenId = _nextTokenId();
+        startTokenId = _currentIndex;
         _mint(to, quantity);
     }
 
@@ -791,7 +762,7 @@ contract PurgeGameNFT is IERC721A {
     }
 
     function _mintTrophyPlaceholders(uint24 level) private returns (uint256 newBaseTokenId) {
-        uint256 startId = _nextTokenId();
+        uint256 startId = _currentIndex;
         _mint(address(game), 2);
         uint256 mapTokenId = startId;
         uint256 levelTokenId = startId + 1;
@@ -804,8 +775,11 @@ contract PurgeGameNFT is IERC721A {
     function purge(address owner, uint256[] calldata tokenIds) external onlyGame {
         uint256 purged;
         uint256 len = tokenIds.length;
+        uint256 baseLimit = _currentBaseTokenId();
         for (uint256 i; i < len; ) {
-            _purgeToken(owner, tokenIds[i]);
+            uint256 tokenId = tokenIds[i];
+            if (tokenId < baseLimit) revert InvalidToken();
+            _purgeToken(owner, tokenId);
             unchecked {
                 ++purged;
                 ++i;
@@ -823,8 +797,6 @@ contract PurgeGameNFT is IERC721A {
     }
 
     function _purgeToken(address owner, uint256 tokenId) private {
-        if (trophyData[tokenId] != 0) revert InvalidToken();
-        if (!_exists(tokenId)) revert InvalidToken();
         uint256 packed = _packedOwnershipOf(tokenId);
         if (address(uint160(packed)) != owner) revert NotTokenOwner();
         _burnPacked(tokenId, packed);
@@ -859,7 +831,6 @@ contract PurgeGameNFT is IERC721A {
         }
 
         emit Transfer(from, address(0), tokenId);
-        _afterTokenTransfers(from, address(0), tokenId, 1);
 
         unchecked {
             _burnCounter++;
