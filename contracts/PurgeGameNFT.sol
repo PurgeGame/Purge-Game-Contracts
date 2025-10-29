@@ -3,89 +3,6 @@ pragma solidity ^0.8.26;
 
 
 
-interface IERC721A {
-    error ApprovalCallerNotOwnerNorApproved();
-
-    error ApprovalQueryForNonexistentToken();
-
-    error BalanceQueryForZeroAddress();
-
-    error MintToZeroAddress();
-
-    error MintZeroQuantity();
-
-    error OwnerQueryForNonexistentToken();
-
-    error TransferCallerNotOwnerNorApproved();
-
-    error TransferFromIncorrectOwner();
-
-    error TransferToNonERC721ReceiverImplementer();
-
-    error TransferToZeroAddress();
-
-    error URIQueryForNonexistentToken();
-
-    error OwnershipNotInitializedForExtraData();
-
-
-    function totalSupply() external view returns (uint256);
-
-
-    function supportsInterface(bytes4 interfaceId) external view returns (bool);
-
-
-    event Transfer(address indexed from, address indexed to, uint256 indexed tokenId);
-
-    event Approval(address indexed owner, address indexed approved, uint256 indexed tokenId);
-
-    event ApprovalForAll(address indexed owner, address indexed operator, bool approved);
-
-    function balanceOf(address owner) external view returns (uint256 balance);
-
-    function ownerOf(uint256 tokenId) external view returns (address owner);
-
-    function safeTransferFrom(
-        address from,
-        address to,
-        uint256 tokenId,
-        bytes calldata data
-    ) external payable;
-
-    function safeTransferFrom(
-        address from,
-        address to,
-        uint256 tokenId
-    ) external payable;
-
-    function transferFrom(
-        address from,
-        address to,
-        uint256 tokenId
-    ) external payable;
-
-    function approve(address to, uint256 tokenId) external payable;
-
-    function setApprovalForAll(address operator, bool _approved) external;
-
-    function getApproved(uint256 tokenId) external view returns (address operator);
-
-    function isApprovedForAll(address owner, address operator) external view returns (bool);
-
-
-    function name() external view returns (string memory);
-
-    function symbol() external view returns (string memory);
-
-    function tokenURI(uint256 tokenId) external view returns (string memory);
-
-
-    event ConsecutiveTransfer(uint256 indexed fromTokenId, uint256 toTokenId, address indexed from, address indexed to);
-}
-
-
-
-
 interface ERC721A__IERC721Receiver {
     function onERC721Received(
         address operator,
@@ -120,7 +37,24 @@ interface IPurgecoin {
     function isBettingPaused() external view returns (bool);
 }
 
-contract PurgeGameNFT is IERC721A {
+contract PurgeGameNFT {
+    // ERC721 errors
+    error ApprovalCallerNotOwnerNorApproved();
+    error ApprovalQueryForNonexistentToken();
+    error BalanceQueryForZeroAddress();
+    error OwnerQueryForNonexistentToken();
+    error TransferCallerNotOwnerNorApproved();
+    error TransferFromIncorrectOwner();
+    error TransferToNonERC721ReceiverImplementer();
+    error TransferToZeroAddress();
+    error URIQueryForNonexistentToken();
+    error OwnershipNotInitializedForExtraData();
+
+    // ERC721 events
+    event Transfer(address indexed from, address indexed to, uint256 indexed tokenId);
+    event Approval(address indexed owner, address indexed approved, uint256 indexed tokenId);
+    event ApprovalForAll(address indexed owner, address indexed operator, bool approved);
+    event ConsecutiveTransfer(uint256 indexed fromTokenId, uint256 toTokenId, address indexed from, address indexed to);
     struct TokenApprovalRef {
         address value;
     }
@@ -150,7 +84,6 @@ contract PurgeGameNFT is IERC721A {
         0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef;
 
     address private constant _TROPHY_BURN_ADDRESS = 0x000000000000000000000000000000000000dEaD;
-
 
     uint256 private _currentIndex;
 
@@ -230,7 +163,7 @@ contract PurgeGameNFT is IERC721A {
     }
 
 
-    function totalSupply() public view virtual override returns (uint256) {
+    function totalSupply() public view virtual returns (uint256) {
         uint256 trophyCount = mapTrophyIds.length + levelTrophyIds.length;
 
         if (game.gameState() == 4) {
@@ -243,12 +176,12 @@ contract PurgeGameNFT is IERC721A {
         return trophyCount;
     }
 
-    function balanceOf(address owner) public view virtual override returns (uint256) {
-        if (owner == address(0)) _revert(BalanceQueryForZeroAddress.selector);
+    function balanceOf(address owner) public view virtual returns (uint256) {
+        if (owner == address(0)) revert BalanceQueryForZeroAddress();
         return _packedAddressData[owner] & _BITMASK_ADDRESS_DATA_ENTRY;
     }
 
-    function supportsInterface(bytes4 interfaceId) public view virtual override returns (bool) {
+    function supportsInterface(bytes4 interfaceId) public view virtual returns (bool) {
         return
             interfaceId == 0x01ffc9a7 || // ERC165 interface ID for ERC165.
             interfaceId == 0x80ac58cd || // ERC165 interface ID for ERC721.
@@ -256,15 +189,15 @@ contract PurgeGameNFT is IERC721A {
     }
 
 
-    function name() public view virtual override returns (string memory) {
+    function name() public view virtual returns (string memory) {
         return _name;
     }
 
-    function symbol() public view virtual override returns (string memory) {
+    function symbol() public view virtual returns (string memory) {
         return _symbol;
     }
 
-    function tokenURI(uint256 tokenId) public view virtual override returns (string memory) {
+    function tokenURI(uint256 tokenId) public view virtual returns (string memory) {
         uint256 info = trophyData[tokenId];
         if (info != 0) {
             uint32[4] memory empty;
@@ -277,14 +210,13 @@ contract PurgeGameNFT is IERC721A {
         return renderer.tokenURI(tokenId, metaPacked, remaining);
     }
 
-    function ownerOf(uint256 tokenId) public view virtual override returns (address) {
+    function ownerOf(uint256 tokenId) public view virtual returns (address) {
         return address(uint160(_packedOwnershipOf(tokenId)));
     }
 
     function _packedOwnershipOf(uint256 tokenId) private view returns (uint256 packed) {
         if (tokenId >= _currentIndex) {
-            if (trophyData[tokenId] != 0) return _packedTrophyBurnOwner();
-            _revert(OwnerQueryForNonexistentToken.selector);
+            revert OwnerQueryForNonexistentToken();
         }
 
         packed = _packedOwnerships[tokenId];
@@ -299,15 +231,11 @@ contract PurgeGameNFT is IERC721A {
         }
 
         if (packed & _BITMASK_BURNED != 0 || (packed & _BITMASK_ADDRESS) == 0) {
-            if (trophyData[tokenId] != 0) return _packedTrophyBurnOwner();
-            _revert(OwnerQueryForNonexistentToken.selector);
+            if (trophyData[tokenId] != 0) return uint256(uint160(_TROPHY_BURN_ADDRESS));
+            revert OwnerQueryForNonexistentToken();
         }
 
         return packed;
-    }
-
-    function _packedTrophyBurnOwner() private pure returns (uint256) {
-        return uint256(uint160(_TROPHY_BURN_ADDRESS));
     }
 
     function _packOwnershipData(address owner, uint256 flags) private view returns (uint256 result) {
@@ -324,22 +252,22 @@ contract PurgeGameNFT is IERC721A {
     }
 
 
-    function approve(address to, uint256 tokenId) public payable virtual override {
+    function approve(address to, uint256 tokenId) public payable virtual {
         _approve(to, tokenId, true);
     }
 
-    function getApproved(uint256 tokenId) public view virtual override returns (address) {
-        if (!_exists(tokenId)) _revert(ApprovalQueryForNonexistentToken.selector);
+    function getApproved(uint256 tokenId) public view virtual returns (address) {
+        if (!_exists(tokenId)) revert ApprovalQueryForNonexistentToken();
 
         return _tokenApprovals[tokenId].value;
     }
 
-    function setApprovalForAll(address operator, bool approved) public virtual override {
+    function setApprovalForAll(address operator, bool approved) public virtual {
         _operatorApprovals[_msgSenderERC721A()][operator] = approved;
         emit ApprovalForAll(_msgSenderERC721A(), operator, approved);
     }
 
-    function isApprovedForAll(address owner, address operator) public view virtual override returns (bool) {
+    function isApprovedForAll(address owner, address operator) public view virtual returns (bool) {
         return _operatorApprovals[owner][operator];
     }
 
@@ -390,19 +318,19 @@ contract PurgeGameNFT is IERC721A {
         address from,
         address to,
         uint256 tokenId
-    ) public payable virtual override {
+    ) public payable virtual {
         uint256 prevOwnershipPacked = _packedOwnershipOf(tokenId);
 
         from = address(uint160(uint256(uint160(from)) & _BITMASK_ADDRESS));
 
-        if (address(uint160(prevOwnershipPacked)) != from) _revert(TransferFromIncorrectOwner.selector);
+        if (address(uint160(prevOwnershipPacked)) != from) revert TransferFromIncorrectOwner();
 
         (uint256 approvedAddressSlot, address approvedAddress) = _getApprovedSlotAndAddress(tokenId);
 
         if (!_isSenderApprovedOrOwner(approvedAddress, from, _msgSenderERC721A()))
-            if (!isApprovedForAll(from, _msgSenderERC721A())) _revert(TransferCallerNotOwnerNorApproved.selector);
+            if (!isApprovedForAll(from, _msgSenderERC721A())) revert TransferCallerNotOwnerNorApproved();
 
-        _beforeTokenTransfers(from, to, tokenId, 1);
+
 
         assembly {
             if approvedAddress {
@@ -440,14 +368,14 @@ contract PurgeGameNFT is IERC721A {
                 tokenId // `tokenId`.
             )
         }
-        if (toMasked == 0) _revert(TransferToZeroAddress.selector);
+        if (toMasked == 0) revert TransferToZeroAddress();
     }
 
     function safeTransferFrom(
         address from,
         address to,
         uint256 tokenId
-    ) public payable virtual override {
+    ) public payable virtual {
         safeTransferFrom(from, to, tokenId, '');
     }
 
@@ -456,13 +384,14 @@ contract PurgeGameNFT is IERC721A {
         address to,
         uint256 tokenId,
         bytes memory _data
-    ) public payable virtual override {
+    ) public payable virtual {
         transferFrom(from, to, tokenId);
         if (to.code.length != 0)
             if (!_checkContractOnERC721Received(from, to, tokenId, _data)) {
-                _revert(TransferToNonERC721ReceiverImplementer.selector);
+                revert TransferToNonERC721ReceiverImplementer();
             }
     }
+
 
     function _checkContractOnERC721Received(
         address from,
@@ -476,7 +405,7 @@ contract PurgeGameNFT is IERC721A {
             return retval == ERC721A__IERC721Receiver(to).onERC721Received.selector;
         } catch (bytes memory reason) {
             if (reason.length == 0) {
-                _revert(TransferToNonERC721ReceiverImplementer.selector);
+                revert TransferToNonERC721ReceiverImplementer();
             }
             assembly {
                 revert(add(32, reason), mload(reason))
@@ -487,9 +416,8 @@ contract PurgeGameNFT is IERC721A {
 
     function _mint(address to, uint256 quantity) internal virtual {
         uint256 startTokenId = _currentIndex;
-        if (quantity == 0) _revert(MintZeroQuantity.selector);
 
-        _beforeTokenTransfers(address(0), to, startTokenId, quantity);
+
 
         unchecked {
             _packedOwnerships[startTokenId] = _packOwnershipData(
@@ -501,7 +429,7 @@ contract PurgeGameNFT is IERC721A {
 
             uint256 toMasked = uint256(uint160(to)) & _BITMASK_ADDRESS;
 
-            if (toMasked == 0) _revert(MintToZeroAddress.selector);
+
 
             uint256 end = startTokenId + quantity;
             uint256 tokenId = startTokenId;
@@ -536,7 +464,7 @@ contract PurgeGameNFT is IERC721A {
 
         if (approvalCheck && _msgSenderERC721A() != owner)
             if (!isApprovedForAll(owner, _msgSenderERC721A())) {
-                _revert(ApprovalCallerNotOwnerNorApproved.selector);
+                revert ApprovalCallerNotOwnerNorApproved();
             }
 
         _tokenApprovals[tokenId].value = to;
@@ -557,10 +485,10 @@ contract PurgeGameNFT is IERC721A {
 
         if (approvalCheck) {
             if (!_isSenderApprovedOrOwner(approvedAddress, from, _msgSenderERC721A()))
-                if (!isApprovedForAll(from, _msgSenderERC721A())) _revert(TransferCallerNotOwnerNorApproved.selector);
+                if (!isApprovedForAll(from, _msgSenderERC721A())) revert TransferCallerNotOwnerNorApproved();
         }
 
-        _beforeTokenTransfers(from, address(0), tokenId, 1);
+
 
         assembly {
             if approvedAddress {
@@ -596,7 +524,7 @@ contract PurgeGameNFT is IERC721A {
 
     function _setExtraDataAt(uint256 index, uint24 extraData) internal virtual {
         uint256 packed = _packedOwnerships[index];
-        if (packed == 0) _revert(OwnershipNotInitializedForExtraData.selector);
+        if (packed == 0) revert OwnershipNotInitializedForExtraData();
         uint256 extraDataCasted;
         assembly {
             extraDataCasted := extraData
@@ -644,13 +572,6 @@ contract PurgeGameNFT is IERC721A {
             let length := sub(end, str)
             str := sub(str, 0x20)
             mstore(str, length)
-        }
-    }
-
-    function _revert(bytes4 errorSelector) internal pure {
-        assembly {
-            mstore(0x00, errorSelector)
-            revert(0x00, 0x04)
         }
     }
 
@@ -735,7 +656,7 @@ contract PurgeGameNFT is IERC721A {
         address from = address(uint160(prevOwnershipPacked));
         (uint256 approvedAddressSlot, address approvedAddress) = _getApprovedSlotAndAddress(tokenId);
 
-        _beforeTokenTransfers(from, address(0), tokenId, 1);
+
 
         assembly {
             if approvedAddress {
