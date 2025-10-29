@@ -48,7 +48,7 @@ contract PurgeGameNFT is ERC721A {
     // ---------------------------------------------------------------------
     // Trophy bookkeeping
     // ---------------------------------------------------------------------
-    uint256 private basePointers; // [previous base (high 128 bits) | current base (low 128 bits)]
+    uint256 private basePointers; // high 128 bits = previous base token id, low 128 bits = current base token id
     mapping(uint256 => uint256) private trophyData; // Packed metadata + owed + claim bookkeeping per trophy
 
     struct EndLevelRequest {

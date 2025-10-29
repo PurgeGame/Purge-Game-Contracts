@@ -294,9 +294,10 @@ contract PurgeGame {
                 revert LuckboxTooSmall();
 
             // Arm VRF when due/new (reward allowed)
-            if ((rngConsumed && day != dayIdx) || rngTs == 0) {
+            bool init = rngTs == 0;
+            if ((rngConsumed && day != dayIdx) || init) {
                 _requestVrf(ts, pauseBetting);
-                break;
+                if (!init) break;
             }
             if (day == dayIdx && s != 1) revert NotTimeYet();
             // --- State 1 - Pregame ---
