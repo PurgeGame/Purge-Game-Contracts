@@ -323,8 +323,18 @@ event TrophyRewardClaimed(uint256 indexed tokenId, address indexed claimant, uin
         return _currentBaseTokenId();
     }
 
-    function trophyOwed(uint256 tokenId) external view returns (uint256) {
-        return trophyData[tokenId] & TROPHY_OWED_MASK;
+    function getTrophyData(uint256 tokenId)
+        external
+        view
+        returns (uint256 owedWei, uint24 baseLevel, uint24 lastClaimLevel, uint16 traitId, bool isMap)
+    {
+        uint256 raw = trophyData[tokenId];
+        owedWei = raw & TROPHY_OWED_MASK;
+        uint256 shiftedBase = raw >> TROPHY_BASE_LEVEL_SHIFT;
+        baseLevel = uint24(shiftedBase);
+        lastClaimLevel = uint24((raw >> TROPHY_LAST_CLAIM_SHIFT));
+        traitId = uint16(raw >> 152);
+        isMap = (raw & TROPHY_FLAG_MAP) != 0;
     }
 
     // ---------------------------------------------------------------------
