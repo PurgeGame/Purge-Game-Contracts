@@ -60,8 +60,7 @@ interface IPurgeGameNFT {
     function awardTrophy(
         address to,
         uint256 data,
-        uint256 deferredWei,
-        uint24 startLevel
+        uint256 deferredWei
     ) external payable;
 
     function processEndLevel(EndLevelRequest calldata req)
@@ -1062,12 +1061,7 @@ contract PurgeGame {
                 address trophyWinner = winners[0];
                 _addClaimableEth(trophyWinner, immediatePool);
                 uint256 trophyData = (uint256(traitId) << 152) | (uint256(lvl) << 128) | TROPHY_FLAG_MAP;
-                nft.awardTrophy{value: deferredAmount}(
-                    trophyWinner,
-                    trophyData,
-                    deferredAmount,
-                    uint24(lvl + 1)
-                );
+                nft.awardTrophy{value: deferredAmount}(trophyWinner, trophyData, deferredAmount);
             } else if (winners.length != 0) {
                 uint256 winnersLen = winners.length;
                 uint256 prizeEachWei = bucketWei / winnersLen;
