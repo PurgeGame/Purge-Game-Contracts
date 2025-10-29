@@ -48,8 +48,7 @@ contract PurgeGameNFT is ERC721A {
     // ---------------------------------------------------------------------
     // Trophy bookkeeping
     // ---------------------------------------------------------------------
-    uint256 private baseTokenId; // Mirrors game-side _baseTokenId for guard checks
-    uint256 private pendingBaseTokenId;
+    uint256 private basePointers; // [previous base (high 128 bits) | current base (low 128 bits)]
     mapping(uint256 => uint256) private trophyData; // Packed metadata + owed + claim bookkeeping per trophy
 
     struct EndLevelRequest {
@@ -73,6 +72,17 @@ contract PurgeGameNFT is ERC721A {
     uint256 private constant TROPHY_LAST_CLAIM_SHIFT = 168;
     uint256 private constant TROPHY_LAST_CLAIM_MASK = uint256(0xFFFFFF) << TROPHY_LAST_CLAIM_SHIFT;
 
+    function _currentBaseTokenId() private view returns (uint256) {
+        return uint256(uint128(basePointers));
+    }
+
+    function _previousBaseTokenId() private view returns (uint256) {
+        return basePointers >> 128;
+    }
+
+    function _setBasePointers(uint256 previousBase, uint256 currentBase) private {
+        basePointers = (uint256(uint128(previousBase)) << 128) | uint128(currentBase);
+    }
 
     constructor(address renderer_, address coin_) ERC721A("Purge Game", "PG") {
         renderer = IPurgeRenderer(renderer_);
@@ -90,7 +100,8 @@ contract PurgeGameNFT is ERC721A {
     function wireContracts(address game_) external {
         if (msg.sender != address(coin)) revert E();
         game = IPurgeGame(game_);
-        _mintTrophyPlaceholders(1);
+        uint256 currentBase = _mintTrophyPlaceholders(1);
+        _setBasePointers(0, currentBase);
     }
 
     // ---------------------------------------------------------------------
@@ -104,11 +115,12 @@ contract PurgeGameNFT is ERC721A {
     }
 
     function prepareNextLevel(uint24 nextLevel) external onlyGame {
-        pendingBaseTokenId = baseTokenId;
-        _mintTrophyPlaceholders(nextLevel);
+        uint256 previousBase = _currentBaseTokenId();
+        uint256 currentBase = _mintTrophyPlaceholders(nextLevel);
+        _setBasePointers(previousBase, currentBase);
     }
 
-    function _mintTrophyPlaceholders(uint24 level) private {
+    function _mintTrophyPlaceholders(uint24 level) private returns (uint256 newBaseTokenId) {
         uint256 startId = _nextTokenId();
         _mint(address(game), 2);
         uint256 mapTokenId = startId;
@@ -116,7 +128,7 @@ contract PurgeGameNFT is ERC721A {
         trophyData[mapTokenId] =
             (uint256(0xFFFF) << 152) | (uint256(level) << TROPHY_BASE_LEVEL_SHIFT) | TROPHY_FLAG_MAP;
         trophyData[levelTokenId] = (uint256(0xFFFF) << 152) | (uint256(level) << TROPHY_BASE_LEVEL_SHIFT);
-        baseTokenId = levelTokenId + 1;
+        newBaseTokenId = levelTokenId + 1;
     }
 
     /// @notice Burn a token controlled by the game (non-trophies only).
@@ -128,6 +140,7 @@ contract PurgeGameNFT is ERC721A {
     /// @notice Award a trophy placeholder, finalise metadata, and seed ETH vesting (if any).
     function awardTrophy(address to, uint256 data, uint256 deferredWei) external payable onlyGame {
         bool isMap = (data & TROPHY_FLAG_MAP) != 0;
+        uint256 baseTokenId = _currentBaseTokenId();
         uint256 tokenId = isMap ? (baseTokenId - 2) : (baseTokenId - 1);
         _awardTrophy(to, data, deferredWei, tokenId);
     }
@@ -139,8 +152,9 @@ contract PurgeGameNFT is ERC721A {
         returns (address mapImmediateRecipient)
     {
         uint24 nextLevel = req.level + 1;
-        uint256 levelTokenId = pendingBaseTokenId - 1;
-        uint256 mapTokenId = pendingBaseTokenId - 2;
+        uint256 previousBase = _previousBaseTokenId();
+        uint256 levelTokenId = previousBase - 1;
+        uint256 mapTokenId = previousBase - 2;
 
         bool traitWin = req.exterminator != address(0);
         uint256 randomWord = req.randomWord;
@@ -196,7 +210,6 @@ contract PurgeGameNFT is ERC721A {
             }
         }
         }
-        pendingBaseTokenId = 0;
     }
 
     function claimTrophyReward(uint256 tokenId) external {
@@ -289,7 +302,7 @@ event TrophyRewardClaimed(uint256 indexed tokenId, address indexed claimant, uin
 
     function ownerOf(uint256 tokenId) public view override returns (address) {
         uint256 info = trophyData[tokenId];
-        if (info == 0 && tokenId < baseTokenId) revert InvalidToken();
+        if (info == 0 && tokenId < _currentBaseTokenId()) revert InvalidToken();
         return super.ownerOf(tokenId);
     }
 
@@ -298,7 +311,7 @@ event TrophyRewardClaimed(uint256 indexed tokenId, address indexed claimant, uin
         if (info != 0) {
             uint32[4] memory empty;
             return renderer.tokenURI(tokenId, info, empty);
-        } else if (tokenId < baseTokenId) {
+        } else if (tokenId < _currentBaseTokenId()) {
             revert InvalidToken();
         }
 
@@ -307,7 +320,7 @@ event TrophyRewardClaimed(uint256 indexed tokenId, address indexed claimant, uin
     }
 
     function currentBaseTokenId() external view returns (uint256) {
-        return baseTokenId;
+        return _currentBaseTokenId();
     }
 
     function trophyOwed(uint256 tokenId) external view returns (uint256) {
