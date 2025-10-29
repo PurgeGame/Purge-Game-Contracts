@@ -68,6 +68,8 @@ interface IPurgeGameNFT {
         payable
         returns (address mapImmediateRecipient);
 
+    function prepareNextLevel(uint24 nextLevel) external;
+
     function currentBaseTokenId() external view returns (uint256);
 }
 
@@ -703,6 +705,9 @@ contract PurgeGame {
             prizePool = 0;
             lastExterminatedTrait = 420;
         }
+
+        uint24 nextLevel = levelSnapshot + 1;
+        nft.prepareNextLevel(nextLevel);
 
         unchecked {
             levelSnapshot++;
