@@ -132,10 +132,6 @@ contract PurgeGameNFT is IERC721A {
 
     uint256 private constant _BITPOS_NUMBER_BURNED = 128;
 
-    uint256 private constant _BITPOS_AUX = 192;
-
-    uint256 private constant _BITMASK_AUX_COMPLEMENT = (1 << 192) - 1;
-
     uint256 private constant _BITPOS_START_TIMESTAMP = 160;
 
     uint256 private constant _BITMASK_BURNED = 1 << 224;
