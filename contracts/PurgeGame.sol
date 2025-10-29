@@ -263,9 +263,9 @@ contract PurgeGame {
 
         uint24 lvl = level;
         uint8 modTwenty = uint8(lvl % 20);
-        uint8 s = gameState;
-        uint8 ph = phase;
-        bool pauseBetting = !((s == 2) && (ph < 3) && (modTwenty == 0));
+        uint8 _gameState = gameState;
+        uint8 _phase = phase;
+        bool pauseBetting = !((_gameState == 2) && (_phase < 3) && (modTwenty == 0));
 
         IPurgeCoinInterface coinContract = coin;
         uint48 day = uint48((ts - JACKPOT_RESET_TIME) / 1 days);
@@ -299,27 +299,27 @@ contract PurgeGame {
                 _requestVrf(ts, pauseBetting);
                 if (!init) break;
             }
-            if (day == dayIdx && s != 1) revert NotTimeYet();
+            if (day == dayIdx && _gameState != 1) revert NotTimeYet();
             // --- State 1 - Pregame ---
-            if (s == 1) {
+            if (_gameState == 1) {
                 _finalizeEndgame(lvl, cap, day); // handles payouts, wipes, endgame dist, and jackpots
                 break;
             }
 
             // --- State 2 - Purchase ---
-            if (s == 2) {
+            if (_gameState == 2) {
                 _updateEarlyPurgeJackpots(lvl);
                 bool prizeReady = prizePool >= lastPrizePool;
                 bool readyForMap = (purchaseCount >= PURCHASE_MINIMUM && prizeReady);
                 if (modTwenty == 16) {
                     readyForMap = prizeReady;
                 }
-                if (ph == 2 && readyForMap) {
+                if (_phase == 2 && readyForMap) {
                     if (_endJackpot(lvl, cap, day, true, pauseBetting)) {
                         phase = 3;
                     }
                     break;
-                } else if (ph == 3 && jackpotCounter == 0) {
+                } else if (_phase == 3 && jackpotCounter == 0) {
                     gameState = 3;
                     renderer.setStartingTraitRemaining(traitRemaining);
                     if (_processMapBatch(cap)) {
@@ -342,8 +342,8 @@ contract PurgeGame {
             }
 
             // --- State 3 - Airdrop ---
-            if (s == 3) {
-                if (ph == 3) {
+            if (_gameState == 3) {
+                if (_phase == 3) {
                     if (_processMapBatch(cap)) {
                         phase = 4;
                         airdropIndex = 0;
@@ -351,13 +351,13 @@ contract PurgeGame {
                     }
                     break;
                 }
-                if (ph == 4) {
+                if (_phase == 4) {
                     if (payMapJackpot(cap, lvl)) {
                         phase = 5;
                     }
                     break;
                 }
-                if (ph == 5) {
+                if (_phase == 5) {
                     if (_processNftBatch(cap)) {
                         delete pendingNftMints;
                         delete pendingMapMints;
@@ -376,8 +376,8 @@ contract PurgeGame {
             }
 
             // --- State 4 - Purge ---
-            if (s == 4) {
-                if (ph == 6) {
+            if (_gameState == 4) {
+                if (_phase == 6) {
                     if (modTwenty == 16 && jackpotCounter < MAP_FIRST_BATCH) {
                         while (jackpotCounter < MAP_FIRST_BATCH) {
                             payDailyJackpot(true, lvl);
@@ -398,12 +398,12 @@ contract PurgeGame {
             }
 
             // --- State 0 ---
-            if (s == 0) {
+            if (_gameState == 0) {
                 _endJackpot(lvl, cap, day, false, pauseBetting);
             }
         } while (false);
 
-        if (s != 0 && cap == 0) coinContract.bonusCoinflip(msg.sender, priceCoin);
+        if (_gameState != 0 && cap == 0) coinContract.bonusCoinflip(msg.sender, priceCoin);
     }
 
     // --- Purchases: schedule NFT mints (traits precomputed) ----------------------------------------
@@ -417,7 +417,7 @@ contract PurgeGame {
     /// @param payInCoin If true, burn Purgecoin instead of paying ETH.
     /// @param affiliateCode Optional affiliate code for ETH purchases (ignored for coin payments).
     function purchase(uint256 quantity, bool payInCoin, bytes32 affiliateCode) external payable {
-        uint8 ph = phase;
+        uint8 _phase = phase;
         uint24 lvl = level;
                 if (quantity == 0 || quantity > 100 || gameState != 2 || !rngConsumed || (lvl % 20) == 16) revert NotTimeYet();
         uint256 _priceCoin = priceCoin;
@@ -430,7 +430,7 @@ contract PurgeGame {
         } else {
             // Scale quantity by 100 so `_ethReceive` can keep integer math.
             uint256 bonus = _ethReceive(quantity * 100, affiliateCode, quantity);
-            if (ph == 3 && (lvl % 100) > 90) {
+            if (_phase == 3 && (lvl % 100) > 90) {
                 bonus += (quantity * _priceCoin) / 5;
             }
             bonus += bonusCoinReward;
@@ -497,7 +497,7 @@ contract PurgeGame {
     /// @param affiliateCode Optional affiliate code for ETH payments.
     function mintAndPurge(uint256 quantity, bool payInCoin, bytes32 affiliateCode) external payable {
         uint256 priceUnit = priceCoin;
-        uint8 ph = phase;
+        uint8 _phase = phase;
         uint8 state = gameState;
         if (quantity == 0 || (state != 2 && state != 4) || !rngConsumed) revert NotTimeYet();
         uint24 lvl = level;
@@ -518,7 +518,7 @@ contract PurgeGame {
             _coinReceive(coinCost - mapRebate, lvl, mapBonus);
         } else {
             uint256 bonus = _ethReceive(scaledQty, affiliateCode, (lvl < 10) ? quantity : 0);
-            if (ph == 3 && (lvl % 100) > 90) {
+            if (_phase == 3 && (lvl % 100) > 90) {
                 bonus += coinCost / 5;
             }
             uint256 rebateMint = bonus + mapRebate + mapBonus;
@@ -745,13 +745,13 @@ contract PurgeGame {
     function _finalizeEndgame(uint24 lvl, uint32 cap, uint48 day) internal {
         PendingEndLevel storage pend = pendingEndLevel;
 
-        uint8 ph = phase;
+        uint8 _phase = phase;
 
         uint24 prevLevel = lvl - 1;
         uint8 prevMod10 = uint8(prevLevel % 10);
         uint8 prevMod100 = uint8(prevLevel % 100);
 
-        if (ph > 3) {
+        if (_phase > 3) {
             if (lastExterminatedTrait != 420) {
                 if (prizePool != 0) {
                     _payoutParticipants(cap, prevLevel);
@@ -1361,7 +1361,7 @@ contract PurgeGame {
             }
         }
         if (throttleWrites) {
-            writesBudget -= writesBudget >> 2; // 75% scaling
+            writesBudget -= writesBudget * 35 / 100; // 65% scaling
         }
         uint32 used = 0;
         uint256 entropy = rngWord;
