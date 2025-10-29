@@ -169,7 +169,7 @@ contract PurgeGameNFT is ERC721A {
 
             mapImmediateRecipient = ownerOf(mapTokenId);
 
-            delete trophyData[tokenId];
+            delete trophyData[levelTokenId];
 
             uint256 valueIn = msg.value;
             _addTrophyReward(mapTokenId, mapUnit, nextLevel);
