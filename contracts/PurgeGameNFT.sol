@@ -75,7 +75,7 @@ contract PurgeGameNFT is ERC721A {
     uint32 private constant COIN_DRIP_STEPS = 10; // MAP coin drip cadence
     uint256 private constant COIN_EMISSION_UNIT = 1_000 * 1_000_000; // 1000 PURGED (6 decimals)
     uint256 private constant TROPHY_FLAG_MAP = uint256(1) << 200;
-    uint32 private constant ETH_VEST_DURATION = 10; // levels
+
 
     constructor(address renderer_, address coin_) ERC721A("Purge Game", "PG") {
         renderer = IPurgeRenderer(renderer_);
@@ -141,7 +141,6 @@ contract PurgeGameNFT is ERC721A {
 
         bool traitWin = req.exterminator != address(0);
         uint256 randomWord = req.randomWord;
-        address mapRecipient;
 
         if (traitWin) {
             uint256 traitData = (uint256(req.traitId) << 152) | (uint256(req.level) << 128);
@@ -174,7 +173,7 @@ contract PurgeGameNFT is ERC721A {
             uint256 mapTokenId = currentBase - 2;
             uint256 levelTokenId = currentBase - 1;
 
-            mapRecipient = ownerOf(mapTokenId);
+            mapImmediateRecipient = ownerOf(mapTokenId);
 
 
             _clearAndBurnTrophy(levelTokenId);
@@ -208,7 +207,7 @@ contract PurgeGameNFT is ERC721A {
             _mintTrophyPlaceholders(nextLevel);
         }
 
-        return mapRecipient;
+
     }
 
     function claimTrophyReward(uint256 tokenId) external {
@@ -227,7 +226,7 @@ contract PurgeGameNFT is ERC721A {
         uint24 baseStartLevel = uint24((info >> 128) & 0xFFFFFF) + 1;
         if (currentLevel < baseStartLevel) revert ClaimNotReady();
 
-        uint32 vestEnd = uint32(baseStartLevel) + ETH_VEST_DURATION;
+        uint32 vestEnd = uint32(baseStartLevel) + COIN_DRIP_STEPS;
         uint32 denom = vestEnd > currentLevel ? vestEnd - currentLevel : 1;
         uint256 payout = owed / denom;
         if (payout == 0) payout = owed;
@@ -425,6 +424,4 @@ event TrophyRewardClaimed(uint256 indexed tokenId, address indexed claimant, uin
         super._beforeTokenTransfers(from, to, tokenId, quantity);
     }
 
-    receive() external payable {
-    }
 }
