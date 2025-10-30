@@ -15,20 +15,24 @@ pragma solidity ^0.8.26;
  *      All calls are trusted (set via constructor in the ERC20 contract).
  */
 interface IPurgeCoinInterface {
-    function bonusCoinflip(address player, uint256 amount) external;
+    function bonusCoinflip(address player, uint256 amount, bool rngReady) external;
     function burnie(uint256 amount) external payable;
     function burnCoin(address target, uint256 amount) external;
     function payAffiliate(uint256 amount, bytes32 code, address sender, uint24 lvl) external;
-    function requestRng(bool pauseBetting) external;
-    function rngFulfilled() external view returns (bool);
-    function pullRng() external returns (uint256 word);
-    function processCoinflipPayouts(uint24 level, uint32 cap, bool bonusFlip) external returns (bool);
-    function triggerCoinJackpot() external;
+    function processCoinflipPayouts(
+        uint24 level,
+        uint32 cap,
+        bool bonusFlip,
+        uint256 rngWord,
+        bool allowResolution
+    ) external returns (bool);
+    function triggerCoinJackpot(uint256 rngWord) external;
     function runExternalJackpot(
         uint8 kind,
         uint256 poolWei,
         uint32 cap,
-        uint24 lvl
+        uint24 lvl,
+        uint256 rngWord
     ) external returns (bool finished, address[] memory winners, uint256[] memory amounts, uint256 returnAmountWei);
     function resetAffiliateLeaderboard(uint24 lvl) external;
     function getLeaderboardAddresses(uint8 which) external view returns (address[] memory);
@@ -51,7 +55,6 @@ interface IPurgeGameNFT {
         uint16 traitId;
         uint24 level;
         uint256 pool;
-        uint256 randomWord;
     }
 
     function gameMint(address to, uint256 quantity) external returns (uint256 startTokenId);
@@ -74,6 +77,16 @@ interface IPurgeGameNFT {
     function currentBaseTokenId() external view returns (uint256);
 
     function recordSeasonMinted(uint256 minted) external;
+
+    function requestRng() external;
+
+    function currentRngWord() external view returns (uint256);
+
+    function rngLocked() external view returns (bool);
+
+    function releaseRngLock() external;
+
+    function isRngFulfilled() external view returns (bool);
 }
 
 // ===========================================================================
@@ -136,14 +149,12 @@ contract PurgeGame {
     uint256 private prizePool; // Live ETH pool for current level
     uint256 private nextPrizePool; // ETH collected during purge for upcoming level
     uint256 private carryoverForNextLevel; // Carryover amount reserved for the next level (wei)
-    uint256 private rngWord; // Last fulfilled VRF word for this level
 
     // -----------------------
     // Time / Session Tracking
     // -----------------------
     uint48 private levelStartTime = type(uint48).max; // Wall-clock start of current level
     uint48 private dailyIdx; // Daily session index (derived from JACKPOT_RESET_TIME)
-    uint48 private rngTs; // Timestamp of last RNG request/fulfillment
 
     // -----------------------
     // Game Progress
@@ -158,8 +169,6 @@ contract PurgeGame {
     // -----------------------
     // RNG Liveness Flags
     // -----------------------
-    bool private rngFulfilled; // Last RNG request has been fulfilled
-    bool private rngConsumed; // Current RNG has been consumed by game logic
 
     // -----------------------
     // Minting / Airdrops
@@ -256,8 +265,8 @@ contract PurgeGame {
         baseTokenId = nft.currentBaseTokenId();
         enoughPurchases = purchaseCount >= PURCHASE_MINIMUM;
         earlyPurgeMask = earlyPurgeJackpotPaidMask;
-        rngFulfilled_ = coin.rngFulfilled();
-        rngConsumed_ = rngConsumed;
+        rngFulfilled_ = nft.isRngFulfilled();
+        rngConsumed_ = !nft.rngLocked();
     }
 
     function lastEthMintLevelOf(address player) external view returns (uint24) {
@@ -284,7 +293,8 @@ contract PurgeGame {
         uint8 modTwenty = uint8(lvl % 20);
         uint8 _gameState = gameState;
         uint8 _phase = phase;
-        bool pauseBetting = !((_gameState == 2) && (_phase < 3) && (modTwenty == 0));
+
+        bool rngReady;
 
         
         uint48 day = uint48((ts - JACKPOT_RESET_TIME) / 1 days);
@@ -296,36 +306,20 @@ contract PurgeGame {
         }
 
         do {
-            // RNG pull / SLA
-            if (rngTs != 0 && !rngFulfilled) {
-                uint256 w = coinContract.pullRng();
-                if (w != 0) {
-                    rngFulfilled = true;
-                    rngWord = w;
-                    rngTs = ts;
-                } else if (ts - rngTs > 6 hours) {
-                    _requestVrf(ts, pauseBetting);
-                    break;
-                } else revert RngNotReady();
-            }
+            uint256 rngWord = _ensureRngReady(day);
+            rngReady = true;
+            bool allowCoinflipResolution = !(_gameState == 2 && _phase < 3 && modTwenty == 0);
+
 
             // Luckbox rewards
             if (cap == 0 && coinContract.playerLuckbox(msg.sender) < luckboxThreshold)
                 revert LuckboxTooSmall();
 
             // Arm VRF when due/new (reward allowed)
-            bool init = rngTs == 0;
-            bool dayRolled = rngConsumed && day != dayIdx;
-            if (init || dayRolled) {
-                if (!(dayRolled && _gameState == 1)) {
-                    _requestVrf(ts, pauseBetting);
-                    if (!init) break;
-                }
-            }
             if (day == dayIdx && _gameState != 1) revert NotTimeYet();
             // --- State 1 - Pregame ---
             if (_gameState == 1) {
-                _finalizeEndgame(lvl, cap, day); // handles payouts, wipes, endgame dist, and jackpots
+                _finalizeEndgame(lvl, cap, day, rngWord); // handles payouts, wipes, endgame dist, and jackpots
                 break;
             }
 
@@ -338,7 +332,7 @@ contract PurgeGame {
                     readyForMap = prizeReady;
                 }
                 if (_phase == 2 && readyForMap) {
-                    if (_endJackpot(lvl, cap, day, true, pauseBetting)) {
+                    if (_endJackpot(lvl, cap, day, true, rngWord, allowCoinflipResolution, _phase)) {
                         phase = 3;
                     }
                     break;
@@ -357,10 +351,10 @@ contract PurgeGame {
                     break;
                 }
                 if (jackpotCounter > 0) {
-                    payDailyJackpot(false, lvl);
+                    payDailyJackpot(false, lvl, rngWord);
                     break;
                 }
-                _endJackpot(lvl, cap, day, false, pauseBetting);
+                _endJackpot(lvl, cap, day, false, rngWord, allowCoinflipResolution, _phase);
                 break;
             }
 
@@ -375,7 +369,7 @@ contract PurgeGame {
                     break;
                 }
                 if (_phase == 4) {
-                    if (payMapJackpot(cap, lvl)) {
+                    if (payMapJackpot(cap, lvl, rngWord)) {
                         phase = 5;
                     }
                     break;
@@ -391,7 +385,7 @@ contract PurgeGame {
                     }
                     break;
                 }
-                if (_endJackpot(lvl, cap, day, false, pauseBetting)) {
+                if (_endJackpot(lvl, cap, day, false, rngWord, allowCoinflipResolution, _phase)) {
                     nft.recordSeasonMinted(purchaseCount);
                     levelStartTime = ts;
                     gameState = 4;
@@ -404,32 +398,32 @@ contract PurgeGame {
                 if (_phase == 6) {
                     if (modTwenty == 16 && jackpotCounter < MAP_FIRST_BATCH) {
                         while (jackpotCounter < MAP_FIRST_BATCH) {
-                            payDailyJackpot(true, lvl);
+                            payDailyJackpot(true, lvl, rngWord);
                             if (gameState != 4) break;
                         }
                     } else {
-                        payDailyJackpot(true, lvl);
+                        payDailyJackpot(true, lvl, rngWord);
                     }
                     if (gameState != 4) break;
                     if (modTwenty != 16) {
-                        coinContract.triggerCoinJackpot();
+                        coinContract.triggerCoinJackpot(rngWord);
                     }
                     phase = 7;
                     break;
                 }
-                if (_endJackpot(lvl, cap, day, false, pauseBetting)) phase = 6;
+                if (_endJackpot(lvl, cap, day, false, rngWord, allowCoinflipResolution, _phase)) phase = 6;
                 break;
             }
 
             // --- State 0 ---
             if (_gameState == 0) {
-                _endJackpot(lvl, cap, day, false, pauseBetting);
+                _endJackpot(lvl, cap, day, false, rngWord, allowCoinflipResolution, _phase);
             }
         } while (false);
 
         emit Advance(_gameState, _phase);
 
-        if (_gameState != 0 && cap == 0) coinContract.bonusCoinflip(msg.sender, priceCoin);
+        if (_gameState != 0 && cap == 0) coinContract.bonusCoinflip(msg.sender, priceCoin, rngReady);
     }
 
 
@@ -446,11 +440,13 @@ contract PurgeGame {
     function purchase(uint256 quantity, bool payInCoin, bytes32 affiliateCode) external payable {
         uint8 _phase = phase;
         uint24 lvl = level;
-        if (!rngConsumed) revert RngNotReady();
         if (quantity == 0 || quantity > 100) revert InvalidQuantity();
         if (gameState != 2 || (lvl % 20) == 16) revert NotTimeYet();
         uint256 _priceCoin = priceCoin;
         _enforceCenturyLuckbox(lvl, _priceCoin);
+        uint256 randomWord = nft.currentRngWord();
+        if (randomWord == 0) revert RngNotReady();
+
         // Payment handling (ETH vs coin)
         uint256 bonusCoinReward = (quantity / 10) * _priceCoin;
         if (payInCoin) {
@@ -463,7 +459,7 @@ contract PurgeGame {
                 bonus += (quantity * _priceCoin) / 5;
             }
             bonus += bonusCoinReward;
-            if (bonus != 0) coin.bonusCoinflip(msg.sender, bonus);
+            if (bonus != 0) coin.bonusCoinflip(msg.sender, bonus, true);
         }
 
         // Push buyer to the pending list once (de-dup)
@@ -473,7 +469,6 @@ contract PurgeGame {
 
         // Precompute traits for future mints using the current RNG snapshot.
         // NOTE: tokenIds are not minted yet; only trait counters are updated.
-        uint256 randomWord = rngWord; // 0 is allowed by design here
         uint256 baseTokenId = nft.currentBaseTokenId();
         uint256 tokenIdStart = baseTokenId + uint256(purchaseCount);
         uint256 randSeed = randomWord | 1;
@@ -528,7 +523,7 @@ contract PurgeGame {
         uint256 priceUnit = priceCoin;
         uint8 _phase = phase;
         uint8 state = gameState;
-        if (!rngConsumed) revert RngNotReady();
+        if (nft.rngLocked()) revert RngNotReady();
         if (quantity == 0) revert InvalidQuantity();
         if (state != 2 && state != 4) revert NotTimeYet();
         uint24 lvl = level;
@@ -553,7 +548,7 @@ contract PurgeGame {
                 bonus += coinCost / 5;
             }
             uint256 rebateMint = bonus + mapRebate + mapBonus;
-            if (rebateMint != 0) coin.bonusCoinflip(msg.sender, rebateMint);
+            if (rebateMint != 0) coin.bonusCoinflip(msg.sender, rebateMint, true);
         }
 
         if (playerMapMintsOwed[msg.sender] == 0) pendingMapMints.push(msg.sender);
@@ -582,7 +577,7 @@ contract PurgeGame {
             extSize := extcodesize(caller())
         }
         if (extSize != 0 || tx.origin != msg.sender) revert E();
-        if (!rngConsumed) revert RngNotReady();
+        if (nft.rngLocked()) revert RngNotReady();
         if (gameState != 4) revert NotTimeYet();
 
         uint256 count = tokenIds.length;
@@ -664,7 +659,7 @@ contract PurgeGame {
         }
 
         if (lvl % 10 == 2) count <<= 1;
-        coin.bonusCoinflip(caller, (count + bonusTenths) * (priceCoin / 10));
+        coin.bonusCoinflip(caller, (count + bonusTenths) * (priceCoin / 10), true);
         emit Purge(msg.sender, tokenIds);
 
         if (winningTrait != TRAIT_ID_TIMEOUT) {
@@ -772,18 +767,17 @@ contract PurgeGame {
         purchaseCount = 0;
         gameState = 1;
 
-        _requestVrf(uint48(block.timestamp), true);
+        _triggerRngRequest();
     }
 
     /// @notice Resolve prior level endgame in bounded slices and advance to purchase when ready.
     /// @dev Order: (A) participant payouts -> (B) ticket wipes -> (C) affiliate/trophy/exterminator
     ///      -> (D) finish coinflip payouts (jackpot end) and move to state 2.
     ///      Pass `cap` from advanceGame to keep tx gas ≤ target.
-    function _finalizeEndgame(uint24 lvl, uint32 cap, uint48 day) internal {
+    function _finalizeEndgame(uint24 lvl, uint32 cap, uint48 day, uint256 rngWord) internal {
         PendingEndLevel storage pend = pendingEndLevel;
 
         uint8 _phase = phase;
-
         uint24 prevLevel = lvl - 1;
         uint8 prevMod10 = uint8(prevLevel % 10);
         uint8 prevMod100 = uint8(prevLevel % 100);
@@ -814,7 +808,7 @@ contract PurgeGame {
                 }
             }
 
-            if (_endJackpot(lvl, cap, day, false, true)) {
+            if (_endJackpot(lvl, cap, day, false, rngWord, true, _phase)) {
                 phase = 0;
                 return;
             }
@@ -822,7 +816,7 @@ contract PurgeGame {
             bool decWindow = prevLevel >= 25 && prevMod10 == 5 && prevMod100 != 95;
             if (decWindow) {
                 uint256 decPoolWei = (carryoverForNextLevel * 15) / 100;
-                (bool decFinished, ) = _progressExternal(1, decPoolWei, cap, prevLevel);
+                (bool decFinished, ) = _progressExternal(1, decPoolWei, cap, prevLevel, rngWord);
                 if (!decFinished) return;
             }
 
@@ -883,8 +877,7 @@ contract PurgeGame {
                     exterminator: pend.exterminator,
                     traitId: pend.traitId,
                     level: prevLevelPending,
-                    pool: poolValue,
-                    randomWord: rngWord
+                    pool: poolValue
                 })
             );
             for (uint8 i; i < 6; ) {
@@ -915,8 +908,7 @@ contract PurgeGame {
                     exterminator: topAffiliate,
                     traitId: TRAIT_ID_TIMEOUT,
                     level: prevLevelPending,
-                    pool: poolCarry,
-                    randomWord: rngWord
+                    pool: poolCarry
                 })
             );
             mapAffiliates;
@@ -1027,14 +1019,14 @@ contract PurgeGame {
     ///     * idx 5–6: same random Q2 trait
     ///     * idx 7–8: same random Q3 trait
     /// - `_mapSpec(idx)` drives winners count & permille for each bucket.
-    function payMapJackpot(uint32 cap, uint24 lvl) internal returns (bool finished) {
+    function payMapJackpot(uint32 cap, uint24 lvl, uint256 rngWord) internal returns (bool finished) {
         uint256 carryWei = carryoverForNextLevel;
         uint8 lvlMod20 = uint8(lvl % 20);
 
         // External jackpots first (may need multiple calls)
         if (lvlMod20 == 0) {
             uint256 bafPoolWei = (carryWei * 24) / 100;
-            (bool finishedBaf, ) = _progressExternal(0, bafPoolWei, cap, lvl);
+            (bool finishedBaf, ) = _progressExternal(0, bafPoolWei, cap, lvl, rngWord);
             if (!finishedBaf) return false;
             carryWei = carryoverForNextLevel;
         }
@@ -1158,8 +1150,7 @@ contract PurgeGame {
     /// - Group sizes scale with the step within the 100‑level epoch: 1× for L..00–19, 2× for 20–39, …, 5× for 80–99.
     /// - Per‑group allocation is an equal split of `dailyTotal / 4` across sampled winners (integer division).
     /// - Updates `jackpotCounter` up/down depending on the mode and emits a `Jackpot(kind=4, traits...)` event.
-    function payDailyJackpot(bool isDaily, uint24 lvl) internal {
-        uint256 randWord = rngWord;
+    function payDailyJackpot(bool isDaily, uint24 lvl, uint256 randWord) internal {
         if (!isDaily) {
             unchecked {
                 randWord = ((randWord << 64) | (randWord >> 192)) ^ (uint256(jackpotCounter) << 128) ^ 0x05;
@@ -1255,14 +1246,22 @@ contract PurgeGame {
         uint32 cap,
         uint48 dayIdx,
         bool bonusFlip,
-        bool pauseBetting
-    ) private returns (bool ok) {
-        if (pauseBetting) {
-            ok = coin.processCoinflipPayouts(lvl, cap, bonusFlip);
-            if (!ok) return false;
+        uint256 rngWord,
+        bool allowResolution,
+        uint8 phaseSnapshot
+    )
+        private
+        returns (bool ok)
+    {
+        bool canResolve = allowResolution;
+        if (phaseSnapshot < 3 && (lvl % 20) == 0) {
+            canResolve = false;
         }
+
+        ok = coin.processCoinflipPayouts(lvl, cap, bonusFlip, rngWord, canResolve);
+        if (!ok) return false;
+        nft.releaseRngLock();
         dailyIdx = dayIdx;
-        rngConsumed = true;
         return true;
     }
 
@@ -1306,15 +1305,19 @@ contract PurgeGame {
 
     // --- Flips, VRF, payments, rarity ----------------------------------------------------------------
 
-    /// @notice Arm a new VRF request and reset RNG state.
-    /// @param ts Current block timestamp (48-bit truncated).
-    /// @param pauseBetting If false, keeps coinflip betting running on the coin contract during VRF wait.
-    function _requestVrf(uint48 ts, bool pauseBetting) internal {
-        rngFulfilled = false;
-        rngWord = 0;
-        rngTs = ts;
-        rngConsumed = false;
-        coin.requestRng(pauseBetting);
+    function _triggerRngRequest() internal {
+        if (!nft.rngLocked()) {
+            nft.requestRng();
+        }
+    }
+
+    function _ensureRngReady(uint48 day) internal returns (uint256 word) {
+        word = nft.currentRngWord();
+        if (word == 0) revert RngNotReady();
+        if (day != dailyIdx) {
+            _triggerRngRequest();
+            revert RngNotReady();
+        }
     }
 
     /// @notice Handle ETH payments for purchases; forwards affiliate rewards as coinflip credits.
@@ -1401,7 +1404,7 @@ contract PurgeGame {
             writesBudget -= writesBudget * 35 / 100; // 65% scaling
         }
         uint32 used = 0;
-        uint256 entropy = rngWord;
+        uint256 entropy = nft.currentRngWord();
 
         while (airdropIndex < total && used < writesBudget) {
             address player = pendingMapMints[airdropIndex];
@@ -1630,14 +1633,15 @@ contract PurgeGame {
     /// @param cap             Step cap forwarded to the external processor.
     /// @return finished True if the external stage reports completion.
     /// @return returnedWei Wei to be returned to carryover (non-zero only on completion).
-    function _progressExternal(uint8 kind, uint256 poolWei, uint32 cap, uint24 lvl)
+    function _progressExternal(uint8 kind, uint256 poolWei, uint32 cap, uint24 lvl, uint256 rngWord)
         internal
         returns (bool finished, uint256 returnedWei)
     {
+
         if (kind == 0 && (rngWord & 1) == 0) return (true, 0);
 
         (bool isFinished, address[] memory winnersArr, uint256[] memory amountsArr, uint256 returnWei) = coin
-            .runExternalJackpot(kind, poolWei, cap, lvl);
+            .runExternalJackpot(kind, poolWei, cap, lvl, rngWord);
 
         for (uint256 i; i < winnersArr.length; ) {
             _addClaimableEth(winnersArr[i], amountsArr[i]);

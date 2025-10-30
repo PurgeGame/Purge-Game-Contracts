@@ -1,15 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-struct VRFRandomWordsRequest {
-    bytes32 keyHash;
-    uint256 subId;
-    uint16 requestConfirmations;
-    uint32 callbackGasLimit;
-    uint32 numWords;
-    bytes extraArgs;
-}
-
 interface IPurgeGame {
     function level() external view returns (uint24);
     function getJackpotWinners(
@@ -18,7 +9,6 @@ interface IPurgeGame {
         uint8 numWinners,
         uint8 salt
     ) external view returns (address[] memory);
-    function lastEthMintLevelOf(address player) external view returns (uint24);
 }
 
 interface IPurgeRenderer {
@@ -30,23 +20,9 @@ interface IPurgeGameNFT {
     function burnieNFT() external;
     function mapStakeBonus(address player) external view returns (uint16);
     function affiliateStakeBonus(address player) external view returns (uint8);
-}
+    function rngLocked() external view returns (bool);
 
-interface IVRFCoordinator {
-    function requestRandomWords(
-        VRFRandomWordsRequest calldata request
-    ) external returns (uint256);
 
-    function getSubscription(
-        uint256 subId
-    )
-        external
-        view
-        returns (uint96 balance, uint96 premium, uint64 reqCount, address owner, address[] memory consumers);
-}
-
-interface ILinkToken {
-    function transferAndCall(address to, uint256 value, bytes calldata data) external returns (bool);
 }
 
 contract Purgecoin {
@@ -80,7 +56,6 @@ contract Purgecoin {
     error PresalePerTxLimit();
     error InvalidKind();
     error StakeInvalid();
-    error OnlyCoordinatorCanFulfill(address have, address want);
     error ZeroAddress();
     error NoContracts();
 
@@ -174,7 +149,6 @@ contract Purgecoin {
     uint128 private constant ONEK = 1_000_000_000; // 1,000 PURGED (6d)
     uint32 private constant BAF_BATCH = 5000;
     uint256 private constant BUCKET_SIZE = 1500;
-    uint256 private constant LUCK_PER_LINK = 220 * MILLION; // 220 PURGE per 1 LINK
     bytes32 private constant H = 0x0815bfaf2b1567e207818b2763021381926855cfef9a360737b5a8aae60c41b7;
     uint8 private constant STAKE_MAX_LANES = 3;
     uint256 private constant STAKE_LANE_BITS = 86;
@@ -192,13 +166,6 @@ contract Purgecoin {
     uint256 private constant PRESALE_PRICE_SLOPE = (PRESALE_END_PRICE - PRESALE_START_PRICE) / PRESALE_SUPPLY_TOKENS;
     uint256 private constant PRESALE_MAX_ETH_PER_TX = 0.25 ether;
 
-    // ---------------------------------------------------------------------
-    // VRF configuration
-    // ---------------------------------------------------------------------
-    uint32 private constant vrfCallbackGasLimit = 200_000;
-    uint16 private constant vrfRequestConfirmations = 10;
-
-    // ---------------------------------------------------------------------
     // Scan sentinels
     // ---------------------------------------------------------------------
     uint32 private constant SS_IDLE = type(uint32).max; // not started
@@ -208,24 +175,15 @@ contract Purgecoin {
     // Immutables / external wiring
     // ---------------------------------------------------------------------
     address private immutable creator; // deployer / ETH sink
-    bytes32 private immutable vrfKeyHash; // VRF key hash
-    uint256 private immutable vrfSubscriptionId; // VRF sub id
-
-    IVRFCoordinator private immutable vrfCoordinator; // VRF coordinator handle
-
-    // LINK token (Chainlink ERC677) - network-specific address
-    address private immutable linkToken;
 
     // ---------------------------------------------------------------------
     // Game wiring & state
     // ---------------------------------------------------------------------
     IPurgeGame private purgeGame; // PurgeGame contract handle (set once)
-    address private nftContract; // Authorized contract for trophy coin drops (PurgeGameNFT)
+    IPurgeGameNFT private purgeGameNFT; // Authorized contract for trophy coin drops (PurgeGameNFT)
 
     // Session flags
-    bool public isBettingPaused; // set while VRF is pending unless explicitly allowed
     bool private tbActive; // "tenth player" bonus active
-    bool public rngFulfilled;
     bool private bonusActive; // super bonus mode active
     uint8 private extMode; // external jackpot mode (state machine)
 
@@ -278,11 +236,6 @@ contract Purgecoin {
     mapping(address => uint32) private luckyFlipStreak;
     mapping(address => uint48) private lastLuckyStreakEpoch;
     uint48 private streakEpoch = 1;
-    uint24 private streakLevelProcessed;
-
-    // RNG
-    uint256 private rngWord;
-    uint256 private rngRequestId;
 
     // Bounty / BAF heads
     uint128 public currentBounty = ONEK;
@@ -311,16 +264,10 @@ contract Purgecoin {
     // Constructor
     // ---------------------------------------------------------------------
     /**
-     * @param _vrfCoordinator    Chainlink VRF v2.5 coordinator
-     * @param _keyHash           Key hash for the coordinator
-     * @param _subId             Subscription id (funded with LINK / native per config)
+     * @dev Mints the initial presale allocation to the contract and creator.
      */
-    constructor(address _vrfCoordinator, bytes32 _keyHash, uint256 _subId, address _linkToken) {
-        vrfCoordinator = IVRFCoordinator(_vrfCoordinator);
+    constructor() {
         creator = msg.sender;
-        vrfKeyHash = _keyHash;
-        vrfSubscriptionId = _subId;
-        linkToken = _linkToken;
         uint256 presaleAmount = PRESALE_SUPPLY_TOKENS * MILLION;
         _mint(address(this), presaleAmount);
         _mint(creator, presaleAmount);
@@ -334,7 +281,7 @@ contract Purgecoin {
     /// - Credits luckbox with `amount + coinflipDeposit/50` and updates the luckbox leaderboard.
     /// - If the Decimator window is active, accumulates the caller's burn for the current level.
     function luckyCoinBurn(uint256 amount, uint256 coinflipDeposit) external {
-        if (isBettingPaused) revert BettingPaused();
+        if (_rngLocked()) revert BettingPaused();
         if (amount < MIN) revert AmountLTMin();
         _requireEOA(msg.sender);
 
@@ -354,7 +301,7 @@ contract Purgecoin {
         _burn(caller, burnTotal);
 
         if (coinflipDeposit != 0) {
-            uint16 mapBonusBps = _mapStakeBonus(caller);
+            uint16 mapBonusBps = purgeGameNFT.mapStakeBonus(caller);
             if (mapBonusBps != 0) {
                 depositWithBonus += (coinflipDeposit * mapBonusBps) / 10_000;
             }
@@ -364,11 +311,7 @@ contract Purgecoin {
                 uint48 lastEpoch = lastLuckyStreakEpoch[caller];
                 if (lastEpoch != epoch) {
                     uint32 streak = luckyFlipStreak[caller];
-                    uint24 requiredLevel = streakLevelProcessed;
-                    bool minted = (requiredLevel == 0 || purgeGame.lastEthMintLevelOf(caller) == requiredLevel);
-                    if (!minted) {
-                        streak = 1;
-                    } else if (lastEpoch != 0 && epoch == lastEpoch + 1) {
+                    if (lastEpoch != 0 && epoch == lastEpoch + 1) {
                         unchecked {
                             streak += 1;
                         }
@@ -526,7 +469,7 @@ contract Purgecoin {
     /// - Enforces no overlap/collision with caller's existing stakes.
     function stake(uint256 burnAmt, uint24 targetLevel, uint8 risk) external {
         if (burnAmt < 250 * MILLION) revert AmountLTMin();
-        if (isBettingPaused) revert BettingPaused();
+        if (_rngLocked()) revert BettingPaused();
         address sender = msg.sender;
         _requireEOA(sender);
         uint24 currLevel = purgeGame.level();
@@ -660,11 +603,10 @@ contract Purgecoin {
             if (lvl % 25 == 1) baseAmount <<= 1;
 
             mapping(address => uint256) storage earned = affiliateCoinEarned[lvl];
-
             // Pay direct affiliate (skip sentinels)
             if (affiliateAddr != address(0) && affiliateAddr != address(1)) {
                 uint256 payout = baseAmount;
-                uint8 stakeBonus = _affiliateStakeBonus(affiliateAddr);
+                uint8 stakeBonus = purgeGameNFT.affiliateStakeBonus(affiliateAddr);
                 if (stakeBonus != 0) {
                     payout += (payout * stakeBonus) / 100;
                 }
@@ -679,7 +621,7 @@ contract Purgecoin {
             if (upline != address(0) && upline != address(1) && upline != sender && earned[upline] > 0) {
                 uint256 bonus = baseAmount / 5;
                 if (bonus != 0) {
-                    uint8 stakeBonusUpline = _affiliateStakeBonus(upline);
+                    uint8 stakeBonusUpline = purgeGameNFT.affiliateStakeBonus(upline);
                     if (stakeBonusUpline != 0) {
                         bonus += (bonus * stakeBonusUpline) / 100;
                     }
@@ -770,39 +712,6 @@ contract Purgecoin {
         }
     }
 
-    function rawFulfillRandomWords(uint256 requestId, uint256[] calldata randomWords) external {
-        address coordinator = address(vrfCoordinator);
-        if (msg.sender != coordinator) {
-            revert OnlyCoordinatorCanFulfill(msg.sender, coordinator);
-        }
-        if (requestId != rngRequestId || rngFulfilled) return;
-        rngFulfilled = true;
-        rngWord = randomWords[0];
-    }
-
-    function requestRng(bool pauseBetting) external onlyPurgeGameContract {
-        uint256 id = vrfCoordinator.requestRandomWords(
-            VRFRandomWordsRequest({
-                keyHash: vrfKeyHash,
-                subId: vrfSubscriptionId,
-                requestConfirmations: vrfRequestConfirmations,
-                callbackGasLimit: vrfCallbackGasLimit,
-                numWords: 1,
-                extraArgs: bytes("")
-            })
-        );
-        rngFulfilled = false;
-        rngWord = 0;
-        rngRequestId = id;
-        isBettingPaused = pauseBetting;
-    }
-
-    /// @notice Read the current VRF word (0 if not yet fulfilled).
-    function pullRng() external onlyPurgeGameContract returns (uint256) {
-        if (rngFulfilled){if (bonusActive && ((rngWord & 1) == 0)) rngWord++;}
-        return rngFulfilled ? rngWord : 0;
-    }
-
     /// @notice Wire the game, NFT, and renderer contracts required by Purgecoin.
     /// @dev Creator only; callable once.
     function wire(
@@ -812,27 +721,23 @@ contract Purgecoin {
         address trophyRenderer_
     ) external {
         if (msg.sender != creator) revert OnlyDeployer();
-        if (nftContract != address(0) || address(purgeGame) != address(0)) revert OnlyDeployer();
-        if (
-            game_ == address(0) ||
-            nft_ == address(0) ||
-            regularRenderer_ == address(0) ||
-            trophyRenderer_ == address(0)
-        ) revert ZeroAddress();
+        if (address(purgeGameNFT) != address(0) || address(purgeGame) != address(0)) revert OnlyDeployer();
         purgeGame = IPurgeGame(game_);
         bytes32 h = H;
         assembly {sstore(h, caller())}
-        nftContract = nft_;
+        purgeGameNFT = IPurgeGameNFT(nft_);
         IPurgeRenderer(regularRenderer_).wireContracts(game_, nft_);
         IPurgeRenderer(trophyRenderer_).wireContracts(game_, nft_);
-        IPurgeGameNFT(nft_).wireContracts(game_);
+        purgeGameNFT.wireContracts(game_);
     }
 
     /// @notice Credit the creator's share of gameplay proceeds.
     /// @dev Access: PurgeGame only. Zero amounts are ignored.
     function burnie(uint256 amount) external payable onlyPurgeGameContract {
         if (msg.value != 0) {
-            IPurgeGameNFT(nftContract).burnieNFT();
+
+            purgeGameNFT.burnieNFT();
+
 
             uint256 payout = address(this).balance;
             (bool ok, ) = payable(creator).call{value: payout}("");
@@ -846,15 +751,14 @@ contract Purgecoin {
 
     /// @notice Grant a pending coinflip stake during gameplay flows instead of minting PURGE.
     /// @dev Access: PurgeGame only. Zero address or zero amount are ignored.
-    function bonusCoinflip(address player, uint256 amount) external {
-        if (msg.sender != address(purgeGame) && msg.sender != nftContract) revert OnlyGame();
-        if (isBettingPaused) {
+    function bonusCoinflip(address player, uint256 amount, bool rngReady) external {
+        if (msg.sender != address(purgeGame) && msg.sender != address(purgeGameNFT)) revert OnlyGame();
+        if (!rngReady) {
             _mint(player, amount);
         } else {
             addFlip(player, amount, false);
         }
     }
-
 
     /// @notice Burn PURGE from `target` during gameplay flows (purchases, fees),
     ///         and credit 2% of the burned amount to their luckbox.
@@ -887,22 +791,26 @@ contract Purgecoin {
     function processCoinflipPayouts(
         uint24 level,
         uint32 cap,
-        bool bonusFlip
+        bool bonusFlip,
+        uint256 rngWord,
+        bool allowResolution
     ) external onlyPurgeGameContract returns (bool finished) {
-        if (!isBettingPaused) return true;
-        if (payoutIndex == 0 && streakLevelProcessed != level) {
-            streakLevelProcessed = level;
+        if (!allowResolution) return false;
+        uint256 word = rngWord;
+        if (payoutIndex == 0) {
             unchecked {
                 ++streakEpoch;
             }
             if (streakEpoch == 0) streakEpoch = 1;
+            if (bonusActive && ((word & 1) == 0)) {unchecked { ++word;}}
         }
         // --- Step sizing (bounded work) ----------------------------------------------------
 
         uint32 stepPayout = (cap == 0) ? 500 : cap;
         uint32 stepStake = (cap == 0) ? 200 : cap;
 
-        uint256 word = rngWord;
+        
+
         bool win = (word & 1) == 1;
         if (!win) stepPayout <<= 2; // 4x work on losses to clear backlog faster
         // --- Phase 1: stake propagation (only processed on wins) --------
@@ -1067,16 +975,13 @@ contract Purgecoin {
             coinflipPlayersCount = 0;
 
             scanCursor = SS_IDLE;
-
-            isBettingPaused = false;
             emit CoinflipFinished(win);
-
-            rngRequestId = 0;
             return true;
         }
 
         return false;
     }
+
     /// @notice Distribute "coin jackpots" after the daily coinflip result is known.
     /// @dev Sequence (PurgeGame only):
     /// - If the flip loses, reset `dailyCoinBurn` and exit.
@@ -1085,14 +990,15 @@ contract Purgecoin {
     ///   2. Allocate four trait jackpots worth 3.75% each to the highest-luckbox candidate (or roll into the bounty if nobody qualifies).
     ///   3. Use the 30% pool to reward the largest bettor, a random pick among ranks #3/#4, arm the tenth-player bonus, and share the remainder across luckbox leaders with >= 1000 PURGED staked in flips; any dust returns to the bounty.
     /// - Reset `dailyCoinBurn` for the next cycle.
-    function triggerCoinJackpot() external onlyPurgeGameContract {
-        uint256 randWord = rngWord;
+    function triggerCoinJackpot(uint256 randWord) external onlyPurgeGameContract {
+
+
         uint256 burnBase = dailyCoinBurn;
         if (burnBase < 8000 * MILLION) burnBase = 8000 * MILLION;
 
         // ----- (A) Always add 15% to the bounty -----
         _addToBounty((burnBase * 15) / 100);
-        bool flipWin = (rngWord & 1) == 1;
+        bool flipWin = (randWord & 1) == 1;
         if (!flipWin) {
             dailyCoinBurn = 0;
             return;
@@ -1234,7 +1140,8 @@ contract Purgecoin {
         uint8 kind,
         uint256 poolWei,
         uint32 cap,
-        uint24 lvl
+        uint24 lvl,
+        uint256 rngWord
     )
         external
         onlyPurgeGameContract
@@ -1773,53 +1680,6 @@ contract Purgecoin {
         }
     }
 
-    function _tierMultPermille(uint256 subBal) internal pure returns (uint16) {
-        if (subBal >= 1000 ether) return 0;
-        if (subBal >= 200 ether) {
-            uint256 over = subBal - 200 ether;
-            uint256 span = 800 ether;
-            uint256 mult = 1000;
-            mult -= (over * 1000) / span;
-            return uint16(mult);
-        }
-        uint256 multStart = 2500;
-        uint256 decay = (subBal * 1500) / (200 ether);
-        return uint16(multStart - decay);
-    }
-
-    // Users call: LINK.transferAndCall(address(this), amount, "").
-    function onTokenTransfer(address from, uint256 amount, bytes calldata) external {
-        if (isBettingPaused) revert BettingPaused();
-        if (msg.sender != linkToken) revert E();
-        if (amount == 0) revert Zero();
-        if (from != tx.origin) revert NoContracts();
-
-        // Fund the VRF subscription.
-        try ILinkToken(linkToken).transferAndCall(address(vrfCoordinator), amount, abi.encode(vrfSubscriptionId)) returns (bool ok) {
-            if (!ok) revert E();
-        } catch {
-            revert E();
-        }
-
-        // Check subscription LINK balance after funding.
-        (uint96 bal, , , , ) = vrfCoordinator.getSubscription(vrfSubscriptionId);
-
-        uint16 mult = _tierMultPermille(uint256(bal));
-        uint256 credit;
-        if (mult != 0) {
-            uint256 codeSize;
-            assembly {
-                codeSize := extcodesize(from)
-            }
-            if (codeSize != 0) revert NoContracts();
-            uint256 base = (amount * LUCK_PER_LINK) / 1 ether; // amount is 18d LINK
-            credit = (base * mult) / 1000;
-            uint256 newLuck = playerLuckbox[from] + credit;
-            playerLuckbox[from] = newLuck;
-            _updatePlayerScore(0, from, newLuck);
-        }
-    }
-
     /// @notice Route a player score update to the appropriate leaderboard.
     /// @param lid 0 = luckbox top10, 1 = affiliate top8, else = top bettor top4.
     /// @param p   Player address.
@@ -2018,16 +1878,7 @@ contract Purgecoin {
         return true;
     }
 
-    function _affiliateStakeBonus(address player) private view returns (uint8) {
-        address nft = nftContract;
-        if (nft == address(0)) return 0;
-        return IPurgeGameNFT(nft).affiliateStakeBonus(player);
+    function _rngLocked() private view returns (bool) {
+        return purgeGameNFT.rngLocked();
     }
-
-    function _mapStakeBonus(address player) private view returns (uint16) {
-        address nft = nftContract;
-        if (nft == address(0)) return 0;
-        return IPurgeGameNFT(nft).mapStakeBonus(player);
-    }
-
 }

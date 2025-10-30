@@ -1,6 +1,15 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+struct VRFRandomWordsRequest {
+    bytes32 keyHash;
+    uint256 subId;
+    uint16 requestConfirmations;
+    uint32 callbackGasLimit;
+    uint32 numWords;
+    bytes extraArgs;
+}
+
 interface IERC721Receiver {
     function onERC721Received(
         address operator,
@@ -30,11 +39,22 @@ interface IPurgeGame {
 }
 
 interface IPurgecoin {
-    function bonusCoinflip(address player, uint256 amount) external;
-
-    function isBettingPaused() external view returns (bool);
+    function bonusCoinflip(address player, uint256 amount, bool rngReady) external;
 
     function getLeaderboardAddresses(uint8 which) external view returns (address[] memory);
+}
+
+interface IVRFCoordinator {
+    function requestRandomWords(
+        VRFRandomWordsRequest calldata request
+    ) external returns (uint256);
+
+    function getSubscription(
+        uint256 subId
+    )
+        external
+        view
+        returns (uint96 balance, uint96 premium, uint64 reqCount, address owner, address[] memory consumers);
 }
 
 contract PurgeGameNFT {
@@ -53,6 +73,7 @@ contract PurgeGameNFT {
     error InvalidToken();
     error TrophyStakeViolation(uint8 reason);
     error StakeInvalid();
+    error OnlyCoordinatorCanFulfill(address have, address want);
 
     // ---------------------------------------------------------------------
     // Events & types
@@ -75,7 +96,6 @@ event TrophyStakeChanged(
         uint16 traitId;
         uint24 level;
         uint256 pool;
-        uint256 randomWord;
     }
 
     // ---------------------------------------------------------------------
@@ -110,6 +130,10 @@ event TrophyStakeChanged(
     ITokenRenderer private immutable regularRenderer;
     ITokenRenderer private immutable trophyRenderer;
     IPurgecoin private immutable coin;
+    IVRFCoordinator private immutable vrfCoordinator;
+    bytes32 private immutable vrfKeyHash;
+    uint256 private immutable vrfSubscriptionId;
+    address private immutable linkToken;
 
     uint256 private basePointers; // high 128 bits = previous base token id, low 128 bits = current base token id
     mapping(uint256 => uint256) private trophyData; // Packed metadata + owed + claim bookkeeping per trophy
@@ -124,6 +148,10 @@ event TrophyStakeChanged(
     mapping(uint256 => bool) private trophyStaked;
     mapping(address => uint8) private affiliateStakeCount;
     mapping(address => uint8) private mapStakeCount;
+    bool private rngFulfilled;
+    bool private rngLockedFlag;
+    uint256 private rngRequestId;
+    uint256 private rngWord;
 
     uint32 private constant COIN_DRIP_STEPS = 10; // Base vesting window before coin drip starts
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
@@ -144,6 +172,8 @@ event TrophyStakeChanged(
     uint8 private constant _STAKE_ERR_NOT_MAP = 6;
     uint8 private constant AFFILIATE_STAKE_MAX = 3;
     uint8 private constant MAP_STAKE_MAX = 3;
+    uint32 private constant VRF_CALLBACK_GAS_LIMIT = 200_000;
+    uint16 private constant VRF_REQUEST_CONFIRMATIONS = 10;
 
     function _currentBaseTokenId() private view returns (uint256) {
         return uint256(uint128(basePointers));
@@ -157,10 +187,24 @@ event TrophyStakeChanged(
         basePointers = (uint256(uint128(previousBase)) << 128) | uint128(currentBase);
     }
 
-    constructor(address regularRenderer_, address trophyRenderer_, address coin_) {
+    constructor(
+        address regularRenderer_,
+        address trophyRenderer_,
+        address coin_,
+        address vrfCoordinator_,
+        bytes32 keyHash_,
+        uint256 subId_,
+        address linkToken_
+    ) {
         regularRenderer = ITokenRenderer(regularRenderer_);
         trophyRenderer = ITokenRenderer(trophyRenderer_);
         coin = IPurgecoin(coin_);
+        vrfCoordinator = IVRFCoordinator(vrfCoordinator_);
+        vrfKeyHash = keyHash_;
+        vrfSubscriptionId = subId_;
+        linkToken = linkToken_;
+        rngFulfilled = true;
+        rngLockedFlag = false;
     }
 
     function totalSupply() external view returns (uint256) {
@@ -438,6 +482,52 @@ event TrophyStakeChanged(
     }
 
     // ---------------------------------------------------------------------
+    // VRF / RNG
+    // ---------------------------------------------------------------------
+
+    function requestRng() external onlyGame {
+        uint256 id = vrfCoordinator.requestRandomWords(
+            VRFRandomWordsRequest({
+                keyHash: vrfKeyHash,
+                subId: vrfSubscriptionId,
+                requestConfirmations: VRF_REQUEST_CONFIRMATIONS,
+                callbackGasLimit: VRF_CALLBACK_GAS_LIMIT,
+                numWords: 1,
+                extraArgs: bytes("")
+            })
+        );
+        rngRequestId = id;
+        rngFulfilled = false;
+        rngWord = 0;
+        rngLockedFlag = true;
+    }
+
+    function rawFulfillRandomWords(uint256 requestId, uint256[] calldata randomWords) external {
+        address coordinator = address(vrfCoordinator);
+        if (msg.sender != coordinator) revert OnlyCoordinatorCanFulfill(msg.sender, coordinator);
+        if (requestId != rngRequestId || rngFulfilled) return;
+        rngFulfilled = true;
+        rngWord = randomWords[0];
+    }
+
+    function releaseRngLock() external onlyGame {
+        rngLockedFlag = false;
+        rngRequestId = 0;
+    }
+
+    function rngLocked() external view returns (bool) {
+        return rngLockedFlag;
+    }
+
+    function currentRngWord() external view returns (uint256) {
+        return rngFulfilled ? rngWord : 0;
+    }
+
+    function isRngFulfilled() external view returns (bool) {
+        return rngFulfilled;
+    }
+
+    // ---------------------------------------------------------------------
     // Game operations
     // ---------------------------------------------------------------------
 
@@ -540,7 +630,7 @@ event TrophyStakeChanged(
         uint256 mapTokenId = previousBase - 3;
 
         bool traitWin = req.traitId != TRAIT_ID_TIMEOUT;
-        uint256 randomWord = req.randomWord;
+        uint256 randomWord = rngWord;
 
         if (traitWin) {
             uint256 traitData = (uint256(req.traitId) << 152) | (uint256(req.level) << TROPHY_BASE_LEVEL_SHIFT);
@@ -671,7 +761,7 @@ event TrophyStakeChanged(
             uint32 last = lastClaim;
             if (last < floor) last = floor;
             if (currentLevel > last) {
-                if (coin.isBettingPaused()) revert CoinPaused();
+                if (rngLockedFlag) revert CoinPaused();
                 uint32 from = last + 1;
                 uint32 offsetStart = from - start;
                 uint32 offsetEnd = currentLevel - start;
@@ -708,7 +798,7 @@ event TrophyStakeChanged(
         }
 
         if (coinClaimed) {
-            coin.bonusCoinflip(msg.sender, coinAmount);
+            coin.bonusCoinflip(msg.sender, coinAmount, true);
         }
     }
 
