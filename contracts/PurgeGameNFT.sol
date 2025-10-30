@@ -49,12 +49,8 @@ contract PurgeGameNFT {
     error TransferFromIncorrectOwner();
     error TransferToNonERC721ReceiverImplementer();
     error TransferToZeroAddress();
-    error URIQueryForNonexistentToken();
     error OwnershipNotInitializedForExtraData();
-
     error E();
-    error NotTokenOwner();
-    error NotTrophyOwner();
     error ClaimNotReady();
     error CoinPaused();
     error OnlyCoin();
@@ -66,6 +62,7 @@ contract PurgeGameNFT {
     event Transfer(address indexed from, address indexed to, uint256 indexed tokenId);
     event Approval(address indexed owner, address indexed approved, uint256 indexed tokenId);
     event ApprovalForAll(address indexed owner, address indexed operator, bool approved);
+    event TrophyRewardClaimed(uint256 indexed tokenId, address indexed claimant, uint256 amount);
 
     struct EndLevelRequest {
         address exterminator;
@@ -505,7 +502,7 @@ contract PurgeGameNFT {
 
     function _purgeToken(address owner, uint256 tokenId) private {
         uint256 packed = _packedOwnershipOf(tokenId);
-        if (address(uint160(packed)) != owner) revert NotTokenOwner();
+        if (address(uint160(packed)) != owner) revert TransferFromIncorrectOwner();
         _burnPacked(tokenId, packed);
     }
 
@@ -608,7 +605,7 @@ contract PurgeGameNFT {
     }
 
     function claimTrophyReward(uint256 tokenId) external {
-        if (ownerOf(tokenId) != msg.sender) revert NotTrophyOwner();
+        if (ownerOf(tokenId) != msg.sender) revert TransferFromIncorrectOwner();
 
         uint256 info = trophyData[tokenId];
         if (info == 0) revert InvalidToken();
@@ -638,7 +635,6 @@ contract PurgeGameNFT {
         emit TrophyRewardClaimed(tokenId, msg.sender, payout);
     }
 
-    event TrophyRewardClaimed(uint256 indexed tokenId, address indexed claimant, uint256 amount);
 
     function burnieNFT() external {
         if (msg.sender != address(coin)) revert OnlyCoin();
@@ -654,7 +650,7 @@ contract PurgeGameNFT {
 
     function claimMapTrophyCoin(uint256 tokenId) external {
         if (coin.isBettingPaused()) revert CoinPaused();
-        if (ownerOf(tokenId) != msg.sender) revert NotTrophyOwner();
+        if (ownerOf(tokenId) != msg.sender) revert TransferFromIncorrectOwner();
 
         uint256 info = trophyData[tokenId];
         if (info == 0 || (info & TROPHY_FLAG_MAP) == 0) revert ClaimNotReady();
