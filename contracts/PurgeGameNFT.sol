@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-
-
 interface IERC721Receiver {
     function onERC721Received(
         address operator,
@@ -43,7 +41,6 @@ contract PurgeGameNFT {
     // ---------------------------------------------------------------------
     error ApprovalCallerNotOwnerNorApproved();
 
- 
     error TransferFromIncorrectOwner();
     error TransferToNonERC721ReceiverImplementer();
     error Zero();
@@ -131,14 +128,12 @@ contract PurgeGameNFT {
         basePointers = (uint256(uint128(previousBase)) << 128) | uint128(currentBase);
     }
 
-
     constructor(address renderer_, address coin_) {
         _name = "Purge Game";
         _symbol = "PG";
         renderer = IPurgeRenderer(renderer_);
         coin = IPurgecoin(coin_);
     }
-
 
     function totalSupply() external view returns (uint256) {
         uint256 trophyCount = mapTrophyIds.length + levelTrophyIds.length;
@@ -165,7 +160,6 @@ contract PurgeGameNFT {
             interfaceId == 0x5b5e139f; // ERC165 interface ID for ERC721Metadata.
     }
 
-
     function name() external view returns (string memory) {
         return _name;
     }
@@ -187,7 +181,7 @@ contract PurgeGameNFT {
         return renderer.tokenURI(tokenId, metaPacked, remaining);
     }
 
-    function ownerOf(uint256 tokenId) public view returns (address) {
+    function ownerOf(uint256 tokenId) external view returns (address) {
         return address(uint160(_packedOwnershipOf(tokenId)));
     }
 
@@ -195,7 +189,6 @@ contract PurgeGameNFT {
         if (tokenId >= _currentIndex) {
             revert InvalidToken();
         }
-
         packed = _packedOwnerships[tokenId];
         if (packed == 0) {
             unchecked {
@@ -210,7 +203,6 @@ contract PurgeGameNFT {
         if (packed & _BITMASK_BURNED != 0 || (packed & _BITMASK_ADDRESS) == 0) {
             revert InvalidToken();
         }
-
         return packed;
     }
 
@@ -220,13 +212,6 @@ contract PurgeGameNFT {
             result := or(owner, or(shl(_BITPOS_START_TIMESTAMP, timestamp()), flags))
         }
     }
-
-    function _nextInitializedFlag(uint256 quantity) private pure returns (uint256 result) {
-        assembly {
-            result := shl(_BITPOS_NEXT_INITIALIZED, eq(quantity, 1))
-        }
-    }
-
 
     function getApproved(uint256 tokenId) external view returns (address) {
         if (!_exists(tokenId)) revert InvalidToken();
@@ -346,7 +331,6 @@ contract PurgeGameNFT {
             }
     }
 
-
     function _checkContractOnERC721Received(
         address from,
         address to,
@@ -368,20 +352,15 @@ contract PurgeGameNFT {
         }
     }
 
-
     function _mint(address to, uint256 quantity) internal {
         uint256 startTokenId = _currentIndex;
 
-
-
         unchecked {
-            _packedOwnerships[startTokenId] = _packOwnershipData(to, _nextInitializedFlag(quantity));
+            _packedOwnerships[startTokenId] = _packOwnershipData(to, quantity == 1 ? _BITMASK_NEXT_INITIALIZED : 0);
 
             _packedAddressData[to] += quantity * ((1 << _BITPOS_NUMBER_MINTED) | 1);
 
             uint256 toMasked = uint256(uint160(to)) & _BITMASK_ADDRESS;
-
-
 
             uint256 end = startTokenId + quantity;
             uint256 tokenId = startTokenId;
@@ -404,7 +383,7 @@ contract PurgeGameNFT {
     }
 
     function approve(address to, uint256 tokenId) external payable {
-        address owner = ownerOf(tokenId);
+        address owner = address(uint160(_packedOwnershipOf(tokenId)));
 
         if (msg.sender != owner && !isApprovedForAll(owner, msg.sender)) {
             revert ApprovalCallerNotOwnerNorApproved();
@@ -492,11 +471,6 @@ contract PurgeGameNFT {
 
     function _burnPacked(uint256 tokenId, uint256 prevOwnershipPacked) private {
         address from = address(uint160(prevOwnershipPacked));
-        address approvedAddress = _tokenApprovals[tokenId];
-
-        if (approvedAddress != address(0)) {
-            delete _tokenApprovals[tokenId];
-        }
 
         unchecked {
             _packedAddressData[from] += (1 << _BITPOS_NUMBER_BURNED) - 1;
@@ -566,7 +540,7 @@ contract PurgeGameNFT {
             uint256 poolCarry = req.pool;
             uint256 mapUnit = poolCarry / 20;
 
-            mapImmediateRecipient = ownerOf(mapTokenId);
+            mapImmediateRecipient = address(uint160(_packedOwnershipOf(mapTokenId)));
 
             delete trophyData[levelTokenId];
 
@@ -589,7 +563,7 @@ contract PurgeGameNFT {
     }
 
     function claimTrophyReward(uint256 tokenId) external {
-        if (ownerOf(tokenId) != msg.sender) revert TransferFromIncorrectOwner();
+        if (address(uint160(_packedOwnershipOf(tokenId))) != msg.sender) revert TransferFromIncorrectOwner();
 
         uint256 info = trophyData[tokenId];
         if (info == 0) revert InvalidToken();
@@ -619,7 +593,6 @@ contract PurgeGameNFT {
         emit TrophyRewardClaimed(tokenId, msg.sender, payout);
     }
 
-
     function burnieNFT() external {
         if (msg.sender != address(coin)) revert OnlyCoin();
         uint256 bal = address(this).balance;
@@ -634,7 +607,7 @@ contract PurgeGameNFT {
 
     function claimMapTrophyCoin(uint256 tokenId) external {
         if (coin.isBettingPaused()) revert CoinPaused();
-        if (ownerOf(tokenId) != msg.sender) revert TransferFromIncorrectOwner();
+        if (address(uint160(_packedOwnershipOf(tokenId))) != msg.sender) revert TransferFromIncorrectOwner();
 
         uint256 info = trophyData[tokenId];
         if (info == 0 || (info & TROPHY_FLAG_MAP) == 0) revert ClaimNotReady();
@@ -698,7 +671,7 @@ contract PurgeGameNFT {
 
     function _awardTrophy(address to, uint256 data, uint256 deferredWei, uint256 tokenId) private {
         bool isMap = (data & TROPHY_FLAG_MAP) != 0;
-        address currentOwner = ownerOf(tokenId);
+        address currentOwner = address(uint160(_packedOwnershipOf(tokenId)));
         if (currentOwner == address(game)) {
             transferFrom(address(game), to, tokenId);
             if (isMap) {
