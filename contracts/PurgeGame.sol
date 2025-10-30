@@ -791,21 +791,10 @@ contract PurgeGame {
 
                 uint256 poolTotal = levelPrizePool;
 
-                uint256 exterminatorShare = (prevMod10 == 4 && prevLevel != 4)
-                    ? (poolTotal * 40) / 100
-                    : (poolTotal * 20) / 100;
-                if (prevMod100 == 0) {
-                    exterminatorShare += carryoverForNextLevel;
-                }
-
                 pend.level = prevLevel;
                 pend.sidePool = poolTotal;
 
                 levelPrizePool = 0;
-
-                if (prevMod100 == 0) {
-                    gameState = 0;
-                }
             }
 
             if (_endJackpot(lvl, cap, day, false, rngWord, true, _phase)) {
@@ -847,9 +836,6 @@ contract PurgeGame {
             uint256 exterminatorShare = (prevLevelPending % 10 == 4 && prevLevelPending != 4)
                 ? (poolValue * 40) / 100
                 : (poolValue * 20) / 100;
-            if ((prevLevelPending % 100) == 0) {
-                exterminatorShare += carryoverForNextLevel;
-            }
 
             uint256 immediate = exterminatorShare >> 1;
             uint256 deferredWei = exterminatorShare - immediate;
@@ -1039,26 +1025,28 @@ contract PurgeGame {
         // Save % for next level (randomized bands per range)
         uint256 rndWord = rngWord;
         uint256 savePct;
-        if ((rndWord % 1_000_000_000) == TRAIT_ID_TIMEOUT) {
-            savePct = 10;
-        } else if (lvl < 10) savePct = uint256(lvl) * 5;
-        else if (lvl < 20) savePct = 55 + (rndWord % 16);
-        else if (lvl < 40) savePct = 55 + (rndWord % 21);
-        else if (lvl < 60) savePct = 60 + (rndWord % 21);
-        else if (lvl < 80) savePct = 60 + (rndWord % 26);
-        else if (lvl == 99) savePct = 93;
-        else savePct = 65 + (rndWord % 26);
-        if (lvlMod10 == 9) savePct += 5;
-
-        uint256 effectiveWei;
         if (lvlMod100 == 0) {
-            effectiveWei = totalWei;
-            carryoverForNextLevel = 0;
+            // Two d12 rolls (capped at 20%) decide how much carryover persists into the next level.
+            uint256 rollA = (uint256(uint64(rndWord)) * 12) >> 64;
+            uint256 rollB = (uint256(uint64(rndWord >> 64)) * 12) >> 64;
+            savePct = rollA + rollB + 2;
+            if (savePct > 20) savePct = 20;
         } else {
-            uint256 saveNextWei = (totalWei * savePct) / 100;
-            carryoverForNextLevel = saveNextWei;
-            effectiveWei = totalWei - saveNextWei;
+            if ((rndWord % 1_000_000_000) == TRAIT_ID_TIMEOUT) {
+                savePct = 10;
+            } else if (lvl < 10) savePct = uint256(lvl) * 5;
+            else if (lvl < 20) savePct = 55 + (rndWord % 16);
+            else if (lvl < 40) savePct = 55 + (rndWord % 21);
+            else if (lvl < 60) savePct = 60 + (rndWord % 21);
+            else if (lvl < 80) savePct = 60 + (rndWord % 26);
+            else if (lvl == 99) savePct = 93;
+            else savePct = 65 + (rndWord % 26);
+            if (lvlMod10 == 9) savePct += 5;
         }
+
+        uint256 saveNextWei = (totalWei * savePct) / 100;
+        carryoverForNextLevel = saveNextWei;
+        uint256 effectiveWei = totalWei - saveNextWei;
 
         lastPrizePool = prizePool;
         prizePool = effectiveWei;
@@ -1228,7 +1216,7 @@ contract PurgeGame {
                 ++jackpotCounter;
             }
             prizePool -= totalPaidWei;
-            if (jackpotCounter >= 15 || (lvl % 100 == 0 && jackpotCounter == 14)) {
+            if (jackpotCounter >= 15) {
                 _endLevel(TRAIT_ID_TIMEOUT);
                 return;
             }
