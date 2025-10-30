@@ -42,14 +42,11 @@ contract PurgeGameNFT {
     // Errors
     // ---------------------------------------------------------------------
     error ApprovalCallerNotOwnerNorApproved();
-    error ApprovalQueryForNonexistentToken();
-    error BalanceQueryForZeroAddress();
-    error OwnerQueryForNonexistentToken();
-    error TransferCallerNotOwnerNorApproved();
+
+ 
     error TransferFromIncorrectOwner();
     error TransferToNonERC721ReceiverImplementer();
-    error TransferToZeroAddress();
-    error OwnershipNotInitializedForExtraData();
+    error Zero();
     error E();
     error ClaimNotReady();
     error CoinPaused();
@@ -157,7 +154,7 @@ contract PurgeGameNFT {
     }
 
     function balanceOf(address owner) external view returns (uint256) {
-        if (owner == address(0)) revert BalanceQueryForZeroAddress();
+        if (owner == address(0)) revert Zero();
         return _packedAddressData[owner] & _BITMASK_ADDRESS_DATA_ENTRY;
     }
 
@@ -196,7 +193,7 @@ contract PurgeGameNFT {
 
     function _packedOwnershipOf(uint256 tokenId) private view returns (uint256 packed) {
         if (tokenId >= _currentIndex) {
-            revert OwnerQueryForNonexistentToken();
+            revert InvalidToken();
         }
 
         packed = _packedOwnerships[tokenId];
@@ -211,7 +208,7 @@ contract PurgeGameNFT {
         }
 
         if (packed & _BITMASK_BURNED != 0 || (packed & _BITMASK_ADDRESS) == 0) {
-            revert OwnerQueryForNonexistentToken();
+            revert InvalidToken();
         }
 
         return packed;
@@ -232,7 +229,7 @@ contract PurgeGameNFT {
 
 
     function getApproved(uint256 tokenId) external view returns (address) {
-        if (!_exists(tokenId)) revert ApprovalQueryForNonexistentToken();
+        if (!_exists(tokenId)) revert InvalidToken();
 
         return _tokenApprovals[tokenId];
     }
@@ -292,7 +289,7 @@ contract PurgeGameNFT {
 
         address sender = msg.sender;
         if (!_isSenderApprovedOrOwner(approvedAddress, from, sender))
-            if (!isApprovedForAll(from, sender)) revert TransferCallerNotOwnerNorApproved();
+            if (!isApprovedForAll(from, sender)) revert TransferFromIncorrectOwner();
 
         if (approvedAddress != address(0)) {
             delete _tokenApprovals[tokenId];
@@ -325,7 +322,7 @@ contract PurgeGameNFT {
                 tokenId // `tokenId`.
             )
         }
-        if (toMasked == 0) revert TransferToZeroAddress();
+        if (toMasked == 0) revert Zero();
     }
 
     function safeTransferFrom(
