@@ -110,7 +110,8 @@ contract PurgeGameNFT {
     uint256 private seasonMintedSnapshot;
     uint256 private seasonPurgedCount;
 
-    uint32 private constant COIN_DRIP_STEPS = 10; // MAP coin drip cadence
+    uint32 private constant COIN_DRIP_STEPS = 10; // Base vesting window before coin drip starts
+    uint32 private constant AFFILIATE_COIN_PERIOD = 20; // Affiliate drip increases every 20 levels
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
     uint256 private constant COIN_EMISSION_UNIT = 1_000 * 1_000_000; // 1000 PURGED (6 decimals)
     uint256 private constant TROPHY_FLAG_MAP = uint256(1) << 200;
@@ -606,35 +607,85 @@ contract PurgeGameNFT {
         return (mapImmediateRecipient, affiliateRecipients);
     }
 
-    function claimTrophyReward(uint256 tokenId) external {
+    function claimTrophy(uint256 tokenId, bool claimCoin) external {
         if (address(uint160(_packedOwnershipOf(tokenId))) != msg.sender) revert TransferFromIncorrectOwner();
 
         uint256 info = trophyData[tokenId];
         if (info == 0) revert InvalidToken();
 
-        uint256 owed = info & TROPHY_OWED_MASK;
-        if (owed == 0) revert ClaimNotReady();
-
         uint24 currentLevel = game.level();
         uint24 lastClaim = uint24((info >> TROPHY_LAST_CLAIM_SHIFT) & 0xFFFFFF);
-        if (currentLevel <= lastClaim) revert ClaimNotReady();
 
-        uint24 baseStartLevel = uint24((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF) + 1;
-        if (currentLevel < baseStartLevel) revert ClaimNotReady();
+        uint256 owed = info & TROPHY_OWED_MASK;
+        uint256 newOwed = owed;
+        uint256 payout;
+        bool ethClaimed;
+        uint24 updatedLast = lastClaim;
 
-        uint32 vestEnd = uint32(baseStartLevel) + COIN_DRIP_STEPS;
-        uint256 denom = vestEnd > currentLevel ? vestEnd - currentLevel : 1;
-        uint256 payout = owed / denom;
+        if (owed != 0 && currentLevel > lastClaim) {
+            uint24 baseStartLevel = uint24((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF) + 1;
+            if (currentLevel >= baseStartLevel) {
+                uint32 vestEnd = uint32(baseStartLevel) + COIN_DRIP_STEPS;
+                uint256 denom = vestEnd > currentLevel ? vestEnd - currentLevel : 1;
+                payout = owed / denom;
+                newOwed = owed - payout;
+                ethClaimed = true;
+                updatedLast = currentLevel;
+            }
+        }
 
-        info = (info & ~(TROPHY_OWED_MASK | TROPHY_LAST_CLAIM_MASK))
-            | ((owed - payout) & TROPHY_OWED_MASK)
-            | (uint256(currentLevel & 0xFFFFFF) << TROPHY_LAST_CLAIM_SHIFT);
-        trophyData[tokenId] = info;
+        uint256 coinAmount;
+        bool coinClaimed;
+        if (claimCoin) {
+            bool isMap = (info & TROPHY_FLAG_MAP) != 0;
+            bool isAffiliate = (info & TROPHY_FLAG_AFFILIATE) != 0;
+            if (isMap || isAffiliate) {
+                uint32 start = uint32((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF) + COIN_DRIP_STEPS + 1;
+                uint32 floor = start - 1;
+                uint32 last = lastClaim;
+                if (last < floor) last = floor;
+                if (currentLevel > last) {
+                    if (coin.isBettingPaused()) revert CoinPaused();
+                    uint32 period = isAffiliate ? AFFILIATE_COIN_PERIOD : COIN_DRIP_STEPS;
+                    uint32 from = last + 1;
+                    uint32 offsetStart = from - start;
+                    uint32 offsetEnd = currentLevel - start;
 
-        (bool ok, ) = msg.sender.call{value: payout}("");
-        if (!ok) revert E();
+                    uint256 span = uint256(offsetEnd - offsetStart + 1);
+                    uint256 periodSize = period;
+                    uint256 blocksEnd = uint256(offsetEnd) / periodSize;
+                    uint256 blocksStart = uint256(offsetStart) / periodSize;
+                    uint256 remEnd = uint256(offsetEnd) % periodSize;
+                    uint256 remStart = uint256(offsetStart) % periodSize;
 
-        emit TrophyRewardClaimed(tokenId, msg.sender, payout);
+                    uint256 prefixEnd =
+                        ((blocksEnd * (blocksEnd - 1)) / 2) * periodSize + blocksEnd * (remEnd + 1);
+                    uint256 prefixStart =
+                        ((blocksStart * (blocksStart - 1)) / 2) * periodSize + blocksStart * (remStart + 1);
+
+                    coinAmount = COIN_EMISSION_UNIT * (span + (prefixEnd - prefixStart));
+                    coinClaimed = true;
+                    updatedLast = currentLevel;
+                }
+            }
+        }
+
+        if (!ethClaimed && !coinClaimed) revert ClaimNotReady();
+
+        uint256 newInfo = (info & ~(TROPHY_OWED_MASK | TROPHY_LAST_CLAIM_MASK))
+            | (newOwed & TROPHY_OWED_MASK)
+            | (uint256(updatedLast & 0xFFFFFF) << TROPHY_LAST_CLAIM_SHIFT);
+        trophyData[tokenId] = newInfo;
+
+        if (ethClaimed) {
+            (bool ok, ) = msg.sender.call{value: payout}("");
+            if (!ok) revert E();
+            emit TrophyRewardClaimed(tokenId, msg.sender, payout);
+        }
+
+        if (coinClaimed) {
+            coin.bonusCoinflip(msg.sender, coinAmount);
+        }
     }
 
     function burnieNFT() external {
@@ -642,48 +693,6 @@ contract PurgeGameNFT {
         uint256 bal = address(this).balance;
         (bool ok, ) = payable(msg.sender).call{value: bal}("");
         if (!ok) revert E();
-    }
-
-    // ---------------------------------------------------------------------
-    // MAP Purgecoin drip
-    // ---------------------------------------------------------------------
-
-    function claimMapTrophyCoin(uint256 tokenId) external {
-        if (coin.isBettingPaused()) revert CoinPaused();
-        if (address(uint160(_packedOwnershipOf(tokenId))) != msg.sender) revert TransferFromIncorrectOwner();
-
-        uint256 info = trophyData[tokenId];
-        if (info == 0 || (info & TROPHY_FLAG_MAP) == 0) revert ClaimNotReady();
-
-        uint32 start = uint32((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF) + COIN_DRIP_STEPS + 1;
-        uint32 levelNow = game.level();
-        uint32 floor = start - 1;
-
-        if (levelNow <= floor) revert ClaimNotReady();
-
-        uint32 last = uint32((info >> TROPHY_LAST_CLAIM_SHIFT) & 0xFFFFFF);
-        if (last < floor) last = floor;
-        if (levelNow <= last) revert ClaimNotReady();
-
-        uint32 from = last + 1;
-        uint32 offsetStart = from - start;
-        uint32 offsetEnd = levelNow - start;
-
-        uint256 span = uint256(offsetEnd - offsetStart + 1);
-
-        uint256 blocksEnd = offsetEnd / 10;
-        uint256 blocksStart = offsetStart / 10;
-        uint256 remEnd = offsetEnd % 10;
-        uint256 remStart = offsetStart % 10;
-
-        uint256 prefixEnd = ((blocksEnd * (blocksEnd - 1)) / 2) * 10 + blocksEnd * (remEnd + 1);
-        uint256 prefixStart = ((blocksStart * (blocksStart - 1)) / 2) * 10 + blocksStart * (remStart + 1);
-
-        uint256 claimable = COIN_EMISSION_UNIT * (span + (prefixEnd - prefixStart));
-
-        info = (info & ~TROPHY_LAST_CLAIM_MASK) | (uint256(levelNow & 0xFFFFFF) << TROPHY_LAST_CLAIM_SHIFT);
-        trophyData[tokenId] = info;
-        coin.bonusCoinflip(msg.sender, claimable);
     }
 
     // ---------------------------------------------------------------------
@@ -737,6 +746,7 @@ contract PurgeGameNFT {
             uint256 rand = randomWord;
             uint256 mask = type(uint64).max;
             uint256 remaining = span;
+            uint256 slotSeed;
 
             if (len <= 256) {
                 uint256 usedMask = 3; // bits 0 and 1 consumed
@@ -746,7 +756,10 @@ contract PurgeGameNFT {
                         ++slot;
                         continue;
                     }
-                    if (rand == 0) rand = randomWord;
+                    if (rand == 0) {
+                        ++slotSeed;
+                        rand = randomWord | slotSeed;
+                    }
                     uint256 idx = 2 + (rand & mask) % span;
                     rand >>= 64;
                     if (idx >= len) idx = len - 1;
@@ -769,7 +782,10 @@ contract PurgeGameNFT {
                         ++slot;
                         continue;
                     }
-                    if (rand == 0) rand = randomWord;
+                    if (rand == 0) {
+                        ++slotSeed;
+                        rand = randomWord | slotSeed;
+                    }
                     uint256 idx = 2 + (rand & mask) % span;
                     rand >>= 64;
                     if (idx >= len) idx = len - 1;
