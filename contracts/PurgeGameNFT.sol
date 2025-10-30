@@ -143,7 +143,7 @@ contract PurgeGameNFT {
     }
 
 
-    function totalSupply() public view virtual returns (uint256) {
+    function totalSupply() external view returns (uint256) {
         uint256 trophyCount = mapTrophyIds.length + levelTrophyIds.length;
 
         if (game.gameState() == 4) {
@@ -156,12 +156,12 @@ contract PurgeGameNFT {
         return trophyCount;
     }
 
-    function balanceOf(address owner) public view virtual returns (uint256) {
+    function balanceOf(address owner) external view returns (uint256) {
         if (owner == address(0)) revert BalanceQueryForZeroAddress();
         return _packedAddressData[owner] & _BITMASK_ADDRESS_DATA_ENTRY;
     }
 
-    function supportsInterface(bytes4 interfaceId) public view virtual returns (bool) {
+    function supportsInterface(bytes4 interfaceId) external pure returns (bool) {
         return
             interfaceId == 0x01ffc9a7 || // ERC165 interface ID for ERC165.
             interfaceId == 0x80ac58cd || // ERC165 interface ID for ERC721.
@@ -169,15 +169,15 @@ contract PurgeGameNFT {
     }
 
 
-    function name() public view virtual returns (string memory) {
+    function name() external view returns (string memory) {
         return _name;
     }
 
-    function symbol() public view virtual returns (string memory) {
+    function symbol() external view returns (string memory) {
         return _symbol;
     }
 
-    function tokenURI(uint256 tokenId) public view virtual returns (string memory) {
+    function tokenURI(uint256 tokenId) external view returns (string memory) {
         uint256 info = trophyData[tokenId];
         if (info != 0) {
             uint32[4] memory empty;
@@ -190,7 +190,7 @@ contract PurgeGameNFT {
         return renderer.tokenURI(tokenId, metaPacked, remaining);
     }
 
-    function ownerOf(uint256 tokenId) public view virtual returns (address) {
+    function ownerOf(uint256 tokenId) public view returns (address) {
         return address(uint160(_packedOwnershipOf(tokenId)));
     }
 
@@ -231,27 +231,23 @@ contract PurgeGameNFT {
     }
 
 
-    function approve(address to, uint256 tokenId) public payable virtual {
-        _approve(to, tokenId, true);
-    }
-
-    function getApproved(uint256 tokenId) public view virtual returns (address) {
+    function getApproved(uint256 tokenId) external view returns (address) {
         if (!_exists(tokenId)) revert ApprovalQueryForNonexistentToken();
 
         return _tokenApprovals[tokenId];
     }
 
-    function setApprovalForAll(address operator, bool approved) public virtual {
+    function setApprovalForAll(address operator, bool approved) external {
         address sender = msg.sender;
         _operatorApprovals[sender][operator] = approved;
         emit ApprovalForAll(sender, operator, approved);
     }
 
-    function isApprovedForAll(address owner, address operator) public view virtual returns (bool) {
+    function isApprovedForAll(address owner, address operator) public view returns (bool) {
         return _operatorApprovals[owner][operator];
     }
 
-    function _exists(uint256 tokenId) internal view virtual returns (bool) {
+    function _exists(uint256 tokenId) internal view returns (bool) {
         if (tokenId < _currentBaseTokenId()) {
             return trophyData[tokenId] != 0;
         }
@@ -285,7 +281,7 @@ contract PurgeGameNFT {
         address from,
         address to,
         uint256 tokenId
-    ) public payable virtual {
+    ) public payable {
         uint256 prevOwnershipPacked = _packedOwnershipOf(tokenId);
 
         from = address(uint160(uint256(uint160(from)) & _BITMASK_ADDRESS));
@@ -336,7 +332,7 @@ contract PurgeGameNFT {
         address from,
         address to,
         uint256 tokenId
-    ) public payable virtual {
+    ) public payable {
         safeTransferFrom(from, to, tokenId, '');
     }
 
@@ -345,7 +341,7 @@ contract PurgeGameNFT {
         address to,
         uint256 tokenId,
         bytes memory _data
-    ) public payable virtual {
+    ) public payable {
         transferFrom(from, to, tokenId);
         if (to.code.length != 0)
             if (!_checkContractOnERC721Received(from, to, tokenId, _data)) {
@@ -376,7 +372,7 @@ contract PurgeGameNFT {
     }
 
 
-    function _mint(address to, uint256 quantity) internal virtual {
+    function _mint(address to, uint256 quantity) internal {
         uint256 startTokenId = _currentIndex;
 
 
@@ -410,21 +406,12 @@ contract PurgeGameNFT {
         }
     }
 
-    function _approve(address to, uint256 tokenId) internal virtual {
-        _approve(to, tokenId, false);
-    }
-
-    function _approve(
-        address to,
-        uint256 tokenId,
-        bool approvalCheck
-    ) internal virtual {
+    function approve(address to, uint256 tokenId) external payable {
         address owner = ownerOf(tokenId);
 
-        if (approvalCheck && msg.sender != owner)
-            if (!isApprovedForAll(owner, msg.sender)) {
-                revert ApprovalCallerNotOwnerNorApproved();
-            }
+        if (msg.sender != owner && !isApprovedForAll(owner, msg.sender)) {
+            revert ApprovalCallerNotOwnerNorApproved();
+        }
 
         _tokenApprovals[tokenId] = to;
         emit Approval(owner, to, tokenId);
