@@ -36,8 +36,10 @@ interface IPurgecoin {
 
     function getLeaderboardAddresses(uint8 which) external view returns (address[] memory);
 
-    function stakeAffiliate(address player) external returns (uint8 newCount);
-    function unstakeAffiliate(address player) external returns (uint8 newCount);
+    function setStake(address player, bool isMap, bool stake)
+        external
+        returns (uint8 newCount, uint16 mapBonusBps);
+    function mapStakeBonus(address player) external view returns (uint16 bps);
 }
 
 contract PurgeGameNFT {
@@ -54,7 +56,7 @@ contract PurgeGameNFT {
     error CoinPaused();
     error OnlyCoin();
     error InvalidToken();
-    error AffiliateStakeViolation(uint8 reason);
+    error TrophyStakeViolation(uint8 reason);
 
     // ---------------------------------------------------------------------
     // Events & types
@@ -62,9 +64,15 @@ contract PurgeGameNFT {
     event Transfer(address indexed from, address indexed to, uint256 indexed tokenId);
     event Approval(address indexed owner, address indexed approved, uint256 indexed tokenId);
     event ApprovalForAll(address indexed owner, address indexed operator, bool approved);
-    event TrophyRewardClaimed(uint256 indexed tokenId, address indexed claimant, uint256 amount);
-    event AffiliateTrophyStaked(address indexed owner, uint256 indexed tokenId);
-    event AffiliateTrophyUnstaked(address indexed owner, uint256 indexed tokenId);
+event TrophyRewardClaimed(uint256 indexed tokenId, address indexed claimant, uint256 amount);
+event TrophyStakeChanged(
+    address indexed owner,
+    uint256 indexed tokenId,
+    uint8 kind,
+    bool staked,
+    uint8 count,
+    uint16 mapBonusBps
+);
 
     struct EndLevelRequest {
         address exterminator;
@@ -116,7 +124,7 @@ contract PurgeGameNFT {
     uint256 private seasonMintedSnapshot;
     uint256 private seasonPurgedCount;
 
-    mapping(uint256 => bool) private affiliateTrophyStaked;
+    mapping(uint256 => bool) private trophyStaked;
 
     uint32 private constant COIN_DRIP_STEPS = 10; // Base vesting window before coin drip starts
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
@@ -134,6 +142,7 @@ contract PurgeGameNFT {
     uint8 private constant _STAKE_ERR_ALREADY_STAKED = 3;
     uint8 private constant _STAKE_ERR_NOT_STAKED = 4;
     uint8 private constant _STAKE_ERR_LOCKED = 5;
+    uint8 private constant _STAKE_ERR_NOT_MAP = 6;
 
     function _currentBaseTokenId() private view returns (uint256) {
         return uint256(uint128(basePointers));
@@ -284,7 +293,7 @@ contract PurgeGameNFT {
         uint256 prevOwnershipPacked = _packedOwnershipOf(tokenId);
 
         if (address(uint160(prevOwnershipPacked)) != from) revert TransferFromIncorrectOwner();
-        if (affiliateTrophyStaked[tokenId]) revert AffiliateStakeViolation(_STAKE_ERR_TRANSFER_BLOCKED);
+        if (trophyStaked[tokenId]) revert TrophyStakeViolation(_STAKE_ERR_TRANSFER_BLOCKED);
 
         address approvedAddress = _tokenApprovals[tokenId];
 
@@ -702,35 +711,37 @@ contract PurgeGameNFT {
     // Affiliate staking
     // ---------------------------------------------------------------------
 
-    function stakeAffiliateTrophy(uint256 tokenId) external {
+    function setTrophyStake(
+        uint256 tokenId,
+        bool isMap,
+        bool stake
+    ) external {
         address sender = msg.sender;
         uint256 info = trophyData[tokenId];
-        if ((info & TROPHY_FLAG_AFFILIATE) == 0) revert AffiliateStakeViolation(_STAKE_ERR_NOT_AFFILIATE);
-        if (affiliateTrophyStaked[tokenId]) revert AffiliateStakeViolation(_STAKE_ERR_ALREADY_STAKED);
+        bool mapTrophy = (info & TROPHY_FLAG_MAP) != 0;
+        bool affiliateTrophy = (info & TROPHY_FLAG_AFFILIATE) != 0;
+        if (isMap ? !mapTrophy : !affiliateTrophy) revert TrophyStakeViolation(isMap ? _STAKE_ERR_NOT_MAP : _STAKE_ERR_NOT_AFFILIATE);
+
         if (address(uint160(_packedOwnershipOf(tokenId))) != sender) revert TransferFromIncorrectOwner();
 
-        affiliateTrophyStaked[tokenId] = true;
-        if (_tokenApprovals[tokenId] != address(0)) {
-            delete _tokenApprovals[tokenId];
+        bool currentlyStaked = trophyStaked[tokenId];
+        if (stake) {
+            if (currentlyStaked) revert TrophyStakeViolation(_STAKE_ERR_ALREADY_STAKED);
+            trophyStaked[tokenId] = true;
+            if (_tokenApprovals[tokenId] != address(0)) delete _tokenApprovals[tokenId];
+            (uint8 count, uint16 mapBonus) = coin.setStake(sender, isMap, true);
+            emit TrophyStakeChanged(sender, tokenId, isMap ? 1 : 2, true, count, mapBonus);
+        } else {
+            if (game.gameState() != 4) revert TrophyStakeViolation(_STAKE_ERR_LOCKED);
+            if (!currentlyStaked) revert TrophyStakeViolation(_STAKE_ERR_NOT_STAKED);
+            trophyStaked[tokenId] = false;
+            (uint8 count, uint16 mapBonus) = coin.setStake(sender, isMap, false);
+            emit TrophyStakeChanged(sender, tokenId, isMap ? 1 : 2, false, count, mapBonus);
         }
-        coin.stakeAffiliate(sender);
-        emit AffiliateTrophyStaked(sender, tokenId);
     }
 
-    function unstakeAffiliateTrophy(uint256 tokenId) external {
-        if (game.gameState() != 4) revert AffiliateStakeViolation(_STAKE_ERR_LOCKED);
-
-        address sender = msg.sender;
-        if (!affiliateTrophyStaked[tokenId]) revert AffiliateStakeViolation(_STAKE_ERR_NOT_STAKED);
-        if (address(uint160(_packedOwnershipOf(tokenId))) != sender) revert TransferFromIncorrectOwner();
-
-        affiliateTrophyStaked[tokenId] = false;
-        coin.unstakeAffiliate(sender);
-        emit AffiliateTrophyUnstaked(sender, tokenId);
-    }
-
-    function isAffiliateTrophyStaked(uint256 tokenId) external view returns (bool) {
-        return affiliateTrophyStaked[tokenId];
+    function isTrophyStaked(uint256 tokenId) external view returns (bool) {
+        return trophyStaked[tokenId];
     }
 
     function burnieNFT() external {

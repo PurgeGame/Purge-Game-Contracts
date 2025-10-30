@@ -93,6 +93,7 @@ contract Purgecoin {
     mapping(address => uint256) public balanceOf;
     mapping(address => mapping(address => uint256)) public allowance;
     mapping(address => uint8) private affiliateStakeBonusPct;
+    mapping(address => uint16) private mapStakeBonusBps;
 
     function approve(address spender, uint256 amount) public returns (bool) {
         allowance[msg.sender][spender] = amount;
@@ -170,7 +171,8 @@ contract Purgecoin {
     uint16 private constant RANK_NOT_FOUND = 11;
     uint256 private constant MIN = 100 * MILLION; // min burn / min flip (100 PURGED)
     uint8 private constant MAX_RISK = 11; // staking risk 1..11
-    uint8 private constant AFFILIATE_STAKE_MAX = 5;
+    uint8 private constant AFFILIATE_STAKE_MAX = 3;
+    uint8 private constant MAP_STAKE_MAX = 3;
     uint128 private constant ONEK = 1_000_000_000; // 1,000 PURGED (6d)
     uint32 private constant BAF_BATCH = 5000;
     uint256 private constant BUCKET_SIZE = 1500;
@@ -336,6 +338,7 @@ contract Purgecoin {
 
         address caller = msg.sender;
         uint256 burnTotal = amount + coinflipDeposit;
+        uint256 depositWithBonus = coinflipDeposit;
         uint256 bal = balanceOf[msg.sender];
         if (burnTotal == bal) burnTotal -= 1; // leave 1 unit to avoid zero balance
 
@@ -348,14 +351,18 @@ contract Purgecoin {
         _burn(caller, burnTotal);
 
         if (coinflipDeposit != 0) {
+            uint16 mapBonusBps = mapStakeBonusBps[caller];
+            if (mapBonusBps != 0) {
+                depositWithBonus += (coinflipDeposit * mapBonusBps) / 10_000;
+            }
             // Internal flip accounting; assumed non-reentrant / no external calls.
-            addFlip(caller, coinflipDeposit, true);
+            addFlip(caller, depositWithBonus, true);
         }
 
         unchecked {
             // Track aggregate burn and grow caller luckbox (adds +2% of deposit).
             dailyCoinBurn += amount;
-            uint256 newLuck = playerLuckbox[caller] + amount + coinflipDeposit / 50;
+            uint256 newLuck = playerLuckbox[caller] + amount + depositWithBonus / 50;
             playerLuckbox[caller] = newLuck;
 
             // Update luckbox leaderboard (board 0 = luckbox).
@@ -797,33 +804,54 @@ contract Purgecoin {
 
     }
 
-    function stakeAffiliate(address player) external returns (uint8 newCount) {
-        if (msg.sender != nftContract) revert OnlyNFT();
-        uint8 current = _bonusToCount(affiliateStakeBonusPct[player]);
-        if (current >= AFFILIATE_STAKE_MAX) revert StakeInvalid();
-        unchecked {
-            current += 1;
+function setStake(address player, bool isMap, bool stake)
+    external
+    returns (uint8 newCount, uint16 mapBonusBps)
+{
+    if (msg.sender != nftContract) revert OnlyNFT();
+
+    if (isMap) {
+        uint8 current = _mapBonusToCount(mapStakeBonusBps[player]);
+        if (stake) {
+            if (current >= MAP_STAKE_MAX) revert StakeInvalid();
+            unchecked {
+                current += 1;
+            }
+        } else {
+            if (current == 0) revert StakeInvalid();
+            unchecked {
+                current -= 1;
+            }
         }
-        uint8 bonus = _stakeBonusPct(current);
-        affiliateStakeBonusPct[player] = bonus;
-        return current;
+        uint16 bonus = _mapBonusBps(current);
+        mapStakeBonusBps[player] = bonus;
+        return (current, bonus);
     }
 
-    function unstakeAffiliate(address player) external returns (uint8 newCount) {
-        if (msg.sender != nftContract) revert OnlyNFT();
-        uint8 current = _bonusToCount(affiliateStakeBonusPct[player]);
-        if (current == 0) revert StakeInvalid();
+    uint8 currentAff = _bonusToCount(affiliateStakeBonusPct[player]);
+    if (stake) {
+        if (currentAff >= AFFILIATE_STAKE_MAX) revert StakeInvalid();
         unchecked {
-            current -= 1;
+            currentAff += 1;
         }
-        uint8 bonus = _stakeBonusPct(current);
-        affiliateStakeBonusPct[player] = bonus;
-        return current;
+    } else {
+        if (currentAff == 0) revert StakeInvalid();
+        unchecked {
+            currentAff -= 1;
+        }
     }
+    uint8 bonusAff = _stakeBonusPct(currentAff);
+    affiliateStakeBonusPct[player] = bonusAff;
+    return (currentAff, mapStakeBonusBps[player]);
+}
 
-    function affiliateStakeBonus(address player) external view returns (uint8) {
-        return affiliateStakeBonusPct[player];
-    }
+function affiliateStakeBonus(address player) external view returns (uint8) {
+    return affiliateStakeBonusPct[player];
+}
+
+function mapStakeBonus(address player) external view returns (uint16) {
+    return mapStakeBonusBps[player];
+}
 
 
     /// @notice Grant a pending coinflip stake during gameplay flows instead of minting PURGE.
@@ -1978,20 +2006,32 @@ contract Purgecoin {
     function _stakeBonusPct(uint8 count) private pure returns (uint8) {
         if (count == 0) return 0;
         if (count >= AFFILIATE_STAKE_MAX) return 15;
-        if (count == 1) return 5;
-        if (count == 2) return 9;
-        if (count == 3) return 12;
-        if (count == 4) return 14;
-        return 0;
+        if (count == 1) return 7;
+        if (count == 2) return 12;
+        return 15;
     }
 
     function _bonusToCount(uint8 bonus) private pure returns (uint8) {
         if (bonus == 0) return 0;
         if (bonus >= 15) return AFFILIATE_STAKE_MAX;
-        if (bonus == 14) return 4;
-        if (bonus == 12) return 3;
-        if (bonus == 9) return 2;
-        if (bonus == 5) return 1;
+        if (bonus >= 12) return 2;
+        if (bonus >= 7) return 1;
+        return 0;
+    }
+
+    function _mapBonusBps(uint8 count) private pure returns (uint16) {
+        if (count == 0) return 0;
+        if (count >= MAP_STAKE_MAX) return 300;
+        if (count == 1) return 150;
+        if (count == 2) return 250;
+        return 300;
+    }
+
+    function _mapBonusToCount(uint16 bonus) private pure returns (uint8) {
+        if (bonus == 0) return 0;
+        if (bonus >= 300) return MAP_STAKE_MAX;
+        if (bonus >= 250) return 2;
+        if (bonus >= 150) return 1;
         return 0;
     }
 
