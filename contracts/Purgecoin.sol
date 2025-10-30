@@ -18,6 +18,7 @@ interface IPurgeGame {
         uint8 numWinners,
         uint8 salt
     ) external view returns (address[] memory);
+    function lastEthMintLevelOf(address player) external view returns (uint24);
 }
 
 interface IPurgeRenderer {
@@ -27,6 +28,8 @@ interface IPurgeRenderer {
 interface IPurgeGameNFT {
     function wireContracts(address game_) external;
     function burnieNFT() external;
+    function mapStakeBonus(address player) external view returns (uint16);
+    function affiliateStakeBonus(address player) external view returns (uint8);
 }
 
 interface IVRFCoordinator {
@@ -80,7 +83,6 @@ contract Purgecoin {
     error OnlyCoordinatorCanFulfill(address have, address want);
     error ZeroAddress();
     error NoContracts();
-    error OnlyNFT();
 
     // ---------------------------------------------------------------------
     // ERC20 state
@@ -92,8 +94,6 @@ contract Purgecoin {
     uint256 public totalSupply;
     mapping(address => uint256) public balanceOf;
     mapping(address => mapping(address => uint256)) public allowance;
-    mapping(address => uint8) private affiliateStakeBonusPct;
-    mapping(address => uint16) private mapStakeBonusBps;
 
     function approve(address spender, uint256 amount) public returns (bool) {
         allowance[msg.sender][spender] = amount;
@@ -171,8 +171,6 @@ contract Purgecoin {
     uint16 private constant RANK_NOT_FOUND = 11;
     uint256 private constant MIN = 100 * MILLION; // min burn / min flip (100 PURGED)
     uint8 private constant MAX_RISK = 11; // staking risk 1..11
-    uint8 private constant AFFILIATE_STAKE_MAX = 3;
-    uint8 private constant MAP_STAKE_MAX = 3;
     uint128 private constant ONEK = 1_000_000_000; // 1,000 PURGED (6d)
     uint32 private constant BAF_BATCH = 5000;
     uint256 private constant BUCKET_SIZE = 1500;
@@ -277,6 +275,10 @@ contract Purgecoin {
     mapping(address => uint8) private luckboxPos;
     mapping(address => uint8) private affiliatePos;
     mapping(address => uint8) private topPos;
+    mapping(address => uint32) private luckyFlipStreak;
+    mapping(address => uint48) private lastLuckyStreakEpoch;
+    uint48 private streakEpoch = 1;
+    uint24 private streakLevelProcessed;
 
     // RNG
     uint256 private rngWord;
@@ -339,6 +341,7 @@ contract Purgecoin {
         address caller = msg.sender;
         uint256 burnTotal = amount + coinflipDeposit;
         uint256 depositWithBonus = coinflipDeposit;
+        uint256 prevStakeBefore = coinflipAmount[caller];
         uint256 bal = balanceOf[msg.sender];
         if (burnTotal == bal) burnTotal -= 1; // leave 1 unit to avoid zero balance
 
@@ -351,9 +354,35 @@ contract Purgecoin {
         _burn(caller, burnTotal);
 
         if (coinflipDeposit != 0) {
-            uint16 mapBonusBps = mapStakeBonusBps[caller];
+            uint16 mapBonusBps = _mapStakeBonus(caller);
             if (mapBonusBps != 0) {
                 depositWithBonus += (coinflipDeposit * mapBonusBps) / 10_000;
+            }
+            if (prevStakeBefore == 0) {
+                uint48 epoch = streakEpoch;
+                if (epoch == 0) epoch = 1;
+                uint48 lastEpoch = lastLuckyStreakEpoch[caller];
+                if (lastEpoch != epoch) {
+                    uint32 streak = luckyFlipStreak[caller];
+                    uint24 requiredLevel = streakLevelProcessed;
+                    bool minted = (requiredLevel == 0 || purgeGame.lastEthMintLevelOf(caller) == requiredLevel);
+                    if (!minted) {
+                        streak = 1;
+                    } else if (lastEpoch != 0 && epoch == lastEpoch + 1) {
+                        unchecked {
+                            streak += 1;
+                        }
+                    } else {
+                        streak = 1;
+                    }
+                    luckyFlipStreak[caller] = streak;
+                    lastLuckyStreakEpoch[caller] = epoch;
+                    uint256 bonusTotal = _streakExtra(streak);
+                    depositWithBonus += bonusTotal;
+                    uint256 newLuckBonus = playerLuckbox[caller] + bonusTotal;
+                    playerLuckbox[caller] = newLuckBonus;
+                    _updatePlayerScore(0, caller, newLuckBonus);
+                }
             }
             // Internal flip accounting; assumed non-reentrant / no external calls.
             addFlip(caller, depositWithBonus, true);
@@ -635,7 +664,7 @@ contract Purgecoin {
             // Pay direct affiliate (skip sentinels)
             if (affiliateAddr != address(0) && affiliateAddr != address(1)) {
                 uint256 payout = baseAmount;
-                uint8 stakeBonus = affiliateStakeBonusPct[affiliateAddr];
+                uint8 stakeBonus = _affiliateStakeBonus(affiliateAddr);
                 if (stakeBonus != 0) {
                     payout += (payout * stakeBonus) / 100;
                 }
@@ -650,7 +679,7 @@ contract Purgecoin {
             if (upline != address(0) && upline != address(1) && upline != sender && earned[upline] > 0) {
                 uint256 bonus = baseAmount / 5;
                 if (bonus != 0) {
-                    uint8 stakeBonusUpline = affiliateStakeBonusPct[upline];
+                    uint8 stakeBonusUpline = _affiliateStakeBonus(upline);
                     if (stakeBonusUpline != 0) {
                         bonus += (bonus * stakeBonusUpline) / 100;
                     }
@@ -815,56 +844,6 @@ contract Purgecoin {
 
     }
 
-    function setStake(address player, bool isMap, bool _stake)
-        external
-        returns (uint8 newCount, uint16 mapBonusBps)
-    {
-        if (msg.sender != nftContract) revert OnlyNFT();
-
-        if (isMap) {
-            uint8 current = _mapBonusToCount(mapStakeBonusBps[player]);
-            if (_stake) {
-                if (current >= MAP_STAKE_MAX) revert StakeInvalid();
-                unchecked {
-                    current += 1;
-                }
-            } else {
-                if (current == 0) revert StakeInvalid();
-                unchecked {
-                    current -= 1;
-                }
-            }
-            uint16 bonus = _mapBonusBps(current);
-            mapStakeBonusBps[player] = bonus;
-            return (current, bonus);
-        }
-
-        uint8 currentAff = _bonusToCount(affiliateStakeBonusPct[player]);
-        if (_stake) {
-            if (currentAff >= AFFILIATE_STAKE_MAX) revert StakeInvalid();
-            unchecked {
-                currentAff += 1;
-            }
-        } else {
-            if (currentAff == 0) revert StakeInvalid();
-            unchecked {
-                currentAff -= 1;
-            }
-        }
-        uint8 bonusAff = _stakeBonusPct(currentAff);
-        affiliateStakeBonusPct[player] = bonusAff;
-        return (currentAff, mapStakeBonusBps[player]);
-    }
-
-    function affiliateStakeBonus(address player) external view returns (uint8) {
-        return affiliateStakeBonusPct[player];
-    }
-
-    function mapStakeBonus(address player) external view returns (uint16) {
-        return mapStakeBonusBps[player];
-    }
-
-
     /// @notice Grant a pending coinflip stake during gameplay flows instead of minting PURGE.
     /// @dev Access: PurgeGame only. Zero address or zero amount are ignored.
     function bonusCoinflip(address player, uint256 amount) external {
@@ -911,6 +890,13 @@ contract Purgecoin {
         bool bonusFlip
     ) external onlyPurgeGameContract returns (bool finished) {
         if (!isBettingPaused) return true;
+        if (payoutIndex == 0 && streakLevelProcessed != level) {
+            streakLevelProcessed = level;
+            unchecked {
+                ++streakEpoch;
+            }
+            if (streakEpoch == 0) streakEpoch = 1;
+        }
         // --- Step sizing (bounded work) ----------------------------------------------------
 
         uint32 stepPayout = (cap == 0) ? 500 : cap;
@@ -1174,7 +1160,7 @@ contract Purgecoin {
 
                     for (uint8 i; i < 10; ) {
                         address p = luckboxLeaderboard[i].player;
-                        if (p != address(0) && coinflipAmount[p] >= ONEK) {
+                    if (p != address(0) && coinflipAmount[p] >= (ONEK * 2)) {
                             eligible[eligibleCount] = p;
                             if (p == topLuck) topIncluded = true;
                             unchecked {
@@ -1285,7 +1271,7 @@ contract Purgecoin {
             // ---------------------------
             if (kind == 0) {
                 uint256 P = poolWei;
-                uint256 lbMin = (ONEK / 4) * uint256(lvl); // minimum "active" threshold
+            uint256 lbMin = (ONEK / 2) * uint256(lvl); // minimum "active" threshold (doubled)
                 address[6] memory tmpW;
                 uint256[6] memory tmpA;
                 uint256 n;
@@ -1434,7 +1420,7 @@ contract Purgecoin {
             uint256[] memory tmpAmounts = new uint256[](tmpCap);
             uint256 n2;
             uint256 per = uint256(bs.per);
-            uint256 lbMin = (ONEK / 4) * uint256(lvl);
+            uint256 lbMin = (ONEK / 2) * uint256(lvl);
             uint256 retWei = uint256(bafState.returnAmountWei);
 
             for (uint32 i = scanCursor; i < end; ) {
@@ -1483,7 +1469,7 @@ contract Purgecoin {
         if (extMode == 2) {
             uint32 end = scanCursor + batch;
             if (end > bs.limit) end = bs.limit;
-            uint256 lbMin = (ONEK / 4) * uint256(lvl);
+            uint256 lbMin = (ONEK / 2) * uint256(lvl);
 
             for (uint32 i = scanCursor; i < end; ) {
                 address p = _srcPlayer(1, lvl, i);
@@ -1528,7 +1514,7 @@ contract Purgecoin {
             uint256[] memory tmpAmounts = new uint256[](tmpCap);
             uint256 n2;
 
-            uint256 lbMin = (ONEK / 4) * uint256(lvl);
+            uint256 lbMin = (ONEK / 2) * uint256(lvl);
             uint256 pool = uint256(bafState.totalPrizePoolWei);
             uint256 denom = extVar;
             uint256 paid = uint256(bafState.returnAmountWei);
@@ -1702,6 +1688,7 @@ contract Purgecoin {
         if (prevStake == 0) _pushPlayer(player);
 
         uint256 newStake = prevStake + coinflipDeposit;
+
         coinflipAmount[player] = newStake;
         _updatePlayerScore(2, player, newStake);
 
@@ -1726,6 +1713,23 @@ contract Purgecoin {
         unchecked {
             currentBounty += uint128(amount);
         }
+    }
+
+    function _streakExtra(uint32 streak) private pure returns (uint256) {
+        if (streak == 0) return 0;
+        if (streak <= 12) {
+            return (25 + (uint256(streak) - 1) * 5) * MILLION;
+        }
+        if (streak <= 32) {
+            return (80 + (uint256(streak) - 12) * 4) * MILLION;
+        }
+        if (streak <= 52) {
+            return (160 + (uint256(streak) - 32) * 3) * MILLION;
+        }
+        if (streak <= 72) {
+            return (220 + (uint256(streak) - 52) * 2) * MILLION;
+        }
+        return 250 * MILLION;
     }
 
     /// @notice Pick the address with the highest luckbox from a candidate list.
@@ -2014,36 +2018,16 @@ contract Purgecoin {
         return true;
     }
 
-    function _stakeBonusPct(uint8 count) private pure returns (uint8) {
-        if (count == 0) return 0;
-        if (count >= AFFILIATE_STAKE_MAX) return 15;
-        if (count == 1) return 7;
-        if (count == 2) return 12;
-        return 15;
+    function _affiliateStakeBonus(address player) private view returns (uint8) {
+        address nft = nftContract;
+        if (nft == address(0)) return 0;
+        return IPurgeGameNFT(nft).affiliateStakeBonus(player);
     }
 
-    function _bonusToCount(uint8 bonus) private pure returns (uint8) {
-        if (bonus == 0) return 0;
-        if (bonus >= 15) return AFFILIATE_STAKE_MAX;
-        if (bonus >= 12) return 2;
-        if (bonus >= 7) return 1;
-        return 0;
-    }
-
-    function _mapBonusBps(uint8 count) private pure returns (uint16) {
-        if (count == 0) return 0;
-        if (count >= MAP_STAKE_MAX) return 300;
-        if (count == 1) return 150;
-        if (count == 2) return 250;
-        return 300;
-    }
-
-    function _mapBonusToCount(uint16 bonus) private pure returns (uint8) {
-        if (bonus == 0) return 0;
-        if (bonus >= 300) return MAP_STAKE_MAX;
-        if (bonus >= 250) return 2;
-        if (bonus >= 150) return 1;
-        return 0;
+    function _mapStakeBonus(address player) private view returns (uint16) {
+        address nft = nftContract;
+        if (nft == address(0)) return 0;
+        return IPurgeGameNFT(nft).mapStakeBonus(player);
     }
 
 }

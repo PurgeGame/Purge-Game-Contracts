@@ -88,6 +88,7 @@ contract PurgeGame {
     error LuckboxTooSmall(); // Caller does not meet luckbox threshold for the action
     error NotTimeYet(); // Called in a phase where the action is not permitted
     error RngNotReady(); // VRF request still pending
+    error InvalidQuantity(); // Invalid quantity or token count for the action
 
     // -----------------------
     // Events
@@ -96,6 +97,7 @@ contract PurgeGame {
     event Jackpot(uint256 traits); // Encodes jackpot metadata
     event Purge(address indexed player, uint256[] tokenIds);
     event TokenCreated(uint256 tokenId, uint32 tokenTraits);
+    event Advance(uint8 gameState, uint8 phase);
 
     // -----------------------
     // Immutable Addresses
@@ -103,6 +105,7 @@ contract PurgeGame {
     IPurgeRenderer private immutable renderer; // Trusted renderer; used for tokenURI composition
     IPurgeCoinInterface private immutable coin; // Trusted coin/game-side coordinator (PURGE ERC20)
     IPurgeGameNFT private immutable nft; // ERC721 interface for mint/burn/metadata surface
+
 
     // -----------------------
     // Game Constants
@@ -177,6 +180,7 @@ contract PurgeGame {
     mapping(uint256 => uint32) private tokenTraits; // Packed 4×8-bit traits (low to high)
     mapping(address => uint256) private claimableWinnings; // ETH claims accumulated on-chain
     mapping(uint24 => address[][256]) private traitPurgeTicket; // level => traitId => ticket holders
+    mapping(address => uint24) private lastEthMintLevel;
 
     struct PendingEndLevel {
         address exterminator; // Non-zero means trait win; zero means map timeout
@@ -256,6 +260,10 @@ contract PurgeGame {
         rngConsumed_ = rngConsumed;
     }
 
+    function lastEthMintLevelOf(address player) external view returns (uint24) {
+        return lastEthMintLevel[player];
+    }
+
     // --- State machine: advance one tick ------------------------------------------------
 
     /// @notice Advances the game state machine. Anyone can call, but certain steps
@@ -284,6 +292,7 @@ contract PurgeGame {
         uint256 luckboxThreshold;
         if (cap == 0) {
             luckboxThreshold = priceCoin * lvl * (lvl / 100 + 1);
+            luckboxThreshold <<= 1;
         }
 
         do {
@@ -418,6 +427,8 @@ contract PurgeGame {
             }
         } while (false);
 
+        emit Advance(_gameState, _phase);
+
         if (_gameState != 0 && cap == 0) coinContract.bonusCoinflip(msg.sender, priceCoin);
     }
 
@@ -436,7 +447,8 @@ contract PurgeGame {
         uint8 _phase = phase;
         uint24 lvl = level;
         if (!rngConsumed) revert RngNotReady();
-        if (quantity == 0 || quantity > 100 || gameState != 2 || (lvl % 20) == 16) revert NotTimeYet();
+        if (quantity == 0 || quantity > 100) revert InvalidQuantity();
+        if (gameState != 2 || (lvl % 20) == 16) revert NotTimeYet();
         uint256 _priceCoin = priceCoin;
         _enforceCenturyLuckbox(lvl, _priceCoin);
         // Payment handling (ETH vs coin)
@@ -446,7 +458,7 @@ contract PurgeGame {
             _coinReceive(quantity * _priceCoin, lvl, bonusCoinReward);
         } else {
             // Scale quantity by 100 so `_ethReceive` can keep integer math.
-            uint256 bonus = _ethReceive(quantity * 100, affiliateCode, quantity);
+            uint256 bonus = _ethReceive(quantity * 100, affiliateCode, quantity, lvl);
             if (_phase == 3 && (lvl % 100) > 90) {
                 bonus += (quantity * _priceCoin) / 5;
             }
@@ -517,7 +529,8 @@ contract PurgeGame {
         uint8 _phase = phase;
         uint8 state = gameState;
         if (!rngConsumed) revert RngNotReady();
-        if (quantity == 0 || (state != 2 && state != 4)) revert NotTimeYet();
+        if (quantity == 0) revert InvalidQuantity();
+        if (state != 2 && state != 4) revert NotTimeYet();
         uint24 lvl = level;
         if (state == 4) {
             unchecked {
@@ -535,7 +548,7 @@ contract PurgeGame {
             if (msg.value != 0) revert E();
             _coinReceive(coinCost - mapRebate, lvl, mapBonus);
         } else {
-            uint256 bonus = _ethReceive(scaledQty, affiliateCode, (lvl < 10) ? quantity : 0);
+            uint256 bonus = _ethReceive(scaledQty, affiliateCode, (lvl < 10) ? quantity : 0, lvl);
             if (_phase == 3 && (lvl % 100) > 90) {
                 bonus += coinCost / 5;
             }
@@ -573,7 +586,7 @@ contract PurgeGame {
         if (gameState != 4) revert NotTimeYet();
 
         uint256 count = tokenIds.length;
-        if (count == 0 || count > 75) revert E();
+        if (count == 0 || count > 75) revert InvalidQuantity();
         address caller = msg.sender;
         nft.purge(caller, tokenIds);
 
@@ -1310,7 +1323,8 @@ contract PurgeGame {
     function _ethReceive(
         uint256 scaledQty,
         bytes32 affiliateCode,
-        uint256 bonusUnits
+        uint256 bonusUnits,
+        uint24 lvl
     ) private returns (uint256 bonusMint) {
         uint256 expectedWei = (price * scaledQty) / 100;
         if (msg.value != expectedWei) revert E();
@@ -1341,6 +1355,8 @@ contract PurgeGame {
             coin.payAffiliate(affiliateAmount, affiliateCode, msg.sender, level);
         }
 
+        lastEthMintLevel[msg.sender] = lvl;
+
         bonusMint = (bonusUnits * priceCoin * pct) / 100;
     }
 
@@ -1355,7 +1371,8 @@ contract PurgeGame {
 
     function _enforceCenturyLuckbox(uint24 lvl, uint256 unit) private view {
         if (lvl % 100 == 0) {
-            if (coin.playerLuckbox(msg.sender) < 10 * unit * ((lvl / 100) + 1)) revert LuckboxTooSmall();
+            uint256 required = 20 * unit * ((lvl / 100) + 1);
+            if (coin.playerLuckbox(msg.sender) < required) revert LuckboxTooSmall();
         }
     }
 

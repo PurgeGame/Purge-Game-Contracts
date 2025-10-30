@@ -35,11 +35,6 @@ interface IPurgecoin {
     function isBettingPaused() external view returns (bool);
 
     function getLeaderboardAddresses(uint8 which) external view returns (address[] memory);
-
-    function setStake(address player, bool isMap, bool stake)
-        external
-        returns (uint8 newCount, uint16 mapBonusBps);
-    function mapStakeBonus(address player) external view returns (uint16 bps);
 }
 
 contract PurgeGameNFT {
@@ -57,6 +52,7 @@ contract PurgeGameNFT {
     error OnlyCoin();
     error InvalidToken();
     error TrophyStakeViolation(uint8 reason);
+    error StakeInvalid();
 
     // ---------------------------------------------------------------------
     // Events & types
@@ -126,6 +122,8 @@ event TrophyStakeChanged(
     uint256 private seasonPurgedCount;
 
     mapping(uint256 => bool) private trophyStaked;
+    mapping(address => uint8) private affiliateStakeCount;
+    mapping(address => uint8) private mapStakeCount;
 
     uint32 private constant COIN_DRIP_STEPS = 10; // Base vesting window before coin drip starts
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
@@ -144,6 +142,8 @@ event TrophyStakeChanged(
     uint8 private constant _STAKE_ERR_NOT_STAKED = 4;
     uint8 private constant _STAKE_ERR_LOCKED = 5;
     uint8 private constant _STAKE_ERR_NOT_MAP = 6;
+    uint8 private constant AFFILIATE_STAKE_MAX = 3;
+    uint8 private constant MAP_STAKE_MAX = 3;
 
     function _currentBaseTokenId() private view returns (uint256) {
         return uint256(uint128(basePointers));
@@ -734,19 +734,67 @@ event TrophyStakeChanged(
             if (currentlyStaked) revert TrophyStakeViolation(_STAKE_ERR_ALREADY_STAKED);
             trophyStaked[tokenId] = true;
             if (_tokenApprovals[tokenId] != address(0)) delete _tokenApprovals[tokenId];
-            (uint8 count, uint16 mapBonus) = coin.setStake(sender, isMap, true);
+            uint8 count;
+            uint16 mapBonus;
+            if (isMap) {
+                uint8 current = mapStakeCount[sender];
+                if (current >= MAP_STAKE_MAX) revert StakeInvalid();
+                unchecked {
+                    current += 1;
+                }
+                mapStakeCount[sender] = current;
+                count = current;
+                mapBonus = _mapBonusBps(current);
+            } else {
+                uint8 current = affiliateStakeCount[sender];
+                if (current >= AFFILIATE_STAKE_MAX) revert StakeInvalid();
+                unchecked {
+                    current += 1;
+                }
+                affiliateStakeCount[sender] = current;
+                count = current;
+                mapBonus = _mapBonusBps(mapStakeCount[sender]);
+            }
             emit TrophyStakeChanged(sender, tokenId, isMap ? 1 : 2, true, count, mapBonus);
         } else {
             if (game.gameState() != 4) revert TrophyStakeViolation(_STAKE_ERR_LOCKED);
             if (!currentlyStaked) revert TrophyStakeViolation(_STAKE_ERR_NOT_STAKED);
             trophyStaked[tokenId] = false;
-            (uint8 count, uint16 mapBonus) = coin.setStake(sender, isMap, false);
+            uint8 count;
+            uint16 mapBonus;
+            if (isMap) {
+                uint8 current = mapStakeCount[sender];
+                if (current == 0) revert StakeInvalid();
+                unchecked {
+                    current -= 1;
+                }
+                mapStakeCount[sender] = current;
+                count = current;
+                mapBonus = _mapBonusBps(current);
+            } else {
+                uint8 current = affiliateStakeCount[sender];
+                if (current == 0) revert StakeInvalid();
+                unchecked {
+                    current -= 1;
+                }
+                affiliateStakeCount[sender] = current;
+                count = current;
+                mapBonus = _mapBonusBps(mapStakeCount[sender]);
+            }
             emit TrophyStakeChanged(sender, tokenId, isMap ? 1 : 2, false, count, mapBonus);
         }
     }
 
     function isTrophyStaked(uint256 tokenId) external view returns (bool) {
         return trophyStaked[tokenId];
+    }
+
+    function affiliateStakeBonus(address player) external view returns (uint8) {
+        return _stakeBonusPct(affiliateStakeCount[player]);
+    }
+
+    function mapStakeBonus(address player) external view returns (uint16) {
+        return _mapBonusBps(mapStakeCount[player]);
     }
 
     function burnieNFT() external {
@@ -899,6 +947,22 @@ event TrophyStakeChanged(
             | (owed & TROPHY_OWED_MASK)
             | (base << TROPHY_BASE_LEVEL_SHIFT);
         trophyData[tokenId] = updated;
+    }
+
+    function _stakeBonusPct(uint8 count) private pure returns (uint8) {
+        if (count == 0) return 0;
+        if (count >= AFFILIATE_STAKE_MAX) return 15;
+        if (count == 1) return 7;
+        if (count == 2) return 12;
+        return 15;
+    }
+
+    function _mapBonusBps(uint8 count) private pure returns (uint16) {
+        if (count == 0) return 0;
+        if (count >= MAP_STAKE_MAX) return 300;
+        if (count == 1) return 150;
+        if (count == 2) return 250;
+        return 300;
     }
 
 }
