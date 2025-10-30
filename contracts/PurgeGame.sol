@@ -318,7 +318,7 @@ contract PurgeGame {
                 revert LuckboxTooSmall();
 
             // Arm VRF when due/new (reward allowed)
-            if (day == dayIdx && _gameState != 1) revert NotTimeYet();
+            if (day == dayIdx) revert NotTimeYet();
             // --- State 1 - Pregame ---
             if (_gameState == 1) {
                 _finalizeEndgame(lvl, cap, day, rngWord); // handles payouts, wipes, endgame dist, and jackpots
@@ -768,8 +768,6 @@ contract PurgeGame {
 
         purchaseCount = 0;
         gameState = 1;
-
-        _triggerRngRequest();
     }
 
     /// @notice Resolve prior level endgame in bounded slices and advance to purchase when ready.
@@ -824,7 +822,7 @@ contract PurgeGame {
                 nextPrizePool = 0;
             }
             gameState = 2;
-        }
+            }
 
         if (pend.level == 0) {
             return;
@@ -1296,17 +1294,13 @@ contract PurgeGame {
 
     // --- Flips, VRF, payments, rarity ----------------------------------------------------------------
 
-    function _triggerRngRequest() internal {
-        if (!nft.rngLocked()) {
-            nft.requestRng();
-        }
-    }
-
     function _ensureRngReady(uint48 day) internal returns (uint256 word) {
         word = nft.currentRngWord();
         if (word == 0) revert RngNotReady();
         if (day != dailyIdx) {
-            _triggerRngRequest();
+            if (!nft.rngLocked()) {
+                nft.requestRng();
+            }
             revert RngNotReady();
         }
     }
