@@ -414,6 +414,7 @@ event TrophyStakeChanged(
         if (msg.sender != owner && !isApprovedForAll(owner, msg.sender)) {
             revert ApprovalCallerNotOwnerNorApproved();
         }
+        if (trophyStaked[tokenId]) revert TrophyStakeViolation(_STAKE_ERR_TRANSFER_BLOCKED);
 
         _tokenApprovals[tokenId] = to;
         emit Approval(owner, to, tokenId);

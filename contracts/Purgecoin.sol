@@ -804,54 +804,54 @@ contract Purgecoin {
 
     }
 
-function setStake(address player, bool isMap, bool stake)
-    external
-    returns (uint8 newCount, uint16 mapBonusBps)
-{
-    if (msg.sender != nftContract) revert OnlyNFT();
+    function setStake(address player, bool isMap, bool stake)
+        external
+        returns (uint8 newCount, uint16 mapBonusBps)
+    {
+        if (msg.sender != nftContract) revert OnlyNFT();
 
-    if (isMap) {
-        uint8 current = _mapBonusToCount(mapStakeBonusBps[player]);
+        if (isMap) {
+            uint8 current = _mapBonusToCount(mapStakeBonusBps[player]);
+            if (stake) {
+                if (current >= MAP_STAKE_MAX) revert StakeInvalid();
+                unchecked {
+                    current += 1;
+                }
+            } else {
+                if (current == 0) revert StakeInvalid();
+                unchecked {
+                    current -= 1;
+                }
+            }
+            uint16 bonus = _mapBonusBps(current);
+            mapStakeBonusBps[player] = bonus;
+            return (current, bonus);
+        }
+
+        uint8 currentAff = _bonusToCount(affiliateStakeBonusPct[player]);
         if (stake) {
-            if (current >= MAP_STAKE_MAX) revert StakeInvalid();
+            if (currentAff >= AFFILIATE_STAKE_MAX) revert StakeInvalid();
             unchecked {
-                current += 1;
+                currentAff += 1;
             }
         } else {
-            if (current == 0) revert StakeInvalid();
+            if (currentAff == 0) revert StakeInvalid();
             unchecked {
-                current -= 1;
+                currentAff -= 1;
             }
         }
-        uint16 bonus = _mapBonusBps(current);
-        mapStakeBonusBps[player] = bonus;
-        return (current, bonus);
+        uint8 bonusAff = _stakeBonusPct(currentAff);
+        affiliateStakeBonusPct[player] = bonusAff;
+        return (currentAff, mapStakeBonusBps[player]);
     }
 
-    uint8 currentAff = _bonusToCount(affiliateStakeBonusPct[player]);
-    if (stake) {
-        if (currentAff >= AFFILIATE_STAKE_MAX) revert StakeInvalid();
-        unchecked {
-            currentAff += 1;
-        }
-    } else {
-        if (currentAff == 0) revert StakeInvalid();
-        unchecked {
-            currentAff -= 1;
-        }
+    function affiliateStakeBonus(address player) external view returns (uint8) {
+        return affiliateStakeBonusPct[player];
     }
-    uint8 bonusAff = _stakeBonusPct(currentAff);
-    affiliateStakeBonusPct[player] = bonusAff;
-    return (currentAff, mapStakeBonusBps[player]);
-}
 
-function affiliateStakeBonus(address player) external view returns (uint8) {
-    return affiliateStakeBonusPct[player];
-}
-
-function mapStakeBonus(address player) external view returns (uint16) {
-    return mapStakeBonusBps[player];
-}
+    function mapStakeBonus(address player) external view returns (uint16) {
+        return mapStakeBonusBps[player];
+    }
 
 
     /// @notice Grant a pending coinflip stake during gameplay flows instead of minting PURGE.
