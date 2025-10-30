@@ -266,8 +266,6 @@ contract PurgeGameNFT {
     ) public payable {
         uint256 prevOwnershipPacked = _packedOwnershipOf(tokenId);
 
-        from = address(uint160(uint256(uint160(from)) & _BITMASK_ADDRESS));
-
         if (address(uint160(prevOwnershipPacked)) != from) revert TransferFromIncorrectOwner();
 
         address approvedAddress = _tokenApprovals[tokenId];
@@ -296,18 +294,19 @@ contract PurgeGameNFT {
             }
         }
 
-        uint256 toMasked = uint256(uint160(to)) & _BITMASK_ADDRESS;
+        if (to == address(0)) revert Zero();
+        uint256 fromValue = uint256(uint160(from));
+        uint256 toValue = uint256(uint160(to));
         assembly {
             log4(
                 0, // Start of data (0, since no data).
                 0, // End of data (0, since no data).
                 _TRANSFER_EVENT_SIGNATURE, // Signature.
-                from, // `from`.
-                toMasked, // `to`.
+                fromValue, // `from`.
+                toValue, // `to`.
                 tokenId // `tokenId`.
             )
         }
-        if (toMasked == 0) revert Zero();
     }
 
     function safeTransferFrom(
@@ -452,15 +451,7 @@ contract PurgeGameNFT {
                 ++i;
             }
         }
-        if (purged != 0) {
-            uint256 snapshot = seasonMintedSnapshot;
-            uint256 current = seasonPurgedCount;
-            uint256 cap = snapshot > current ? snapshot - current : 0;
-            uint256 add = purged > cap ? cap : purged;
-            if (add != 0) {
-                seasonPurgedCount = current + add;
-            }
-        }
+        seasonPurgedCount += purged;
     }
 
     function _purgeToken(address owner, uint256 tokenId) private {
