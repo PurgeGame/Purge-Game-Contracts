@@ -521,10 +521,17 @@ contract PurgeGameNFT {
                         uint256 idxB = trophyCount == 1 ? idxA : (rand & mask) % trophyCount;
                         rand >>= 64;
                         uint256 tokenA = source[idxA];
-                        uint256 tokenB = source[idxB];
-                        uint256 chosen = trophyCount == 1
-                            ? tokenA
-                            : _earlierLevelToken(tokenA, tokenB);
+                        uint256 chosen = tokenA;
+                        if (trophyCount != 1) {
+                            uint256 tokenB = source[idxB];
+                            uint256 dataA = trophyData[tokenA];
+                            uint256 dataB = trophyData[tokenB];
+                            uint24 levelA = uint24((dataA >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF);
+                            uint24 levelB = uint24((dataB >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF);
+                            if (levelB < levelA) {
+                                chosen = tokenB;
+                            }
+                        }
                         _addTrophyReward(chosen, baseShare, nextLevel);
                         unchecked {
                             ++i;
@@ -693,11 +700,4 @@ contract PurgeGameNFT {
         trophyData[tokenId] = updated;
     }
 
-    function _earlierLevelToken(uint256 tokenA, uint256 tokenB) private view returns (uint256) {
-        uint256 dataA = trophyData[tokenA];
-        uint256 dataB = trophyData[tokenB];
-        uint24 levelA = uint24((dataA >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF);
-        uint24 levelB = uint24((dataB >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF);
-        return levelA <= levelB ? tokenA : tokenB;
-    }
 }
