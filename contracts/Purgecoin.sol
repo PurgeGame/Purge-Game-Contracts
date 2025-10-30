@@ -84,9 +84,9 @@ contract Purgecoin {
     // ---------------------------------------------------------------------
     // ERC20 state
     // ---------------------------------------------------------------------
-    string public name;
-    string public symbol;
-    uint8 public immutable decimals;
+    string public name = "Purgecoin";
+    string public symbol = "PURGE";
+    uint8 public constant decimals = 6;
 
     uint256 public totalSupply;
     mapping(address => uint256) public balanceOf;
@@ -309,9 +309,6 @@ contract Purgecoin {
      * @param _subId             Subscription id (funded with LINK / native per config)
      */
     constructor(address _vrfCoordinator, bytes32 _keyHash, uint256 _subId, address _linkToken) {
-        name = "Purgecoin";
-        symbol = "PURGE";
-        decimals = 6;
         vrfCoordinator = IVRFCoordinator(_vrfCoordinator);
         creator = msg.sender;
         vrfKeyHash = _keyHash;

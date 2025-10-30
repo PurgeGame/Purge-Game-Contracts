@@ -83,8 +83,8 @@ contract PurgeGameNFT {
 
     uint256 private _currentIndex;
 
-    string private _name;
-    string private _symbol;
+    string private _name = "Purge Game";
+    string private _symbol = "PG";
 
     mapping(uint256 => uint256) private _packedOwnerships;
     mapping(address => uint256) private _packedAddressData;
@@ -129,8 +129,6 @@ contract PurgeGameNFT {
     }
 
     constructor(address renderer_, address coin_) {
-        _name = "Purge Game";
-        _symbol = "PG";
         renderer = IPurgeRenderer(renderer_);
         coin = IPurgecoin(coin_);
     }
@@ -513,14 +511,21 @@ contract PurgeGameNFT {
                 uint256[] storage source = levelTrophyIds;
                 uint256 trophyCount = source.length;
                 if (trophyCount != 0) {
-                    uint256 draws = trophyCount < 3 ? trophyCount : 3;
-                    uint256 baseShare = legacyPool / draws;
+                    uint256 rounds = trophyCount == 1 ? 1 : 2;
+                    uint256 baseShare = legacyPool / rounds;
                     uint256 rand = randomWord;
                     uint256 mask = type(uint64).max;
-                    for (uint256 i; i < draws; ) {
-                        uint256 idx = trophyCount == 1 ? 0 : (rand & mask) % trophyCount;
+                    for (uint256 i; i < rounds; ) {
+                        uint256 idxA = trophyCount == 1 ? 0 : (rand & mask) % trophyCount;
                         rand >>= 64;
-                        _addTrophyReward(source[idx], baseShare, nextLevel);
+                        uint256 idxB = trophyCount == 1 ? idxA : (rand & mask) % trophyCount;
+                        rand >>= 64;
+                        uint256 tokenA = source[idxA];
+                        uint256 tokenB = source[idxB];
+                        uint256 chosen = trophyCount == 1
+                            ? tokenA
+                            : _earlierLevelToken(tokenA, tokenB);
+                        _addTrophyReward(chosen, baseShare, nextLevel);
                         unchecked {
                             ++i;
                         }
@@ -686,5 +691,13 @@ contract PurgeGameNFT {
             | (owed & TROPHY_OWED_MASK)
             | (base << TROPHY_BASE_LEVEL_SHIFT);
         trophyData[tokenId] = updated;
+    }
+
+    function _earlierLevelToken(uint256 tokenA, uint256 tokenB) private view returns (uint256) {
+        uint256 dataA = trophyData[tokenA];
+        uint256 dataB = trophyData[tokenB];
+        uint24 levelA = uint24((dataA >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF);
+        uint24 levelB = uint24((dataB >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF);
+        return levelA <= levelB ? tokenA : tokenB;
     }
 }
