@@ -87,6 +87,7 @@ contract PurgeGame {
     error E(); // Generic guard (reverts in multiple paths)
     error LuckboxTooSmall(); // Caller does not meet luckbox threshold for the action
     error NotTimeYet(); // Called in a phase where the action is not permitted
+    error RngNotReady(); // VRF request still pending
 
     // -----------------------
     // Events
@@ -218,6 +219,7 @@ contract PurgeGame {
     /// @return carry_           Carryover earmarked for next level (wei)
     /// @return prizePoolTarget  Last level's prize pool snapshot (wei)
     /// @return prizePoolCurrent Active prize pool (levelPrizePool when purging)
+    /// @return baseTokenId      Current base token id from the NFT contract
     /// @return enoughPurchases  True if purchaseCount >= 1,500
     /// @return earlyPurgeMask   Bitmask of early-purge jackpot thresholds crossed (10/20/30/40/50/75%)
     /// @return rngFulfilled_    Last VRF request fulfilled
@@ -233,6 +235,7 @@ contract PurgeGame {
             uint256 carry_,
             uint256 prizePoolTarget,
             uint256 prizePoolCurrent,
+            uint256 baseTokenId,
             bool enoughPurchases,
             uint8 earlyPurgeMask,
             bool rngFulfilled_,
@@ -246,6 +249,7 @@ contract PurgeGame {
         carry_ = carryoverForNextLevel;
         prizePoolTarget = lastPrizePool;
         prizePoolCurrent = (gameState == 4) ? levelPrizePool : prizePool;
+        baseTokenId = nft.currentBaseTokenId();
         enoughPurchases = purchaseCount >= PURCHASE_MINIMUM;
         earlyPurgeMask = earlyPurgeJackpotPaidMask;
         rngFulfilled_ = coin.rngFulfilled();
@@ -293,7 +297,7 @@ contract PurgeGame {
                 } else if (ts - rngTs > 6 hours) {
                     _requestVrf(ts, pauseBetting);
                     break;
-                } else revert NotTimeYet();
+                } else revert RngNotReady();
             }
 
             // Luckbox rewards
@@ -431,7 +435,8 @@ contract PurgeGame {
     function purchase(uint256 quantity, bool payInCoin, bytes32 affiliateCode) external payable {
         uint8 _phase = phase;
         uint24 lvl = level;
-                if (quantity == 0 || quantity > 100 || gameState != 2 || !rngConsumed || (lvl % 20) == 16) revert NotTimeYet();
+        if (!rngConsumed) revert RngNotReady();
+        if (quantity == 0 || quantity > 100 || gameState != 2 || (lvl % 20) == 16) revert NotTimeYet();
         uint256 _priceCoin = priceCoin;
         _enforceCenturyLuckbox(lvl, _priceCoin);
         // Payment handling (ETH vs coin)
@@ -511,7 +516,8 @@ contract PurgeGame {
         uint256 priceUnit = priceCoin;
         uint8 _phase = phase;
         uint8 state = gameState;
-        if (quantity == 0 || (state != 2 && state != 4) || !rngConsumed) revert NotTimeYet();
+        if (!rngConsumed) revert RngNotReady();
+        if (quantity == 0 || (state != 2 && state != 4)) revert NotTimeYet();
         uint24 lvl = level;
         if (state == 4) {
             unchecked {
@@ -563,7 +569,8 @@ contract PurgeGame {
             extSize := extcodesize(caller())
         }
         if (extSize != 0 || tx.origin != msg.sender) revert E();
-        if (gameState != 4 || !rngConsumed) revert NotTimeYet();
+        if (!rngConsumed) revert RngNotReady();
+        if (gameState != 4) revert NotTimeYet();
 
         uint256 count = tokenIds.length;
         if (count == 0 || count > 75) revert E();
