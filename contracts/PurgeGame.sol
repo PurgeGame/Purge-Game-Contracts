@@ -302,9 +302,12 @@ contract PurgeGame {
 
             // Arm VRF when due/new (reward allowed)
             bool init = rngTs == 0;
-            if ((rngConsumed && day != dayIdx) || init) {
-                _requestVrf(ts, pauseBetting);
-                if (!init) break;
+            bool dayRolled = rngConsumed && day != dayIdx;
+            if (init || dayRolled) {
+                if (!(dayRolled && _gameState == 1)) {
+                    _requestVrf(ts, pauseBetting);
+                    if (!init) break;
+                }
             }
             if (day == dayIdx && _gameState != 1) revert NotTimeYet();
             // --- State 1 - Pregame ---
