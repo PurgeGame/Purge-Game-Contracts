@@ -80,6 +80,7 @@ contract Purgecoin {
     error OnlyCoordinatorCanFulfill(address have, address want);
     error ZeroAddress();
     error NoContracts();
+    error OnlyNFT();
 
     // ---------------------------------------------------------------------
     // ERC20 state
@@ -91,6 +92,7 @@ contract Purgecoin {
     uint256 public totalSupply;
     mapping(address => uint256) public balanceOf;
     mapping(address => mapping(address => uint256)) public allowance;
+    mapping(address => uint8) private affiliateStakeBonusPct;
 
     function approve(address spender, uint256 amount) public returns (bool) {
         allowance[msg.sender][spender] = amount;
@@ -168,6 +170,7 @@ contract Purgecoin {
     uint16 private constant RANK_NOT_FOUND = 11;
     uint256 private constant MIN = 100 * MILLION; // min burn / min flip (100 PURGED)
     uint8 private constant MAX_RISK = 11; // staking risk 1..11
+    uint8 private constant AFFILIATE_STAKE_MAX = 5;
     uint128 private constant ONEK = 1_000_000_000; // 1,000 PURGED (6d)
     uint32 private constant BAF_BATCH = 5000;
     uint256 private constant BUCKET_SIZE = 1500;
@@ -617,23 +620,33 @@ contract Purgecoin {
         }
 
         if (amount != 0) {
-            if (lvl % 25 == 1) amount <<= 1;
+            uint256 baseAmount = amount;
+            if (lvl % 25 == 1) baseAmount <<= 1;
 
             mapping(address => uint256) storage earned = affiliateCoinEarned[lvl];
 
             // Pay direct affiliate (skip sentinels)
             if (affiliateAddr != address(0) && affiliateAddr != address(1)) {
-                uint256 newTotal = earned[affiliateAddr] + amount;
+                uint256 payout = baseAmount;
+                uint8 stakeBonus = affiliateStakeBonusPct[affiliateAddr];
+                if (stakeBonus != 0) {
+                    payout += (payout * stakeBonus) / 100;
+                }
+                uint256 newTotal = earned[affiliateAddr] + payout;
                 earned[affiliateAddr] = newTotal;
-                addFlip(affiliateAddr, amount, false);
+                addFlip(affiliateAddr, payout, false);
                 _updatePlayerScore(1, affiliateAddr, newTotal);
             }
 
             // Upline bonus (20%) only if upline is active this level
             address upline = referredBy[affiliateAddr];
             if (upline != address(0) && upline != address(1) && upline != sender && earned[upline] > 0) {
-                uint256 bonus = amount / 5;
+                uint256 bonus = baseAmount / 5;
                 if (bonus != 0) {
+                    uint8 stakeBonusUpline = affiliateStakeBonusPct[upline];
+                    if (stakeBonusUpline != 0) {
+                        bonus += (bonus * stakeBonusUpline) / 100;
+                    }
                     uint256 newTotalU = earned[upline] + bonus;
                     earned[upline] = newTotalU;
                     addFlip(upline, bonus, false);
@@ -783,6 +796,35 @@ contract Purgecoin {
         _mint(creator, amount);
 
     }
+
+    function stakeAffiliate(address player) external returns (uint8 newCount) {
+        if (msg.sender != nftContract) revert OnlyNFT();
+        uint8 current = _bonusToCount(affiliateStakeBonusPct[player]);
+        if (current >= AFFILIATE_STAKE_MAX) revert StakeInvalid();
+        unchecked {
+            current += 1;
+        }
+        uint8 bonus = _stakeBonusPct(current);
+        affiliateStakeBonusPct[player] = bonus;
+        return current;
+    }
+
+    function unstakeAffiliate(address player) external returns (uint8 newCount) {
+        if (msg.sender != nftContract) revert OnlyNFT();
+        uint8 current = _bonusToCount(affiliateStakeBonusPct[player]);
+        if (current == 0) revert StakeInvalid();
+        unchecked {
+            current -= 1;
+        }
+        uint8 bonus = _stakeBonusPct(current);
+        affiliateStakeBonusPct[player] = bonus;
+        return current;
+    }
+
+    function affiliateStakeBonus(address player) external view returns (uint8) {
+        return affiliateStakeBonusPct[player];
+    }
+
 
     /// @notice Grant a pending coinflip stake during gameplay flows instead of minting PURGE.
     /// @dev Access: PurgeGame only. Zero address or zero amount are ignored.
@@ -1932,4 +1974,25 @@ contract Purgecoin {
         if (dropped != address(0)) topPos[dropped] = 0;
         return true;
     }
+
+    function _stakeBonusPct(uint8 count) private pure returns (uint8) {
+        if (count == 0) return 0;
+        if (count >= AFFILIATE_STAKE_MAX) return 15;
+        if (count == 1) return 5;
+        if (count == 2) return 9;
+        if (count == 3) return 12;
+        if (count == 4) return 14;
+        return 0;
+    }
+
+    function _bonusToCount(uint8 bonus) private pure returns (uint8) {
+        if (bonus == 0) return 0;
+        if (bonus >= 15) return AFFILIATE_STAKE_MAX;
+        if (bonus == 14) return 4;
+        if (bonus == 12) return 3;
+        if (bonus == 9) return 2;
+        if (bonus == 5) return 1;
+        return 0;
+    }
+
 }
