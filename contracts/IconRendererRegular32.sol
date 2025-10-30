@@ -34,6 +34,12 @@ interface IColorRegistry {
         uint32 trophyOuterPct1e6
     ) external returns (bool);
 
+    function setTopAffiliateColor(
+        address user,
+        uint256 tokenId,
+        string calldata trophyHex
+    ) external returns (bool);
+
     function tokenColor(
         uint256 tokenId,
         uint8 channel
@@ -43,6 +49,7 @@ interface IColorRegistry {
         uint8 channel
     ) external view returns (string memory);
     function trophyOuter(uint256 tokenId) external view returns (uint32);
+    function topAffiliateColor(uint256 tokenId) external view returns (string memory);
 }
 
 /// @notice Minimal ERC-721 surface for ownership checks.
@@ -56,19 +63,15 @@ interface IPurgedRead {
 }
 
 /**
- * @title IconRenderer32
+ * @title IconRendererRegular32
  * @notice Stateless(ish) SVG renderer with per-token and per-address color overrides.
  * @dev
  * - Reads color overrides from an external registry (per-token or per-address fallback).
  * - Enforces strict `#rrggbb` lowercase format via the registry when overrides are set.
  * - Without overrides, consumers fall back to palette indices elsewhere.
  */
-contract IconRenderer32 {
+contract IconRendererRegular32 {
     using Strings for uint256;
-
-    uint256 private constant MAP_TROPHY_FLAG = uint256(1) << 200;
-    string private constant MAP_BADGE_PATH =
-        "M14.3675 2.15671C14.7781 2.01987 15.2219 2.01987 15.6325 2.15671L20.6325 3.82338C21.4491 4.09561 22 4.85988 22 5.72074V19.6126C22 20.9777 20.6626 21.9416 19.3675 21.5099L15 20.0541L9.63246 21.8433C9.22192 21.9801 8.77808 21.9801 8.36754 21.8433L3.36754 20.1766C2.55086 19.9044 2 19.1401 2 18.2792V4.38741C2 3.0223 3.33739 2.05836 4.63246 2.49004L9 3.94589L14.3675 2.15671ZM15 4.05408L9.63246 5.84326C9.22192 5.9801 8.77808 5.9801 8.36754 5.84326L4 4.38741V18.2792L9 19.9459L14.3675 18.1567C14.7781 18.0199 15.2219 18.0199 15.6325 18.1567L20 19.6126V5.72074L15 4.05408ZM13.2929 8.29288C13.6834 7.90235 14.3166 7.90235 14.7071 8.29288L15.5 9.08577L16.2929 8.29288C16.6834 7.90235 17.3166 7.90235 17.7071 8.29288C18.0976 8.6834 18.0976 9.31657 17.7071 9.70709L16.9142 10.5L17.7071 11.2929C18.0976 11.6834 18.0976 12.3166 17.7071 12.7071C17.3166 13.0976 16.6834 13.0976 16.2929 12.7071L15.5 11.9142L14.7071 12.7071C14.3166 13.0976 13.6834 13.0976 13.2929 12.7071C12.9024 12.3166 12.9024 11.6834 13.2929 11.2929L14.0858 10.5L13.2929 9.70709C12.9024 9.31657 12.9024 8.6834 13.2929 8.29288ZM6 16C6.55228 16 7 15.5523 7 15C7 14.4477 6.55228 14 6 14C5.44772 14 5 14.4477 5 15C5 15.5523 5.44772 16 6 16ZM9 12C9 12.5523 8.55228 13 8 13C7.44772 13 7 12.5523 7 12C7 11.4477 7.44772 11 8 11C8.55228 11 9 11.4477 9 12ZM11 12C11.5523 12 12 11.5523 12 11C12 10.4477 11.5523 9.99998 11 9.99998C10.4477 9.99998 10 10.4477 10 11C10 11.5523 10.4477 12 11 12Z";
 
     // ---------------- Storage ----------------
 
@@ -176,6 +179,36 @@ contract IconRenderer32 {
             );
     }
 
+    /// @notice Set per-token overrides plus Top Affiliate trophy color in one call.
+    /// @dev Pass "" for any channel (or `trophyHex`) to clear that specific override.
+    function setTopAffiliateColors(
+        uint256 tokenId,
+        string calldata outlineHex,
+        string calldata flameHex,
+        string calldata diamondHex,
+        string calldata squareHex,
+        uint32 trophyOuterPct1e6,
+        string calldata trophyHex
+    ) external returns (bool) {
+        uint256[] memory ids = new uint256[](1);
+        ids[0] = tokenId;
+        bool ok = registry.setCustomColorsForMany(
+            msg.sender,
+            ids,
+            outlineHex,
+            flameHex,
+            diamondHex,
+            squareHex,
+            trophyOuterPct1e6
+        );
+        bool ok2 = registry.setTopAffiliateColor(
+            msg.sender,
+            tokenId,
+            trophyHex
+        );
+        return ok && ok2;
+    }
+
     // ---------------------------------------------------------------------
     // Color resolution: token → per‑token override → owner default → referrer/upline default → fallback
     // ---------------------------------------------------------------------
@@ -214,15 +247,26 @@ contract IconRenderer32 {
     // ---------------------------------------------------------------------
 
     // Canonical palette (indexed 0..7). Stored intentionally (non‑zero) for direct lookup.
-    string[8] private COLOR_HEX = [
-        "#f409cd",
-        "#7c2bff",
-        "#30d100",
-        "#ed0e11",
-        "#1317f7",
-        "#f7931a",
-        "#5e5e5e",
-        "#ab8d3f"
+    uint24[8] private BASE_COLOR = [
+        0xf409cd,
+        0x7c2bff,
+        0x30d100,
+        0xed0e11,
+        0x1317f7,
+        0xf7931a,
+        0x5e5e5e,
+        0xab8d3f
+    ];
+
+    int16[8] private BASE_VARIANT_BIAS = [
+        int16(-14),
+        int16(-6),
+        int16(12),
+        int16(-10),
+        int16(14),
+        int16(6),
+        int16(-8),
+        int16(10)
     ];
 
     // Layout tuning (1e6 fixed‑point).
@@ -293,14 +337,6 @@ contract IconRenderer32 {
     /// @dev Read the exterminated trait from a packed trophy `data` word.
     ///      Bits [167:152] hold: 0xFFFF for placeholder (unwon), else uint8 trait id.
     ///      Bit 200 is reserved for MAP trophies (1 = MAP, 0 = level trophy).
-    function _readExterminatedTrait(
-        uint256 data
-    ) private pure returns (uint16) {
-        uint16 ex16 = uint16((data >> 152) & 0xFFFF);
-        if (ex16 == 0xFFFF) return 0xFFFF; // placeholder/unwon trophy
-        return uint16(uint8(ex16)); // normalize to 0..255 for won trophies
-    }
-
     /// @notice Render metadata + image for a PURGE token (regular or trophy).
     /// @param tokenId   NFT id.
     /// @param data      Packed game data:
@@ -313,44 +349,9 @@ contract IconRenderer32 {
         uint256 data,
         uint32[4] calldata remaining
     ) external view returns (string memory) {
-        uint24 lvl;
+        if ((data >> 128) != 0) revert("renderer:trophy-data");
 
-        // ----- Trophy path: presence of bits above 128 indicates trophy layout -----
-        if ((data >> 128) != 0) {
-            lvl = uint24((data >> 128) & 0xFFFFFF); // may be 0 for placeholder trophies
-            uint16 exTr = _readExterminatedTrait(data); // 0xFFFF = placeholder, else 0..255
-            bool isMap = (data & MAP_TROPHY_FLAG) != 0;
-            string memory lvlStr = (lvl == 0) ? "TBD" : uint256(lvl).toString();
-            string memory trophyType = isMap ? "Map" : "Winner's";
-            string memory trophyLabel = isMap
-                ? "MAP Trophy"
-                : "Winner's Trophy";
-
-            string memory desc;
-            if (exTr == 0xFFFF) {
-                if (lvl == 0) {
-                    desc = string.concat("Reserved Purge Game ", trophyLabel);
-                    desc = string.concat(desc, ".");
-                } else {
-                    desc = string.concat("Reserved for Level ", lvlStr);
-                    desc = string.concat(desc, " ");
-                    desc = string.concat(desc, trophyLabel);
-                    desc = string.concat(desc, ".");
-                }
-            } else {
-                desc = string.concat("Awarded for Level ", lvlStr);
-                desc = string.concat(
-                    desc,
-                    isMap ? " MAP jackpot." : " extermination victory."
-                );
-            }
-
-            string memory img = _trophySvg(tokenId, exTr, isMap, lvl);
-            return _pack(tokenId, true, img, lvl, desc, trophyType);
-        }
-
-        // ----- Regular token path -----
-        lvl = uint24((data >> 32) & 0xFFFFFF);
+        uint24 lvl = uint24((data >> 32) & 0xFFFFFF);
         uint16 lastEx = uint16((data >> 56) & 0xFFFF); // 0..255 valid; 420 = sentinel “none”
         if (lvl == 90) {
             lastEx = 0xFFFF; // special case: level 90 renders all quadrants inverted
@@ -364,7 +365,8 @@ contract IconRenderer32 {
             col,
             sym,
             remaining,
-            lastEx
+            lastEx,
+            lvl
         );
         string memory desc2 = _descFromRem(col, sym, remaining);
 
@@ -384,10 +386,11 @@ contract IconRenderer32 {
         uint8[4] memory col,
         uint8[4] memory sym,
         uint32[4] calldata remaining,
-        uint16 lastEx
+        uint16 lastEx,
+        uint24 level
     ) private view returns (string memory out) {
         // Resolve palette (owner/custom overrides cascade inside `_resolve`)
-        string memory borderColor0 = _borderColor(tokenId, traitsPacked, col);
+        string memory borderColor0 = _borderColor(tokenId, traitsPacked, col, level);
         string memory borderColor = _resolve(tokenId, 0, borderColor0);
         string memory diamondFill = _resolve(tokenId, 2, "#fff");
         string memory flameFill = _resolve(tokenId, 1, "#111");
@@ -404,19 +407,19 @@ contract IconRenderer32 {
         // Quadrant remap (visual layout): BL←Q2, BR←Q3, TL←Q0, TR←Q1
         out = string.concat(
             out,
-            _svgQuad(0, 2, col[2], sym[2], remaining[2], lastEx)
+            _svgQuad(0, 2, col[2], sym[2], remaining[2], lastEx, level)
         ); // BL
         out = string.concat(
             out,
-            _svgQuad(1, 3, col[3], sym[3], remaining[3], lastEx)
+            _svgQuad(1, 3, col[3], sym[3], remaining[3], lastEx, level)
         ); // BR
         out = string.concat(
             out,
-            _svgQuad(2, 0, col[0], sym[0], remaining[0], lastEx)
+            _svgQuad(2, 0, col[0], sym[0], remaining[0], lastEx, level)
         ); // TL
         out = string.concat(
             out,
-            _svgQuad(3, 1, col[1], sym[1], remaining[1], lastEx)
+            _svgQuad(3, 1, col[1], sym[1], remaining[1], lastEx, level)
         ); // TR
 
         out = string.concat(out, _svgFooter());
@@ -430,7 +433,8 @@ contract IconRenderer32 {
         uint8 colorIndex,
         uint8 symbolIndex,
         uint32 liveRemaining,
-        uint16 lastExterminated
+        uint16 lastExterminated,
+        uint24 level
     ) private view returns (string memory) {
         // Trait id in the 0..255 namespace for (quadId, colorIndex, symbolIndex)
         uint8 traitId = _traitId(uint8(quadId), colorIndex, symbolIndex);
@@ -455,7 +459,7 @@ contract IconRenderer32 {
         uint32 rInner = uint32((uint256(rOuter) * RATIO_IN_1e6) / 1_000_000);
 
         // Concentric rings
-        string memory colorHex = COLOR_HEX[colorIndex];
+        string memory colorHex = _paletteColor(colorIndex, level);
         string memory ringsSvg = _rings(
             colorHex,
             "#111",
@@ -600,209 +604,6 @@ contract IconRenderer32 {
      *   in `_trophyOuterPct1e6[tokenId]` (5%..100%), or a default mapped from prior fixed radii:
      *   88px for placeholder, 76px for won, over an inner side of 98px.
      */
-    function _trophySvg(
-        uint256 tokenId,
-        uint16 exterminatedTrait,
-        bool isMap,
-        uint24 lvl
-    ) private view returns (string memory) {
-        uint32 innerSide = _innerSquareSide(); // currently 98
-        // ---------------- Unwon/placeholder trophy -------------------------
-        string memory diamondPath = icons.diamond();
-        if (exterminatedTrait == 0xFFFF) {
-            uint8 ringIdx = isMap ? 2 : 3; // Green for MAP placeholders, Red otherwise
-            string memory borderColor = _resolve(
-                tokenId,
-                /*k=*/
-                0, // outline/border
-                _borderColor(tokenId, /*traitsPacked=*/ 0, _repeat4(ringIdx))
-            );
-
-            // Determine DIAMETER percentage (1e6 fp)
-            uint32 pct = registry.trophyOuter(tokenId);
-            uint32 diameter = (pct <= 1)
-                ? 88 // default from prior rOut=44
-                : uint32((uint256(innerSide) * pct) / 1_000_000);
-            uint32 rOut = diameter / 2;
-            uint32 rMid = uint32((uint256(rOut) * RATIO_MID_1e6) / 1_000_000);
-            uint32 rIn = uint32((uint256(rOut) * RATIO_IN_1e6) / 1_000_000);
-
-            string memory head = _svgHeader(
-                borderColor,
-                _resolve(tokenId, /*square*/ 3, "#d9d9d9")
-            );
-            string memory ringColor = COLOR_HEX[ringIdx];
-            string memory placeholderFlameColor = _resolve(
-                tokenId,
-                /*flame*/ 1,
-                "#111"
-            );
-            string memory rings = _rings(
-                /*outer*/
-                ringColor,
-                /*middle*/
-                placeholderFlameColor,
-                /*inner*/
-                _resolve(tokenId, /*diamond*/ 2, "#fff"),
-                rOut,
-                rMid,
-                rIn,
-                /*cx=*/
-                0,
-                /*cy=*/
-                0
-            );
-
-            // Clip the central diamond area and paint the “flame” inside.
-            string memory clip = string(
-                abi.encodePacked(
-                    '<defs><clipPath id="ct"><circle cx="0" cy="0" r="',
-                    uint256(rIn).toString(),
-                    '"/></clipPath></defs>'
-                )
-            );
-
-            string memory centerGlyph = _centerGlyph(
-                isMap,
-                placeholderFlameColor,
-                diamondPath
-            );
-            string memory cornerGlyph = _cornerGlyph(
-                isMap,
-                placeholderFlameColor,
-                diamondPath
-            );
-
-            return
-                string(
-                    abi.encodePacked(
-                        head,
-                        rings,
-                        clip,
-                        centerGlyph,
-                        cornerGlyph,
-                        _svgFooter()
-                    )
-                );
-        }
-
-        // ---------------- Won trophy ---------------------------------------
-        uint8 dataQ = uint8(exterminatedTrait) >> 6; // 0..3
-        uint8 six = uint8(exterminatedTrait) & 0x3F; // 0..63
-        uint8 colIdx = six >> 3; // 0..7 (palette index)
-        uint8 symIdx = six & 0x07; // 0..7 (symbol within quadrant)
-
-        string memory border = _resolve(
-            tokenId,
-            /*k=*/
-            0,
-            _borderColor(
-                tokenId,
-                /*traitsPacked=*/ uint32(six),
-                _repeat4(colIdx)
-            )
-        );
-
-        string memory flameColor = _resolve(tokenId, /*flame*/ 1, "#111");
-        string memory diamondColor = _resolve(tokenId, /*diamond*/ 2, "#fff");
-
-        uint32 pct2 = registry.trophyOuter(tokenId);
-        uint32 diameter2 = (pct2 <= 1)
-            ? 76 // default from prior rOut=38
-            : uint32((uint256(innerSide) * pct2) / 1_000_000);
-        uint32 rOut2 = diameter2 / 2;
-        uint32 rMid2 = uint32((uint256(rOut2) * RATIO_MID_1e6) / 1_000_000);
-        uint32 rIn2 = uint32((uint256(rOut2) * RATIO_IN_1e6) / 1_000_000);
-
-        // Load the symbol path for the (quadrant, index) pair.
-        uint256 i = uint256(dataQ) * 8 + uint256(symIdx);
-        string memory g = icons.data(i);
-        uint16 w = icons.vbW(i);
-        uint16 h = icons.vbH(i);
-        uint16 m = w > h ? w : h;
-        if (m == 0) m = 1;
-
-        // Fit crypto icons a touch larger for two specific cases; otherwise the standard fit.
-        uint32 fitSym1e6;
-        if (dataQ == 0 && (symIdx == 3 || symIdx == 7)) {
-            fitSym1e6 = 1_030_000;
-        } else if (dataQ == 1 && symIdx == 6) {
-            fitSym1e6 = 600_000; // Sagittarius trophy; reduce 25% for better framing
-        } else {
-            fitSym1e6 = 800_000;
-        }
-        uint32 sSym1e6 = uint32((uint256(2) * rIn2 * fitSym1e6) / m);
-
-        // Center the symbol in the inner circle.
-        int256 txm = -(int256(uint256(w)) * int256(uint256(sSym1e6))) / 2;
-        int256 tyn = -(int256(uint256(h)) * int256(uint256(sSym1e6))) / 2;
-
-        // Symbols on trophies are ALWAYS tinted to the palette color (no per‑path strokes).
-        string memory paletteColor = COLOR_HEX[colIdx];
-        string memory body = string(
-            abi.encodePacked(
-                '<g fill="',
-                paletteColor,
-                '" stroke="',
-                paletteColor,
-                '" style="vector-effect:non-scaling-stroke">',
-                g,
-                "</g>"
-            )
-        );
-
-        string memory ringsAndSymbol = string(
-            abi.encodePacked(
-                _rings(
-                    paletteColor,
-                    flameColor,
-                    diamondColor,
-                    rOut2,
-                    rMid2,
-                    rIn2,
-                    /*cx=*/
-                    0,
-                    /*cy=*/
-                    0
-                ),
-                '<defs><clipPath id="ct2"><circle cx="0" cy="0" r="',
-                uint256(rIn2).toString(),
-                '"/></clipPath></defs>',
-                '<g clip-path="url(#ct2)">',
-                '<g transform="',
-                _mat6(sSym1e6, txm, tyn),
-                '">',
-                body,
-                "</g>",
-                "</g>"
-            )
-        );
-
-        bool invertTrophy = !isMap && (exterminatedTrait <= 255 || lvl == 90);
-        if (invertTrophy) {
-            ringsAndSymbol = string(
-                abi.encodePacked(
-                    '<g filter="url(#inv)">',
-                    ringsAndSymbol,
-                    "</g>"
-                )
-            );
-        }
-
-        return
-            string(
-                abi.encodePacked(
-                    _svgHeader(
-                        border,
-                        _resolve(tokenId, /*square*/ 3, "#d9d9d9")
-                    ),
-                    ringsAndSymbol,
-                    _cornerGlyph(isMap, flameColor, diamondPath),
-                    _svgFooter()
-                )
-            );
-    }
-
     /**
      * @dev SVG root header. Defines the inversion filter (#inv), then draws the outer rounded square.
      * @param borderColor Stroke color for the outer square (resolved border).
@@ -881,57 +682,6 @@ contract IconRenderer32 {
                     diamondPath,
                     '"/>',
                     "</g></g>"
-                )
-            );
-    }
-
-    function _centerGlyph(
-        bool isMap,
-        string memory flameFill,
-        string memory flamePath
-    ) private pure returns (string memory) {
-        return
-            string(
-                abi.encodePacked(
-                    '<g clip-path="url(#ct)">',
-                    '<path fill="',
-                    flameFill,
-                    '" transform="',
-                    isMap
-                        ? "matrix(1.9125 0 0 1.9125 -22.95 -22.95)"
-                        : "matrix(0.13 0 0 0.13 -56 -41)",
-                    '" d="',
-                    isMap ? MAP_BADGE_PATH : flamePath,
-                    '"/>',
-                    "</g>"
-                )
-            );
-    }
-
-    function _cornerGlyph(
-        bool isMap,
-        string memory flameFill,
-        string memory flamePath
-    ) private pure returns (string memory) {
-        string memory translate = isMap
-            ? "translate(41.28 40.32)"
-            : "translate(43 42)";
-        return
-            string(
-                abi.encodePacked(
-                    '<g transform="',
-                    translate,
-                    '" opacity="0.95">',
-                    '<path fill="',
-                    flameFill,
-                    '" transform="',
-                    isMap
-                        ? "matrix(0.442 0 0 0.442 -5.304 -5.304)"
-                        : "matrix(0.021 0 0 0.021 -10.8 -8.10945)",
-                    '" d="',
-                    isMap ? MAP_BADGE_PATH : flamePath,
-                    '"/>',
-                    "</g>"
                 )
             );
     }
@@ -1211,7 +961,8 @@ contract IconRenderer32 {
     function _borderColor(
         uint256 tokenId,
         uint32 traits,
-        uint8[4] memory used
+        uint8[4] memory used,
+        uint24 level
     ) private view returns (string memory) {
         uint8 initial = uint8(
             uint256(keccak256(abi.encodePacked(tokenId, traits))) % 8
@@ -1233,13 +984,68 @@ contract IconRenderer32 {
                     ++j;
                 }
             }
-            if (!isUsed) return COLOR_HEX[idx];
+            if (!isUsed) return _paletteColor(idx, level);
             unchecked {
                 ++i;
             }
         }
         // Fallback: should be unreachable (8 palette entries, 4 used)
-        return COLOR_HEX[0];
+        return _paletteColor(0, level);
+    }
+
+    function _paletteColor(uint8 idx, uint24 level) private view returns (string memory) {
+        uint24 rgb = _paletteColorRGB(idx, level);
+        return _rgbToHex(rgb);
+    }
+
+    function _paletteColorRGB(uint8 idx, uint24 level) private view returns (uint24) {
+        uint24 cycle = level % 10;
+        uint24 base = BASE_COLOR[idx];
+        uint8 r = uint8(base >> 16);
+        uint8 g = uint8(base >> 8);
+        uint8 b = uint8(base);
+
+        int16 bias = BASE_VARIANT_BIAS[idx];
+        uint256 seed = uint256(keccak256(abi.encodePacked(cycle, idx)));
+        int16 jitter = int16(int8(uint8(seed & 0x1F))) - 16; // -16 .. +15
+        int16 delta = bias + jitter;
+        if (delta > 24) delta = 24;
+        if (delta < -24) delta = -24;
+
+        uint8 r2 = _toneChannel(r, delta);
+        uint8 g2 = _toneChannel(g, delta);
+        uint8 b2 = _toneChannel(b, delta);
+        return (uint24(r2) << 16) | (uint24(g2) << 8) | uint24(b2);
+    }
+
+    function _toneChannel(uint8 value, int16 delta) private pure returns (uint8) {
+        if (delta == 0) return value;
+        if (delta > 0) {
+        uint16 span = 255 - value;
+        return value + uint8((span * uint16(uint16(delta))) / 32);
+    }
+    uint16 spanDown = value;
+    return value - uint8((spanDown * uint16(uint16(-delta))) / 32);
+}
+
+    function _rgbToHex(uint24 rgb) private pure returns (string memory) {
+        uint8 r = uint8(rgb >> 16);
+        uint8 g = uint8(rgb >> 8);
+        uint8 b = uint8(rgb);
+        bytes memory buf = new bytes(7);
+        buf[0] = '#';
+        buf[1] = _hexChar(r >> 4);
+        buf[2] = _hexChar(r & 0x0F);
+        buf[3] = _hexChar(g >> 4);
+        buf[4] = _hexChar(g & 0x0F);
+        buf[5] = _hexChar(b >> 4);
+        buf[6] = _hexChar(b & 0x0F);
+        return string(buf);
+    }
+
+    function _hexChar(uint8 nibble) private pure returns (bytes1) {
+        uint8 v = nibble & 0x0F;
+        return bytes1(v + (v < 10 ? 48 : 87));
     }
 
     /**

@@ -23,6 +23,7 @@ contract IconColorRegistry {
 
     mapping(address => Colors) private _addr;
     mapping(uint256 => Colors) private _custom;
+    mapping(uint256 => string) private _topAffiliate;
     mapping(uint256 => uint32) private _trophyOuterPct1e6;
 
     constructor(address nft_) {
@@ -121,6 +122,22 @@ contract IconColorRegistry {
         return true;
     }
 
+    function setTopAffiliateColor(
+        address user,
+        uint256 tokenId,
+        string calldata trophyHex
+    ) external onlyRenderer returns (bool) {
+        if (_nft.ownerOf(tokenId) != user) revert NotRenderer();
+
+        if (bytes(trophyHex).length == 0) {
+            delete _topAffiliate[tokenId];
+            return true;
+        }
+
+        _topAffiliate[tokenId] = _requireHex7(trophyHex);
+        return true;
+    }
+
     function tokenColor(uint256 tokenId, uint8 channel) external view returns (string memory) {
         Colors storage c = _custom[tokenId];
         if (channel == 0) return c.outline;
@@ -137,6 +154,10 @@ contract IconColorRegistry {
         return c.square;
     }
 
+    function topAffiliateColor(uint256 tokenId) external view returns (string memory) {
+        return _topAffiliate[tokenId];
+    }
+
     function trophyOuter(uint256 tokenId) external view returns (uint32) {
         return _trophyOuterPct1e6[tokenId];
     }
@@ -151,4 +172,3 @@ contract IconColorRegistry {
         return s;
     }
 }
-

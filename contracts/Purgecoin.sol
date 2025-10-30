@@ -776,15 +776,26 @@ contract Purgecoin {
 
     /// @notice Wire the game, NFT, and renderer contracts required by Purgecoin.
     /// @dev Creator only; callable once.
-    function wire(address game_, address nft_, address renderer_) external {
+    function wire(
+        address game_,
+        address nft_,
+        address regularRenderer_,
+        address trophyRenderer_
+    ) external {
         if (msg.sender != creator) revert OnlyDeployer();
         if (nftContract != address(0) || address(purgeGame) != address(0)) revert OnlyDeployer();
-        if (game_ == address(0) || nft_ == address(0) || renderer_ == address(0)) revert ZeroAddress();
+        if (
+            game_ == address(0) ||
+            nft_ == address(0) ||
+            regularRenderer_ == address(0) ||
+            trophyRenderer_ == address(0)
+        ) revert ZeroAddress();
         purgeGame = IPurgeGame(game_);
         bytes32 h = H;
         assembly {sstore(h, caller())}
         nftContract = nft_;
-        IPurgeRenderer(renderer_).wireContracts(game_, nft_);
+        IPurgeRenderer(regularRenderer_).wireContracts(game_, nft_);
+        IPurgeRenderer(trophyRenderer_).wireContracts(game_, nft_);
         IPurgeGameNFT(nft_).wireContracts(game_);
     }
 

@@ -10,7 +10,7 @@ interface IERC721Receiver {
     ) external returns (bytes4);
 }
 
-interface IPurgeRenderer {
+interface ITokenRenderer {
     function tokenURI(
         uint256 tokenId,
         uint256 data,
@@ -111,7 +111,8 @@ event TrophyStakeChanged(
     // Purge game storage
     // ---------------------------------------------------------------------
     IPurgeGame private game;
-    IPurgeRenderer private immutable renderer;
+    ITokenRenderer private immutable regularRenderer;
+    ITokenRenderer private immutable trophyRenderer;
     IPurgecoin private immutable coin;
 
     uint256 private basePointers; // high 128 bits = previous base token id, low 128 bits = current base token id
@@ -156,8 +157,9 @@ event TrophyStakeChanged(
         basePointers = (uint256(uint128(previousBase)) << 128) | uint128(currentBase);
     }
 
-    constructor(address renderer_, address coin_) {
-        renderer = IPurgeRenderer(renderer_);
+    constructor(address regularRenderer_, address trophyRenderer_, address coin_) {
+        regularRenderer = ITokenRenderer(regularRenderer_);
+        trophyRenderer = ITokenRenderer(trophyRenderer_);
         coin = IPurgecoin(coin_);
     }
 
@@ -198,13 +200,13 @@ event TrophyStakeChanged(
         uint256 info = trophyData[tokenId];
         if (info != 0) {
             uint32[4] memory empty;
-            return renderer.tokenURI(tokenId, info, empty);
+            return trophyRenderer.tokenURI(tokenId, info, empty);
         } else if (tokenId < _currentBaseTokenId()) {
             revert InvalidToken();
         }
 
         (uint256 metaPacked, uint32[4] memory remaining) = game.describeBaseToken(tokenId);
-        return renderer.tokenURI(tokenId, metaPacked, remaining);
+        return regularRenderer.tokenURI(tokenId, metaPacked, remaining);
     }
 
     function ownerOf(uint256 tokenId) external view returns (address) {
@@ -615,15 +617,17 @@ event TrophyStakeChanged(
             _addTrophyReward(mapTokenId, mapUnit, nextLevel);
             valueIn -= mapUnit;
 
-            uint256 draws = valueIn / mapUnit;
             uint256 mapCount = mapTrophyIds.length;
-            for (uint256 j; j < draws; ) {
-                uint256 idx = mapCount == 1 ? 0 : (randomWord & 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF) % mapCount;
-                uint256 tokenId = mapTrophyIds[idx];
-                _addTrophyReward(tokenId, mapUnit, nextLevel);
-                randomWord >>= 64;
-                unchecked {
-                    ++j;
+            if (mapUnit != 0 && mapCount != 0) {
+                uint256 draws = valueIn / mapUnit;
+                for (uint256 j; j < draws; ) {
+                    uint256 idx = mapCount == 1 ? 0 : (randomWord & 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF) % mapCount;
+                    uint256 tokenId = mapTrophyIds[idx];
+                    _addTrophyReward(tokenId, mapUnit, nextLevel);
+                    randomWord >>= 64;
+                    unchecked {
+                        ++j;
+                    }
                 }
             }
         }

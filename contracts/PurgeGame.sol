@@ -414,6 +414,7 @@ contract PurgeGame {
         if (_gameState != 0 && cap == 0) coinContract.bonusCoinflip(msg.sender, priceCoin);
     }
 
+
     // --- Purchases: schedule NFT mints (traits precomputed) ----------------------------------------
 
     /// @notice Records a purchase during state 2, either paying in Purgecoin or ETH.
