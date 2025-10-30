@@ -190,6 +190,7 @@ contract PurgeGame {
     mapping(address => uint256) private claimableWinnings; // ETH claims accumulated on-chain
     mapping(uint24 => address[][256]) private traitPurgeTicket; // level => traitId => ticket holders
     mapping(address => uint24) private lastEthMintLevel;
+    mapping(address => uint24) private ethMintLevelCount;
 
     struct PendingEndLevel {
         address exterminator; // Non-zero means trait win; zero means map timeout
@@ -273,6 +274,10 @@ contract PurgeGame {
         return lastEthMintLevel[player];
     }
 
+    function ethMintLevelsCompleted(address player) external view returns (uint24) {
+        return ethMintLevelCount[player];
+    }
+
     // --- State machine: advance one tick ------------------------------------------------
 
     /// @notice Advances the game state machine. Anyone can call, but certain steps
@@ -308,9 +313,6 @@ contract PurgeGame {
         do {
             uint256 rngWord = _ensureRngReady(day);
             rngReady = true;
-            bool allowCoinflipResolution = !(_gameState == 2 && _phase < 3 && modTwenty == 0);
-
-
             // Luckbox rewards
             if (cap == 0 && coinContract.playerLuckbox(msg.sender) < luckboxThreshold)
                 revert LuckboxTooSmall();
@@ -332,7 +334,7 @@ contract PurgeGame {
                     readyForMap = prizeReady;
                 }
                 if (_phase == 2 && readyForMap) {
-                    if (_endJackpot(lvl, cap, day, true, rngWord, allowCoinflipResolution, _phase)) {
+                    if (_endJackpot(lvl, cap, day, true, rngWord, _phase)) {
                         phase = 3;
                     }
                     break;
@@ -354,7 +356,7 @@ contract PurgeGame {
                     payDailyJackpot(false, lvl, rngWord);
                     break;
                 }
-                _endJackpot(lvl, cap, day, false, rngWord, allowCoinflipResolution, _phase);
+                _endJackpot(lvl, cap, day, false, rngWord, _phase);
                 break;
             }
 
@@ -385,7 +387,7 @@ contract PurgeGame {
                     }
                     break;
                 }
-                if (_endJackpot(lvl, cap, day, false, rngWord, allowCoinflipResolution, _phase)) {
+                if (_endJackpot(lvl, cap, day, false, rngWord, _phase)) {
                     nft.recordSeasonMinted(purchaseCount);
                     levelStartTime = ts;
                     gameState = 4;
@@ -411,13 +413,13 @@ contract PurgeGame {
                     phase = 7;
                     break;
                 }
-                if (_endJackpot(lvl, cap, day, false, rngWord, allowCoinflipResolution, _phase)) phase = 6;
+                if (_endJackpot(lvl, cap, day, false, rngWord, _phase)) phase = 6;
                 break;
             }
 
             // --- State 0 ---
             if (_gameState == 0) {
-                _endJackpot(lvl, cap, day, false, rngWord, allowCoinflipResolution, _phase);
+                _endJackpot(lvl, cap, day, false, rngWord, _phase);
             }
         } while (false);
 
@@ -797,7 +799,7 @@ contract PurgeGame {
                 levelPrizePool = 0;
             }
 
-            if (_endJackpot(lvl, cap, day, false, rngWord, true, _phase)) {
+            if (_endJackpot(lvl, cap, day, false, rngWord, _phase)) {
                 phase = 0;
                 return;
             }
@@ -1235,19 +1237,20 @@ contract PurgeGame {
         uint48 dayIdx,
         bool bonusFlip,
         uint256 rngWord,
-        bool allowResolution,
         uint8 phaseSnapshot
     )
         private
         returns (bool ok)
     {
-        bool canResolve = allowResolution;
         if (phaseSnapshot < 3 && (lvl % 20) == 0) {
-            canResolve = false;
+            nft.releaseRngLock();
+            dailyIdx = dayIdx;
+            return true;
         }
 
-        ok = coin.processCoinflipPayouts(lvl, cap, bonusFlip, rngWord, canResolve);
+        ok = coin.processCoinflipPayouts(lvl, cap, bonusFlip, rngWord, true);
         if (!ok) return false;
+
         nft.releaseRngLock();
         dailyIdx = dayIdx;
         return true;
@@ -1346,7 +1349,14 @@ contract PurgeGame {
             coin.payAffiliate(affiliateAmount, affiliateCode, msg.sender, level);
         }
 
-        lastEthMintLevel[msg.sender] = lvl;
+        address payer = msg.sender;
+        uint24 prevLevel = lastEthMintLevel[payer];
+        if (prevLevel != lvl) {
+            unchecked {
+                ethMintLevelCount[payer] = uint24(ethMintLevelCount[payer] + 1);
+            }
+            lastEthMintLevel[payer] = lvl;
+        }
 
         bonusMint = (bonusUnits * priceCoin * pct) / 100;
     }
