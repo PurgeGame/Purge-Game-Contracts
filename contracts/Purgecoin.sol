@@ -815,7 +815,7 @@ contract Purgecoin {
 
     }
 
-    function setStake(address player, bool isMap, bool stake)
+    function setStake(address player, bool isMap, bool _stake)
         external
         returns (uint8 newCount, uint16 mapBonusBps)
     {
@@ -823,7 +823,7 @@ contract Purgecoin {
 
         if (isMap) {
             uint8 current = _mapBonusToCount(mapStakeBonusBps[player]);
-            if (stake) {
+            if (_stake) {
                 if (current >= MAP_STAKE_MAX) revert StakeInvalid();
                 unchecked {
                     current += 1;
@@ -840,7 +840,7 @@ contract Purgecoin {
         }
 
         uint8 currentAff = _bonusToCount(affiliateStakeBonusPct[player]);
-        if (stake) {
+        if (_stake) {
             if (currentAff >= AFFILIATE_STAKE_MAX) revert StakeInvalid();
             unchecked {
                 currentAff += 1;
