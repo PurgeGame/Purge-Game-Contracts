@@ -572,6 +572,7 @@ contract PurgeGame {
 
         address[][256] storage tickets = traitPurgeTicket[lvl];
 
+        uint16 winningTrait = 420;
         for (uint256 i; i < count; ) {
             uint256 tokenId = tokenIds[i];
 
@@ -607,24 +608,23 @@ contract PurgeGame {
             }
 
             unchecked {
-
                 uint32 endLevel = (lvl % 10 == 7) ? 1 : 0;
 
                 if (--traitRemaining[trait0] == endLevel) {
-                    _endLevel(trait0);
-                    return;
+                    winningTrait = trait0;
+                    break;
                 }
                 if (--traitRemaining[trait1] == endLevel) {
-                    _endLevel(trait1);
-                    return;
+                    winningTrait = trait1;
+                    break;
                 }
                 if (--traitRemaining[trait2] == endLevel) {
-                    _endLevel(trait2);
-                    return;
+                    winningTrait = trait2;
+                    break;
                 }
                 if (--traitRemaining[trait3] == endLevel) {
-                    _endLevel(trait3);
-                    return;
+                    winningTrait = trait3;
+                    break;
                 }
                 dailyPurgeCount[trait0 & 0x07] += 1;
                 dailyPurgeCount[((trait1 - 64) >> 3) + 8] += 1;
@@ -641,6 +641,11 @@ contract PurgeGame {
         if (lvl % 10 == 2) count <<= 1;
         coin.bonusCoinflip(caller, (count + bonusTenths) * (priceCoin / 10));
         emit Purge(msg.sender, tokenIds);
+
+        if (winningTrait != 420) {
+            _endLevel(winningTrait);
+            return;
+        }
     }
 
     // --- Level finalization -------------------------------------------------------------------------
