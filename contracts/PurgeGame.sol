@@ -48,7 +48,7 @@ interface IPurgeRenderer {
 interface IPurgeGameNFT {
     struct EndLevelRequest {
         address exterminator;
-        uint8 traitId;
+        uint16 traitId;
         uint24 level;
         uint256 pool;
         uint256 randomWord;
@@ -67,7 +67,7 @@ interface IPurgeGameNFT {
     function processEndLevel(EndLevelRequest calldata req)
         external
         payable
-        returns (address mapImmediateRecipient);
+        returns (address mapImmediateRecipient, address[6] memory affiliateRecipients);
 
     function prepareNextLevel(uint24 nextLevel) external;
 
@@ -116,6 +116,7 @@ contract PurgeGame {
     uint64 private constant MAP_LCG_MULT = 0x5851F42D4C957F2D; // LCG multiplier for map RNG slices
     uint256 private constant TROPHY_FLAG_MAP = uint256(1) << 200; // Marks trophies sourced from MAP jackpots
     uint8 private constant MAP_FIRST_BATCH = 8; // Consecutive daily jackpots on map-only levels before normal cadence resumes
+    uint16 private constant TRAIT_ID_TIMEOUT = 420;
 
     // -----------------------
     // Price
@@ -148,7 +149,7 @@ contract PurgeGame {
     uint8 private jackpotCounter; // # of daily jackpots paid in current level
     uint8 private earlyPurgeJackpotPaidMask; // Bitmask for early purge jackpots paid (progressive)
     uint8 private phase; // Airdrop sub-phase (0..7)
-    uint16 private lastExterminatedTrait = 420; // The winning trait from the previous season (420 sentinel)
+    uint16 private lastExterminatedTrait = TRAIT_ID_TIMEOUT; // The winning trait from the previous season (timeout sentinel)
 
     // -----------------------
     // RNG Liveness Flags
@@ -179,7 +180,7 @@ contract PurgeGame {
     struct PendingEndLevel {
         address exterminator; // Non-zero means trait win; zero means map timeout
         uint24 level; // Level that just ended (0 sentinel = none pending)
-        uint8 traitId; // Winning trait (valid when exterminator != address(0))
+        uint16 traitId; // Winning trait (valid when exterminator != address(0))
         uint256 sidePool; // Trait win: pool snapshot for trophy/exterminator splits; Map timeout: full carry pool snapshot
     }
     PendingEndLevel private pendingEndLevel;
@@ -572,7 +573,7 @@ contract PurgeGame {
 
         address[][256] storage tickets = traitPurgeTicket[lvl];
 
-        uint16 winningTrait = 420;
+        uint16 winningTrait = TRAIT_ID_TIMEOUT;
         for (uint256 i; i < count; ) {
             uint256 tokenId = tokenIds[i];
 
@@ -642,7 +643,7 @@ contract PurgeGame {
         coin.bonusCoinflip(caller, (count + bonusTenths) * (priceCoin / 10));
         emit Purge(msg.sender, tokenIds);
 
-        if (winningTrait != 420) {
+        if (winningTrait != TRAIT_ID_TIMEOUT) {
             _endLevel(winningTrait);
             return;
         }
@@ -650,7 +651,7 @@ contract PurgeGame {
 
     // --- Level finalization -------------------------------------------------------------------------
 
-    /// @notice Finalize the current level either due to a trait being exterminated (<256) or a timed-out “420” end.
+    /// @notice Finalize the current level either due to a trait being exterminated (<256) or a timed-out “TRAIT_ID_TIMEOUT” end.
     /// @dev
     /// When a trait is exterminated (<256):
     /// - Lock the exterminated trait in the current level’s storage.
@@ -668,7 +669,7 @@ contract PurgeGame {
     ///
     /// After either path:
     /// - Reset per-level state, mint the next level’s trophy placeholder,
-    ///   set default exterminated sentinel to 420, and request fresh VRF.
+    ///   set default exterminated sentinel to TRAIT_ID_TIMEOUT, and request fresh VRF.
     function _endLevel(uint16 exterminated) private {
         PendingEndLevel storage pend = pendingEndLevel;
 
@@ -718,7 +719,7 @@ contract PurgeGame {
             pend.sidePool = poolCarry;
 
             prizePool = 0;
-            lastExterminatedTrait = 420;
+            lastExterminatedTrait = TRAIT_ID_TIMEOUT;
         }
 
         uint24 nextLevel = levelSnapshot + 1;
@@ -764,7 +765,7 @@ contract PurgeGame {
         uint8 prevMod100 = uint8(prevLevel % 100);
 
         if (_phase > 3) {
-            if (lastExterminatedTrait != 420) {
+            if (lastExterminatedTrait != TRAIT_ID_TIMEOUT) {
                 if (prizePool != 0) {
                     _payoutParticipants(cap, prevLevel);
                     return;
@@ -837,43 +838,23 @@ contract PurgeGame {
             _addClaimableEth(pend.exterminator, immediate);
 
             uint256 sharedPool = poolValue / 20;
-            uint256 affiliatePool = sharedPool;
-            if (affiliatePool != 0) {
-                address[] memory affLeaders = coin.getLeaderboardAddresses(1);
-                uint256 affLen = affLeaders.length;
-                if (affLen != 0) {
-                    uint256 top = affLen < 3 ? affLen : 3;
-                    for (uint256 i; i < top; ) {
-                        uint256 pct = i == 0
-                            ? 50
-                            : i == 1
-                                ? 25
-                                : 15;
-                        _addClaimableEth(affLeaders[i], (affiliatePool * pct) / 100);
-                        unchecked {
-                            ++i;
-                        }
-                    }
-                    if (affLen > 3) {
-                        address rndAddr = affLeaders[3 + (rngWord % (affLen - 3))];
-                        _addClaimableEth(rndAddr, (affiliatePool * 10) / 100);
-                    }
-                } else {
-                    carryoverForNextLevel += affiliatePool;
-                    affiliatePool = 0;
-                }
-            }
+            uint256 base = sharedPool / 100;
+            uint256 remainder = sharedPool - (base * 100);
+            uint256 affiliateTrophyShare = base * 20 + remainder;
+            uint256 legacyAffiliateShare = base * 10;
+            uint256[6] memory affiliatePayouts = [
+                base * 20,
+                base * 20,
+                base * 10,
+                base * 8,
+                base * 7,
+                base * 5
+            ];
 
-            uint256 legacyTrophyPool;
-            if (prevLevelPending > 1) {
-                legacyTrophyPool = sharedPool;
-            } else {
-                deferredWei += sharedPool;
-                legacyTrophyPool = 0;
-            }
-            uint256 forwardWei = deferredWei + legacyTrophyPool;
+            address[] memory affLeaders = coin.getLeaderboardAddresses(1);
+            address affiliateTrophyRecipient = affLeaders[0];
 
-            nft.processEndLevel{value: forwardWei}(
+            (, address[6] memory affiliateRecipients) = nft.processEndLevel{value: deferredWei + affiliateTrophyShare + legacyAffiliateShare}(
                 IPurgeGameNFT.EndLevelRequest({
                     exterminator: pend.exterminator,
                     traitId: pend.traitId,
@@ -882,23 +863,39 @@ contract PurgeGame {
                     randomWord: rngWord
                 })
             );
+            for (uint8 i; i < 6; ) {
+                address recipient = affiliateRecipients[i];
+                if (recipient == address(0)) {
+                    recipient = affiliateTrophyRecipient;
+                }
+                uint256 amount = affiliatePayouts[i];
+                if (amount != 0) {
+                    _addClaimableEth(recipient, amount);
+                }
+                unchecked {
+                    ++i;
+                }
+            }
 
             // mapImmediateRecipient is unused for trait wins
         } else {
             uint256 poolCarry = poolValue;
             uint256 mapUnit = poolCarry / 20;
-            uint256 mapPayoutValue = mapUnit * 4;
+            address[] memory affLeaders = coin.getLeaderboardAddresses(1);
+            address topAffiliate = affLeaders[0];
+            uint256 affiliateAward = mapUnit;
+            uint256 mapPayoutValue = mapUnit * 4 + affiliateAward;
 
-
-            address mapRecipient = nft.processEndLevel{value: mapPayoutValue}(
+            (address mapRecipient, address[6] memory mapAffiliates) = nft.processEndLevel{value: mapPayoutValue}(
                 IPurgeGameNFT.EndLevelRequest({
-                    exterminator: address(0),
-                    traitId: 0,
+                    exterminator: topAffiliate,
+                    traitId: TRAIT_ID_TIMEOUT,
                     level: prevLevelPending,
                     pool: poolCarry,
                     randomWord: rngWord
                 })
             );
+            mapAffiliates;
             _addClaimableEth(mapRecipient, mapUnit);
         }
 
@@ -1026,7 +1023,7 @@ contract PurgeGame {
         // Save % for next level (randomized bands per range)
         uint256 rndWord = rngWord;
         uint256 savePct;
-        if ((rndWord % 1_000_000_000) == 420) {
+        if ((rndWord % 1_000_000_000) == TRAIT_ID_TIMEOUT) {
             savePct = 10;
         } else if (lvl < 10) savePct = uint256(lvl) * 5;
         else if (lvl < 20) savePct = 55 + (rndWord % 16);
@@ -1217,7 +1214,7 @@ contract PurgeGame {
             }
             prizePool -= totalPaidWei;
             if (jackpotCounter >= 15 || (lvl % 100 == 0 && jackpotCounter == 14)) {
-                _endLevel(420);
+                _endLevel(TRAIT_ID_TIMEOUT);
                 return;
             }
             _clearDailyPurgeCount();
@@ -1750,4 +1747,5 @@ contract PurgeGame {
         mints = playerTokensOwed[player];
         maps = playerMapMintsOwed[player];
     }
+    receive() external payable {}
 }
