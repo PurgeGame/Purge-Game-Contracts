@@ -85,8 +85,6 @@ contract PurgeGameNFT {
     uint256 private constant _BITMASK_BURNED = 1 << 224;
     uint256 private constant _BITPOS_NEXT_INITIALIZED = 225;
     uint256 private constant _BITMASK_NEXT_INITIALIZED = 1 << 225;
-    uint256 private constant _BITPOS_EXTRA_DATA = 232;
-    uint256 private constant _BITMASK_EXTRA_DATA_COMPLEMENT = (1 << 232) - 1;
     uint256 private constant _BITMASK_ADDRESS = (1 << 160) - 1;
 
     bytes32 private constant _TRANSFER_EVENT_SIGNATURE =
@@ -247,8 +245,9 @@ contract PurgeGameNFT {
     }
 
     function setApprovalForAll(address operator, bool approved) public virtual {
-        _operatorApprovals[_msgSenderERC721A()][operator] = approved;
-        emit ApprovalForAll(_msgSenderERC721A(), operator, approved);
+        address sender = msg.sender;
+        _operatorApprovals[sender][operator] = approved;
+        emit ApprovalForAll(sender, operator, approved);
     }
 
     function isApprovedForAll(address owner, address operator) public view virtual returns (bool) {
@@ -298,8 +297,9 @@ contract PurgeGameNFT {
 
         address approvedAddress = _tokenApprovals[tokenId];
 
-        if (!_isSenderApprovedOrOwner(approvedAddress, from, _msgSenderERC721A()))
-            if (!isApprovedForAll(from, _msgSenderERC721A())) revert TransferCallerNotOwnerNorApproved();
+        address sender = msg.sender;
+        if (!_isSenderApprovedOrOwner(approvedAddress, from, sender))
+            if (!isApprovedForAll(from, sender)) revert TransferCallerNotOwnerNorApproved();
 
         if (approvedAddress != address(0)) {
             delete _tokenApprovals[tokenId];
@@ -309,10 +309,7 @@ contract PurgeGameNFT {
             --_packedAddressData[from]; // Updates: `balance -= 1`.
             ++_packedAddressData[to]; // Updates: `balance += 1`.
 
-            _packedOwnerships[tokenId] = _packOwnershipData(
-                to,
-                _BITMASK_NEXT_INITIALIZED | _nextExtraData(from, to, prevOwnershipPacked)
-            );
+            _packedOwnerships[tokenId] = _packOwnershipData(to, _BITMASK_NEXT_INITIALIZED);
 
             if (prevOwnershipPacked & _BITMASK_NEXT_INITIALIZED == 0) {
                 uint256 nextTokenId = tokenId + 1;
@@ -366,7 +363,8 @@ contract PurgeGameNFT {
         uint256 tokenId,
         bytes memory _data
     ) private returns (bool) {
-        try IERC721Receiver(to).onERC721Received(_msgSenderERC721A(), from, tokenId, _data) returns (
+        address sender = msg.sender;
+        try IERC721Receiver(to).onERC721Received(sender, from, tokenId, _data) returns (
             bytes4 retval
         ) {
             return retval == IERC721Receiver(to).onERC721Received.selector;
@@ -387,10 +385,7 @@ contract PurgeGameNFT {
 
 
         unchecked {
-            _packedOwnerships[startTokenId] = _packOwnershipData(
-                to,
-                _nextInitializedFlag(quantity) | _nextExtraData(address(0), to, 0)
-            );
+            _packedOwnerships[startTokenId] = _packOwnershipData(to, _nextInitializedFlag(quantity));
 
             _packedAddressData[to] += quantity * ((1 << _BITPOS_NUMBER_MINTED) | 1);
 
@@ -429,67 +424,14 @@ contract PurgeGameNFT {
     ) internal virtual {
         address owner = ownerOf(tokenId);
 
-        if (approvalCheck && _msgSenderERC721A() != owner)
-            if (!isApprovedForAll(owner, _msgSenderERC721A())) {
+        if (approvalCheck && msg.sender != owner)
+            if (!isApprovedForAll(owner, msg.sender)) {
                 revert ApprovalCallerNotOwnerNorApproved();
             }
 
         _tokenApprovals[tokenId] = to;
         emit Approval(owner, to, tokenId);
     }
-    function _setExtraDataAt(uint256 index, uint24 extraData) internal virtual {
-        uint256 packed = _packedOwnerships[index];
-        if (packed == 0) revert OwnershipNotInitializedForExtraData();
-        uint256 extraDataCasted;
-        assembly {
-            extraDataCasted := extraData
-        }
-        packed = (packed & _BITMASK_EXTRA_DATA_COMPLEMENT) | (extraDataCasted << _BITPOS_EXTRA_DATA);
-        _packedOwnerships[index] = packed;
-    }
-
-    function _extraData(
-        address from,
-        address to,
-        uint24 previousExtraData
-    ) internal view virtual returns (uint24) {}
-
-    function _nextExtraData(
-        address from,
-        address to,
-        uint256 prevOwnershipPacked
-    ) private view returns (uint256) {
-        uint24 extraData = uint24(prevOwnershipPacked >> _BITPOS_EXTRA_DATA);
-        return uint256(_extraData(from, to, extraData)) << _BITPOS_EXTRA_DATA;
-    }
-
-
-    function _msgSenderERC721A() internal view virtual returns (address) {
-        return msg.sender;
-    }
-
-    function _toString(uint256 value) internal pure virtual returns (string memory str) {
-        assembly {
-            let m := add(mload(0x40), 0xa0)
-            mstore(0x40, m)
-            str := sub(m, 0x20)
-            mstore(str, 0)
-
-            let end := str
-
-            for { let temp := value } 1 {} {
-                str := sub(str, 1)
-                mstore8(str, add(48, mod(temp, 10)))
-                temp := div(temp, 10)
-                if iszero(temp) { break }
-            }
-
-            let length := sub(end, str)
-            str := sub(str, 0x20)
-            mstore(str, length)
-        }
-    }
-
     // ---------------------------------------------------------------------
     // Purge game wiring
     // ---------------------------------------------------------------------
@@ -578,10 +520,7 @@ contract PurgeGameNFT {
         unchecked {
             _packedAddressData[from] += (1 << _BITPOS_NUMBER_BURNED) - 1;
 
-            _packedOwnerships[tokenId] = _packOwnershipData(
-                from,
-                (_BITMASK_BURNED | _BITMASK_NEXT_INITIALIZED) | _nextExtraData(from, address(0), prevOwnershipPacked)
-            );
+            _packedOwnerships[tokenId] = _packOwnershipData(from, _BITMASK_BURNED | _BITMASK_NEXT_INITIALIZED);
 
             if (prevOwnershipPacked & _BITMASK_NEXT_INITIALIZED == 0) {
                 uint256 nextTokenId = tokenId + 1;
