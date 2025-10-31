@@ -1270,14 +1270,24 @@ contract PurgeGame {
     function rngAndTimeGate(uint48 day) internal returns (uint256 word) {
         if (day == dailyIdx) revert NotTimeYet();
 
-        word = nft.currentRngWord();
-        if (word == 0) {
-            if (!nft.rngLocked()) {
+        bool locked = nft.rngLocked();
+        uint256 currentWord = nft.currentRngWord();
+
+        if (currentWord == 0) {
+            if (!locked) {
                 nft.requestRng();
                 return 1;
             }
             revert RngNotReady();
         }
+
+        if (!locked) {
+            // Stale entropy from previous cycle; request a fresh word.
+            nft.requestRng();
+            return 1;
+        }
+
+        return currentWord;
     }
 
     /// @notice Handle ETH payments for purchases; forwards affiliate rewards as coinflip credits.
