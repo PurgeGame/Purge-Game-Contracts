@@ -57,6 +57,10 @@ interface IVRFCoordinator {
         returns (uint96 balance, uint96 premium, uint64 reqCount, address owner, address[] memory consumers);
 }
 
+interface ILinkToken {
+    function transferAndCall(address to, uint256 value, bytes calldata data) external returns (bool);
+}
+
 contract PurgeGameNFT {
     // ---------------------------------------------------------------------
     // Errors
@@ -160,6 +164,7 @@ event TrophyStakeChanged(
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
     uint256 private constant COIN_BASE_UNIT = 1_000_000; // 1 PURGED (6 decimals)
     uint256 private constant COIN_EMISSION_UNIT = 1_000 * COIN_BASE_UNIT; // 1000 PURGED (6 decimals)
+    uint256 private constant LUCK_PER_LINK = 220 * COIN_BASE_UNIT; // Base credit per 1 LINK (pre-multiplier)
     uint256 private constant TROPHY_FLAG_MAP = uint256(1) << 200;
     uint256 private constant TROPHY_FLAG_AFFILIATE = uint256(1) << 201;
     uint256 private constant TROPHY_OWED_MASK = (uint256(1) << 128) - 1;
@@ -529,6 +534,37 @@ event TrophyStakeChanged(
 
     function isRngFulfilled() external view returns (bool) {
         return rngFulfilled;
+    }
+
+    function _tierMultPermille(uint256 subBal) private pure returns (uint16) {
+        if (subBal < 200 ether) return 2000;
+        if (subBal < 300 ether) return 1500;
+        if (subBal < 600 ether) return 1000;
+        if (subBal < 1000 ether) return 500;
+        if (subBal < 2000 ether) return 100;
+        return 0;
+    }
+
+    function onTokenTransfer(address from, uint256 amount, bytes calldata) external {
+        if (msg.sender != linkToken) revert E();
+        if (amount == 0) revert Zero();
+        if (rngLockedFlag) revert CoinPaused();
+
+        try ILinkToken(linkToken).transferAndCall(address(vrfCoordinator), amount, abi.encode(vrfSubscriptionId)) returns (bool ok) {
+            if (!ok) revert E();
+        } catch {
+            revert E();
+        }
+
+        (uint96 bal, , , , ) = vrfCoordinator.getSubscription(vrfSubscriptionId);
+        uint16 mult = _tierMultPermille(uint256(bal));
+        if (mult == 0) return;
+
+        uint256 base = (amount * LUCK_PER_LINK) / 1 ether;
+        uint256 credit = (base * mult) / 1000;
+        if (credit != 0) {
+            coin.bonusCoinflip(from, 0, true, credit);
+        }
     }
 
     // ---------------------------------------------------------------------

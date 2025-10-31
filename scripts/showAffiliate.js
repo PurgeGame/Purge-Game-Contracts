@@ -3,8 +3,18 @@ const hre = require("hardhat");
 async function main() {
   const [deployer] = await hre.ethers.getSigners();
 
+  const iconData = require("./data/icons32Data.json");
+
   const IconsFactory = await hre.ethers.getContractFactory("Icons32Data");
-  const icons = await IconsFactory.deploy();
+  const icons = await IconsFactory.deploy(
+    iconData.paths,
+    iconData.vbW,
+    iconData.vbH,
+    iconData.diamond,
+    iconData.symQ1,
+    iconData.symQ2,
+    iconData.symQ3
+  );
   await icons.waitForDeployment();
 
   const RegistryFactory = await hre.ethers.getContractFactory("MockRegistry");
