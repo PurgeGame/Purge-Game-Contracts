@@ -23,8 +23,7 @@ interface IPurgeCoinInterface {
         uint24 level,
         uint32 cap,
         bool bonusFlip,
-        uint256 rngWord,
-        bool allowResolution
+        uint256 rngWord
     ) external returns (bool);
     function triggerCoinJackpot(uint256 rngWord) external;
     function runExternalJackpot(
@@ -293,36 +292,22 @@ contract PurgeGame {
             uint256 bal = address(this).balance;
             if (bal > 0) coinContract.burnie{value: bal}(0);
         }
-
         uint24 lvl = level;
         uint8 modTwenty = uint8(lvl % 20);
         uint8 _gameState = gameState;
         uint8 _phase = phase;
-
-        bool rngReady;
-
-        
+        bool rngReady  = true;
         uint48 day = uint48((ts - JACKPOT_RESET_TIME) / 1 days);
-        uint256 luckboxThreshold;
-        if (cap == 0) {
-            luckboxThreshold = priceCoin * lvl * (lvl / 100 + 1);
-            luckboxThreshold <<= 1;
-        }
-
-
-        rngReady = true;
 
         do {
             // Luckbox rewards
-            if (cap == 0 && coinContract.playerLuckbox(msg.sender) < luckboxThreshold)
+            if (cap == 0 && coinContract.playerLuckbox(msg.sender) < priceCoin * lvl * (lvl / 100 + 1) << 1)
                 revert LuckboxTooSmall();
             uint256 rngWord = rngAndTimeGate(day);
             if (rngWord == 1) {
                 rngReady = false;
                 break;
             }
-
-            // Arm VRF when due/new (reward allowed)
             // --- State 1 - Pregame ---
             if (_gameState == 1) {
                 _finalizeEndgame(lvl, cap, day, rngWord); // handles payouts, wipes, endgame dist, and jackpots
@@ -334,11 +319,11 @@ contract PurgeGame {
                 if (_phase <= 2) {
                     _updateEarlyPurgeJackpots(lvl);
                     bool prizeReady = prizePool >= lastPrizePool;
-                    bool readyForMap = (purchaseCount >= PURCHASE_MINIMUM && prizeReady);
+                    bool levelGate = (purchaseCount >= PURCHASE_MINIMUM && prizeReady);
                     if (modTwenty == 16) {
-                        readyForMap = prizeReady;
+                        levelGate = prizeReady;
                     }
-                    if (_phase == 2 && readyForMap) {
+                    if (_phase == 2 && levelGate) {
                         if (_endJackpot(lvl, cap, day, true, rngWord, _phase)) {
                             phase = 3;
                         }
@@ -560,7 +545,6 @@ contract PurgeGame {
     /// @notice Burn up to 75 owned NFTs to contribute purge tickets; may end the level if a trait hits zero.
     /// @dev
     /// Security:
-    /// - Blocks contract calls (`extcodesize(caller()) != 0`) and `tx.origin` relays.
     /// - Requires `gameState == 3` and a consumed RNG session.
     /// Accounting:
     /// - For each token, burns it, updates daily counters and remaining-per-trait,
@@ -571,11 +555,6 @@ contract PurgeGame {
     /// - Grants a Purgecoin coinflip credit: base `n` plus up to +0.9×n (in tenths) if the NFT
     ///   included last level’s exterminated trait.
     function purge(uint256[] calldata tokenIds) external {
-        uint256 extSize;
-        assembly {
-            extSize := extcodesize(caller())
-        }
-        if (extSize != 0 || tx.origin != msg.sender) revert E();
         if (nft.rngLocked()) revert RngNotReady();
         if (gameState != 3) revert NotTimeYet();
 
@@ -1237,15 +1216,10 @@ contract PurgeGame {
         private
         returns (bool ok)
     {
-        if (phaseSnapshot < 3 && (lvl % 20) == 0) {
-            nft.releaseRngLock();
-            dailyIdx = dayIdx;
-            return true;
+        if (phaseSnapshot >= 3 || (lvl % 20) != 0) {
+            ok = coin.processCoinflipPayouts(lvl, cap, bonusFlip, rngWord);
+            if (!ok) return false;
         }
-
-        ok = coin.processCoinflipPayouts(lvl, cap, bonusFlip, rngWord, true);
-        if (!ok) return false;
-
         nft.releaseRngLock();
         dailyIdx = dayIdx;
         return true;

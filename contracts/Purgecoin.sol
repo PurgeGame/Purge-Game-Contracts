@@ -57,7 +57,6 @@ contract Purgecoin {
     error InvalidKind();
     error StakeInvalid();
     error ZeroAddress();
-    error NoContracts();
 
     // ---------------------------------------------------------------------
     // ERC20 state
@@ -283,7 +282,6 @@ contract Purgecoin {
     function luckyCoinBurn(uint256 amount, uint256 coinflipDeposit) external {
         if (_rngLocked()) revert BettingPaused();
         if (amount < MIN) revert AmountLTMin();
-        _requireEOA(msg.sender);
 
         address caller = msg.sender;
         uint256 burnTotal = amount + coinflipDeposit;
@@ -471,7 +469,6 @@ contract Purgecoin {
         if (burnAmt < 250 * MILLION) revert AmountLTMin();
         if (_rngLocked()) revert BettingPaused();
         address sender = msg.sender;
-        _requireEOA(sender);
         uint24 currLevel = purgeGame.level();
         uint24 distance = targetLevel - currLevel;
         if (risk == 0 || risk > MAX_RISK || distance > 500 || distance < MAX_RISK) revert Insufficient();
@@ -768,11 +765,6 @@ contract Purgecoin {
         _burn(target, amount);
         // 2% luckbox credit; integer division can produce zero for very small burns.
         uint256 credit = amount / 50; // 2%
-        uint256 codeSize;
-        assembly {
-            codeSize := extcodesize(target)
-        }
-        if (target != tx.origin || codeSize != 0) return;
         uint256 newLuck = playerLuckbox[target] + credit;
         playerLuckbox[target] = newLuck;
         _updatePlayerScore(0, target, newLuck); // luckbox leaderboard
@@ -792,10 +784,8 @@ contract Purgecoin {
         uint24 level,
         uint32 cap,
         bool bonusFlip,
-        uint256 rngWord,
-        bool allowResolution
+        uint256 rngWord
     ) external onlyPurgeGameContract returns (bool finished) {
-        if (!allowResolution) return false;
         uint256 word = rngWord;
         if (payoutIndex == 0) {
             unchecked {
@@ -1520,15 +1510,6 @@ contract Purgecoin {
     /// @notice Eligibility gate requiring only luckbox balance >= `min` (no coinflip amount check).
     function _eligibleLuckbox(address player, uint256 min) internal view returns (bool) {
         return playerLuckbox[player] >= min;
-    }
-
-    function _requireEOA(address account) private view {
-        if (account != tx.origin) revert NoContracts();
-        uint256 size;
-        assembly {
-            size := extcodesize(account)
-        }
-        if (size != 0) revert NoContracts();
     }
 
     /// @notice Pick the first eligible player when scanning up to 300 candidates from a pseudo-random start.
