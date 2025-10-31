@@ -581,7 +581,8 @@ event TrophyStakeChanged(
         _ethMintLastLevel[player] = level;
 
         if (streak >= 2) {
-            luckboxReward = uint256(streak - 1) * 100 * COIN_BASE_UNIT;
+            uint256 capped = streak >= 61 ? 60 : uint256(streak - 1);
+            luckboxReward = capped * 100 * COIN_BASE_UNIT;
             coinReward = luckboxReward;
         }
 
