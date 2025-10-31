@@ -303,19 +303,24 @@ contract PurgeGame {
 
         
         uint48 day = uint48((ts - JACKPOT_RESET_TIME) / 1 days);
-        uint48 dayIdx = dailyIdx;
         uint256 luckboxThreshold;
         if (cap == 0) {
             luckboxThreshold = priceCoin * lvl * (lvl / 100 + 1);
             luckboxThreshold <<= 1;
         }
 
+
+        rngReady = true;
+
         do {
-            uint256 rngWord = _ensureRngReady(day);
-            rngReady = true;
             // Luckbox rewards
             if (cap == 0 && coinContract.playerLuckbox(msg.sender) < luckboxThreshold)
                 revert LuckboxTooSmall();
+            uint256 rngWord = rngAndTimeGate(day);
+            if (rngWord == 1) {
+                rngReady = false;
+                break;
+            }
 
             // Arm VRF when due/new (reward allowed)
             // --- State 1 - Pregame ---
@@ -1286,13 +1291,14 @@ contract PurgeGame {
 
     // --- Flips, VRF, payments, rarity ----------------------------------------------------------------
 
-    function _ensureRngReady(uint48 day) internal returns (uint256 word) {
+    function rngAndTimeGate(uint48 day) internal returns (uint256 word) {
         if (day == dailyIdx) revert NotTimeYet();
 
         word = nft.currentRngWord();
         if (word == 0) {
             if (!nft.rngLocked()) {
                 nft.requestRng();
+                return 1;
             }
             revert RngNotReady();
         }
