@@ -789,7 +789,6 @@ contract PurgeGame {
 
             if (lvl > 1) {
                 _clearDailyPurgeCount();
-                coin.resetAffiliateLeaderboard(lvl);
 
                 prizePool = 0;
                 phase = 0;
@@ -834,7 +833,10 @@ contract PurgeGame {
             ];
 
             address[] memory affLeaders = coin.getLeaderboardAddresses(1);
-            address affiliateTrophyRecipient = affLeaders[0];
+            address affiliateTrophyRecipient = affLeaders.length != 0 ? affLeaders[0] : pend.exterminator;
+            if (affiliateTrophyRecipient == address(0)) {
+                affiliateTrophyRecipient = pend.exterminator;
+            }
 
             (, address[6] memory affiliateRecipients) = nft.processEndLevel{value: deferredWei + affiliateTrophyShare + legacyAffiliateShare}(
                 IPurgeGameNFT.EndLevelRequest({
@@ -863,8 +865,8 @@ contract PurgeGame {
             uint256 poolCarry = poolValue;
             uint256 mapUnit = poolCarry / 20;
             address[] memory affLeaders = coin.getLeaderboardAddresses(1);
-            address topAffiliate = affLeaders[0];
-            uint256 affiliateAward = mapUnit;
+            address topAffiliate = affLeaders.length != 0 ? affLeaders[0] : address(0);
+            uint256 affiliateAward = topAffiliate == address(0) ? 0 : mapUnit;
             uint256 mapPayoutValue = mapUnit * 4 + affiliateAward;
 
             (address mapRecipient, address[6] memory mapAffiliates) = nft.processEndLevel{value: mapPayoutValue}(
@@ -880,6 +882,8 @@ contract PurgeGame {
         }
 
         delete pendingEndLevel;
+
+        coin.resetAffiliateLeaderboard(lvl);
     }
 
     function _payoutParticipants(uint32 capHint, uint24 prevLevel) internal {
