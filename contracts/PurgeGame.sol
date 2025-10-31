@@ -15,7 +15,7 @@ pragma solidity ^0.8.26;
  *      All calls are trusted (set via constructor in the ERC20 contract).
  */
 interface IPurgeCoinInterface {
-    function bonusCoinflip(address player, uint256 amount, bool rngReady) external;
+    function bonusCoinflip(address player, uint256 amount, bool rngReady, uint256 luckboxBonus) external;
     function burnie(uint256 amount) external payable;
     function burnCoin(address target, uint256 amount) external;
     function payAffiliate(uint256 amount, bytes32 code, address sender, uint24 lvl) external;
@@ -86,6 +86,11 @@ interface IPurgeGameNFT {
     function releaseRngLock() external;
 
     function isRngFulfilled() external view returns (bool);
+
+    function recordEthMint(address player, uint24 level)
+        external
+        returns (uint256 coinReward, uint256 luckboxReward);
+
 }
 
 // ===========================================================================
@@ -188,8 +193,6 @@ contract PurgeGame {
     mapping(uint256 => uint32) private tokenTraits; // Packed 4×8-bit traits (low to high)
     mapping(address => uint256) private claimableWinnings; // ETH claims accumulated on-chain
     mapping(uint24 => address[][256]) private traitPurgeTicket; // level => traitId => ticket holders
-    mapping(address => uint24) private lastEthMintLevel;
-    mapping(address => uint24) private ethMintLevelCount;
 
     struct PendingEndLevel {
         address exterminator; // Non-zero means trait win; zero means map timeout
@@ -267,14 +270,6 @@ contract PurgeGame {
         earlyPurgeMask = earlyPurgeJackpotPaidMask;
         rngFulfilled_ = nft.isRngFulfilled();
         rngConsumed_ = !nft.rngLocked();
-    }
-
-    function lastEthMintLevelOf(address player) external view returns (uint24) {
-        return lastEthMintLevel[player];
-    }
-
-    function ethMintLevelsCompleted(address player) external view returns (uint24) {
-        return ethMintLevelCount[player];
     }
 
     // --- State machine: advance one tick ------------------------------------------------
@@ -412,7 +407,7 @@ contract PurgeGame {
 
         emit Advance(_gameState, _phase);
 
-        if (_gameState != 0 && cap == 0) coinContract.bonusCoinflip(msg.sender, priceCoin, rngReady);
+        if (_gameState != 0 && cap == 0) coinContract.bonusCoinflip(msg.sender, priceCoin, rngReady, 0);
     }
 
 
@@ -444,12 +439,12 @@ contract PurgeGame {
             _coinReceive(quantity * _priceCoin, lvl, bonusCoinReward);
         } else {
             // Scale quantity by 100 so `_ethReceive` can keep integer math.
-            uint256 bonus = _ethReceive(quantity * 100, affiliateCode, quantity, lvl);
+            (uint256 bonus, uint256 luckboxBonus) = _ethReceive(quantity * 100, affiliateCode, quantity, lvl);
             if (_phase == 3 && (lvl % 100) > 90) {
                 bonus += (quantity * _priceCoin) / 5;
             }
             bonus += bonusCoinReward;
-            if (bonus != 0) coin.bonusCoinflip(msg.sender, bonus, true);
+            if (bonus != 0 || luckboxBonus != 0) coin.bonusCoinflip(msg.sender, bonus, true, luckboxBonus);
         }
 
         // Push buyer to the pending list once (de-dup)
@@ -527,12 +522,17 @@ contract PurgeGame {
             if (msg.value != 0) revert E();
             _coinReceive(coinCost - mapRebate, lvl, mapBonus);
         } else {
-            uint256 bonus = _ethReceive(scaledQty, affiliateCode, (lvl < 10) ? quantity : 0, lvl);
+            (uint256 bonus, uint256 luckboxBonus) = _ethReceive(
+                scaledQty,
+                affiliateCode,
+                (lvl < 10) ? quantity : 0,
+                lvl
+            );
             if (_phase == 3 && (lvl % 100) > 90) {
                 bonus += coinCost / 5;
             }
             uint256 rebateMint = bonus + mapRebate + mapBonus;
-            if (rebateMint != 0) coin.bonusCoinflip(msg.sender, rebateMint, true);
+            if (rebateMint != 0 || luckboxBonus != 0) coin.bonusCoinflip(msg.sender, rebateMint, true, luckboxBonus);
         }
 
         if (playerMapMintsOwed[msg.sender] == 0) pendingMapMints.push(msg.sender);
@@ -637,7 +637,7 @@ contract PurgeGame {
         }
 
         if (lvl % 10 == 2) count <<= 1;
-        coin.bonusCoinflip(caller, (count + bonusTenths) * (priceCoin / 10), true);
+        coin.bonusCoinflip(caller, (count + bonusTenths) * (priceCoin / 10), true, 0);
         emit Purge(msg.sender, tokenIds);
 
         if (winningTrait != TRAIT_ID_TIMEOUT) {
@@ -1286,7 +1286,7 @@ contract PurgeGame {
         bytes32 affiliateCode,
         uint256 bonusUnits,
         uint24 lvl
-    ) private returns (uint256 bonusMint) {
+    ) private returns (uint256 bonusMint, uint256 luckboxBonus) {
         uint256 expectedWei = (price * scaledQty) / 100;
         if (msg.value != expectedWei) revert E();
 
@@ -1318,15 +1318,15 @@ contract PurgeGame {
         }
 
         address payer = msg.sender;
-        uint24 prevLevel = lastEthMintLevel[payer];
-        if (prevLevel != lvl) {
-            unchecked {
-                ethMintLevelCount[payer] = uint24(ethMintLevelCount[payer] + 1);
-            }
-            lastEthMintLevel[payer] = lvl;
-        }
+        (uint256 streakBonus, uint256 streakLuckbox) = nft.recordEthMint(payer, lvl);
 
         bonusMint = (bonusUnits * priceCoin * pct) / 100;
+        if (streakBonus != 0) {
+            unchecked {
+                bonusMint += streakBonus;
+            }
+        }
+        luckboxBonus = streakLuckbox;
     }
 
     /// @notice Handle Purgecoin coin payments for purchases;

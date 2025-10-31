@@ -39,7 +39,7 @@ interface IPurgeGame {
 }
 
 interface IPurgecoin {
-    function bonusCoinflip(address player, uint256 amount, bool rngReady) external;
+    function bonusCoinflip(address player, uint256 amount, bool rngReady, uint256 luckboxBonus) external;
 
     function getLeaderboardAddresses(uint8 which) external view returns (address[] memory);
 }
@@ -148,6 +148,9 @@ event TrophyStakeChanged(
     mapping(uint256 => bool) private trophyStaked;
     mapping(address => uint8) private affiliateStakeCount;
     mapping(address => uint8) private mapStakeCount;
+    mapping(address => uint24) private _ethMintLastLevel;
+    mapping(address => uint24) private _ethMintLevelCount;
+    mapping(address => uint24) private _ethMintStreakCount;
     bool private rngFulfilled;
     bool private rngLockedFlag;
     uint256 private rngRequestId;
@@ -155,7 +158,8 @@ event TrophyStakeChanged(
 
     uint32 private constant COIN_DRIP_STEPS = 10; // Base vesting window before coin drip starts
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
-    uint256 private constant COIN_EMISSION_UNIT = 1_000 * 1_000_000; // 1000 PURGED (6 decimals)
+    uint256 private constant COIN_BASE_UNIT = 1_000_000; // 1 PURGED (6 decimals)
+    uint256 private constant COIN_EMISSION_UNIT = 1_000 * COIN_BASE_UNIT; // 1000 PURGED (6 decimals)
     uint256 private constant TROPHY_FLAG_MAP = uint256(1) << 200;
     uint256 private constant TROPHY_FLAG_AFFILIATE = uint256(1) << 201;
     uint256 private constant TROPHY_OWED_MASK = (uint256(1) << 128) - 1;
@@ -547,6 +551,48 @@ event TrophyStakeChanged(
         seasonPurgedCount = 0;
     }
 
+    function recordEthMint(address player, uint24 level)
+        external
+        onlyGame
+        returns (uint256 coinReward, uint256 luckboxReward)
+    {
+        uint24 prevLevel = _ethMintLastLevel[player];
+        if (prevLevel == level) return (0, 0);
+
+        uint24 total = _ethMintLevelCount[player];
+        if (total < type(uint24).max) {
+            unchecked {
+                total = uint24(total + 1);
+            }
+            _ethMintLevelCount[player] = total;
+        }
+
+        uint24 streak = _ethMintStreakCount[player];
+        if (prevLevel != 0 && prevLevel + 1 == level) {
+            if (streak < type(uint24).max) {
+                unchecked {
+                    streak = uint24(streak + 1);
+                }
+            }
+        } else {
+            streak = 1;
+        }
+        _ethMintStreakCount[player] = streak;
+        _ethMintLastLevel[player] = level;
+
+        if (streak >= 2) {
+            luckboxReward = uint256(streak - 1) * 100 * COIN_BASE_UNIT;
+            coinReward = luckboxReward;
+        }
+
+        if (streak == level && level >= 20 && (level % 10 == 0)) {
+            uint256 milestoneBonus = (uint256(level) / 2) * 1000 * COIN_BASE_UNIT;
+            coinReward += milestoneBonus;
+        }
+
+        return (coinReward, luckboxReward);
+    }
+
     function _mintTrophyPlaceholders(uint24 level) private returns (uint256 newBaseTokenId) {
         uint256 startId = _currentIndex;
         _mint(address(game), 3);
@@ -798,7 +844,7 @@ event TrophyStakeChanged(
         }
 
         if (coinClaimed) {
-            coin.bonusCoinflip(msg.sender, coinAmount, true);
+            coin.bonusCoinflip(msg.sender, coinAmount, true, 0);
         }
     }
 
@@ -885,6 +931,18 @@ event TrophyStakeChanged(
 
     function mapStakeBonus(address player) external view returns (uint16) {
         return _mapBonusBps(mapStakeCount[player]);
+    }
+
+    function ethMintLastLevel(address player) external view returns (uint24) {
+        return _ethMintLastLevel[player];
+    }
+
+    function ethMintLevelsCompleted(address player) external view returns (uint24) {
+        return _ethMintLevelCount[player];
+    }
+
+    function ethMintStreak(address player) external view returns (uint24) {
+        return _ethMintStreakCount[player];
     }
 
     function burnieNFT() external {

@@ -747,13 +747,21 @@ contract Purgecoin {
     }
 
     /// @notice Grant a pending coinflip stake during gameplay flows instead of minting PURGE.
-    /// @dev Access: PurgeGame only. Zero address or zero amount are ignored.
-    function bonusCoinflip(address player, uint256 amount, bool rngReady) external {
+    /// @dev Access: PurgeGame or NFT only. Zero address is ignored. Optionally adds a direct luckbox credit.
+    function bonusCoinflip(address player, uint256 amount, bool rngReady, uint256 luckboxBonus) external {
         if (msg.sender != address(purgeGame) && msg.sender != address(purgeGameNFT)) revert OnlyGame();
-        if (!rngReady) {
-            _mint(player, amount);
-        } else {
-            addFlip(player, amount, false);
+        if (player == address(0)) return;
+        if (amount != 0) {
+            if (!rngReady) {
+                _mint(player, amount);
+            } else {
+                addFlip(player, amount, false);
+            }
+        }
+        if (luckboxBonus != 0) {
+            uint256 newLuck = playerLuckbox[player] + luckboxBonus;
+            playerLuckbox[player] = newLuck;
+            _updatePlayerScore(0, player, newLuck);
         }
     }
 
