@@ -226,7 +226,7 @@ contract PurgeGame {
 
 
     /// @notice Snapshot key game state for UI/indexers.
-    /// @return gameState_       FSM state (0=idle,1=pregame,2=purchase,3=airdrop,4=purge)
+    /// @return gameState_       FSM state (0=idle,1=pregame,2=purchase/airdrop,3=purge)
     /// @return phase_           Airdrop sub-phase (0..7)
     /// @return jackpotCounter_  Daily jackpots processed this level
     /// @return price_           Current mint price (wei)
@@ -262,7 +262,7 @@ contract PurgeGame {
         price_ = price;
         carry_ = carryoverForNextLevel;
         prizePoolTarget = lastPrizePool;
-        prizePoolCurrent = (gameState == 4) ? levelPrizePool : prizePool;
+        prizePoolCurrent = (gameState == 3) ? levelPrizePool : prizePool;
         baseTokenId = nft.currentBaseTokenId();
         enoughPurchases = purchaseCount >= PURCHASE_MINIMUM;
         earlyPurgeMask = earlyPurgeJackpotPaidMask;
@@ -318,51 +318,45 @@ contract PurgeGame {
                 revert LuckboxTooSmall();
 
             // Arm VRF when due/new (reward allowed)
-            if (day == dayIdx) revert NotTimeYet();
             // --- State 1 - Pregame ---
             if (_gameState == 1) {
                 _finalizeEndgame(lvl, cap, day, rngWord); // handles payouts, wipes, endgame dist, and jackpots
                 break;
             }
 
-            // --- State 2 - Purchase ---
+            // --- State 2 - Purchase / Airdrop ---
             if (_gameState == 2) {
-                _updateEarlyPurgeJackpots(lvl);
-                bool prizeReady = prizePool >= lastPrizePool;
-                bool readyForMap = (purchaseCount >= PURCHASE_MINIMUM && prizeReady);
-                if (modTwenty == 16) {
-                    readyForMap = prizeReady;
-                }
-                if (_phase == 2 && readyForMap) {
-                    if (_endJackpot(lvl, cap, day, true, rngWord, _phase)) {
-                        phase = 3;
+                if (_phase <= 2) {
+                    _updateEarlyPurgeJackpots(lvl);
+                    bool prizeReady = prizePool >= lastPrizePool;
+                    bool readyForMap = (purchaseCount >= PURCHASE_MINIMUM && prizeReady);
+                    if (modTwenty == 16) {
+                        readyForMap = prizeReady;
                     }
-                    break;
-                } else if (_phase == 3 && jackpotCounter == 0) {
-                    gameState = 3;
-                    renderer.setStartingTraitRemaining(traitRemaining);
-                    if (_processMapBatch(cap)) {
-                        phase = 4;
-                        airdropIndex = 0;
-                        airdropMapsProcessedCount = 0;
+                    if (_phase == 2 && readyForMap) {
+                        if (_endJackpot(lvl, cap, day, true, rngWord, _phase)) {
+                            phase = 3;
+                        }
+                        break;
                     }
+                    if (airdropIndex < pendingMapMints.length) {
+                        _processMapBatch(cap);
+                        break;
+                    }
+                    if (jackpotCounter > 0) {
+                        payDailyJackpot(false, lvl, rngWord);
+                        break;
+                    }
+                    _endJackpot(lvl, cap, day, false, rngWord, _phase);
                     break;
                 }
-                if (airdropIndex < pendingMapMints.length) {
-                    _processMapBatch(cap);
-                    break;
-                }
-                if (jackpotCounter > 0) {
-                    payDailyJackpot(false, lvl, rngWord);
-                    break;
-                }
-                _endJackpot(lvl, cap, day, false, rngWord, _phase);
-                break;
-            }
 
-            // --- State 3 - Airdrop ---
-            if (_gameState == 3) {
                 if (_phase == 3) {
+                    if (
+                        jackpotCounter == 0 && airdropIndex == 0 && airdropMapsProcessedCount == 0
+                    ) {
+                        renderer.setStartingTraitRemaining(traitRemaining);
+                    }
                     if (_processMapBatch(cap)) {
                         phase = 4;
                         airdropIndex = 0;
@@ -370,12 +364,14 @@ contract PurgeGame {
                     }
                     break;
                 }
+
                 if (_phase == 4) {
                     if (payMapJackpot(cap, lvl, rngWord)) {
                         phase = 5;
                     }
                     break;
                 }
+
                 if (_phase == 5) {
                     if (_processNftBatch(cap)) {
                         delete pendingNftMints;
@@ -387,26 +383,27 @@ contract PurgeGame {
                     }
                     break;
                 }
+
                 if (_endJackpot(lvl, cap, day, false, rngWord, _phase)) {
                     nft.recordSeasonMinted(purchaseCount);
                     levelStartTime = ts;
-                    gameState = 4;
+                    gameState = 3;
                 }
                 break;
             }
 
-            // --- State 4 - Purge ---
-            if (_gameState == 4) {
+            // --- State 3 - Purge ---
+            if (_gameState == 3) {
                 if (_phase == 6) {
                     if (modTwenty == 16 && jackpotCounter < MAP_FIRST_BATCH) {
                         while (jackpotCounter < MAP_FIRST_BATCH) {
                             payDailyJackpot(true, lvl, rngWord);
-                            if (gameState != 4) break;
+                            if (gameState != 3) break;
                         }
                     } else {
                         payDailyJackpot(true, lvl, rngWord);
                     }
-                    if (gameState != 4) break;
+                    if (gameState != 3) break;
                     if (modTwenty != 16) {
                         coinContract.triggerCoinJackpot(rngWord);
                     }
@@ -444,7 +441,7 @@ contract PurgeGame {
         uint24 lvl = level;
         uint8 state = gameState;
         if (quantity == 0 || quantity > 100) revert InvalidQuantity();
-        if (state != 1 && state != 2) revert NotTimeYet();
+        if (state == 3) revert NotTimeYet();
         if ((lvl % 20) == 16) revert NotTimeYet();
         uint256 _priceCoin = priceCoin;
         _enforceCenturyLuckbox(lvl, _priceCoin);
@@ -523,12 +520,11 @@ contract PurgeGame {
         uint8 state = gameState;
         if (quantity == 0) revert InvalidQuantity();
         uint24 lvl = level;
-        if (state == 4) {
+        if (state == 3) {
             unchecked {
                 ++lvl;
             }
         }
-        if (state == 3 || state == 0)  revert NotTimeYet();
         if (nft.rngLocked()) revert RngNotReady();
         _enforceCenturyLuckbox(lvl, priceUnit);
         // Pricing / rebates
@@ -560,7 +556,7 @@ contract PurgeGame {
     /// @dev
     /// Security:
     /// - Blocks contract calls (`extcodesize(caller()) != 0`) and `tx.origin` relays.
-    /// - Requires `gameState == 4` and a consumed RNG session.
+    /// - Requires `gameState == 3` and a consumed RNG session.
     /// Accounting:
     /// - For each token, burns it, updates daily counters and remaining-per-trait,
     ///   and appends four tickets (one per trait) to the current level’s buckets.
@@ -576,7 +572,7 @@ contract PurgeGame {
         }
         if (extSize != 0 || tx.origin != msg.sender) revert E();
         if (nft.rngLocked()) revert RngNotReady();
-        if (gameState != 4) revert NotTimeYet();
+        if (gameState != 3) revert NotTimeYet();
 
         uint256 count = tokenIds.length;
         if (count == 0 || count > 75) revert InvalidQuantity();
@@ -1291,9 +1287,10 @@ contract PurgeGame {
     // --- Flips, VRF, payments, rarity ----------------------------------------------------------------
 
     function _ensureRngReady(uint48 day) internal returns (uint256 word) {
+        if (day == dailyIdx) revert NotTimeYet();
+
         word = nft.currentRngWord();
-        if (word == 0) revert RngNotReady();
-        if (day != dailyIdx) {
+        if (word == 0) {
             if (!nft.rngLocked()) {
                 nft.requestRng();
             }
@@ -1314,7 +1311,7 @@ contract PurgeGame {
         if (msg.value != expectedWei) revert E();
 
         uint8 state = gameState;
-        if (state == 4 || state == 1) {
+        if (state == 3 || state == 1) {
             unchecked {
                 nextPrizePool += msg.value;
             }
@@ -1383,9 +1380,9 @@ contract PurgeGame {
         if (phase <= 1) {
             throttleWrites = true;
             phase = 2;
-        }else if (phase == 3) {
-            bool firstStateThreeBatch = (gameState == 3 && airdropMapsProcessedCount == 0);
-            if (firstStateThreeBatch) {
+        } else if (phase == 3) {
+            bool firstAirdropBatch = (airdropIndex == 0 && airdropMapsProcessedCount == 0);
+            if (firstAirdropBatch) {
                 throttleWrites = true;
             }
         }

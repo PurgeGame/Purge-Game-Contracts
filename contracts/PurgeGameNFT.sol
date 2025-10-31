@@ -210,7 +210,7 @@ event TrophyStakeChanged(
     function totalSupply() external view returns (uint256) {
         uint256 trophyCount = mapTrophyIds.length + levelTrophyIds.length + affiliateTrophyIds.length;
 
-        if (game.gameState() == 4) {
+        if (game.gameState() == 3) {
             uint256 minted = seasonMintedSnapshot;
             uint256 purged = seasonPurgedCount;
             uint256 active = minted > purged ? minted - purged : 0;
@@ -847,7 +847,7 @@ event TrophyStakeChanged(
             }
             emit TrophyStakeChanged(sender, tokenId, isMap ? 1 : 2, true, count, mapBonus);
         } else {
-            if (game.gameState() != 4) revert TrophyStakeViolation(_STAKE_ERR_LOCKED);
+            if (game.gameState() != 3) revert TrophyStakeViolation(_STAKE_ERR_LOCKED);
             if (!currentlyStaked) revert TrophyStakeViolation(_STAKE_ERR_NOT_STAKED);
             trophyStaked[tokenId] = false;
             uint8 count;
