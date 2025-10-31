@@ -21,7 +21,8 @@ interface IPurgeGameNFT {
     function mapStakeBonus(address player) external view returns (uint16);
     function affiliateStakeBonus(address player) external view returns (uint8);
     function rngLocked() external view returns (bool);
-
+    function awardStakeTrophy(address to, uint24 level, uint256 principal) external;
+    function stakedTrophySample(uint64 salt) external view returns (address);
 
 }
 
@@ -138,6 +139,12 @@ contract Purgecoin {
         uint24 level;
     }
 
+    struct StakeTrophyCandidate {
+        address player;
+        uint256 principal;
+        uint24 level;
+    }
+
     // ---------------------------------------------------------------------
     // Constants (units & limits)
     // ---------------------------------------------------------------------
@@ -227,6 +234,7 @@ contract Purgecoin {
     // Staking
     mapping(uint24 => address[]) private stakeAddr; // level => stakers
     mapping(uint24 => mapping(address => uint256)) private stakeAmt; // level => packed stake lanes (principal/risk)
+    StakeTrophyCandidate private stakeTrophyCandidate;
 
     // Leaderboard index maps (1-based positions)
     mapping(address => uint8) private luckboxPos;
@@ -456,6 +464,29 @@ contract Purgecoin {
         if (strictCapacity) revert StakeInvalid();
         // all slots occupied with different maturities
         revert StakeInvalid();
+    }
+
+    function _recordStakeTrophyCandidate(uint24 level, address player, uint256 principal) private {
+        if (player == address(0) || principal == 0) return;
+        StakeTrophyCandidate storage cand = stakeTrophyCandidate;
+        if (cand.level != level) {
+            stakeTrophyCandidate = StakeTrophyCandidate({player: player, principal: principal, level: level});
+            return;
+        }
+        if (principal > cand.principal) {
+            cand.player = player;
+            cand.principal = principal;
+        }
+    }
+
+    function _finalizeStakeTrophy(uint24 level, bool award) private {
+        StakeTrophyCandidate memory cand = stakeTrophyCandidate;
+        if (award && cand.level == level && cand.player != address(0) && cand.principal != 0) {
+            purgeGameNFT.awardStakeTrophy(cand.player, level, cand.principal);
+        }
+        if (cand.level == level || !award) {
+            delete stakeTrophyCandidate;
+        }
     }
 
     /// @notice Burn PURGED to open a future "stake window" targeting `targetLevel` with a risk radius.
@@ -817,6 +848,9 @@ contract Purgecoin {
             if (st == SS_IDLE) {
                 st = 0;
                 scanCursor = 0;
+                if (stakeTrophyCandidate.level != level) {
+                    delete stakeTrophyCandidate;
+                }
             }
 
             if (st != SS_DONE) {
@@ -824,6 +858,7 @@ contract Purgecoin {
                 if (!win) {
                     scanCursor = SS_DONE;
                     stakeLevelComplete = level;
+                    _finalizeStakeTrophy(level, false);
                 } else {
                     // Win: process stakers at this level in slices.
                     address[] storage roster = stakeAddr[level];
@@ -840,6 +875,7 @@ contract Purgecoin {
                                 if (lane != 0) {
                                     (uint256 principal, uint8 riskFactor) = _decodeStakeLane(lane);
                                     if (riskFactor <= 1) {
+                                        _recordStakeTrophyCandidate(level, player, principal);
                                         uint256 fivePct = principal / 20;
                                         uint256 newLuck = playerLuckbox[player] + fivePct;
                                         playerLuckbox[player] = newLuck;
@@ -867,13 +903,19 @@ contract Purgecoin {
                             }
                         }
 
-                        scanCursor = (en == len) ? SS_DONE : en;
+                        bool sliceFinished = (en == len);
+                        scanCursor = sliceFinished ? SS_DONE : en;
+                        if (sliceFinished) {
+                            stakeLevelComplete = level;
+                            _finalizeStakeTrophy(level, true);
+                        }
                         return false; // more stake processing remains
                     }
 
                     // Finished this phase.
                     scanCursor = SS_DONE;
                     stakeLevelComplete = level;
+                    _finalizeStakeTrophy(level, true);
                     return false; // allow caller to continue in a subsequent call
                 }
             }
@@ -1228,48 +1270,39 @@ contract Purgecoin {
                         toReturn += prize;
                     }
                 }
-                // (4) Luckbox leaderboard #1/#2/#3: 7%/5%/3%
+                // (4) Staked trophy bonuses: 5% / 5% / 2.5% / 2.5%
                 {
-                    uint256 p1 = (P * 7) / 100;
-                    uint256 p2 = (P * 5) / 100;
-                    uint256 p3 = (P * 3) / 100;
-                    address w1 = luckboxLeaderboard[0].player;
-                    address w2 = luckboxLeaderboard[1].player;
-                    address w3 = luckboxLeaderboard[2].player;
-                    if (_eligible(w1, lbMin)) {
-                        tmpW[n] = w1;
-                        tmpA[n] = p1;
-                        unchecked {
-                            ++n;
+                    uint256[4] memory shares = [
+                        (P * 5) / 100,
+                        (P * 5) / 100,
+                        (P * 25) / 1000,
+                        (P * 25) / 1000
+                    ];
+                    for (uint256 s; s < 4; ) {
+                        uint256 prize = shares[s];
+                        address w = purgeGameNFT.stakedTrophySample(uint64(uint256(keccak256(abi.encodePacked(executeWord, s, "st")))));
+                        if (w != address(0)) {
+                            tmpW[n] = w;
+                            tmpA[n] = prize;
+                            unchecked {
+                                ++n;
+                            }
+                            credited += prize;
+                        } else {
+                            toReturn += prize;
                         }
-                        credited += p1;
-                    } else {
-                        toReturn += p1;
-                    }
-                    if (_eligible(w2, lbMin)) {
-                        tmpW[n] = w2;
-                        tmpA[n] = p2;
                         unchecked {
-                            ++n;
+                            ++s;
                         }
-                        credited += p2;
-                    } else {
-                        toReturn += p2;
-                    }
-                    if (_eligible(w3, lbMin)) {
-                        tmpW[n] = w3;
-                        tmpA[n] = p3;
-                        unchecked {
-                            ++n;
-                        }
-                        credited += p3;
-                    } else {
-                        toReturn += p3;
                     }
                 }
 
                 // Scatter the remainder equally across shard-stride participants
-                uint256 scatter = P - credited - toReturn;
+                uint256 scatter = (P * 40) / 100;
+                uint256 unallocated = P - credited - toReturn - scatter;
+                if (unallocated != 0) {
+                    toReturn += unallocated;
+                }
                 if (limit >= 10 && bs.offset < limit) {
                     uint256 occurrences = 1 + (uint256(limit) - 1 - bs.offset) / 10; // count of indices visited
                     uint256 perWei = scatter / occurrences;

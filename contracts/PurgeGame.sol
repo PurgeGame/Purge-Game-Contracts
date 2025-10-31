@@ -92,6 +92,8 @@ interface IPurgeGameNFT {
         returns (uint256 coinReward, uint256 luckboxReward);
 
     function ethMintLastLevel(address player) external view returns (uint24);
+
+    function stakedTrophySample(uint64 salt) external view returns (address);
 }
 
 // ===========================================================================

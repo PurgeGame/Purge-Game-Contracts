@@ -65,6 +65,7 @@ contract IconRendererTrophy32 {
 
     uint256 private constant MAP_TROPHY_FLAG = uint256(1) << 200;
     uint256 private constant AFFILIATE_TROPHY_FLAG = uint256(1) << 201;
+    uint256 private constant STAKE_TROPHY_FLAG = uint256(1) << 202;
     string private constant MAP_BADGE_PATH =
         "M14.3675 2.15671C14.7781 2.01987 15.2219 2.01987 15.6325 2.15671L20.6325 3.82338C21.4491 4.09561 22 4.85988 22 5.72074V19.6126C22 20.9777 20.6626 21.9416 19.3675 21.5099L15 20.0541L9.63246 21.8433C9.22192 21.9801 8.77808 21.9801 8.36754 21.8433L3.36754 20.1766C2.55086 19.9044 2 19.1401 2 18.2792V4.38741C2 3.0223 3.33739 2.05836 4.63246 2.49004L9 3.94589L14.3675 2.15671ZM15 4.05408L9.63246 5.84326C9.22192 5.9801 8.77808 5.9801 8.36754 5.84326L4 4.38741V18.2792L9 19.9459L14.3675 18.1567C14.7781 18.0199 15.2219 18.0199 15.6325 18.1567L20 19.6126V5.72074L15 4.05408ZM13.2929 8.29288C13.6834 7.90235 14.3166 7.90235 14.7071 8.29288L15.5 9.08577L16.2929 8.29288C16.6834 7.90235 17.3166 7.90235 17.7071 8.29288C18.0976 8.6834 18.0976 9.31657 17.7071 9.70709L16.9142 10.5L17.7071 11.2929C18.0976 11.6834 18.0976 12.3166 17.7071 12.7071C17.3166 13.0976 16.6834 13.0976 16.2929 12.7071L15.5 11.9142L14.7071 12.7071C14.3166 13.0976 13.6834 13.0976 13.2929 12.7071C12.9024 12.3166 12.9024 11.6834 13.2929 11.2929L14.0858 10.5L13.2929 9.70709C12.9024 9.31657 12.9024 8.6834 13.2929 8.29288ZM6 16C6.55228 16 7 15.5523 7 15C7 14.4477 6.55228 14 6 14C5.44772 14 5 14.4477 5 15C5 15.5523 5.44772 16 6 16ZM9 12C9 12.5523 8.55228 13 8 13C7.44772 13 7 12.5523 7 12C7 11.4477 7.44772 11 8 11C8.55228 11 9 11.4477 9 12ZM11 12C11.5523 12 12 11.5523 12 11C12 10.4477 11.5523 9.99998 11 9.99998C10.4477 9.99998 10 10.4477 10 11C10 11.5523 10.4477 12 11 12Z";
     string private constant AFFILIATE_BADGE_PATH =
@@ -167,6 +168,7 @@ contract IconRendererTrophy32 {
         uint16 exTr = _readExterminatedTrait(data);
         bool isMap = (data & MAP_TROPHY_FLAG) != 0;
         bool isAffiliate = (data & AFFILIATE_TROPHY_FLAG) != 0;
+        bool isStake = (data & STAKE_TROPHY_FLAG) != 0;
 
         string memory lvlStr = (lvl == 0) ? "TBD" : uint256(lvl).toString();
         string memory trophyType;
@@ -177,6 +179,9 @@ contract IconRendererTrophy32 {
         } else if (isAffiliate) {
             trophyType = "Top Affiliate's";
             trophyLabel = "Top Affiliate's Trophy";
+        } else if (isStake) {
+            trophyType = "Stake";
+            trophyLabel = "Stake Trophy";
         } else {
             trophyType = "Winner's";
             trophyLabel = "Winner's Trophy";
@@ -201,6 +206,12 @@ contract IconRendererTrophy32 {
                 lvlStr,
                 " Top Affiliate's champion."
             );
+        } else if (isStake && exTr == 0xFFFD) {
+            desc = string.concat(
+                "Awarded for Level ",
+                lvlStr,
+                " largest stake maturation."
+            );
         } else {
             desc = string.concat("Awarded for Level ", lvlStr);
             desc = string.concat(
@@ -209,7 +220,7 @@ contract IconRendererTrophy32 {
             );
         }
 
-        string memory img = _trophySvg(tokenId, exTr, isMap, isAffiliate, lvl);
+        string memory img = _trophySvg(tokenId, exTr, isMap, isAffiliate, isStake, lvl);
         return _pack(tokenId, true, img, lvl, desc, trophyType);
     }
 
@@ -221,7 +232,7 @@ contract IconRendererTrophy32 {
         uint256 data
     ) private pure returns (uint16) {
         uint16 ex16 = uint16((data >> 152) & 0xFFFF);
-        if (ex16 >= 0xFFFE) return ex16;
+        if (ex16 >= 0xFFFD) return ex16;
         return uint16(uint8(ex16));
     }
 
@@ -255,13 +266,14 @@ contract IconRendererTrophy32 {
         uint16 exterminatedTrait,
         bool isMap,
         bool isAffiliate,
+        bool isStake,
         uint24 lvl
     ) private view returns (string memory) {
         uint32 innerSide = _innerSquareSide();
         string memory diamondPath = icons.diamond();
 
-        if (exterminatedTrait == 0xFFFF) {
-            uint8 ringIdx = isMap ? 2 : (isAffiliate ? 4 : 3);
+        if (exterminatedTrait == 0xFFFF || isStake) {
+            uint8 ringIdx = isMap ? 2 : (isAffiliate ? 4 : (isStake ? 5 : 3));
             string memory borderColor = _resolve(
                 tokenId,
                 0,
