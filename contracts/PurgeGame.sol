@@ -91,6 +91,7 @@ interface IPurgeGameNFT {
         external
         returns (uint256 coinReward, uint256 luckboxReward);
 
+    function ethMintLastLevel(address player) external view returns (uint24);
 }
 
 // ===========================================================================
@@ -138,6 +139,7 @@ contract PurgeGame {
     uint256 private constant TROPHY_FLAG_MAP = uint256(1) << 200; // Marks trophies sourced from MAP jackpots
     uint8 private constant MAP_FIRST_BATCH = 8; // Consecutive daily jackpots on map-only levels before normal cadence resumes
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
+    uint256 private constant LUCKBOX_BYPASS_THRESHOLD = 100_000 * 1_000_000; // 100k PURGED (6 decimals)
 
     // -----------------------
     // Price
@@ -1339,9 +1341,13 @@ contract PurgeGame {
     }
 
     function _enforceCenturyLuckbox(uint24 lvl, uint256 unit) private view {
-        if (lvl % 100 == 0) {
+        if (lvl != 0 && (lvl % 100 == 0)) {
+            uint256 luck = coin.playerLuckbox(msg.sender);
             uint256 required = 20 * unit * ((lvl / 100) + 1);
-            if (coin.playerLuckbox(msg.sender) < required) revert LuckboxTooSmall();
+            if (luck < required) revert LuckboxTooSmall();
+            if (luck < required + LUCKBOX_BYPASS_THRESHOLD) {
+                if (uint256(nft.ethMintLastLevel(msg.sender)) + 1 != uint256(lvl)) revert LuckboxTooSmall();
+            }
         }
     }
 

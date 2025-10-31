@@ -580,15 +580,33 @@ event TrophyStakeChanged(
         _ethMintStreakCount[player] = streak;
         _ethMintLastLevel[player] = level;
 
+        uint256 streakReward;
         if (streak >= 2) {
             uint256 capped = streak >= 61 ? 60 : uint256(streak - 1);
-            luckboxReward = capped * 100 * COIN_BASE_UNIT;
-            coinReward = luckboxReward;
+            streakReward = capped * 100 * COIN_BASE_UNIT;
+        }
+
+        uint256 totalReward;
+        if (total >= 2) {
+            uint256 cappedTotal = total >= 61 ? 60 : uint256(total - 1);
+            totalReward = (cappedTotal * 100 * COIN_BASE_UNIT * 30) / 100;
+        }
+
+        if (streakReward != 0 || totalReward != 0) {
+            unchecked {
+                luckboxReward = streakReward + totalReward;
+                coinReward = luckboxReward;
+            }
         }
 
         if (streak == level && level >= 20 && (level % 10 == 0)) {
             uint256 milestoneBonus = (uint256(level) / 2) * 1000 * COIN_BASE_UNIT;
             coinReward += milestoneBonus;
+        }
+
+        if (total >= 20 && (total % 10 == 0)) {
+            uint256 totalMilestone = (uint256(total) / 2) * 1000 * COIN_BASE_UNIT;
+            coinReward += (totalMilestone * 30) / 100;
         }
 
         return (coinReward, luckboxReward);
