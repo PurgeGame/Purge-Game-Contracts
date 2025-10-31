@@ -442,12 +442,13 @@ contract PurgeGame {
     function purchase(uint256 quantity, bool payInCoin, bytes32 affiliateCode) external payable {
         uint8 _phase = phase;
         uint24 lvl = level;
+        uint8 state = gameState;
         if (quantity == 0 || quantity > 100) revert InvalidQuantity();
-        if (gameState != 2 || (lvl % 20) == 16) revert NotTimeYet();
+        if (state != 1 && state != 2) revert NotTimeYet();
+        if ((lvl % 20) == 16) revert NotTimeYet();
         uint256 _priceCoin = priceCoin;
         _enforceCenturyLuckbox(lvl, _priceCoin);
-        uint256 randomWord = nft.currentRngWord();
-        if (randomWord == 0) revert RngNotReady();
+        if (nft.rngLocked()) revert RngNotReady();
 
         // Payment handling (ETH vs coin)
         uint256 bonusCoinReward = (quantity / 10) * _priceCoin;
@@ -473,14 +474,9 @@ contract PurgeGame {
         // NOTE: tokenIds are not minted yet; only trait counters are updated.
         uint256 baseTokenId = nft.currentBaseTokenId();
         uint256 tokenIdStart = baseTokenId + uint256(purchaseCount);
-        uint256 randSeed = randomWord | 1;
         for (uint32 i; i < quantity; ) {
             uint256 _tokenId = tokenIdStart + i;
-            unchecked {
-                randSeed = randSeed * 0x9E3779B97F4A7C15 + _tokenId;
-                randSeed ^= randSeed >> 128;
-            }
-            uint256 rand = randSeed;
+            uint256 rand = uint256(keccak256(abi.encodePacked(_tokenId, lvl)));
             uint8 tA = _getTrait(uint64(rand));
             uint8 tB = _getTrait(uint64(rand >> 64)) | 64;
             uint8 tC = _getTrait(uint64(rand >> 128)) | 128;
@@ -525,15 +521,15 @@ contract PurgeGame {
         uint256 priceUnit = priceCoin;
         uint8 _phase = phase;
         uint8 state = gameState;
-        if (nft.rngLocked()) revert RngNotReady();
         if (quantity == 0) revert InvalidQuantity();
-        if (state != 2 && state != 4) revert NotTimeYet();
         uint24 lvl = level;
         if (state == 4) {
             unchecked {
                 ++lvl;
             }
         }
+        if (state == 3 || state == 0)  revert NotTimeYet();
+        if (nft.rngLocked()) revert RngNotReady();
         _enforceCenturyLuckbox(lvl, priceUnit);
         // Pricing / rebates
         uint256 coinCost = quantity * (priceUnit / 4);
@@ -822,7 +818,7 @@ contract PurgeGame {
                 nextPrizePool = 0;
             }
             gameState = 2;
-            }
+        }
 
         if (pend.level == 0) {
             return;
@@ -1317,7 +1313,8 @@ contract PurgeGame {
         uint256 expectedWei = (price * scaledQty) / 100;
         if (msg.value != expectedWei) revert E();
 
-        if (gameState == 4) {
+        uint8 state = gameState;
+        if (state == 4 || state == 1) {
             unchecked {
                 nextPrizePool += msg.value;
             }
