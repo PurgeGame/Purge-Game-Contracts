@@ -937,6 +937,7 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
         bool isMap,
         bool stake
     ) external {
+        if (rngLockedFlag) revert CoinPaused();
         address sender = msg.sender;
         uint256 info = trophyData[tokenId];
         bool mapTrophy = (info & TROPHY_FLAG_MAP) != 0;
