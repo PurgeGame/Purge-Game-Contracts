@@ -247,6 +247,7 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
         linkToken = linkToken_;
         rngFulfilled = true;
         rngLockedFlag = false;
+        _currentIndex = 97;
     }
 
     function totalSupply() external view returns (uint256) {
@@ -728,44 +729,35 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
             TROPHY_FLAG_STAKE;
     }
 
-    function _mintedCountForLevel(uint24 level) private pure returns (uint256 count) {
-        count = 4;
-        if (_hasBafTrophy(level)) count += 1;
-        if (_hasDecimatorTrophy(level)) count += 1;
-    }
-
-    function _placeholderStart(uint24 level) private view returns (uint256 startId) {
+    function _placeholderBase(uint24 level) private view returns (uint256 base) {
         uint24 currentLevel = game.level();
-        uint256 mintedCount = _mintedCountForLevel(level);
         if (level == currentLevel) {
-            uint256 base = _currentBaseTokenId();
-            return base - mintedCount;
+            base = _currentBaseTokenId();
+            if (base == 0) revert InvalidToken();
+            return base;
         }
         if (level + 1 == currentLevel) {
-            uint256 base = _previousBaseTokenId();
-            return base - mintedCount;
+            base = _previousBaseTokenId();
+            if (base == 0) revert InvalidToken();
+            return base;
         }
         revert InvalidToken();
     }
 
     function _placeholderTokenId(uint24 level, TrophyKind kind) private view returns (uint256) {
-        bool hasBaf = _hasBafTrophy(level);
-        bool hasDec = _hasDecimatorTrophy(level);
-        uint256 startId = _placeholderStart(level);
+        uint256 base = _placeholderBase(level);
+        if (kind == TrophyKind.Level) return base - 1;
+        if (kind == TrophyKind.Map) return base - 2;
+        if (kind == TrophyKind.Affiliate) return base - 3;
+        if (kind == TrophyKind.Stake) return base - 4;
         if (kind == TrophyKind.Baf) {
-            if (!hasBaf) revert InvalidToken();
-            return startId;
+            if (!_hasBafTrophy(level)) revert InvalidToken();
+            return base - 5;
         }
         if (kind == TrophyKind.Decimator) {
-            if (!hasDec) revert InvalidToken();
-            return startId + (hasBaf ? 1 : 0);
+            if (!_hasDecimatorTrophy(level)) revert InvalidToken();
+            return base - 5;
         }
-
-        uint256 baseOffset = (hasBaf ? 1 : 0) + (hasDec ? 1 : 0);
-        if (kind == TrophyKind.Map) return startId + baseOffset;
-        if (kind == TrophyKind.Level) return startId + baseOffset + 1;
-        if (kind == TrophyKind.Affiliate) return startId + baseOffset + 2;
-        if (kind == TrophyKind.Stake) return startId + baseOffset + 3;
         revert InvalidToken();
     }
 
@@ -774,29 +766,29 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
         bool mintBaf = _hasBafTrophy(level);
         bool mintDec = _hasDecimatorTrophy(level);
 
-        uint256 mintedCount = _mintedCountForLevel(level);
+        uint256 placeholderCount = mintBaf || mintDec ? 5 : 4;
         uint256 startId = _currentIndex;
+        uint256 mintedCount = placeholderCount;
+
+        uint256 projectedLastId = startId + mintedCount - 1;
+        uint256 remainder = projectedLastId % 100;
+        if (remainder != 0) {
+            mintedCount += 100 - remainder;
+        }
+
         _mint(address(game), mintedCount);
 
-        uint256 nextId = startId;
-        if (mintBaf) {
-            uint256 bafTokenId = nextId++;
-            trophyData[bafTokenId] = baseData | TROPHY_FLAG_BAF;
+        uint256 firstPlaceholderId = startId + mintedCount - placeholderCount;
+        uint256 nextId = firstPlaceholderId;
+
+        if (mintBaf || mintDec) {
+            uint256 specialTokenId = nextId++;
+            if (mintBaf) {
+                trophyData[specialTokenId] = baseData | TROPHY_FLAG_BAF;
+            } else {
+                trophyData[specialTokenId] = baseData | TROPHY_FLAG_DECIMATOR;
+            }
         }
-
-        if (mintDec) {
-            uint256 decTokenId = nextId++;
-            trophyData[decTokenId] = baseData | TROPHY_FLAG_DECIMATOR;
-        }
-
-        uint256 mapTokenId = nextId++;
-        trophyData[mapTokenId] = baseData | TROPHY_FLAG_MAP;
-
-        uint256 levelTokenId = nextId++;
-        trophyData[levelTokenId] = baseData;
-
-        uint256 affiliateTokenId = nextId++;
-        trophyData[affiliateTokenId] = baseData | TROPHY_FLAG_AFFILIATE;
 
         uint256 stakeTokenId = nextId++;
         if (level >= STAKE_PREVIEW_START_LEVEL) {
@@ -805,7 +797,16 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
             trophyData[stakeTokenId] = 0;
         }
 
-        newBaseTokenId = nextId;
+        uint256 affiliateTokenId = nextId++;
+        trophyData[affiliateTokenId] = baseData | TROPHY_FLAG_AFFILIATE;
+
+        uint256 mapTokenId = nextId++;
+        trophyData[mapTokenId] = baseData | TROPHY_FLAG_MAP;
+
+        uint256 levelTokenId = nextId++;
+        trophyData[levelTokenId] = baseData;
+
+        newBaseTokenId = startId + mintedCount;
     }
 
     function clearStakePreview(uint24 level) external onlyCoinContract {
