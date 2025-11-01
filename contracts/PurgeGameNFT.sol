@@ -163,6 +163,7 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
     mapping(address => uint8) private levelStakeCount;
     mapping(address => uint8) private affiliateStakeCount;
     mapping(address => uint8) private mapStakeCount;
+    mapping(address => uint24) private affiliateStakeBaseLevel;
     mapping(address => uint24) private _ethMintLastLevel;
     mapping(address => uint24) private _ethMintLevelCount;
     mapping(address => uint24) private _ethMintStreakCount;
@@ -1081,6 +1082,8 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
         bool targetAffiliate = !isMap && affiliateTrophy;
         bool targetLevel = !isMap && !affiliateTrophy && levelTrophy;
 
+        uint24 effectiveLevel = _effectiveStakeLevel();
+
         if (targetMap) {
             if (!mapTrophy) revert TrophyStakeViolation(_STAKE_ERR_NOT_MAP);
         } else if (targetAffiliate) {
@@ -1115,14 +1118,13 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
                 discountBps = uint16(_stakeDiscountPct(current) * 100);
                 kind = 1;
             } else if (targetAffiliate) {
-                uint8 current = affiliateStakeCount[sender];
-                if (current >= AFFILIATE_STAKE_MAX) revert StakeInvalid();
-                unchecked {
-                    current += 1;
-                }
+                uint8 before = affiliateStakeCount[sender];
+                if (before >= AFFILIATE_STAKE_MAX) revert StakeInvalid();
+                affiliateStakeBaseLevel[sender] = effectiveLevel;
+                uint8 current = before + 1;
                 affiliateStakeCount[sender] = current;
                 count = current;
-                discountBps = uint16(_stakeDiscountPct(current) * 100);
+                discountBps = uint16(_currentAffiliateBonus(sender, effectiveLevel) * 100);
                 kind = 2;
             } else {
                 uint8 current = levelStakeCount[sender];
@@ -1161,8 +1163,9 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
                     current -= 1;
                 }
                 affiliateStakeCount[sender] = current;
+                affiliateStakeBaseLevel[sender] = effectiveLevel;
                 count = current;
-                discountBps = uint16(_stakeDiscountPct(current) * 100);
+                discountBps = uint16(_currentAffiliateBonus(sender, effectiveLevel) * 100);
                 kind = 2;
             } else {
                 uint8 current = levelStakeCount[sender];
@@ -1235,8 +1238,8 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
     function affiliateStakeBonus(address player) external view returns (uint8) {
         uint8 count = affiliateStakeCount[player];
         if (count == 0) return 0;
-        if (count >= 4) return 25;
-        return 10 + (count - 1) * 5;
+        uint24 effective = _effectiveStakeLevel();
+        return _currentAffiliateBonus(player, effective);
     }
 
     function ethMintLastLevel(address player) external view returns (uint24) {
@@ -1447,6 +1450,30 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
         if (count == 0) return 0;
         if (count >= 20) return 20;
         return count;
+    }
+
+    function _effectiveStakeLevel() private view returns (uint24) {
+        uint24 lvl = game.level();
+
+        uint8 state = game.gameState();
+        if (state != 3) {
+            unchecked {
+                return lvl - 1;
+            }
+        }
+        return lvl;
+    }
+
+    function _currentAffiliateBonus(address player, uint24 effectiveLevel) private view returns (uint8) {
+        uint8 count = affiliateStakeCount[player];
+        if (count == 0) return 0;
+        uint24 baseLevel = affiliateStakeBaseLevel[player];
+        uint24 levelsHeld = effectiveLevel > baseLevel ? effectiveLevel - baseLevel : 0;
+        uint256 effectiveBonus = uint256(levelsHeld) * uint256(count);
+        uint256 cap = 10 + (uint256(count - 1) * 5);
+        if (cap > 25) cap = 25;
+        if (effectiveBonus > cap) effectiveBonus = cap;
+        return uint8(effectiveBonus);
     }
 
 }
