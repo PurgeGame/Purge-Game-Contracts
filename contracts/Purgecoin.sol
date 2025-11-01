@@ -215,6 +215,8 @@ contract Purgecoin {
 
     // Daily jackpot accounting
     uint256 private dailyCoinBurn;
+    uint256 private prevDailyCoinBurn;
+    address private lastBiggestFlipPlayer;
     uint256 private currentTenthPlayerBonusPool;
 
     // Coinflip roster stored as a reusable ring buffer.
@@ -1029,6 +1031,7 @@ contract Purgecoin {
         payoutIndex = uint32(end);
         // --- Phase 4: cleanup (single shot) -------------------------------------------
         if (end >= totalPlayers) {
+            lastBiggestFlipPlayer = topBettors[0].player;
             PlayerScore[4] memory cached = topBettors;
             uint8 len = topLen;
             delete topBettors;
@@ -1057,144 +1060,27 @@ contract Purgecoin {
         return false;
     }
 
-    /// @notice Distribute "coin jackpots" after the daily coinflip result is known.
-    /// @dev Sequence (PurgeGame only):
-    /// - If the flip loses, reset `dailyCoinBurn` and exit.
-    /// - On a win:
-    ///   1. Add 15% of `max(dailyCoinBurn, 8_000 PURGED)` to the bounty.
-    ///   2. Allocate four trait jackpots worth 3.75% each to the highest-luckbox candidate (or roll into the bounty if nobody qualifies).
-    ///   3. Use the 30% pool to reward the largest bettor, a random pick among ranks #3/#4, arm the tenth-player bonus, and share the remainder across luckbox leaders with >= 1000 PURGED staked in flips; any dust returns to the bounty.
-    /// - Reset `dailyCoinBurn` for the next cycle.
-    function triggerCoinJackpot(uint256 randWord) external onlyPurgeGameContract {
+    function prepareCoinJackpot() external onlyPurgeGameContract returns (uint256 poolAmount, address biggestFlip) {
+        uint256 burnBase = prevDailyCoinBurn;
+        uint256 pool = (burnBase * 60) / 100;
+        uint256 minPool = 10_000 * MILLION;
+        if (pool < minPool) pool = minPool;
 
+        poolAmount = pool;
+        biggestFlip = lastBiggestFlipPlayer;
+        lastBiggestFlipPlayer = address(0);
 
-        uint256 burnBase = dailyCoinBurn;
-        if (burnBase < 8000 * MILLION) burnBase = 8000 * MILLION;
-
-        // ----- (A) Always add 15% to the bounty -----
-        _addToBounty((burnBase * 15) / 100);
-        bool flipWin = (randWord & 1) == 1;
-        if (!flipWin) {
-            dailyCoinBurn = 0;
-            return;
-        }
-
-
-
-        // ----- (B) 4x trait jackpots from another 15% (3.75% each) -----
-        {
-            uint256 traitPool = (burnBase * 15) / 100;
-            if (traitPool != 0) {
-                uint256 traitRnd = uint256(keccak256(abi.encodePacked(randWord, "CoinJackpot")));
-                uint256 perTraitPrize = traitPool / 4; // remainder intentionally not used
-
-                for (uint8 i; i < 4; ) {
-                    if (i > 0) traitRnd = uint256(keccak256(abi.encodePacked(traitRnd, i)));
-                    uint8 winningTrait = uint8(traitRnd & 0x3F) + (i << 6);
-
-                    // Up to 5 candidates sampled by the game; pick highest luckbox.
-                    address[] memory candidates = purgeGame.getJackpotWinners(randWord, winningTrait, 5, uint8(42 + i));
-                    address winnerAddr = getTopLuckbox(candidates);
-
-                    emit CoinJackpotPaid(winningTrait, winnerAddr, perTraitPrize);
-                    if (winnerAddr != address(0)) {
-                        _mint(winnerAddr, perTraitPrize);
-                    } else {
-                        _addToBounty(perTraitPrize);
-                    }
-                    unchecked {
-                        ++i;
-                    }
-                }
-            }
-        }
-
-        // ----- (C) Player / leaderboard jackpots from 30% -----
-        {
-            uint256 totalPlayers = coinflipPlayersCount;
-            uint256 playerPool = (burnBase * 30) / 100;
-
-            if (totalPlayers != 0 && playerPool != 0) {
-                uint256 lbPrize = (playerPool * 35) / 100; // largest bettor
-                uint256 midPrize = (playerPool * 15) / 100; // random among #3 / #4 bettors
-                currentTenthPlayerBonusPool = (playerPool * 20) / 100; // paid during payouts
-                uint256 lbPool = playerPool - lbPrize - midPrize - currentTenthPlayerBonusPool;
-
-                // Largest bettor gets credited now (paid when payouts run).
-                address largestBettor = topBettors[0].player;
-                if (largestBettor != address(0)) {
-                    coinflipAmount[largestBettor] += lbPrize;
-                }
-
-                // Randomly pick #3 or #4.
-                address midWinner = topBettors[2 + (uint256(keccak256(abi.encodePacked(randWord, "p34"))) & 1)].player;
-                if (midWinner != address(0)) {
-                    coinflipAmount[midWinner] += midPrize;
-                }
-
-                // Luckbox leaderboard split (only those with >= 1000 PURGED in active flips).
-                if (lbPool != 0) {
-                    address[10] memory eligible;
-                    uint256 eligibleCount;
-                    address topLuck = luckboxLeaderboard[0].player;
-                    bool topIncluded;
-
-                    for (uint8 i; i < 10; ) {
-                        address p = luckboxLeaderboard[i].player;
-                    if (p != address(0) && coinflipAmount[p] >= (ONEK * 2)) {
-                            eligible[eligibleCount] = p;
-                            if (p == topLuck) topIncluded = true;
-                            unchecked {
-                                ++eligibleCount;
-                            }
-                        }
-                        unchecked {
-                            ++i;
-                        }
-                    }
-
-                    if (eligibleCount == 0) {
-                        _addToBounty(lbPool);
-                    } else if (topIncluded) {
-                        if (eligibleCount == 1) {
-                            _mint(topLuck, lbPool);
-                            emit CoinJackpotPaid(420, topLuck, lbPool);
-                        } else {
-                            uint256 topCut = (lbPool * 25) / 100;
-                            _mint(topLuck, topCut);
-                            emit CoinJackpotPaid(420, topLuck, topCut);
-
-                            uint256 rem = lbPool - topCut;
-                            uint256 each = rem / (eligibleCount - 1);
-
-                            for (uint256 i; i < eligibleCount; ) {
-                                address w = eligible[i];
-                                if (w != topLuck) {
-                                    _mint(w, each);
-                                    emit CoinJackpotPaid(420, w, each);
-                                }
-                                unchecked {
-                                    ++i;
-                                }
-                            }
-                        }
-                    } else {
-                        uint256 each = lbPool / eligibleCount;
-                        for (uint256 i; i < eligibleCount; ) {
-                            address w = eligible[i];
-                            _mint(w, each);
-                            emit CoinJackpotPaid(420, w, each);
-                            unchecked {
-                                ++i;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Reset for next day.
+        prevDailyCoinBurn = dailyCoinBurn;
         dailyCoinBurn = 0;
+    }
+
+    function addToBounty(uint256 amount) external onlyPurgeGameContract {
+        if (amount == 0) return;
+        _addToBounty(amount);
+    }
+
+    function lastBiggestFlip() external view returns (address) {
+        return lastBiggestFlipPlayer;
     }
     /// @notice Progress an external jackpot: BAF (kind=0) or Decimator (kind=1).
     /// @dev

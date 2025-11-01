@@ -25,7 +25,9 @@ interface IPurgeCoinInterface {
         bool bonusFlip,
         uint256 rngWord
     ) external returns (bool);
-    function triggerCoinJackpot(uint256 rngWord) external;
+    function prepareCoinJackpot() external returns (uint256 poolAmount, address biggestFlip);
+    function addToBounty(uint256 amount) external;
+    function lastBiggestFlip() external view returns (address);
     function runExternalJackpot(
         uint8 kind,
         uint256 poolWei,
@@ -161,6 +163,7 @@ contract PurgeGame {
     uint8 private constant MAP_FIRST_BATCH = 8; // Consecutive daily jackpots on map-only levels before normal cadence resumes
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
     uint256 private constant LUCKBOX_BYPASS_THRESHOLD = 100_000 * 1_000_000; // 100k PURGED (6 decimals)
+    uint256 private constant PURCHASE_WEIGHT_TOTAL = 30;
 
     // -----------------------
     // Price
@@ -225,6 +228,17 @@ contract PurgeGame {
         uint256 sidePool; // Trait win: pool snapshot for trophy/exterminator splits; Map timeout: full carry pool snapshot
     }
     PendingEndLevel private pendingEndLevel;
+
+    struct JackpotSpec {
+        bool payInCoin;
+        bool randomHeadline;
+        address headlineAddress;
+        uint16 headlinePct;
+        uint16 stakePct;
+        uint16 purchaseEachPct;
+        uint8 purchaseCount;
+        uint16 purchaseSinglePct;
+    }
 
     // -----------------------
     // Daily / Trait Counters
@@ -1085,31 +1099,58 @@ contract PurgeGame {
             uint256 winnersLen = winners.length;
 
             if (idx == 0 && winnersLen != 0) {
-                uint256 immediatePool = bucketWei >> 1;
-                uint256 deferredAmount = bucketWei - immediatePool;
-                unchecked {
-                    totalPaidWei += bucketWei;
-                }
-                address trophyWinner = winners[0];
-                _addClaimableEth(trophyWinner, immediatePool);
-                uint256 trophyData = (uint256(traitId) << 152) | (uint256(lvl) << 128) | TROPHY_FLAG_MAP;
-                nft.awardTrophy{value: deferredAmount}(
-                    trophyWinner,
-                    lvl,
-                    IPurgeGameNFT.TrophyKind.Map,
-                    trophyData,
-                    deferredAmount
-                );
-            } else if (winnersLen != 0) {
-                uint256 prizeEachWei = bucketWei / winnersLen;
-                uint256 paidWei = prizeEachWei * winnersLen;
-                unchecked {
-                    totalPaidWei += paidWei;
-                }
+                address trophyWinner;
                 for (uint256 k; k < winnersLen; ) {
-                    _addClaimableEth(winners[k], prizeEachWei);
+                    address candidate = winners[k];
+                    if (_eligibleJackpotWinner(candidate, lvl)) {
+                        trophyWinner = candidate;
+                        break;
+                    }
                     unchecked {
                         ++k;
+                    }
+                }
+                if (trophyWinner != address(0)) {
+                    uint256 immediatePool = bucketWei >> 1;
+                    uint256 deferredAmount = bucketWei - immediatePool;
+                    unchecked {
+                        totalPaidWei += bucketWei;
+                    }
+                    _addClaimableEth(trophyWinner, immediatePool);
+                    uint256 trophyData = (uint256(traitId) << 152) | (uint256(lvl) << 128) | TROPHY_FLAG_MAP;
+                    nft.awardTrophy{value: deferredAmount}(
+                        trophyWinner,
+                        lvl,
+                        IPurgeGameNFT.TrophyKind.Map,
+                        trophyData,
+                        deferredAmount
+                    );
+                }
+            } else if (winnersLen != 0) {
+                uint256 eligibleCount;
+                for (uint256 k; k < winnersLen; ) {
+                    address candidate = winners[k];
+                    if (_eligibleJackpotWinner(candidate, lvl)) {
+                        winners[eligibleCount] = candidate;
+                        unchecked {
+                            ++eligibleCount;
+                        }
+                    }
+                    unchecked {
+                        ++k;
+                    }
+                }
+                if (eligibleCount != 0) {
+                    uint256 prizeEachWei = bucketWei / eligibleCount;
+                    uint256 paidWei = prizeEachWei * eligibleCount;
+                    unchecked {
+                        totalPaidWei += paidWei;
+                    }
+                    for (uint256 k; k < eligibleCount; ) {
+                        _addClaimableEth(winners[k], prizeEachWei);
+                        unchecked {
+                            ++k;
+                        }
                     }
                 }
             }
@@ -1132,79 +1173,45 @@ contract PurgeGame {
 
     // --- Daily & early‑purge jackpots ---------------------------------------------------------------
 
-    /// @notice Pay four jackpot groups either during daily payouts or early‑purge sessions.
+    /// @notice Pay daily or early‑purge jackpots (ETH payouts) using a shared jackpot runner.
     /// @dev
-    /// - For daily runs, the RNG word is the current VRF word; for early‑purge runs it is salted with the
-    ///   current `jackpotCounter`.
-    /// - Winning traits come from either observed purge counts (daily) or uniform draw (early).
-    /// - Group sizes scale with the step within the 100‑level epoch: 1× for L..00–19, 2× for 20–39, …, 5× for 80–99.
-    /// - Per‑group allocation is an equal split of `dailyTotal / 4` across sampled winners (integer division).
-    /// - Updates `jackpotCounter` up/down depending on the mode and emits a `Jackpot(kind=4, traits...)` event.
+    /// - RNG is salted for early‑purge runs so the quadrant draw shifts as `jackpotCounter` drains.
+    /// - Pool split (% of jackpot pool): 10 headline (largest flip on daily, weighted purchase pick on EP), 30 weighted purchase draws,
+    ///   remainder into trait quadrants {20,10,5,1} with replacement. No stake trophies are paid on daily/EP runs.
     function payDailyJackpot(bool isDaily, uint24 lvl, uint256 randWord) internal {
         jackpotActivityThisCycle = true;
-        if (!isDaily) {
+        uint8[4] memory winningTraits;
+        if (isDaily) {
+            winningTraits = _getWinningTraits(randWord, dailyPurgeCount);
+        } else {
             unchecked {
                 randWord = ((randWord << 64) | (randWord >> 192)) ^ (uint256(jackpotCounter) << 128) ^ 0x05;
             }
+            winningTraits = _getRandomTraits(randWord);
         }
 
-        uint8[4] memory winningTraits = isDaily
-            ? _getWinningTraits(randWord, dailyPurgeCount)
-            : _getRandomTraits(randWord);
-
-        uint256 multiplier = 1 + ((lvl % 100) / 20); // 1..5
-
-        uint256 dailyTotalWei;
+        uint256 poolWei;
         if (isDaily) {
-            dailyTotalWei = (levelPrizePool * (250 + uint256(jackpotCounter) * 50)) / 10_000;
+            poolWei = (levelPrizePool * (250 + uint256(jackpotCounter) * 50)) / 10_000;
         } else {
             uint256 baseWei = carryoverForNextLevel;
-            if ((lvl % 20) == 0) dailyTotalWei = baseWei / 100;
-            else if (lvl >= 21 && (lvl % 10) == 1) dailyTotalWei = (baseWei * 6) / 100;
-            else dailyTotalWei = baseWei / 40;
+            if ((lvl % 20) == 0) poolWei = baseWei / 100;
+            else if (lvl >= 21 && (lvl % 10) == 1) poolWei = (baseWei * 6) / 100;
+            else poolWei = baseWei / 40;
         }
 
-        uint256 perGroupWei = dailyTotalWei / 4;
-        uint256 totalPaidWei;
+        JackpotSpec memory spec = JackpotSpec({
+            payInCoin: false,
+            randomHeadline: false,
+            headlineAddress: isDaily ? coin.lastBiggestFlip() : address(0),
+            headlinePct: isDaily ? 10 : 0,
+            stakePct: 0,
+            purchaseEachPct: 5,
+            purchaseCount: 5,
+            purchaseSinglePct: 10
+        });
 
-        for (uint8 groupIdx; groupIdx < 4; ) {
-            uint256 wantWinners;
-            if (groupIdx < 3) {
-                wantWinners =
-                    (
-                        groupIdx == 0
-                            ? 30
-                            : groupIdx == 1
-                                ? 20
-                                : 10
-                    ) * multiplier;
-            } else wantWinners = 1;
-
-            address[] memory winners = _randTraitTicket(
-                traitPurgeTicket[lvl],
-                randWord,
-                winningTraits[groupIdx],
-                uint8(wantWinners),
-                uint8(69 + groupIdx)
-            );
-
-            uint256 winnersLen = winners.length;
-            uint256 prizeEachWei = winnersLen == 0 ? 0 : perGroupWei / winnersLen;
-            if (prizeEachWei != 0) {
-                unchecked {
-                    totalPaidWei += prizeEachWei * winnersLen;
-                }
-                for (uint256 k; k < winnersLen; ) {
-                    _addClaimableEth(winners[k], prizeEachWei);
-                    unchecked {
-                        ++k;
-                    }
-                }
-            }
-            unchecked {
-                ++groupIdx;
-            }
-        }
+        (uint256 paidWei, , ) = _runJackpot(spec, lvl, poolWei, randWord ^ (uint256(lvl) << 192), winningTraits);
 
         emit Jackpot(
             (uint256(4) << 248) |
@@ -1218,7 +1225,8 @@ contract PurgeGame {
             unchecked {
                 ++jackpotCounter;
             }
-            prizePool -= totalPaidWei;
+            uint256 currentPool = prizePool;
+            prizePool = paidWei > currentPool ? 0 : currentPool - paidWei;
             if (jackpotCounter >= 15) {
                 _endLevel(TRAIT_ID_TIMEOUT);
                 return;
@@ -1226,8 +1234,15 @@ contract PurgeGame {
             _clearDailyPurgeCount();
         } else {
             unchecked {
-                carryoverForNextLevel -= totalPaidWei;
-                --jackpotCounter;
+                if (jackpotCounter != 0) {
+                    --jackpotCounter;
+                }
+            }
+            uint256 carry = carryoverForNextLevel;
+            carryoverForNextLevel = paidWei > carry ? 0 : carry - paidWei;
+            if (jackpotCounter >= 15) {
+                _endLevel(TRAIT_ID_TIMEOUT);
+                return;
             }
         }
     }
@@ -1251,7 +1266,7 @@ contract PurgeGame {
             if (!ok) return false;
         }
         if (triggerCoinJackpot) {
-            coin.triggerCoinJackpot(rngWord);
+            _executeCoinJackpot(lvl, uint256(keccak256(abi.encodePacked(rngWord, lvl, "coin"))));
         }
         jackpotActivityThisCycle = false;
         nft.releaseRngLock();
@@ -1704,6 +1719,216 @@ contract PurgeGame {
                 ++i;
                 slice = (slice >> 16) | (slice << 240);
             }
+        }
+    }
+
+    function _entropyStep(uint256 state) private pure returns (uint256) {
+        unchecked {
+            state ^= state << 7;
+            state ^= state >> 9;
+            state ^= state << 8;
+        }
+        return state;
+    }
+
+    function _pickPurchaseCandidate(uint256 entropy)
+        private
+        view
+        returns (address candidate, uint256 newEntropy)
+    {
+        address[] storage buyers = pendingNftMints;
+        uint256 len = buyers.length;
+        if (len == 0) return (address(0), entropy);
+
+        newEntropy = entropy;
+        uint8 attempts = uint8(len < 16 ? len : 16);
+        if (attempts == 0) attempts = 1;
+        for (uint8 i; i < attempts; ) {
+            newEntropy = _entropyStep(newEntropy ^ (uint256(i) + 1));
+            address addr = buyers[newEntropy % len];
+            if (playerTokensOwed[addr] != 0) {
+                return (addr, newEntropy);
+            }
+            unchecked {
+                ++i;
+            }
+        }
+        return (address(0), newEntropy);
+    }
+
+    function _creditJackpot(bool payInCoin, address beneficiary, uint256 amount) private returns (bool) {
+        if (beneficiary == address(0) || amount == 0) return false;
+        if (payInCoin) {
+            coin.bonusCoinflip(beneficiary, amount, true, 0);
+        } else {
+            _addClaimableEth(beneficiary, amount);
+        }
+        return true;
+    }
+
+    function _runJackpot(
+        JackpotSpec memory spec,
+        uint24 lvl,
+        uint256 poolAmount,
+        uint256 entropy,
+        uint8[4] memory winningTraits
+    ) private returns (uint256 totalPaidEth, uint256 remainingCoin, uint256 newEntropy) {
+        uint256 ethPaid;
+        uint256 coinPaid;
+        uint256 spent;
+        uint256 traitCarry; // ETH-only
+        newEntropy = entropy;
+
+        // Headline share
+        if (spec.headlinePct != 0) {
+            uint256 amt = (poolAmount * spec.headlinePct) / 100;
+            if (amt != 0) {
+                address target = spec.headlineAddress;
+                if (spec.randomHeadline) {
+                    (target, newEntropy) = _pickPurchaseCandidate(newEntropy);
+                }
+                spent += amt;
+                bool ok = target != address(0) && _eligibleJackpotWinner(target, lvl);
+                if (ok && _creditJackpot(spec.payInCoin, target, amt)) {
+                    if (spec.payInCoin) coinPaid += amt;
+                    else ethPaid += amt;
+                } else if (!spec.payInCoin) {
+                    traitCarry += amt;
+                }
+            }
+        }
+
+        // Stake samples
+        if (spec.stakePct != 0) {
+            uint256 stakePoolAmt = (poolAmount * spec.stakePct) / 100;
+            uint256 stakeShare = stakePoolAmt / 2;
+            if (stakeShare != 0) {
+                spent += stakeShare * 2;
+                for (uint256 i; i < 2; ) {
+                    newEntropy = _entropyStep(newEntropy ^ (i + 1));
+                    address stakeWinner = nft.stakedTrophySample(uint64(newEntropy));
+                    bool ok = stakeWinner != address(0) && _eligibleJackpotWinner(stakeWinner, lvl);
+                    if (ok && _creditJackpot(spec.payInCoin, stakeWinner, stakeShare)) {
+                        if (spec.payInCoin) coinPaid += stakeShare;
+                        else ethPaid += stakeShare;
+                    } else if (!spec.payInCoin) {
+                        traitCarry += stakeShare;
+                    }
+                    unchecked {
+                        ++i;
+                    }
+                }
+            }
+        }
+
+        // Single purchase pick
+        if (spec.purchaseSinglePct != 0) {
+            uint256 amtSingle = (poolAmount * spec.purchaseSinglePct) / 100;
+            if (amtSingle != 0) {
+                address singleWinner;
+                (singleWinner, newEntropy) = _pickPurchaseCandidate(newEntropy);
+                spent += amtSingle;
+                bool ok = singleWinner != address(0) && _eligibleJackpotWinner(singleWinner, lvl);
+                if (ok && _creditJackpot(spec.payInCoin, singleWinner, amtSingle)) {
+                    if (spec.payInCoin) coinPaid += amtSingle;
+                    else ethPaid += amtSingle;
+                } else if (!spec.payInCoin) {
+                    traitCarry += amtSingle;
+                }
+            }
+        }
+
+        // Repeated purchase picks
+        if (spec.purchaseEachPct != 0 && spec.purchaseCount != 0) {
+            uint256 eachAmt = (poolAmount * spec.purchaseEachPct) / 100;
+            if (eachAmt != 0) {
+                uint8 count = spec.purchaseCount;
+                spent += eachAmt * uint256(count);
+                for (uint8 i; i < count; ) {
+                    address purchaseWinner;
+                    (purchaseWinner, newEntropy) = _pickPurchaseCandidate(newEntropy);
+                    bool ok = purchaseWinner != address(0) && _eligibleJackpotWinner(purchaseWinner, lvl);
+                    if (ok && _creditJackpot(spec.payInCoin, purchaseWinner, eachAmt)) {
+                        if (spec.payInCoin) coinPaid += eachAmt;
+                        else ethPaid += eachAmt;
+                    } else if (!spec.payInCoin) {
+                        traitCarry += eachAmt;
+                    }
+                    unchecked {
+                        ++i;
+                    }
+                }
+            }
+        }
+
+        uint256 traitPool = poolAmount > spent ? poolAmount - spent : 0;
+        if (!spec.payInCoin) traitPool += traitCarry;
+
+        if (traitPool != 0) {
+            uint256 perQuadrant = traitPool / 4;
+            for (uint8 q; q < 4; ) {
+                uint8 draws = (q == 0 ? 20 : q == 1 ? 10 : q == 2 ? 5 : 1);
+                if (perQuadrant != 0 && draws != 0) {
+                    uint256 shareEach = perQuadrant / draws;
+                    if (shareEach != 0) {
+                        newEntropy = _entropyStep(newEntropy ^ uint256(q + 21));
+                        address[] memory traitWinners = _randTraitTicket(
+                            traitPurgeTicket[lvl],
+                            newEntropy,
+                            winningTraits[q],
+                            draws,
+                            uint8(200 + q)
+                        );
+                        uint256 len = traitWinners.length;
+                        for (uint256 i; i < len; ) {
+                            address tw = traitWinners[i];
+                            bool ok = tw != address(0) && _eligibleJackpotWinner(tw, lvl);
+                            if (ok && _creditJackpot(spec.payInCoin, tw, shareEach)) {
+                                if (spec.payInCoin) coinPaid += shareEach;
+                                else ethPaid += shareEach;
+                            }
+                            unchecked {
+                                ++i;
+                            }
+                        }
+                    }
+                }
+                unchecked {
+                    ++q;
+                }
+            }
+        }
+
+        totalPaidEth = ethPaid;
+        remainingCoin = spec.payInCoin ? (poolAmount > coinPaid ? poolAmount - coinPaid : 0) : 0;
+        return (totalPaidEth, remainingCoin, newEntropy);
+    }
+
+    function _eligibleJackpotWinner(address player, uint24 lvl) private view returns (bool) {
+        if (player == address(0)) return false;
+        return nft.ethMintLastLevel(player) == lvl;
+    }
+
+    function _executeCoinJackpot(uint24 lvl, uint256 randWord) internal returns (uint8[4] memory winningTraits) {
+        winningTraits = _getRandomTraits(randWord);
+
+        (uint256 pool, address biggestFlip) = coin.prepareCoinJackpot();
+        if (pool == 0) return winningTraits;
+
+        JackpotSpec memory spec = JackpotSpec({
+            payInCoin: true,
+            randomHeadline: false,
+            headlineAddress: biggestFlip,
+            headlinePct: 10,
+            stakePct: 10,
+            purchaseEachPct: 5,
+            purchaseCount: 5,
+            purchaseSinglePct: 10
+        });
+
+        (, uint256 remaining, ) = _runJackpot(spec, lvl, pool, randWord ^ (uint256(lvl) << 192), winningTraits);
+        if (remaining != 0) {
+            coin.addToBounty(remaining);
         }
     }
 
