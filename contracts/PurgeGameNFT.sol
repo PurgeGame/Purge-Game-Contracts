@@ -10,6 +10,15 @@ struct VRFRandomWordsRequest {
     bytes extraArgs;
 }
 
+enum TrophyKind {
+    Map,
+    Level,
+    Affiliate,
+    Stake,
+    Baf,
+    Decimator
+}
+
 interface IERC721Receiver {
     function onERC721Received(
         address operator,
@@ -170,6 +179,8 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
     uint256 private constant TROPHY_FLAG_MAP = uint256(1) << 200;
     uint256 private constant TROPHY_FLAG_AFFILIATE = uint256(1) << 201;
     uint256 private constant TROPHY_FLAG_STAKE = uint256(1) << 202;
+    uint256 private constant TROPHY_FLAG_BAF = uint256(1) << 203;
+    uint256 private constant TROPHY_FLAG_DECIMATOR = uint256(1) << 204;
     uint256 private constant TROPHY_OWED_MASK = (uint256(1) << 128) - 1;
     uint256 private constant TROPHY_BASE_LEVEL_SHIFT = 128;
     uint256 private constant TROPHY_BASE_LEVEL_MASK = uint256(0xFFFFFF) << TROPHY_BASE_LEVEL_SHIFT;
@@ -186,9 +197,12 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
     uint8 private constant LEVEL_STAKE_MAX = 20;
     uint8 private constant MAP_STAKE_MAX = 20;
     uint8 private constant AFFILIATE_STAKE_MAX = 20;
+    uint16 private constant BAF_TRAIT_SENTINEL = 0xFFFA;
+    uint16 private constant DECIMATOR_TRAIT_SENTINEL = 0xFFFB;
     uint16 private constant STAKE_TRAIT_SENTINEL = 0xFFFD;
     uint32 private constant VRF_CALLBACK_GAS_LIMIT = 200_000;
     uint16 private constant VRF_REQUEST_CONFIRMATIONS = 10;
+    uint24 private constant STAKE_PREVIEW_START_LEVEL = 12;
 
     function _currentBaseTokenId() private view returns (uint256) {
         return uint256(uint128(basePointers));
@@ -682,20 +696,110 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
         return (coinReward, luckboxReward);
     }
 
+    function _hasBafTrophy(uint24 level) private pure returns (bool) {
+        if (level == 0) return false;
+        return level % 20 == 0;
+    }
+
+    function _hasDecimatorTrophy(uint24 level) private pure returns (bool) {
+        if (level < 25) return false;
+        if (level % 10 != 5) return false;
+        return (level % 100) != 95;
+    }
+
+    function _stakePreviewData(uint24 level) private pure returns (uint256) {
+        uint24 baseLevel = level == 0 ? 0 : uint24(level - 1);
+        return
+            (uint256(STAKE_TRAIT_SENTINEL) << 152) |
+            (uint256(baseLevel) << TROPHY_BASE_LEVEL_SHIFT) |
+            TROPHY_FLAG_STAKE;
+    }
+
+    function _mintedCountForLevel(uint24 level) private pure returns (uint256 count) {
+        count = 4;
+        if (_hasBafTrophy(level)) count += 1;
+        if (_hasDecimatorTrophy(level)) count += 1;
+    }
+
+    function _placeholderStart(uint24 level) private view returns (uint256 startId) {
+        uint24 currentLevel = game.level();
+        uint256 mintedCount = _mintedCountForLevel(level);
+        if (level == currentLevel) {
+            uint256 base = _currentBaseTokenId();
+            return base - mintedCount;
+        }
+        if (level + 1 == currentLevel) {
+            uint256 base = _previousBaseTokenId();
+            return base - mintedCount;
+        }
+        revert InvalidToken();
+    }
+
+    function _placeholderTokenId(uint24 level, TrophyKind kind) private view returns (uint256) {
+        bool hasBaf = _hasBafTrophy(level);
+        bool hasDec = _hasDecimatorTrophy(level);
+        uint256 startId = _placeholderStart(level);
+        if (kind == TrophyKind.Baf) {
+            if (!hasBaf) revert InvalidToken();
+            return startId;
+        }
+        if (kind == TrophyKind.Decimator) {
+            if (!hasDec) revert InvalidToken();
+            return startId + (hasBaf ? 1 : 0);
+        }
+
+        uint256 baseOffset = (hasBaf ? 1 : 0) + (hasDec ? 1 : 0);
+        if (kind == TrophyKind.Map) return startId + baseOffset;
+        if (kind == TrophyKind.Level) return startId + baseOffset + 1;
+        if (kind == TrophyKind.Affiliate) return startId + baseOffset + 2;
+        if (kind == TrophyKind.Stake) return startId + baseOffset + 3;
+        revert InvalidToken();
+    }
+
     function _mintTrophyPlaceholders(uint24 level) private returns (uint256 newBaseTokenId) {
+        uint256 baseData = (uint256(0xFFFF) << 152) | (uint256(level) << TROPHY_BASE_LEVEL_SHIFT);
+        bool mintBaf = _hasBafTrophy(level);
+        bool mintDec = _hasDecimatorTrophy(level);
+
+        uint256 mintedCount = _mintedCountForLevel(level);
         uint256 startId = _currentIndex;
-        _mint(address(game), 4);
-        uint256 mapTokenId = startId;
-        uint256 levelTokenId = startId + 1;
-        uint256 affiliateTokenId = startId + 2;
-        uint256 stakeTokenId = startId + 3;
-        trophyData[mapTokenId] =
-            (uint256(0xFFFF) << 152) | (uint256(level) << TROPHY_BASE_LEVEL_SHIFT) | TROPHY_FLAG_MAP;
-        trophyData[levelTokenId] = (uint256(0xFFFF) << 152) | (uint256(level) << TROPHY_BASE_LEVEL_SHIFT);
-        trophyData[affiliateTokenId] =
-            (uint256(0xFFFF) << 152) | (uint256(level) << TROPHY_BASE_LEVEL_SHIFT) | TROPHY_FLAG_AFFILIATE;
-        delete trophyData[stakeTokenId];
-        newBaseTokenId = stakeTokenId + 1;
+        _mint(address(game), mintedCount);
+
+        uint256 nextId = startId;
+        if (mintBaf) {
+            uint256 bafTokenId = nextId++;
+            trophyData[bafTokenId] = baseData | TROPHY_FLAG_BAF;
+        }
+
+        if (mintDec) {
+            uint256 decTokenId = nextId++;
+            trophyData[decTokenId] = baseData | TROPHY_FLAG_DECIMATOR;
+        }
+
+        uint256 mapTokenId = nextId++;
+        trophyData[mapTokenId] = baseData | TROPHY_FLAG_MAP;
+
+        uint256 levelTokenId = nextId++;
+        trophyData[levelTokenId] = baseData;
+
+        uint256 affiliateTokenId = nextId++;
+        trophyData[affiliateTokenId] = baseData | TROPHY_FLAG_AFFILIATE;
+
+        uint256 stakeTokenId = nextId++;
+        if (level >= STAKE_PREVIEW_START_LEVEL) {
+            trophyData[stakeTokenId] = _stakePreviewData(level);
+        } else {
+            trophyData[stakeTokenId] = 0;
+        }
+
+        newBaseTokenId = nextId;
+    }
+
+    function clearStakePreview(uint24 level) external onlyCoinContract {
+        uint256 tokenId = _placeholderTokenId(level, TrophyKind.Stake);
+        if (trophyData[tokenId] == 0) return;
+        if (address(uint160(_packedOwnershipOf(tokenId))) != address(game)) return;
+        trophyData[tokenId] = 0;
     }
 
     function purge(address owner, uint256[] calldata tokenIds) external onlyGame {
@@ -739,18 +843,26 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
         emit Transfer(from, address(0), tokenId);
     }
 
-    function awardTrophy(address to, uint256 data, uint256 deferredWei) external payable onlyGame {
-        bool isMap = (data & TROPHY_FLAG_MAP) != 0;
-        bool isAffiliate = (data & TROPHY_FLAG_AFFILIATE) != 0;
-        uint256 baseTokenId = _currentBaseTokenId();
-        uint256 tokenId;
-        if (isMap) {
-            tokenId = baseTokenId - 4;
-        } else if (isAffiliate) {
-            tokenId = baseTokenId - 2;
+    function awardTrophy(
+        address to,
+        uint24 level,
+        TrophyKind kind,
+        uint256 data,
+        uint256 deferredWei
+    ) external payable {
+        bool fromGame = msg.sender == address(game);
+        bool fromCoinContract = msg.sender == address(coin);
+        if (!fromGame && !fromCoinContract) revert E();
+
+        if (kind == TrophyKind.Stake) revert E();
+
+        if (fromGame) {
+            if (kind == TrophyKind.Baf || kind == TrophyKind.Decimator) revert E();
         } else {
-            tokenId = baseTokenId - 3;
+            if (kind != TrophyKind.Baf && kind != TrophyKind.Decimator) revert OnlyCoin();
         }
+
+        uint256 tokenId = _placeholderTokenId(level, kind);
         _awardTrophy(to, data, deferredWei, tokenId);
     }
 
@@ -761,10 +873,9 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
         returns (address mapImmediateRecipient, address[6] memory affiliateRecipients)
     {
         uint24 nextLevel = req.level + 1;
-        uint256 previousBase = _previousBaseTokenId();
-        uint256 affiliateTokenId = previousBase - 2;
-        uint256 levelTokenId = previousBase - 3;
-        uint256 mapTokenId = previousBase - 4;
+        uint256 mapTokenId = _placeholderTokenId(req.level, TrophyKind.Map);
+        uint256 levelTokenId = _placeholderTokenId(req.level, TrophyKind.Level);
+        uint256 affiliateTokenId = _placeholderTokenId(req.level, TrophyKind.Affiliate);
 
         bool traitWin = req.traitId != TRAIT_ID_TIMEOUT;
         uint256 randomWord = rngWord;
@@ -1146,21 +1257,8 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
         uint256 principal
     ) external onlyCoinContract returns (uint256 tokenId) {
 
-        uint256 data =
-            (uint256(STAKE_TRAIT_SENTINEL) << 152) |
-            (uint256(level) << TROPHY_BASE_LEVEL_SHIFT) |
-            TROPHY_FLAG_STAKE;
-        uint256 placeholderId;
-        uint24 currentLevel = game.level();
-        if (level == currentLevel) {
-            placeholderId = _currentBaseTokenId() - 1;
-        } else if (level + 1 == currentLevel) {
-            placeholderId = _previousBaseTokenId() - 1;
-        }
-
-
-
-
+        uint256 data = _stakePreviewData(level);
+        uint256 placeholderId = _placeholderTokenId(level, TrophyKind.Stake);
 
         _awardTrophy(to, data, 0, placeholderId);
         tokenId = placeholderId;

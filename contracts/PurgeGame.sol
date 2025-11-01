@@ -56,12 +56,23 @@ interface IPurgeGameNFT {
         uint256 pool;
     }
 
+    enum TrophyKind {
+        Map,
+        Level,
+        Affiliate,
+        Stake,
+        Baf,
+        Decimator
+    }
+
     function gameMint(address to, uint256 quantity) external returns (uint256 startTokenId);
 
     function purge(address owner, uint256[] calldata tokenIds) external;
 
     function awardTrophy(
         address to,
+        uint24 level,
+        TrophyKind kind,
         uint256 data,
         uint256 deferredWei
     ) external payable;
@@ -72,6 +83,8 @@ interface IPurgeGameNFT {
         returns (address mapImmediateRecipient, address[6] memory affiliateRecipients);
 
     function prepareNextLevel(uint24 nextLevel) external;
+
+    function clearStakePreview(uint24 level) external;
 
     function currentBaseTokenId() external view returns (uint256);
 
@@ -1081,7 +1094,13 @@ contract PurgeGame {
                 address trophyWinner = winners[0];
                 _addClaimableEth(trophyWinner, immediatePool);
                 uint256 trophyData = (uint256(traitId) << 152) | (uint256(lvl) << 128) | TROPHY_FLAG_MAP;
-                nft.awardTrophy{value: deferredAmount}(trophyWinner, trophyData, deferredAmount);
+                nft.awardTrophy{value: deferredAmount}(
+                    trophyWinner,
+                    lvl,
+                    IPurgeGameNFT.TrophyKind.Map,
+                    trophyData,
+                    deferredAmount
+                );
             } else if (winnersLen != 0) {
                 uint256 prizeEachWei = bucketWei / winnersLen;
                 uint256 paidWei = prizeEachWei * winnersLen;

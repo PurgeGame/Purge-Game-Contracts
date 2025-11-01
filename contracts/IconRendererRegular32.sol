@@ -370,7 +370,32 @@ contract IconRendererRegular32 {
         );
         string memory desc2 = _descFromRem(col, sym, remaining);
 
-        return _pack(tokenId, false, img2, lvl, desc2, "");
+        string memory levelStr = (lvl == 0) ? "TBD" : uint256(lvl).toString();
+        string memory attrs = string(
+            abi.encodePacked(
+                '[{"trait_type":"',
+                _quadrantTitle(0),
+                '","value":"',
+                _label(0, col[0], sym[0]),
+                '"},{"trait_type":"',
+                _quadrantTitle(1),
+                '","value":"',
+                _label(1, col[1], sym[1]),
+                '"},{"trait_type":"',
+                _quadrantTitle(2),
+                '","value":"',
+                _label(2, col[2], sym[2]),
+                '"},{"trait_type":"',
+                _quadrantTitle(3),
+                '","value":"',
+                _label(3, col[3], sym[3]),
+                '"},{"trait_type":"Level","value":"',
+                levelStr,
+                '"}]'
+            )
+        );
+
+        return _pack(tokenId, false, img2, lvl, desc2, "", attrs);
     }
 
     /// @dev Compose the full SVG for a regular token (non‑trophy).
@@ -539,10 +564,15 @@ contract IconRendererRegular32 {
         uint256 quadId,
         uint8 symbolIndex
     ) private view returns (string memory) {
-        if (quadId < 3) return icons.symbol(quadId, symbolIndex);
-        unchecked {
-            return (uint256(symbolIndex) + 1).toString();
+        if (quadId < 3) {
+            string memory externalName = icons.symbol(quadId, symbolIndex);
+            if (bytes(externalName).length != 0) {
+                return externalName;
+            }
+            return string.concat("Symbol ", (uint256(symbolIndex) + 1).toString());
         }
+
+        return string.concat("Dice ", (uint256(symbolIndex) + 1).toString());
     }
 
     /// @notice Color + symbol label (e.g., “Blue Diamond”).
@@ -551,14 +581,15 @@ contract IconRendererRegular32 {
         uint8 colorIndex,
         uint8 symbolIndex
     ) private view returns (string memory) {
-        return
-            string(
-                abi.encodePacked(
-                    _colorTitle(colorIndex),
-                    " ",
-                    _symTitle(quadId, symbolIndex)
-                )
-            );
+        string memory symTitle = _symTitle(quadId, symbolIndex);
+        return string(abi.encodePacked(_colorTitle(colorIndex), " ", symTitle));
+    }
+
+    function _quadrantTitle(uint256 idx) private pure returns (string memory) {
+        if (idx == 0) return "Crypto";
+        if (idx == 1) return "Zodiac";
+        if (idx == 2) return "Gambling";
+        return "Dice";
     }
 
     /// @notice Build a 4‑line description showing remaining counts per quadrant.
@@ -707,7 +738,8 @@ contract IconRendererRegular32 {
         string memory svg,
         uint256 level,
         string memory desc,
-        string memory trophyType
+        string memory trophyType,
+        string memory attrs
     ) private pure returns (string memory) {
         string memory lvlStr = (level == 0) ? "TBD" : level.toString();
         string memory nm = isTrophy
@@ -736,14 +768,14 @@ contract IconRendererRegular32 {
         j = string.concat(j, '","description":"', desc);
         j = string.concat(j, '","image":"', imgData, '","attributes":');
         if (isTrophy) {
-            j = string.concat(
-                j,
+            string memory trophyAttrs = string.concat(
                 '[{"trait_type":"Trophy","value":"',
                 trophyType,
-                '"}]}'
+                '"}]'
             );
+            j = string.concat(j, trophyAttrs, "}");
         } else {
-            j = string.concat(j, "[]}");
+            j = string.concat(j, attrs, "}");
         }
 
         // Return as data:application/json;base64

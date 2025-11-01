@@ -9,6 +9,7 @@ interface IIcons32 {
     function vbH(uint256 i) external view returns (uint16);
     function data(uint256 i) external view returns (string memory);
     function diamond() external view returns (string memory);
+    function symbol(uint256 quadrant, uint8 idx) external view returns (string memory);
 }
 
 interface IColorRegistry {
@@ -66,6 +67,10 @@ contract IconRendererTrophy32 {
     uint256 private constant MAP_TROPHY_FLAG = uint256(1) << 200;
     uint256 private constant AFFILIATE_TROPHY_FLAG = uint256(1) << 201;
     uint256 private constant STAKE_TROPHY_FLAG = uint256(1) << 202;
+    uint256 private constant BAF_TROPHY_FLAG = uint256(1) << 203;
+    uint256 private constant DECIMATOR_TROPHY_FLAG = uint256(1) << 204;
+    uint16 private constant BAF_TRAIT_SENTINEL = 0xFFFA;
+    uint16 private constant DECIMATOR_TRAIT_SENTINEL = 0xFFFB;
     string private constant MAP_BADGE_PATH =
         "M14.3675 2.15671C14.7781 2.01987 15.2219 2.01987 15.6325 2.15671L20.6325 3.82338C21.4491 4.09561 22 4.85988 22 5.72074V19.6126C22 20.9777 20.6626 21.9416 19.3675 21.5099L15 20.0541L9.63246 21.8433C9.22192 21.9801 8.77808 21.9801 8.36754 21.8433L3.36754 20.1766C2.55086 19.9044 2 19.1401 2 18.2792V4.38741C2 3.0223 3.33739 2.05836 4.63246 2.49004L9 3.94589L14.3675 2.15671ZM15 4.05408L9.63246 5.84326C9.22192 5.9801 8.77808 5.9801 8.36754 5.84326L4 4.38741V18.2792L9 19.9459L14.3675 18.1567C14.7781 18.0199 15.2219 18.0199 15.6325 18.1567L20 19.6126V5.72074L15 4.05408ZM13.2929 8.29288C13.6834 7.90235 14.3166 7.90235 14.7071 8.29288L15.5 9.08577L16.2929 8.29288C16.6834 7.90235 17.3166 7.90235 17.7071 8.29288C18.0976 8.6834 18.0976 9.31657 17.7071 9.70709L16.9142 10.5L17.7071 11.2929C18.0976 11.6834 18.0976 12.3166 17.7071 12.7071C17.3166 13.0976 16.6834 13.0976 16.2929 12.7071L15.5 11.9142L14.7071 12.7071C14.3166 13.0976 13.6834 13.0976 13.2929 12.7071C12.9024 12.3166 12.9024 11.6834 13.2929 11.2929L14.0858 10.5L13.2929 9.70709C12.9024 9.31657 12.9024 8.6834 13.2929 8.29288ZM6 16C6.55228 16 7 15.5523 7 15C7 14.4477 6.55228 14 6 14C5.44772 14 5 14.4477 5 15C5 15.5523 5.44772 16 6 16ZM9 12C9 12.5523 8.55228 13 8 13C7.44772 13 7 12.5523 7 12C7 11.4477 7.44772 11 8 11C8.55228 11 9 11.4477 9 12ZM11 12C11.5523 12 12 11.5523 12 11C12 10.4477 11.5523 9.99998 11 9.99998C10.4477 9.99998 10 10.4477 10 11C10 11.5523 10.4477 12 11 12Z";
     string private constant AFFILIATE_BADGE_PATH =
@@ -169,6 +174,8 @@ contract IconRendererTrophy32 {
         bool isMap = (data & MAP_TROPHY_FLAG) != 0;
         bool isAffiliate = (data & AFFILIATE_TROPHY_FLAG) != 0;
         bool isStake = (data & STAKE_TROPHY_FLAG) != 0;
+        bool isBaf = (data & BAF_TROPHY_FLAG) != 0;
+        bool isDec = (data & DECIMATOR_TROPHY_FLAG) != 0;
 
         string memory lvlStr = (lvl == 0) ? "TBD" : uint256(lvl).toString();
         string memory trophyType;
@@ -182,6 +189,12 @@ contract IconRendererTrophy32 {
         } else if (isStake) {
             trophyType = "Stake";
             trophyLabel = "Stake Trophy";
+        } else if (isBaf) {
+            trophyType = "BAF";
+            trophyLabel = "BAF Trophy";
+        } else if (isDec) {
+            trophyType = "Decimator";
+            trophyLabel = "Decimator Trophy";
         } else {
             trophyType = "Winner's";
             trophyLabel = "Winner's Trophy";
@@ -212,6 +225,18 @@ contract IconRendererTrophy32 {
                 lvlStr,
                 " largest stake maturation."
             );
+        } else if (isBaf && exTr == BAF_TRAIT_SENTINEL) {
+            desc = string.concat(
+                "Awarded for Level ",
+                lvlStr,
+                " BAF finale."
+            );
+        } else if (isDec && exTr == DECIMATOR_TRAIT_SENTINEL) {
+            desc = string.concat(
+                "Awarded for Level ",
+                lvlStr,
+                " Decimator finale."
+            );
         } else {
             desc = string.concat("Awarded for Level ", lvlStr);
             desc = string.concat(
@@ -220,8 +245,44 @@ contract IconRendererTrophy32 {
             );
         }
 
-        string memory img = _trophySvg(tokenId, exTr, isMap, isAffiliate, isStake, lvl);
-        return _pack(tokenId, true, img, lvl, desc, trophyType);
+        bool includeTraitAttr;
+        string memory traitType;
+        string memory traitValue;
+        if (exTr < 256 && (isMap || (!isMap && !isAffiliate && !isStake && !isBaf && !isDec))) {
+            uint8 quadrant = uint8(exTr >> 6);
+            uint8 raw = uint8(exTr & 0x3F);
+            uint8 colorIdx = raw >> 3;
+            uint8 symIdx = raw & 0x07;
+            traitType = _quadrantTitle(quadrant);
+            traitValue = _traitLabel(quadrant, colorIdx, symIdx);
+            includeTraitAttr = true;
+        }
+
+        string memory attrs = string(
+            abi.encodePacked(
+                '[{"trait_type":"Level","value":"',
+                lvlStr,
+                '"},{"trait_type":"Trophy","value":"',
+                trophyType,
+                '"}'
+            )
+        );
+        if (includeTraitAttr) {
+            attrs = string(
+                abi.encodePacked(
+                    attrs,
+                    ',{"trait_type":"',
+                    traitType,
+                    '","value":"',
+                    traitValue,
+                    '"}'
+                )
+            );
+        }
+        attrs = string(abi.encodePacked(attrs, "]"));
+
+        string memory img = _trophySvg(tokenId, exTr, isMap, isAffiliate, isStake, isBaf, isDec, lvl);
+        return _pack(tokenId, true, img, lvl, desc, trophyType, attrs);
     }
 
     // ---------------------------------------------------------------------
@@ -267,13 +328,28 @@ contract IconRendererTrophy32 {
         bool isMap,
         bool isAffiliate,
         bool isStake,
+        bool isBaf,
+        bool isDec,
         uint24 lvl
     ) private view returns (string memory) {
         uint32 innerSide = _innerSquareSide();
         string memory diamondPath = icons.diamond();
 
         if (exterminatedTrait == 0xFFFF || isStake) {
-            uint8 ringIdx = isMap ? 2 : (isAffiliate ? 4 : (isStake ? 5 : 3));
+            uint8 ringIdx;
+            if (isMap) {
+                ringIdx = 2;
+            } else if (isAffiliate) {
+                ringIdx = 4;
+            } else if (isStake) {
+                ringIdx = 5;
+            } else if (isBaf) {
+                ringIdx = 7;
+            } else if (isDec) {
+                ringIdx = 6;
+            } else {
+                ringIdx = 3;
+            }
             string memory borderColor = _resolve(
                 tokenId,
                 0,
@@ -340,8 +416,17 @@ contract IconRendererTrophy32 {
         }
 
         bool isTopAffiliate = isAffiliate && exterminatedTrait == 0xFFFE;
+        bool isBafAward = isBaf && exterminatedTrait == BAF_TRAIT_SENTINEL;
+        bool isDecAward = isDec && exterminatedTrait == DECIMATOR_TRAIT_SENTINEL;
         uint8 six = uint8(exterminatedTrait) & 0x3F;
         uint8 dataQ = uint8(exterminatedTrait) >> 6;
+        if (isBafAward) {
+            dataQ = 3;
+            six = 0x38; // quadrant 3, color idx 7, symbol 0
+        } else if (isDecAward) {
+            dataQ = 3;
+            six = 0x31; // quadrant 3, color idx 6, symbol 1
+        }
         uint8 colIdx = isTopAffiliate ? 4 : (six >> 3);
         uint8 symIdx = isTopAffiliate ? 0 : (six & 0x07);
 
@@ -720,13 +805,48 @@ contract IconRendererTrophy32 {
         a[3] = v;
     }
 
+    function _colorTitle(uint8 idx) private pure returns (string memory) {
+        if (idx == 0) return "Pink";
+        if (idx == 1) return "Purple";
+        if (idx == 2) return "Green";
+        if (idx == 3) return "Red";
+        if (idx == 4) return "Blue";
+        if (idx == 5) return "Orange";
+        if (idx == 6) return "Silver";
+        return "Gold";
+    }
+
+    function _quadrantTitle(uint8 idx) private pure returns (string memory) {
+        if (idx == 0) return "Crypto";
+        if (idx == 1) return "Zodiac";
+        if (idx == 2) return "Gambling";
+        return "Dice";
+    }
+
+    function _symbolTitle(uint8 quadrant, uint8 symbolIdx) private view returns (string memory) {
+        if (quadrant < 3) {
+            string memory externalName = icons.symbol(quadrant, symbolIdx);
+            if (bytes(externalName).length != 0) {
+                return externalName;
+            }
+            return string.concat("Symbol ", (uint256(symbolIdx) + 1).toString());
+        }
+
+        return string.concat("Dice ", (uint256(symbolIdx) + 1).toString());
+    }
+
+    function _traitLabel(uint8 quadrant, uint8 colorIdx, uint8 symbolIdx) private view returns (string memory) {
+        return string.concat(_colorTitle(colorIdx), " ", _symbolTitle(quadrant, symbolIdx));
+    }
+
     function _pack(
         uint256 tokenId,
         bool isTrophy,
         string memory svg,
         uint256 level,
         string memory desc,
-        string memory trophyType
+        string memory trophyType,
+        string memory attrs
     ) private pure returns (string memory) {
         string memory lvlStr = (level == 0) ? "TBD" : level.toString();
         string memory nm = isTrophy
@@ -753,12 +873,7 @@ contract IconRendererTrophy32 {
         j = string.concat(j, '","description":"', desc);
         j = string.concat(j, '","image":"', imgData, '","attributes":');
         if (isTrophy) {
-            j = string.concat(
-                j,
-                '[{"trait_type":"Trophy","value":"',
-                trophyType,
-                '"}]}'
-            );
+            j = string.concat(j, attrs, "}");
         } else {
             j = string.concat(j, "[]}");
         }

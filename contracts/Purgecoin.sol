@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 interface IPurgeGame {
     function level() external view returns (uint24);
+    function gameState() external view returns (uint8);
     function getJackpotWinners(
         uint256 randomWord,
         uint8 trait,
@@ -498,11 +499,30 @@ contract Purgecoin {
         if (_rngLocked()) revert BettingPaused();
         address sender = msg.sender;
         uint24 currLevel = purgeGame.level();
-        uint24 distance = targetLevel - currLevel;
-        if (risk == 0 || risk > MAX_RISK || distance > 500 || distance < MAX_RISK) revert Insufficient();
+        if (targetLevel < currLevel) revert StakeInvalid();
+
+        uint8 stakeGameState = purgeGame.gameState();
+
+        uint24 effectiveLevel = currLevel;
+        if (stakeGameState != 3 && effectiveLevel != 0) {
+            unchecked {
+                effectiveLevel -= 1;
+            }
+        }
+
+        if (targetLevel <= effectiveLevel) revert StakeInvalid();
+
+        uint24 distance = targetLevel - effectiveLevel;
+        if (distance > 500) revert Insufficient();
+
+        if (risk == 0 || risk > MAX_RISK) revert Insufficient();
+
+        uint256 maxRiskForTarget = uint256(targetLevel) + 1 - uint256(effectiveLevel);
+        if (risk > maxRiskForTarget) revert Insufficient();
 
         // Starting level where this stake is placed (inclusive)
-        uint24 placeLevel = uint24(targetLevel - (risk - 1));
+        uint24 placeLevel = uint24(uint256(targetLevel) + 1 - uint256(risk));
+        if (placeLevel < effectiveLevel) revert StakeInvalid();
 
         // 1) Guard against direct collisions in the risk window [placeLevel .. placeLevel+risk-1]
         uint256 existingEncoded;
@@ -568,6 +588,10 @@ contract Purgecoin {
             unchecked {
                 --i;
             }
+        }
+
+        if (effectiveLevel == 0) {
+            boostedPrincipal = (boostedPrincipal * 3) / 2;
         }
 
         // Encode and place the stake lane
