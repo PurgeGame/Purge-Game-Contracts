@@ -154,9 +154,10 @@ contract PurgeGame {
     uint48 private constant JACKPOT_RESET_TIME = 82620; // Offset anchor for "daily" windows
     uint32 private constant NFT_AIRDROP_PLAYER_BATCH_SIZE = 210; // Max unique recipients per airdrop batch
     uint32 private constant NFT_AIRDROP_TOKEN_CAP = 3_000; // Max tokens distributed per airdrop batch
-    uint32 private constant DEFAULT_PAYOUTS_PER_TX = 500; // Keeps participant payouts under ~16M gas
+    uint32 private constant DEFAULT_PAYOUTS_PER_TX = 420; // Keeps participant payouts safely under ~15M gas
     uint32 private constant PURCHASE_MINIMUM = 1_500; // Minimum purchases to unlock game start
-    uint32 private constant WRITES_BUDGET_SAFE = 800; // Keeps map batching within the ~16M gas budget
+    uint32 private constant WRITES_BUDGET_SAFE = 640; // Keeps map batching within the ~15M gas budget
+    uint32 private constant TRAIT_REBUILD_TOKENS_PER_TX = 4_096; // Max tokens processed per trait rebuild slice
     uint64 private constant MAP_LCG_MULT = 0x5851F42D4C957F2D; // LCG multiplier for map RNG slices
     uint256 private constant TROPHY_FLAG_MAP = uint256(1) << 200; // Marks trophies sourced from MAP jackpots
     uint8 private constant MAP_FIRST_BATCH = 8; // Consecutive daily jackpots on map-only levels before normal cadence resumes
@@ -207,6 +208,8 @@ contract PurgeGame {
     uint32 private purchaseCount; // Total purchased NFTs this level
     uint32 private airdropMapsProcessedCount; // Progress inside current map-mint player's queue
     uint32 private airdropIndex; // Progress across players in pending arrays
+    uint32 private traitRebuildCursor; // Tokens processed during trait rebuild
+    bool private traitCountsSeeded; // Renderer seeded with counts for current level
 
     address[] private pendingNftMints; // Queue of players awaiting NFT mints
     address[] private pendingMapMints; // Queue of players awaiting map mints
@@ -238,7 +241,7 @@ contract PurgeGame {
     // Daily / Trait Counters
     // -----------------------
     uint32[80] internal dailyPurgeCount; // Layout: 8 symbol, 8 color, 64 trait buckets
-    uint32[256] internal traitRemaining; // Remaining supply per trait (0..255)
+    uint32[256] internal traitRemaining; // Remaining supply per trait (0 means exhausted)
 
     // -----------------------
     // Constructor
@@ -362,10 +365,14 @@ contract PurgeGame {
                 }
 
                 if (_phase == 3) {
+                    uint32 purchasesPhase3 = purchaseCount;
+                    bool rebuildCompletePhase3 = (purchasesPhase3 == 0) || (traitRebuildCursor >= purchasesPhase3);
                     if (
+                        rebuildCompletePhase3 &&
+                        !traitCountsSeeded &&
                         jackpotCounter == 0 && airdropIndex == 0 && airdropMapsProcessedCount == 0
                     ) {
-                        renderer.setStartingTraitRemaining(traitRemaining);
+                        _seedTraitCounts();
                     }
                     if (_processMapBatch(cap)) {
                         phase = 4;
@@ -394,6 +401,16 @@ contract PurgeGame {
                     break;
                 }
 
+                uint32 purchases = purchaseCount;
+                bool rebuildComplete = (purchases == 0) || (traitRebuildCursor >= purchases);
+                if (!rebuildComplete) {
+                    _rebuildTraitCounts(cap);
+                    break;
+                }
+                if (!traitCountsSeeded) {
+                    _seedTraitCounts();
+                    break;
+                }
                 if (_endJackpot(lvl, cap, day, false, rngWord, _phase)) {
                     nft.recordSeasonMinted(purchaseCount);
                     levelStartTime = ts;
@@ -447,6 +464,7 @@ contract PurgeGame {
         uint8 _phase = phase;
         uint24 lvl = level;
         uint8 state = gameState;
+        address buyer = msg.sender;
         if (quantity == 0 || quantity > 100) revert InvalidQuantity();
         if (state == 3) revert NotTimeYet();
         if ((lvl % 20) == 16) revert NotTimeYet();
@@ -467,18 +485,23 @@ contract PurgeGame {
                 bonus += (quantity * _priceCoin) / 5;
             }
             bonus += bonusCoinReward;
-            if (bonus != 0 || luckboxBonus != 0) coin.bonusCoinflip(msg.sender, bonus, true, luckboxBonus);
+            if (bonus != 0 || luckboxBonus != 0) coin.bonusCoinflip(buyer, bonus, true, luckboxBonus);
         }
 
         // Push buyer to the pending list once (de-dup)
-        if (playerTokensOwed[msg.sender] == 0) {
-            pendingNftMints.push(msg.sender);
+        uint32 owed = playerTokensOwed[buyer];
+        if (owed == 0) {
+            pendingNftMints.push(buyer);
         }
 
         // Precompute traits for future mints using the current RNG snapshot.
         // NOTE: tokenIds are not minted yet; only trait counters are updated.
         uint256 baseTokenId = nft.currentBaseTokenId();
-        uint256 tokenIdStart = baseTokenId + uint256(purchaseCount);
+        uint32 purchaseCountLocal = purchaseCount;
+        uint256 tokenIdStart = baseTokenId + uint256(purchaseCountLocal);
+        if (purchaseCountLocal == 0) {
+            traitRebuildCursor = 0;
+        }
         for (uint32 i; i < quantity; ) {
             uint256 _tokenId = tokenIdStart + i;
             uint256 rand = uint256(keccak256(abi.encodePacked(_tokenId, lvl)));
@@ -491,13 +514,6 @@ contract PurgeGame {
             uint32 _tokenTraits = uint32(tA) | (uint32(tB) << 8) | (uint32(tC) << 16) | (uint32(tD) << 24);
             tokenTraits[_tokenId] = _tokenTraits;
 
-            // Increment remaining counts for each tier-mapped trait bucket.
-            unchecked {
-                traitRemaining[tA] += 1; // base 0..63
-                traitRemaining[tB] += 1; // 64..127
-                traitRemaining[tC] += 1; // 128..191
-                traitRemaining[tD] += 1; // 192..255
-            }
             unchecked {
                 ++i;
             }
@@ -505,11 +521,13 @@ contract PurgeGame {
         }
 
         // Accrue scheduled mints to the buyer
+        uint32 qty32 = uint32(quantity);
         unchecked {
-            uint32 qty32 = uint32(quantity);
-            playerTokensOwed[msg.sender] += qty32;
-            purchaseCount += qty32;
+            uint32 newOwed = owed + qty32;
+            playerTokensOwed[buyer] = newOwed;
+            purchaseCount = purchaseCountLocal + qty32;
         }
+        traitCountsSeeded = false;
     }
 
     // --- “Mint & Purge” map flow: schedule symbol drops --------------------------------------------
@@ -633,19 +651,19 @@ contract PurgeGame {
             unchecked {
                 uint32 endLevel = (lvl % 10 == 7) ? 1 : 0;
 
-                if (--traitRemaining[trait0] == endLevel) {
+                if (_consumeTrait(trait0, endLevel)) {
                     winningTrait = trait0;
                     break;
                 }
-                if (--traitRemaining[trait1] == endLevel) {
+                if (_consumeTrait(trait1, endLevel)) {
                     winningTrait = trait1;
                     break;
                 }
-                if (--traitRemaining[trait2] == endLevel) {
+                if (_consumeTrait(trait2, endLevel)) {
                     winningTrait = trait2;
                     break;
                 }
-                if (--traitRemaining[trait3] == endLevel) {
+                if (_consumeTrait(trait3, endLevel)) {
                     winningTrait = trait3;
                     break;
                 }
@@ -758,6 +776,8 @@ contract PurgeGame {
                 ++t;
             }
         }
+        traitRebuildCursor = 0;
+        traitCountsSeeded = false;
         jackpotCounter = 0;
 
         uint256 mod100 = levelSnapshot % 100;
@@ -822,6 +842,8 @@ contract PurgeGame {
                 nextPrizePool = 0;
             }
             gameState = 2;
+            traitRebuildCursor = 0;
+            traitCountsSeeded = false;
         }
 
         if (pend.level == 0) {
@@ -1293,9 +1315,10 @@ contract PurgeGame {
     /// @notice Handle Purgecoin coin payments for purchases;
     /// @dev 1.5x cost on steps where `level % 20 == 13`. 10% discount on 18. Applies post-adjustment discount.
     function _coinReceive(uint256 amount, uint24 lvl, uint256 discount) private {
-        if (lvl % 20 == 13) amount = (amount * 3) / 2;
-        else if (lvl % 20 == 18) amount = (amount * 9) / 10;
-            amount -= discount;
+        uint8 stepMod = uint8(lvl % 20);
+        if (stepMod == 13) amount = (amount * 3) / 2;
+        else if (stepMod == 18) amount = (amount * 9) / 10;
+        if (discount != 0) amount -= discount;
         coin.burnCoin(msg.sender, amount);
     }
 
@@ -1317,7 +1340,7 @@ contract PurgeGame {
     // --- Map / NFT airdrop batching ------------------------------------------------------------------
 
     /// @notice Process a batch of map mints using a caller-provided writes budget (0 = auto).
-    /// @param writesBudget Count of SSTORE writes allowed this tx; hard-clamped to ≤16M-safe.
+    /// @param writesBudget Count of SSTORE writes allowed this tx; hard-clamped to stay ≤15M-safe.
     /// @return finished True if all pending map mints have been fully processed.
     function _processMapBatch(uint32 writesBudget) private returns (bool finished) {
         uint256 total = pendingMapMints.length;
@@ -1436,6 +1459,91 @@ contract PurgeGame {
             }
         }
         return airdropIndex >= totalPlayers;
+    }
+
+    function _snapshotTraitRemaining() private view returns (uint32[256] memory snapshot) {
+        uint32[256] storage remaining = traitRemaining;
+        for (uint16 t; t < 256; ) {
+            snapshot[t] = remaining[t];
+            unchecked {
+                ++t;
+            }
+        }
+    }
+
+    function _seedTraitCounts() private {
+        if (traitCountsSeeded) return;
+        renderer.setStartingTraitRemaining(_snapshotTraitRemaining());
+        traitCountsSeeded = true;
+    }
+
+    /// @notice Rebuild `traitRemaining` by scanning scheduled token traits in capped slices.
+    /// @param tokenBudget Max tokens to process this call (0 => default 4,096).
+    /// @return finished True when all tokens for the level have been incorporated.
+    function _rebuildTraitCounts(uint32 tokenBudget) private returns (bool finished) {
+        uint32 target = purchaseCount;
+        if (target == 0) {
+            traitRebuildCursor = 0;
+            return true;
+        }
+
+        uint32 cursor = traitRebuildCursor;
+        if (cursor >= target) return true;
+
+        uint32 batch = (tokenBudget == 0) ? TRAIT_REBUILD_TOKENS_PER_TX : tokenBudget;
+        uint32 remaining = target - cursor;
+        if (batch > remaining) batch = remaining;
+
+        bool startingSlice = cursor == 0;
+        uint32[256] memory localCounts;
+        uint8[256] memory touched;
+        uint16 touchedLen;
+
+        uint256 baseTokenId = nft.currentBaseTokenId();
+
+        for (uint32 i; i < batch; ) {
+            uint32 tokenOffset = cursor + i;
+            uint32 traitsPacked = tokenTraits[baseTokenId + tokenOffset];
+            uint8 t0 = uint8(traitsPacked);
+            uint8 t1 = uint8(traitsPacked >> 8);
+            uint8 t2 = uint8(traitsPacked >> 16);
+            uint8 t3 = uint8(traitsPacked >> 24);
+
+            unchecked {
+                if (localCounts[t0]++ == 0) touched[touchedLen++] = t0;
+                if (localCounts[t1]++ == 0) touched[touchedLen++] = t1;
+                if (localCounts[t2]++ == 0) touched[touchedLen++] = t2;
+                if (localCounts[t3]++ == 0) touched[touchedLen++] = t3;
+                ++i;
+            }
+        }
+
+        uint32[256] storage remainingCounts = traitRemaining;
+        for (uint16 u; u < touchedLen; ) {
+            uint8 traitId = touched[u];
+            unchecked {
+                uint32 incoming = localCounts[traitId];
+                if (startingSlice) {
+                    remainingCounts[traitId] = incoming;
+                } else {
+                    remainingCounts[traitId] += incoming;
+                }
+                ++u;
+            }
+        }
+
+        traitRebuildCursor = cursor + batch;
+        finished = (traitRebuildCursor == target);
+    }
+
+    function _consumeTrait(uint8 traitId, uint32 endLevel) private returns (bool reachedZero) {
+        uint32 stored = traitRemaining[traitId];
+
+        unchecked {
+            stored -= 1;
+        }
+        traitRemaining[traitId] = stored;
+        return stored == endLevel;
     }
 
     /// @notice Generate `count` random “map symbols” for `player`, record tickets & contributions.
