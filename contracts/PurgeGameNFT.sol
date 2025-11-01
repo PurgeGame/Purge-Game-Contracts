@@ -164,6 +164,8 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
     mapping(address => uint8) private affiliateStakeCount;
     mapping(address => uint8) private mapStakeCount;
     mapping(address => uint24) private affiliateStakeBaseLevel;
+    mapping(address => uint24) private stakedBafMaxLevel;
+    mapping(address => mapping(uint24 => uint16)) private stakedBafLevelCounts;
     mapping(address => uint24) private _ethMintLastLevel;
     mapping(address => uint24) private _ethMintLevelCount;
     mapping(address => uint24) private _ethMintStreakCount;
@@ -1078,6 +1080,8 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
         bool mapTrophy = (info & TROPHY_FLAG_MAP) != 0;
         bool affiliateTrophy = (info & TROPHY_FLAG_AFFILIATE) != 0;
         bool levelTrophy = info != 0 && !mapTrophy && !affiliateTrophy && (info & TROPHY_FLAG_STAKE) == 0;
+        bool bafTrophy = (info & TROPHY_FLAG_BAF) != 0;
+        uint24 trophyBaseLevel = uint24((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF);
         bool targetMap = isMap;
         bool targetAffiliate = !isMap && affiliateTrophy;
         bool targetLevel = !isMap && !affiliateTrophy && levelTrophy;
@@ -1137,6 +1141,9 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
                 discountBps = uint16(_stakeDiscountPct(current) * 100);
                 kind = 3;
             }
+            if (bafTrophy) {
+                _registerBafStake(sender, trophyBaseLevel);
+            }
             emit TrophyStakeChanged(sender, tokenId, kind, true, count, discountBps);
         } else {
             if (game.gameState() != 3) revert TrophyStakeViolation(_STAKE_ERR_LOCKED);
@@ -1177,6 +1184,9 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
                 count = current;
                 discountBps = uint16(_stakeDiscountPct(current) * 100);
                 kind = 3;
+            }
+            if (bafTrophy) {
+                _unregisterBafStake(sender, trophyBaseLevel);
             }
             emit TrophyStakeChanged(sender, tokenId, kind, false, count, discountBps);
         }
@@ -1227,6 +1237,44 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
         delete stakedTrophyIndex[tokenId];
     }
 
+    function _registerBafStake(address player, uint24 level) private {
+        if (level == 0) return;
+        uint16 newCount = stakedBafLevelCounts[player][level] + 1;
+        stakedBafLevelCounts[player][level] = newCount;
+        uint24 currentMax = stakedBafMaxLevel[player];
+        if (level > currentMax) {
+            stakedBafMaxLevel[player] = level;
+        }
+    }
+
+    function _unregisterBafStake(address player, uint24 level) private {
+        if (level == 0) return;
+        mapping(uint24 => uint16) storage counts = stakedBafLevelCounts[player];
+        uint16 current = counts[level];
+        if (current <= 1) {
+            delete counts[level];
+            if (stakedBafMaxLevel[player] == level) {
+                stakedBafMaxLevel[player] = _nextHighestBafLevel(player, level);
+            }
+        } else {
+            counts[level] = current - 1;
+        }
+    }
+
+    function _nextHighestBafLevel(address player, uint24 startLevel) private view returns (uint24) {
+        mapping(uint24 => uint16) storage counts = stakedBafLevelCounts[player];
+        uint24 level = startLevel;
+        while (level != 0) {
+            unchecked {
+                level -= 1;
+            }
+            if (counts[level] != 0) {
+                return level;
+            }
+        }
+        return 0;
+    }
+
     function levelStakeDiscount(address player) external view returns (uint8) {
         return _stakeDiscountPct(levelStakeCount[player]);
     }
@@ -1240,6 +1288,16 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
         if (count == 0) return 0;
         uint24 effective = _effectiveStakeLevel();
         return _currentAffiliateBonus(player, effective);
+    }
+
+    function bafStakeBonusBps(address player) external view returns (uint16) {
+        uint24 level = stakedBafMaxLevel[player];
+        if (level == 0) return 0;
+        uint256 bonus = uint256(level) * 10;
+        if (bonus > 220) {
+            bonus = 220;
+        }
+        return uint16(bonus);
     }
 
     function ethMintLastLevel(address player) external view returns (uint24) {

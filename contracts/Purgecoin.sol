@@ -25,6 +25,7 @@ interface IPurgeGameNFT {
     function rngLocked() external view returns (bool);
     function awardStakeTrophy(address to, uint24 level, uint256 principal) external;
     function stakedTrophySample(uint64 salt) external view returns (address);
+    function bafStakeBonusBps(address player) external view returns (uint16);
 
 }
 
@@ -332,6 +333,13 @@ contract Purgecoin {
                 }
             }
             // Internal flip accounting; assumed non-reentrant / no external calls.
+            if (depositWithBonus != 0) {
+                uint16 bafBonusBps = purgeGameNFT.bafStakeBonusBps(caller);
+                if (bafBonusBps != 0) {
+                    uint256 extra = (depositWithBonus * bafBonusBps) / 10_000;
+                    depositWithBonus += extra;
+                }
+            }
             addFlip(caller, depositWithBonus, true);
         }
 
