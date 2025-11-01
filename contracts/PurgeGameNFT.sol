@@ -270,9 +270,7 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
     }
 
     function _packedOwnershipOf(uint256 tokenId) private view returns (uint256 packed) {
-        if (tokenId >= _currentIndex || (trophyData[tokenId] == 0 && tokenId < _currentBaseTokenId())) {
-            revert InvalidToken();
-        }
+        if (tokenId >= _currentIndex) revert InvalidToken();
 
         packed = _packedOwnerships[tokenId];
         if (packed == 0) {
@@ -283,6 +281,12 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
                     if (packed != 0) break;
                 }
             }
+        }
+
+
+
+        if (tokenId < _currentBaseTokenId() && trophyData[tokenId] == 0) {
+            revert InvalidToken();
         }
 
         if (packed & _BITMASK_BURNED != 0 || (packed & _BITMASK_ADDRESS) == 0) {
@@ -316,7 +320,21 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
 
     function _exists(uint256 tokenId) internal view returns (bool) {
         if (tokenId < _currentBaseTokenId()) {
-            return trophyData[tokenId] != 0;
+            if (trophyData[tokenId] != 0) return true;
+            uint256 packed = _packedOwnerships[tokenId];
+            if (packed == 0) {
+                unchecked {
+                    uint256 curr = tokenId;
+                    while (curr != 0) {
+                        packed = _packedOwnerships[--curr];
+                        if (packed != 0) break;
+                    }
+                }
+            }
+            if (packed == 0) return false;
+            return
+                (packed & _BITMASK_BURNED) == 0 &&
+                address(uint160(packed)) == address(game);
         }
 
         if (tokenId < _currentIndex) {
@@ -663,16 +681,18 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
 
     function _mintTrophyPlaceholders(uint24 level) private returns (uint256 newBaseTokenId) {
         uint256 startId = _currentIndex;
-        _mint(address(game), 3);
+        _mint(address(game), 4);
         uint256 mapTokenId = startId;
         uint256 levelTokenId = startId + 1;
         uint256 affiliateTokenId = startId + 2;
+        uint256 stakeTokenId = startId + 3;
         trophyData[mapTokenId] =
             (uint256(0xFFFF) << 152) | (uint256(level) << TROPHY_BASE_LEVEL_SHIFT) | TROPHY_FLAG_MAP;
         trophyData[levelTokenId] = (uint256(0xFFFF) << 152) | (uint256(level) << TROPHY_BASE_LEVEL_SHIFT);
         trophyData[affiliateTokenId] =
             (uint256(0xFFFF) << 152) | (uint256(level) << TROPHY_BASE_LEVEL_SHIFT) | TROPHY_FLAG_AFFILIATE;
-        newBaseTokenId = affiliateTokenId + 1;
+        delete trophyData[stakeTokenId];
+        newBaseTokenId = stakeTokenId + 1;
     }
 
     function purge(address owner, uint256[] calldata tokenIds) external onlyGame {
@@ -722,11 +742,11 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
         uint256 baseTokenId = _currentBaseTokenId();
         uint256 tokenId;
         if (isMap) {
-            tokenId = baseTokenId - 3;
+            tokenId = baseTokenId - 4;
         } else if (isAffiliate) {
-            tokenId = baseTokenId - 1;
-        } else {
             tokenId = baseTokenId - 2;
+        } else {
+            tokenId = baseTokenId - 3;
         }
         _awardTrophy(to, data, deferredWei, tokenId);
     }
@@ -739,9 +759,9 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
     {
         uint24 nextLevel = req.level + 1;
         uint256 previousBase = _previousBaseTokenId();
-        uint256 affiliateTokenId = previousBase - 1;
-        uint256 levelTokenId = previousBase - 2;
-        uint256 mapTokenId = previousBase - 3;
+        uint256 affiliateTokenId = previousBase - 2;
+        uint256 levelTokenId = previousBase - 3;
+        uint256 mapTokenId = previousBase - 4;
 
         bool traitWin = req.traitId != TRAIT_ID_TIMEOUT;
         uint256 randomWord = rngWord;
@@ -1076,15 +1096,36 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
         uint256 principal
     ) external onlyCoinContract returns (uint256 tokenId) {
         if (to == address(0)) revert Zero();
+        uint256 data =
+            (uint256(STAKE_TRAIT_SENTINEL) << 152) |
+            (uint256(level) << TROPHY_BASE_LEVEL_SHIFT) |
+            TROPHY_FLAG_STAKE;
+        uint256 placeholderId;
+        uint24 currentLevel = game.level();
+        if (level == currentLevel) {
+            placeholderId = _currentBaseTokenId() - 1;
+        } else if (level + 1 == currentLevel) {
+            placeholderId = _previousBaseTokenId() - 1;
+        }
+
+        if (placeholderId != 0) {
+            uint256 ownership = _packedOwnershipOf(placeholderId);
+            if (
+                address(uint160(ownership)) == address(game) &&
+                trophyData[placeholderId] == 0
+            ) {
+                _awardTrophy(to, data, 0, placeholderId);
+                tokenId = placeholderId;
+                emit StakeTrophyAwarded(to, tokenId, level, principal);
+                return tokenId;
+            }
+        }
+
         tokenId = _currentIndex;
         _mint(to, 1);
         unchecked {
             totalTrophySupply += 1;
         }
-        uint256 data =
-            (uint256(STAKE_TRAIT_SENTINEL) << 152) |
-            (uint256(level) << TROPHY_BASE_LEVEL_SHIFT) |
-            TROPHY_FLAG_STAKE;
         trophyData[tokenId] = data;
         emit StakeTrophyAwarded(to, tokenId, level, principal);
     }
