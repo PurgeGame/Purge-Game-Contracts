@@ -1018,6 +1018,7 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
         uint256 coinAmount;
         bool coinClaimed;
         bool isMap = (info & TROPHY_FLAG_MAP) != 0;
+        bool isDecimator = (info & TROPHY_FLAG_DECIMATOR) != 0;
         if (isMap) {
             uint32 start = uint32((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF) + COIN_DRIP_STEPS + 1;
             uint32 floor = start - 1;
@@ -1044,6 +1045,17 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
                 coinAmount = COIN_EMISSION_UNIT * (span + (prefixEnd - prefixStart));
                 coinClaimed = true;
                 updatedLast = currentLevel;
+            }
+        } else if (isDecimator) {
+            if (!trophyStaked[tokenId]) revert ClaimNotReady();
+            if (currentLevel > lastClaim) {
+                if (rngLockedFlag) revert CoinPaused();
+                uint256 decCoin = _decimatorCoinBetween(lastClaim, currentLevel);
+                if (decCoin != 0) {
+                    coinAmount = decCoin;
+                    coinClaimed = true;
+                    updatedLast = currentLevel;
+                }
             }
         }
 
@@ -1081,6 +1093,7 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
         bool affiliateTrophy = (info & TROPHY_FLAG_AFFILIATE) != 0;
         bool levelTrophy = info != 0 && !mapTrophy && !affiliateTrophy && (info & TROPHY_FLAG_STAKE) == 0;
         bool bafTrophy = (info & TROPHY_FLAG_BAF) != 0;
+        bool decimatorTrophy = (info & TROPHY_FLAG_DECIMATOR) != 0;
         uint24 trophyBaseLevel = uint24((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF);
         bool targetMap = isMap;
         bool targetAffiliate = !isMap && affiliateTrophy;
@@ -1111,6 +1124,7 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
             uint8 count;
             uint16 discountBps;
             uint8 kind;
+            uint24 currentLevelNow = game.level();
             if (targetMap) {
                 uint8 current = mapStakeCount[sender];
                 if (current >= MAP_STAKE_MAX) revert StakeInvalid();
@@ -1144,6 +1158,9 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
             if (bafTrophy) {
                 _registerBafStake(sender, trophyBaseLevel);
             }
+            if (decimatorTrophy) {
+                _setDecimatorBaseline(tokenId, currentLevelNow);
+            }
             emit TrophyStakeChanged(sender, tokenId, kind, true, count, discountBps);
         } else {
             if (game.gameState() != 3) revert TrophyStakeViolation(_STAKE_ERR_LOCKED);
@@ -1153,6 +1170,7 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
             uint8 count;
             uint16 discountBps;
             uint8 kind;
+            uint24 currentLevelNow = game.level();
             if (targetMap) {
                 uint8 current = mapStakeCount[sender];
                 if (current == 0) revert StakeInvalid();
@@ -1187,6 +1205,12 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
             }
             if (bafTrophy) {
                 _unregisterBafStake(sender, trophyBaseLevel);
+            }
+            if (decimatorTrophy) {
+                uint256 coinAmount = _payoutDecimatorStake(tokenId, currentLevelNow);
+                if (coinAmount != 0) {
+                    coin.bonusCoinflip(sender, coinAmount, true, 0);
+                }
             }
             emit TrophyStakeChanged(sender, tokenId, kind, false, count, discountBps);
         }
@@ -1273,6 +1297,50 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
             }
         }
         return 0;
+    }
+
+    function _setDecimatorBaseline(uint256 tokenId, uint24 level) private {
+        uint256 info = trophyData[tokenId];
+        uint256 cleared = info & ~TROPHY_LAST_CLAIM_MASK;
+        uint256 updated = cleared | (uint256(level & 0xFFFFFF) << TROPHY_LAST_CLAIM_SHIFT);
+        trophyData[tokenId] = updated;
+    }
+
+    function _payoutDecimatorStake(uint256 tokenId, uint24 currentLevel) private returns (uint256) {
+        uint256 info = trophyData[tokenId];
+        uint24 lastClaim = uint24((info >> TROPHY_LAST_CLAIM_SHIFT) & 0xFFFFFF);
+        if (currentLevel <= lastClaim) return 0;
+        uint256 amount = _decimatorCoinBetween(lastClaim, currentLevel);
+        if (amount == 0) return 0;
+        uint256 newInfo = (info & ~TROPHY_LAST_CLAIM_MASK) | (uint256(currentLevel) << TROPHY_LAST_CLAIM_SHIFT);
+        trophyData[tokenId] = newInfo;
+        return amount;
+    }
+
+    function _decimatorCoinBetween(uint24 fromLevel, uint24 toLevel) private pure returns (uint256 reward) {
+        if (toLevel <= fromLevel) return 0;
+        uint256 start = uint256(fromLevel) + 1;
+        uint256 end = uint256(toLevel);
+        uint256 bucketStart = (start - 1) / 10;
+        uint256 bucketEnd = (end - 1) / 10;
+        for (uint256 bucket = bucketStart; bucket <= bucketEnd; ) {
+            uint256 bucketLow = bucket * 10 + 1;
+            uint256 bucketHigh = bucketLow + 9;
+            if (bucketHigh > end) bucketHigh = end;
+            uint256 segStart = start > bucketLow ? start : bucketLow;
+            uint256 segEnd = end < bucketHigh ? end : bucketHigh;
+            if (segStart <= segEnd) {
+                uint256 count = segEnd - segStart + 1;
+                uint256 multiplier = bucket + 1;
+                if (multiplier > 10) multiplier = 10;
+                reward += count * multiplier;
+            }
+            if (bucket == bucketEnd) break;
+            unchecked {
+                bucket += 1;
+            }
+        }
+        return reward * COIN_EMISSION_UNIT;
     }
 
     function levelStakeDiscount(address player) external view returns (uint8) {
