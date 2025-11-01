@@ -192,6 +192,7 @@ contract PurgeGame {
     uint8 private earlyPurgeJackpotPaidMask; // Bitmask for early purge jackpots paid (progressive)
     uint8 private phase; // Airdrop sub-phase (0..7)
     uint16 private lastExterminatedTrait = TRAIT_ID_TIMEOUT; // The winning trait from the previous season (timeout sentinel)
+    bool private jackpotActivityThisCycle; // Tracks if a daily, early-purge, or map jackpot ran this cycle
 
     // -----------------------
     // RNG Liveness Flags
@@ -405,9 +406,6 @@ contract PurgeGame {
                         payDailyJackpot(true, lvl, rngWord);
                     }
                     if (gameState != 3) break;
-                    if (modTwenty != 16) {
-                        coinContract.triggerCoinJackpot(rngWord);
-                    }
                     phase = 7;
                     break;
                 }
@@ -1127,6 +1125,7 @@ contract PurgeGame {
         prizePool = newPrizePool;
         levelPrizePool = newPrizePool;
 
+        jackpotActivityThisCycle = true;
         emit Jackpot((uint256(9) << 248) | packedTraits);
         return true;
     }
@@ -1142,6 +1141,7 @@ contract PurgeGame {
     /// - Per‑group allocation is an equal split of `dailyTotal / 4` across sampled winners (integer division).
     /// - Updates `jackpotCounter` up/down depending on the mode and emits a `Jackpot(kind=4, traits...)` event.
     function payDailyJackpot(bool isDaily, uint24 lvl, uint256 randWord) internal {
+        jackpotActivityThisCycle = true;
         if (!isDaily) {
             unchecked {
                 randWord = ((randWord << 64) | (randWord >> 192)) ^ (uint256(jackpotCounter) << 128) ^ 0x05;
@@ -1243,10 +1243,17 @@ contract PurgeGame {
         private
         returns (bool ok)
     {
-        if (phaseSnapshot >= 3 || (lvl % 20) != 0) {
+        uint8 lvlMod20 = uint8(lvl % 20);
+        bool triggerCoinJackpot = !jackpotActivityThisCycle;
+
+        if (phaseSnapshot >= 3 || lvlMod20 != 0) {
             ok = coin.processCoinflipPayouts(lvl, cap, bonusFlip, rngWord);
             if (!ok) return false;
         }
+        if (triggerCoinJackpot) {
+            coin.triggerCoinJackpot(rngWord);
+        }
+        jackpotActivityThisCycle = false;
         nft.releaseRngLock();
         dailyIdx = dayIdx;
         return true;
