@@ -157,14 +157,14 @@ contract PurgeGame {
     uint32 private constant DEFAULT_PAYOUTS_PER_TX = 500; // Keeps participant payouts under ~16M gas
     uint32 private constant PURCHASE_MINIMUM = 1_500; // Minimum purchases to unlock game start
     uint32 private constant WRITES_BUDGET_SAFE = 800; // Keeps map batching within the ~16M gas budget
-    uint72 private constant MAP_PERMILLE = 0x0A0A07060304050564; // Payout permilles packed (9 bytes)
     uint64 private constant MAP_LCG_MULT = 0x5851F42D4C957F2D; // LCG multiplier for map RNG slices
     uint256 private constant TROPHY_FLAG_MAP = uint256(1) << 200; // Marks trophies sourced from MAP jackpots
     uint8 private constant MAP_FIRST_BATCH = 8; // Consecutive daily jackpots on map-only levels before normal cadence resumes
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
     uint256 private constant LUCKBOX_BYPASS_THRESHOLD = 100_000 * 1_000_000; // 100k PURGED (6 decimals)
     uint8 private constant EP_THIRTY_MASK = 4; // 30% early-purge threshold bit
-    uint256 private constant PURCHASE_WEIGHT_TOTAL = 30;
+    uint8 private constant JACKPOT_KIND_DAILY = 4;
+    uint8 private constant JACKPOT_KIND_MAP = 9;
 
     // -----------------------
     // Price
@@ -196,7 +196,6 @@ contract PurgeGame {
     uint8 private earlyPurgeJackpotPaidMask; // Bitmask for early purge jackpots paid (progressive)
     uint8 private phase; // Airdrop sub-phase (0..7)
     uint16 private lastExterminatedTrait = TRAIT_ID_TIMEOUT; // The winning trait from the previous season (timeout sentinel)
-    bool private jackpotActivityThisCycle; // Tracks if a daily, early-purge, or map jackpot ran this cycle
 
     // -----------------------
     // RNG Liveness Flags
@@ -978,17 +977,6 @@ contract PurgeGame {
         emit PlayerCredited(beneficiary, weiAmount);
     }
 
-    /// @notice Map jackpot specification for a given bucket index.
-    /// @dev Returns the number of winners and the bucket’s permille share of the prize.
-    ///      Index layout (0..8) corresponds to distinct trait groups.
-    /// @param index Bucket index.
-    /// @return winnersN Number of winners to draw for this bucket.
-    /// @return permille Permille share (out of 1000) allocated to this bucket.
-    function _mapSpec(uint8 index) internal pure returns (uint8 winnersN, uint8 permille) {
-        winnersN = (index & 1) == 1 ? 1 : (index == 0 ? 1 : 20);
-        permille = uint8(MAP_PERMILLE >> (uint256(index) * 8));
-    }
-
     /// @notice Expose trait-ticket sampling (view helper for coinJackpot).
     function getJackpotWinners(
         uint256 randomWord,
@@ -997,6 +985,30 @@ contract PurgeGame {
         uint8 salt
     ) external view returns (address[] memory) {
         return _randTraitTicket(traitPurgeTicket[level], randomWord, trait, numWinners, salt);
+    }
+
+    // --- Shared jackpot helpers ----------------------------------------------------------------------
+
+    function _emitJackpot(uint8 kind, uint8[4] memory winningTraits) private {
+        emit Jackpot(
+            (uint256(kind) << 248) |
+                uint256(winningTraits[0]) |
+                (uint256(winningTraits[1]) << 8) |
+                (uint256(winningTraits[2]) << 16) |
+                (uint256(winningTraits[3]) << 24)
+        );
+    }
+
+    function _runJackpotAndEmit(
+        uint8 eventKind,
+        JackpotSpec memory spec,
+        uint24 lvl,
+        uint256 poolAmount,
+        uint256 entropy,
+        uint8[4] memory winningTraits
+    ) private returns (uint256 paidEth, uint256 remainingCoin) {
+        (paidEth, remainingCoin) = _runJackpot(spec, lvl, poolAmount, entropy, winningTraits);
+        _emitJackpot(eventKind, winningTraits);
     }
 
     // --- Map jackpot payout (end of purchase phase) -------------------------------------------------
@@ -1053,20 +1065,19 @@ contract PurgeGame {
 
         JackpotSpec memory spec = JackpotSpec({payInCoin: false, mapTrophy: true});
 
-        (uint256 paidWei, ) = _runJackpot(spec, lvl, effectiveWei, rndWord ^ (uint256(lvl) << 200), winningTraits);
+        (uint256 paidWei, ) = _runJackpotAndEmit(
+            JACKPOT_KIND_MAP,
+            spec,
+            lvl,
+            effectiveWei,
+            rndWord ^ (uint256(lvl) << 200),
+            winningTraits
+        );
 
         uint256 remainingPool = effectiveWei > paidWei ? effectiveWei - paidWei : 0;
         prizePool = remainingPool;
         levelPrizePool = remainingPool;
 
-        jackpotActivityThisCycle = true;
-        emit Jackpot(
-            (uint256(9) << 248) |
-                uint256(winningTraits[0]) |
-                (uint256(winningTraits[1]) << 8) |
-                (uint256(winningTraits[2]) << 16) |
-                (uint256(winningTraits[3]) << 24)
-        );
         return true;
     }
 
@@ -1075,14 +1086,11 @@ contract PurgeGame {
     /// @notice Pay daily or early‑purge jackpots (ETH payouts) using the shared trait distribution.
     /// @dev Rolls four traits, assigns 20% of the pool to each, and pays {25,15,10,1} winners (scaled by level band) evenly per trait.
     function payDailyJackpot(bool isDaily, uint24 lvl, uint256 randWord) internal {
-        jackpotActivityThisCycle = true;
         uint8[4] memory winningTraits;
         if (isDaily) {
             winningTraits = _getWinningTraits(randWord, dailyPurgeCount);
         } else {
-            unchecked {
-                randWord = ((randWord << 64) | (randWord >> 192)) ^ (uint256(jackpotCounter) << 128) ^ 0x05;
-            }
+            randWord = _scrambleJackpotEntropy(randWord, jackpotCounter);
             winningTraits = _getRandomTraits(randWord);
         }
 
@@ -1098,14 +1106,13 @@ contract PurgeGame {
 
         JackpotSpec memory spec = JackpotSpec({payInCoin: false, mapTrophy: false});
 
-        (uint256 paidWei, ) = _runJackpot(spec, lvl, poolWei, randWord ^ (uint256(lvl) << 192), winningTraits);
-
-        emit Jackpot(
-            (uint256(4) << 248) |
-                uint256(winningTraits[0]) |
-                (uint256(winningTraits[1]) << 8) |
-                (uint256(winningTraits[2]) << 16) |
-                (uint256(winningTraits[3]) << 24)
+        (uint256 paidWei, ) = _runJackpotAndEmit(
+            JACKPOT_KIND_DAILY,
+            spec,
+            lvl,
+            poolWei,
+            randWord ^ (uint256(lvl) << 192),
+            winningTraits
         );
 
         if (isDaily) {
@@ -1146,16 +1153,12 @@ contract PurgeGame {
         returns (bool ok)
     {
         uint8 lvlMod20 = uint8(lvl % 20);
-        bool triggerCoinJackpot = !jackpotActivityThisCycle;
 
         if (phaseSnapshot >= 3 || lvlMod20 != 0) {
             ok = coin.processCoinflipPayouts(lvl, cap, bonusFlip, rngWord);
             if (!ok) return false;
         }
-        if (triggerCoinJackpot) {
-            _executeCoinJackpot(lvl, uint256(keccak256(abi.encodePacked(rngWord, lvl, "coin"))));
-        }
-        jackpotActivityThisCycle = false;
+        _executeCoinJackpot(lvl, uint256(keccak256(abi.encodePacked(rngWord, lvl, "coin"))));
         nft.releaseRngLock();
         dailyIdx = dayIdx;
         return true;
@@ -1664,52 +1667,39 @@ contract PurgeGame {
         nextEntropy = entropy;
         trophyGivenOut = trophyGiven;
 
-        uint8 count0 = uint8(25 * band);
-        uint8 count1 = uint8(15 * band);
-        uint8 count2 = uint8(10 * band);
-        uint16 totalCount = uint16(count0) + uint16(count1) + uint16(count2) + 1;
-        if (totalCount == 0 || traitShare == 0) return (nextEntropy, trophyGivenOut, 0, 0);
+        if (traitShare == 0) return (nextEntropy, trophyGivenOut, 0, 0);
+
+        uint16 totalCount = 1;
+        for (uint8 i; i < 3; ) {
+            totalCount += _jackpotCount(i, band);
+            unchecked {
+                ++i;
+            }
+        }
 
         uint256 perWinner = traitShare / totalCount;
         if (perWinner == 0) return (nextEntropy, trophyGivenOut, 0, 0);
 
-        if (count0 != 0) {
-            nextEntropy = _entropyStep(nextEntropy ^ (uint256(traitIdx) + 1));
-            address[] memory winners0 = _randTraitTicket(
-                traitPurgeTicket[lvl],
-                nextEntropy,
-                traitId,
-                count0,
-                uint8(200 + traitIdx * 4)
-            );
-            uint256 credited0 = _payCategory(perWinner, winners0, count0, payCoin, lvl);
-            if (payCoin) coinDelta += credited0; else ethDelta += credited0;
-        }
-
-        if (count1 != 0) {
-            nextEntropy = _entropyStep(nextEntropy ^ (uint256(traitIdx) + 2));
-            address[] memory winners1 = _randTraitTicket(
-                traitPurgeTicket[lvl],
-                nextEntropy,
-                traitId,
-                count1,
-                uint8(200 + traitIdx * 4 + 1)
-            );
-            uint256 credited1 = _payCategory(perWinner, winners1, count1, payCoin, lvl);
-            if (payCoin) coinDelta += credited1; else ethDelta += credited1;
-        }
-
-        if (count2 != 0) {
-            nextEntropy = _entropyStep(nextEntropy ^ (uint256(traitIdx) + 3));
-            address[] memory winners2 = _randTraitTicket(
-                traitPurgeTicket[lvl],
-                nextEntropy,
-                traitId,
-                count2,
-                uint8(200 + traitIdx * 4 + 2)
-            );
-            uint256 credited2 = _payCategory(perWinner, winners2, count2, payCoin, lvl);
-            if (payCoin) coinDelta += credited2; else ethDelta += credited2;
+        uint8 saltBase = uint8(200 + traitIdx * 4);
+        for (uint8 i; i < 3; ) {
+            uint8 count = _jackpotCount(i, band);
+            if (count != 0) {
+                nextEntropy = _entropyStep(nextEntropy ^ (uint256(traitIdx) + uint256(i) + 1));
+                uint8 salt = uint8(uint256(saltBase) + i);
+                address[] memory winners = _randTraitTicket(
+                    traitPurgeTicket[lvl],
+                    nextEntropy,
+                    traitId,
+                    count,
+                    salt
+                );
+                uint256 credited = _payCategory(perWinner, winners, count, payCoin, lvl);
+                if (payCoin) coinDelta += credited;
+                else ethDelta += credited;
+            }
+            unchecked {
+                ++i;
+            }
         }
 
         nextEntropy = _entropyStep(nextEntropy ^ (uint256(traitIdx) + 4));
@@ -1718,7 +1708,7 @@ contract PurgeGame {
             nextEntropy,
             traitId,
             1,
-            uint8(200 + traitIdx * 4 + 3)
+            uint8(saltBase + 3)
         );
         address finalWinner = finalWinnerArr.length == 0 ? address(0) : finalWinnerArr[0];
         if (mapTrophy && !trophyGivenOut && traitIdx == 0 && _eligibleJackpotWinner(finalWinner, lvl)) {
@@ -1733,6 +1723,20 @@ contract PurgeGame {
             }
         } else if (_eligibleJackpotWinner(finalWinner, lvl) && _creditJackpot(payCoin, finalWinner, perWinner)) {
             if (payCoin) coinDelta += perWinner; else ethDelta += perWinner;
+        }
+    }
+
+    function _jackpotCount(uint8 idx, uint8 band) private pure returns (uint8) {
+        uint16 base;
+        if (idx == 0) base = 25;
+        else if (idx == 1) base = 15;
+        else base = 10;
+        return uint8(base * uint16(band));
+    }
+
+    function _scrambleJackpotEntropy(uint256 entropy, uint256 salt) private pure returns (uint256) {
+        unchecked {
+            return ((entropy << 64) | (entropy >> 192)) ^ (salt << 128) ^ 0x05;
         }
     }
 
