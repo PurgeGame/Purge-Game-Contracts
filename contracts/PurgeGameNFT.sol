@@ -270,9 +270,10 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
     }
 
     function _packedOwnershipOf(uint256 tokenId) private view returns (uint256 packed) {
-        if (tokenId >= _currentIndex) {
+        if (tokenId >= _currentIndex || (trophyData[tokenId] == 0 && tokenId < _currentBaseTokenId())) {
             revert InvalidToken();
         }
+
         packed = _packedOwnerships[tokenId];
         if (packed == 0) {
             unchecked {

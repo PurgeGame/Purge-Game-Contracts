@@ -239,11 +239,8 @@ contract PurgeGame {
     /// @return carry_           Carryover earmarked for next level (wei)
     /// @return prizePoolTarget  Last level's prize pool snapshot (wei)
     /// @return prizePoolCurrent Active prize pool (levelPrizePool when purging)
-    /// @return baseTokenId      Current base token id from the NFT contract
     /// @return enoughPurchases  True if purchaseCount >= 1,500
     /// @return earlyPurgeMask   Bitmask of early-purge jackpot thresholds crossed (10/20/30/40/50/75%)
-    /// @return rngFulfilled_    Last VRF request fulfilled
-    /// @return rngConsumed_     Current RNG word consumed
     function gameInfo()
         external
         view
@@ -255,11 +252,8 @@ contract PurgeGame {
             uint256 carry_,
             uint256 prizePoolTarget,
             uint256 prizePoolCurrent,
-            uint256 baseTokenId,
             bool enoughPurchases,
-            uint8 earlyPurgeMask,
-            bool rngFulfilled_,
-            bool rngConsumed_
+            uint8 earlyPurgeMask
         )
     {
         gameState_ = gameState;
@@ -268,12 +262,11 @@ contract PurgeGame {
         price_ = price;
         carry_ = carryoverForNextLevel;
         prizePoolTarget = lastPrizePool;
-        prizePoolCurrent = (gameState == 3) ? levelPrizePool : prizePool;
-        baseTokenId = nft.currentBaseTokenId();
+        prizePoolCurrent = prizePool;
+
         enoughPurchases = purchaseCount >= PURCHASE_MINIMUM;
         earlyPurgeMask = earlyPurgeJackpotPaidMask;
-        rngFulfilled_ = nft.isRngFulfilled();
-        rngConsumed_ = !nft.rngLocked();
+
     }
 
     // --- State machine: advance one tick ------------------------------------------------
@@ -1280,11 +1273,9 @@ contract PurgeGame {
         uint256 currentWord = nft.currentRngWord();
 
         if (currentWord == 0) {
-            if (!locked) {
-                nft.requestRng();
-                return 1;
-            }
-            revert RngNotReady();
+            if (locked) revert RngNotReady();
+            nft.requestRng();
+            return 1;
         }
 
         if (!locked) {
