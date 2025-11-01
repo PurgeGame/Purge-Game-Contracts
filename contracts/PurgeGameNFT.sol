@@ -1095,7 +1095,7 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
         uint24 level,
         uint256 principal
     ) external onlyCoinContract returns (uint256 tokenId) {
-        if (to == address(0)) revert Zero();
+
         uint256 data =
             (uint256(STAKE_TRAIT_SENTINEL) << 152) |
             (uint256(level) << TROPHY_BASE_LEVEL_SHIFT) |
@@ -1108,26 +1108,14 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
             placeholderId = _previousBaseTokenId() - 1;
         }
 
-        if (placeholderId != 0) {
-            uint256 ownership = _packedOwnershipOf(placeholderId);
-            if (
-                address(uint160(ownership)) == address(game) &&
-                trophyData[placeholderId] == 0
-            ) {
-                _awardTrophy(to, data, 0, placeholderId);
-                tokenId = placeholderId;
-                emit StakeTrophyAwarded(to, tokenId, level, principal);
-                return tokenId;
-            }
-        }
 
-        tokenId = _currentIndex;
-        _mint(to, 1);
-        unchecked {
-            totalTrophySupply += 1;
-        }
-        trophyData[tokenId] = data;
+
+
+
+        _awardTrophy(to, data, 0, placeholderId);
+        tokenId = placeholderId;
         emit StakeTrophyAwarded(to, tokenId, level, principal);
+        return tokenId;
     }
 
     function burnieNFT() external onlyCoinContract {
