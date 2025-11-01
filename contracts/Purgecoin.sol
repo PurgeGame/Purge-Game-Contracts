@@ -26,6 +26,7 @@ interface IPurgeGameNFT {
     function awardStakeTrophy(address to, uint24 level, uint256 principal) external;
     function stakedTrophySample(uint64 salt) external view returns (address);
     function bafStakeBonusBps(address player) external view returns (uint16);
+    function stakeTrophyBonus(address player) external view returns (uint8);
 
 }
 
@@ -600,6 +601,11 @@ contract Purgecoin {
 
         if (effectiveLevel == 0) {
             boostedPrincipal = (boostedPrincipal * 3) / 2;
+        }
+
+        uint8 stakeTrophyBoost = purgeGameNFT.stakeTrophyBonus(sender);
+        if (stakeTrophyBoost != 0) {
+            boostedPrincipal += (boostedPrincipal * stakeTrophyBoost) / 100;
         }
 
         // Encode and place the stake lane

@@ -455,7 +455,7 @@ contract PurgeGame {
             _coinReceive(quantity * _priceCoin, lvl, bonusCoinReward);
         } else {
             // Scale quantity by 100 so `_ethReceive` can keep integer math.
-            (uint256 bonus, uint256 luckboxBonus) = _ethReceive(quantity * 100, affiliateCode, quantity, lvl);
+            (uint256 bonus, uint256 luckboxBonus) = _ethReceive(quantity * 100, affiliateCode, quantity, lvl, false);
             if (_phase == 3 && (lvl % 100) > 90) {
                 bonus += (quantity * _priceCoin) / 5;
             }
@@ -542,7 +542,8 @@ contract PurgeGame {
                 scaledQty,
                 affiliateCode,
                 (lvl < 10) ? quantity : 0,
-                lvl
+                lvl,
+                true
             );
             if (_phase == 3 && (lvl % 100) > 90) {
                 bonus += coinCost / 5;
@@ -1319,13 +1320,23 @@ contract PurgeGame {
         uint256 scaledQty,
         bytes32 affiliateCode,
         uint256 bonusUnits,
-        uint24 lvl
+        uint24 lvl,
+        bool mapPurchase
     ) private returns (uint256 bonusMint, uint256 luckboxBonus) {
         uint256 expectedWei = (price * scaledQty) / 100;
-        uint8 levelDiscount = nft.levelStakeDiscount(msg.sender);
-        if (levelDiscount != 0) {
-            uint256 discountWei = (expectedWei * levelDiscount) / 100;
-            expectedWei -= discountWei;
+        address payer = msg.sender;
+        if (mapPurchase) {
+            uint8 mapDiscount = nft.mapStakeDiscount(payer);
+            if (mapDiscount != 0) {
+                uint256 discountWei = (expectedWei * mapDiscount) / 100;
+                expectedWei -= discountWei;
+            }
+        } else {
+            uint8 levelDiscount = nft.levelStakeDiscount(payer);
+            if (levelDiscount != 0) {
+                uint256 discountWei = (expectedWei * levelDiscount) / 100;
+                expectedWei -= discountWei;
+            }
         }
         if (msg.value != expectedWei) revert E();
 
@@ -1353,10 +1364,9 @@ contract PurgeGame {
             affiliateAmount += (affiliateAmount * pct) / 100;
         }
         unchecked {
-            coin.payAffiliate(affiliateAmount, affiliateCode, msg.sender, level);
+            coin.payAffiliate(affiliateAmount, affiliateCode, payer, level);
         }
 
-        address payer = msg.sender;
         (uint256 streakBonus, uint256 streakLuckbox) = nft.recordEthMint(payer, lvl);
 
         bonusMint = (bonusUnits * priceCoin * pct) / 100;

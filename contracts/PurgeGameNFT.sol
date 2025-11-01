@@ -163,9 +163,13 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
     mapping(address => uint8) private levelStakeCount;
     mapping(address => uint8) private affiliateStakeCount;
     mapping(address => uint8) private mapStakeCount;
+    mapping(address => uint8) private stakeStakeCount;
     mapping(address => uint24) private affiliateStakeBaseLevel;
-    mapping(address => uint24) private stakedBafMaxLevel;
-    mapping(address => mapping(uint24 => uint16)) private stakedBafLevelCounts;
+    mapping(address => uint8) private mapStakeBonusPct;
+    mapping(address => uint8) private levelStakeBonusPct;
+    mapping(address => uint8) private stakeStakeBonusPct;
+    mapping(address => uint16) private bafStakeBonusBpsCache;
+    mapping(address => uint8) private bafStakeCount;
     mapping(address => uint24) private _ethMintLastLevel;
     mapping(address => uint24) private _ethMintLevelCount;
     mapping(address => uint24) private _ethMintStreakCount;
@@ -197,15 +201,21 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
     uint8 private constant _STAKE_ERR_LOCKED = 5;
     uint8 private constant _STAKE_ERR_NOT_MAP = 6;
     uint8 private constant _STAKE_ERR_NOT_AFFILIATE = 7;
+    uint8 private constant _STAKE_ERR_NOT_STAKE = 8;
     uint8 private constant LEVEL_STAKE_MAX = 20;
     uint8 private constant MAP_STAKE_MAX = 20;
     uint8 private constant AFFILIATE_STAKE_MAX = 20;
+    uint8 private constant STAKE_TROPHY_MAX = 20;
     uint16 private constant BAF_TRAIT_SENTINEL = 0xFFFA;
     uint16 private constant DECIMATOR_TRAIT_SENTINEL = 0xFFFB;
     uint16 private constant STAKE_TRAIT_SENTINEL = 0xFFFD;
     uint32 private constant VRF_CALLBACK_GAS_LIMIT = 200_000;
     uint16 private constant VRF_REQUEST_CONFIRMATIONS = 10;
     uint24 private constant STAKE_PREVIEW_START_LEVEL = 12;
+    uint8 private constant _BONUS_MAP = 0;
+    uint8 private constant _BONUS_LEVEL = 1;
+    uint8 private constant _BONUS_STAKE = 2;
+    uint8 private constant _BONUS_BAF = 3;
 
     function _currentBaseTokenId() private view returns (uint256) {
         return uint256(uint128(basePointers));
@@ -1091,13 +1101,17 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
         uint256 info = trophyData[tokenId];
         bool mapTrophy = (info & TROPHY_FLAG_MAP) != 0;
         bool affiliateTrophy = (info & TROPHY_FLAG_AFFILIATE) != 0;
-        bool levelTrophy = info != 0 && !mapTrophy && !affiliateTrophy && (info & TROPHY_FLAG_STAKE) == 0;
+        bool stakeTrophyKind = (info & TROPHY_FLAG_STAKE) != 0;
+        bool levelTrophy = info != 0 && !mapTrophy && !affiliateTrophy && !stakeTrophyKind;
         bool bafTrophy = (info & TROPHY_FLAG_BAF) != 0;
         bool decimatorTrophy = (info & TROPHY_FLAG_DECIMATOR) != 0;
         uint24 trophyBaseLevel = uint24((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF);
+        uint24 trophyLevelValue = stakeTrophyKind ? trophyBaseLevel + 1 : trophyBaseLevel;
+        bool pureLevelTrophy = levelTrophy && !bafTrophy && !decimatorTrophy;
         bool targetMap = isMap;
         bool targetAffiliate = !isMap && affiliateTrophy;
         bool targetLevel = !isMap && !affiliateTrophy && levelTrophy;
+        bool targetStake = !isMap && stakeTrophyKind;
 
         uint24 effectiveLevel = _effectiveStakeLevel();
 
@@ -1107,8 +1121,14 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
             // ok
         } else if (targetLevel) {
             // ok
+        } else if (targetStake) {
+            if (!stakeTrophyKind) revert TrophyStakeViolation(_STAKE_ERR_NOT_STAKE);
+        } else if (mapTrophy) {
+            revert TrophyStakeViolation(_STAKE_ERR_NOT_MAP);
         } else if (affiliateTrophy) {
             revert TrophyStakeViolation(_STAKE_ERR_NOT_LEVEL);
+        } else if (stakeTrophyKind) {
+            revert TrophyStakeViolation(_STAKE_ERR_NOT_STAKE);
         } else {
             revert TrophyStakeViolation(_STAKE_ERR_NOT_AFFILIATE);
         }
@@ -1124,6 +1144,7 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
             uint8 count;
             uint16 discountBps;
             uint8 kind;
+            uint8 discountPct;
             uint24 currentLevelNow = game.level();
             if (targetMap) {
                 uint8 current = mapStakeCount[sender];
@@ -1132,8 +1153,16 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
                     current += 1;
                 }
                 mapStakeCount[sender] = current;
+                uint8 cap = _mapDiscountCap(current);
+                uint8 candidate = uint8(trophyBaseLevel > cap ? cap : trophyBaseLevel);
+                uint8 prev = mapStakeBonusPct[sender];
+                if (candidate > prev) {
+                    mapStakeBonusPct[sender] = candidate;
+                    prev = candidate;
+                }
                 count = current;
-                discountBps = uint16(_stakeDiscountPct(current) * 100);
+                discountPct = prev;
+                discountBps = uint16(discountPct) * 100;
                 kind = 1;
             } else if (targetAffiliate) {
                 uint8 before = affiliateStakeCount[sender];
@@ -1142,21 +1171,62 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
                 uint8 current = before + 1;
                 affiliateStakeCount[sender] = current;
                 count = current;
-                discountBps = uint16(_currentAffiliateBonus(sender, effectiveLevel) * 100);
+                discountPct = _currentAffiliateBonus(sender, effectiveLevel);
+                discountBps = uint16(discountPct) * 100;
                 kind = 2;
+            } else if (targetLevel) {
+                if (pureLevelTrophy) {
+                    uint8 current = levelStakeCount[sender];
+                    if (current >= LEVEL_STAKE_MAX) revert StakeInvalid();
+                    unchecked {
+                        current += 1;
+                    }
+                    levelStakeCount[sender] = current;
+                    uint8 cap = _levelDiscountCap(current);
+                    uint8 candidate = uint8(trophyBaseLevel > cap ? cap : trophyBaseLevel);
+                    uint8 prev = levelStakeBonusPct[sender];
+                    if (candidate > prev) {
+                        levelStakeBonusPct[sender] = candidate;
+                        prev = candidate;
+                    }
+                    count = current;
+                    discountPct = prev;
+                } else {
+                    count = levelStakeCount[sender];
+                    discountPct = levelStakeBonusPct[sender];
+                }
+                discountBps = uint16(discountPct) * 100;
+                kind = 3;
             } else {
-                uint8 current = levelStakeCount[sender];
-                if (current >= LEVEL_STAKE_MAX) revert StakeInvalid();
+                uint8 current = stakeStakeCount[sender];
+                if (current >= STAKE_TROPHY_MAX) revert StakeInvalid();
                 unchecked {
                     current += 1;
                 }
-                levelStakeCount[sender] = current;
+                stakeStakeCount[sender] = current;
+                uint8 cap = _stakeBonusCap(current);
+                uint8 candidate = uint8(trophyLevelValue > cap ? cap : trophyLevelValue);
+                uint8 prev = stakeStakeBonusPct[sender];
+                if (candidate > prev) {
+                    stakeStakeBonusPct[sender] = candidate;
+                    prev = candidate;
+                }
                 count = current;
-                discountBps = uint16(_stakeDiscountPct(current) * 100);
-                kind = 3;
+                discountPct = prev;
+                discountBps = uint16(discountPct) * 100;
+                kind = 4;
             }
             if (bafTrophy) {
-                _registerBafStake(sender, trophyBaseLevel);
+                uint8 current = bafStakeCount[sender];
+                unchecked {
+                    current += 1;
+                }
+                bafStakeCount[sender] = current;
+                uint16 candidate = _bafBonusFromLevel(trophyBaseLevel);
+                uint16 prev = bafStakeBonusBpsCache[sender];
+                if (candidate > prev) {
+                    bafStakeBonusBpsCache[sender] = candidate;
+                }
             }
             if (decimatorTrophy) {
                 _setDecimatorBaseline(tokenId, currentLevelNow);
@@ -1170,6 +1240,7 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
             uint8 count;
             uint16 discountBps;
             uint8 kind;
+            uint8 discountPct;
             uint24 currentLevelNow = game.level();
             if (targetMap) {
                 uint8 current = mapStakeCount[sender];
@@ -1178,8 +1249,10 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
                     current -= 1;
                 }
                 mapStakeCount[sender] = current;
+                mapStakeBonusPct[sender] = 0;
                 count = current;
-                discountBps = uint16(_stakeDiscountPct(current) * 100);
+                discountPct = 0;
+                discountBps = uint16(discountPct) * 100;
                 kind = 1;
             } else if (targetAffiliate) {
                 uint8 current = affiliateStakeCount[sender];
@@ -1190,21 +1263,47 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
                 affiliateStakeCount[sender] = current;
                 affiliateStakeBaseLevel[sender] = effectiveLevel;
                 count = current;
-                discountBps = uint16(_currentAffiliateBonus(sender, effectiveLevel) * 100);
+                discountPct = _currentAffiliateBonus(sender, effectiveLevel);
+                discountBps = uint16(discountPct) * 100;
                 kind = 2;
+            } else if (targetLevel) {
+                if (pureLevelTrophy) {
+                    uint8 current = levelStakeCount[sender];
+                    if (current == 0) revert StakeInvalid();
+                    unchecked {
+                        current -= 1;
+                    }
+                    levelStakeCount[sender] = current;
+                    levelStakeBonusPct[sender] = 0;
+                    count = current;
+                    discountPct = 0;
+                } else {
+                    count = levelStakeCount[sender];
+                    discountPct = levelStakeBonusPct[sender];
+                }
+                discountBps = uint16(discountPct) * 100;
+                kind = 3;
             } else {
-                uint8 current = levelStakeCount[sender];
+                uint8 current = stakeStakeCount[sender];
                 if (current == 0) revert StakeInvalid();
                 unchecked {
                     current -= 1;
                 }
-                levelStakeCount[sender] = current;
+                stakeStakeCount[sender] = current;
+                stakeStakeBonusPct[sender] = 0;
                 count = current;
-                discountBps = uint16(_stakeDiscountPct(current) * 100);
-                kind = 3;
+                discountPct = 0;
+                discountBps = uint16(discountPct) * 100;
+                kind = 4;
             }
             if (bafTrophy) {
-                _unregisterBafStake(sender, trophyBaseLevel);
+                uint8 current = bafStakeCount[sender];
+                if (current == 0) revert StakeInvalid();
+                unchecked {
+                    current -= 1;
+                }
+                bafStakeCount[sender] = current;
+                bafStakeBonusBpsCache[sender] = 0;
             }
             if (decimatorTrophy) {
                 uint256 coinAmount = _payoutDecimatorStake(tokenId, currentLevelNow);
@@ -1261,44 +1360,6 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
         delete stakedTrophyIndex[tokenId];
     }
 
-    function _registerBafStake(address player, uint24 level) private {
-        if (level == 0) return;
-        uint16 newCount = stakedBafLevelCounts[player][level] + 1;
-        stakedBafLevelCounts[player][level] = newCount;
-        uint24 currentMax = stakedBafMaxLevel[player];
-        if (level > currentMax) {
-            stakedBafMaxLevel[player] = level;
-        }
-    }
-
-    function _unregisterBafStake(address player, uint24 level) private {
-        if (level == 0) return;
-        mapping(uint24 => uint16) storage counts = stakedBafLevelCounts[player];
-        uint16 current = counts[level];
-        if (current <= 1) {
-            delete counts[level];
-            if (stakedBafMaxLevel[player] == level) {
-                stakedBafMaxLevel[player] = _nextHighestBafLevel(player, level);
-            }
-        } else {
-            counts[level] = current - 1;
-        }
-    }
-
-    function _nextHighestBafLevel(address player, uint24 startLevel) private view returns (uint24) {
-        mapping(uint24 => uint16) storage counts = stakedBafLevelCounts[player];
-        uint24 level = startLevel;
-        while (level != 0) {
-            unchecked {
-                level -= 1;
-            }
-            if (counts[level] != 0) {
-                return level;
-            }
-        }
-        return 0;
-    }
-
     function _setDecimatorBaseline(uint256 tokenId, uint24 level) private {
         uint256 info = trophyData[tokenId];
         uint256 cleared = info & ~TROPHY_LAST_CLAIM_MASK;
@@ -1343,12 +1404,56 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
         return reward * COIN_EMISSION_UNIT;
     }
 
+    function _mapDiscountCap(uint8 count) private pure returns (uint8) {
+        if (count == 0) return 0;
+        if (count == 1) return 10;
+        if (count == 2) return 16;
+        return 20;
+    }
+
+    function _levelDiscountCap(uint8 count) private pure returns (uint8) {
+        if (count == 0) return 0;
+        if (count == 1) return 10;
+        if (count == 2) return 16;
+        return 20;
+    }
+
+    function _stakeBonusCap(uint8 count) private pure returns (uint8) {
+        if (count == 0) return 0;
+        if (count == 1) return 7;
+        if (count == 2) return 12;
+        return 15;
+    }
+
+    function _bafBonusFromLevel(uint24 level) private pure returns (uint16) {
+        uint256 bonus = uint256(level) * 10;
+        if (bonus > 220) bonus = 220;
+        return uint16(bonus);
+    }
+
     function levelStakeDiscount(address player) external view returns (uint8) {
-        return _stakeDiscountPct(levelStakeCount[player]);
+        return levelStakeBonusPct[player];
     }
 
     function mapStakeDiscount(address player) external view returns (uint8) {
-        return _stakeDiscountPct(mapStakeCount[player]);
+        return mapStakeBonusPct[player];
+    }
+
+    function stakeTrophyBonus(address player) external view returns (uint8) {
+        return stakeStakeBonusPct[player];
+    }
+
+    function refreshStakeBonuses(
+        uint256[] calldata mapTokenIds,
+        uint256[] calldata levelTokenIds,
+        uint256[] calldata stakeTokenIds,
+        uint256[] calldata bafTokenIds
+    ) external {
+        address player = msg.sender;
+        _refreshBonus(player, _BONUS_MAP, mapTokenIds);
+        _refreshBonus(player, _BONUS_LEVEL, levelTokenIds);
+        _refreshBonus(player, _BONUS_STAKE, stakeTokenIds);
+        _refreshBonus(player, _BONUS_BAF, bafTokenIds);
     }
 
     function affiliateStakeBonus(address player) external view returns (uint8) {
@@ -1359,13 +1464,113 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
     }
 
     function bafStakeBonusBps(address player) external view returns (uint16) {
-        uint24 level = stakedBafMaxLevel[player];
-        if (level == 0) return 0;
-        uint256 bonus = uint256(level) * 10;
-        if (bonus > 220) {
-            bonus = 220;
+        return bafStakeBonusBpsCache[player];
+    }
+
+    function _refreshBonus(address player, uint8 kind, uint256[] calldata tokenIds) private {
+        if (kind == _BONUS_MAP) {
+            uint8 expected = mapStakeCount[player];
+            if (tokenIds.length == 0) {
+                if (expected == 0) mapStakeBonusPct[player] = 0;
+                return;
+            }
+            if (expected == 0 || tokenIds.length != expected) revert StakeInvalid();
+            uint24 best;
+            for (uint256 i; i < tokenIds.length; ) {
+                uint256 info = _validateStakedToken(player, tokenIds[i]);
+                if ((info & TROPHY_FLAG_MAP) == 0) revert StakeInvalid();
+                uint24 base = uint24((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF);
+                if (base > best) best = base;
+                unchecked {
+                    ++i;
+                }
+            }
+            if (best == 0) revert StakeInvalid();
+            uint8 cap = _mapDiscountCap(expected);
+            mapStakeBonusPct[player] = uint8(best > cap ? cap : best);
+            return;
         }
-        return uint16(bonus);
+
+        if (kind == _BONUS_LEVEL) {
+            uint8 expected = levelStakeCount[player];
+            if (tokenIds.length == 0) {
+                if (expected == 0) levelStakeBonusPct[player] = 0;
+                return;
+            }
+            if (expected == 0 || tokenIds.length != expected) revert StakeInvalid();
+            uint24 best;
+            for (uint256 i; i < tokenIds.length; ) {
+                uint256 info = _validateStakedToken(player, tokenIds[i]);
+                bool invalid = (info & TROPHY_FLAG_MAP) != 0 || (info & TROPHY_FLAG_AFFILIATE) != 0
+                    || (info & TROPHY_FLAG_STAKE) != 0 || (info & TROPHY_FLAG_BAF) != 0
+                    || (info & TROPHY_FLAG_DECIMATOR) != 0;
+                if (invalid) revert StakeInvalid();
+                uint24 base = uint24((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF);
+                if (base > best) best = base;
+                unchecked {
+                    ++i;
+                }
+            }
+            if (best == 0) revert StakeInvalid();
+            uint8 cap = _levelDiscountCap(expected);
+            levelStakeBonusPct[player] = uint8(best > cap ? cap : best);
+            return;
+        }
+
+        if (kind == _BONUS_STAKE) {
+            uint8 expected = stakeStakeCount[player];
+            if (tokenIds.length == 0) {
+                if (expected == 0) stakeStakeBonusPct[player] = 0;
+                return;
+            }
+            if (expected == 0 || tokenIds.length != expected) revert StakeInvalid();
+            uint24 best;
+            for (uint256 i; i < tokenIds.length; ) {
+                uint256 info = _validateStakedToken(player, tokenIds[i]);
+                if ((info & TROPHY_FLAG_STAKE) == 0) revert StakeInvalid();
+                uint24 value = uint24((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF) + 1;
+                if (value > best) best = value;
+                unchecked {
+                    ++i;
+                }
+            }
+            if (best == 0) revert StakeInvalid();
+            uint8 cap = _stakeBonusCap(expected);
+            stakeStakeBonusPct[player] = uint8(best > cap ? cap : best);
+            return;
+        }
+
+        if (kind == _BONUS_BAF) {
+            uint8 expected = bafStakeCount[player];
+            if (tokenIds.length == 0) {
+                if (expected == 0) bafStakeBonusBpsCache[player] = 0;
+                return;
+            }
+            if (expected == 0 || tokenIds.length != expected) revert StakeInvalid();
+            uint24 best;
+            for (uint256 i; i < tokenIds.length; ) {
+                uint256 info = _validateStakedToken(player, tokenIds[i]);
+                if ((info & TROPHY_FLAG_BAF) == 0) revert StakeInvalid();
+                uint24 base = uint24((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF);
+                if (base > best) best = base;
+                unchecked {
+                    ++i;
+                }
+            }
+            if (best == 0) revert StakeInvalid();
+            bafStakeBonusBpsCache[player] = _bafBonusFromLevel(best);
+            return;
+        }
+
+        revert StakeInvalid();
+    }
+
+    function _validateStakedToken(address player, uint256 tokenId) private view returns (uint256 info) {
+        if (!trophyStaked[tokenId]) revert StakeInvalid();
+        uint256 ownershipPacked = _packedOwnershipOf(tokenId);
+        if (address(uint160(ownershipPacked)) != player) revert TransferFromIncorrectOwner();
+        info = trophyData[tokenId];
+        if (info == 0) revert InvalidToken();
     }
 
     function ethMintLastLevel(address player) external view returns (uint24) {
@@ -1570,12 +1775,6 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
             | (owed & TROPHY_OWED_MASK)
             | (base << TROPHY_BASE_LEVEL_SHIFT);
         trophyData[tokenId] = updated;
-    }
-
-    function _stakeDiscountPct(uint8 count) private pure returns (uint8) {
-        if (count == 0) return 0;
-        if (count >= 20) return 20;
-        return count;
     }
 
     function _effectiveStakeLevel() private view returns (uint24) {
