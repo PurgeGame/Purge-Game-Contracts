@@ -93,6 +93,12 @@ interface IPurgeGameNFT {
 
     function ethMintLastLevel(address player) external view returns (uint24);
 
+    function levelStakeDiscount(address player) external view returns (uint8);
+
+    function mapStakeDiscount(address player) external view returns (uint8);
+
+    function affiliateStakeBonus(address player) external view returns (uint8);
+
     function stakedTrophySample(uint64 salt) external view returns (address);
 }
 
@@ -1297,6 +1303,11 @@ contract PurgeGame {
         uint24 lvl
     ) private returns (uint256 bonusMint, uint256 luckboxBonus) {
         uint256 expectedWei = (price * scaledQty) / 100;
+        uint8 levelDiscount = nft.levelStakeDiscount(msg.sender);
+        if (levelDiscount != 0) {
+            uint256 discountWei = (expectedWei * levelDiscount) / 100;
+            expectedWei -= discountWei;
+        }
         if (msg.value != expectedWei) revert E();
 
         uint8 state = gameState;
@@ -1343,7 +1354,7 @@ contract PurgeGame {
     function _coinReceive(uint256 amount, uint24 lvl, uint256 discount) private {
         if (lvl % 20 == 13) amount = (amount * 3) / 2;
         else if (lvl % 20 == 18) amount = (amount * 9) / 10;
-        amount -= discount;
+            amount -= discount;
         coin.burnCoin(msg.sender, amount);
     }
 

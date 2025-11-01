@@ -18,7 +18,8 @@ interface IPurgeRenderer {
 interface IPurgeGameNFT {
     function wireContracts(address game_) external;
     function burnieNFT() external;
-    function mapStakeBonus(address player) external view returns (uint16);
+    function mapStakeDiscount(address player) external view returns (uint8);
+    function levelStakeDiscount(address player) external view returns (uint8);
     function affiliateStakeBonus(address player) external view returns (uint8);
     function rngLocked() external view returns (bool);
     function awardStakeTrophy(address to, uint24 level, uint256 principal) external;
@@ -307,10 +308,6 @@ contract Purgecoin {
         _burn(caller, burnTotal);
 
         if (coinflipDeposit != 0) {
-            uint16 mapBonusBps = purgeGameNFT.mapStakeBonus(caller);
-            if (mapBonusBps != 0) {
-                depositWithBonus += (coinflipDeposit * mapBonusBps) / 10_000;
-            }
             if (prevStakeBefore == 0) {
                 uint48 epoch = streakEpoch;
                 if (epoch == 0) epoch = 1;

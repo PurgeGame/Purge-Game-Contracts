@@ -151,6 +151,7 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
     uint256 private seasonPurgedCount;
 
     mapping(uint256 => bool) private trophyStaked;
+    mapping(address => uint8) private levelStakeCount;
     mapping(address => uint8) private affiliateStakeCount;
     mapping(address => uint8) private mapStakeCount;
     mapping(address => uint24) private _ethMintLastLevel;
@@ -176,13 +177,15 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
     uint256 private constant TROPHY_LAST_CLAIM_MASK = uint256(0xFFFFFF) << TROPHY_LAST_CLAIM_SHIFT;
 
     uint8 private constant _STAKE_ERR_TRANSFER_BLOCKED = 1;
-    uint8 private constant _STAKE_ERR_NOT_AFFILIATE = 2;
+    uint8 private constant _STAKE_ERR_NOT_LEVEL = 2;
     uint8 private constant _STAKE_ERR_ALREADY_STAKED = 3;
     uint8 private constant _STAKE_ERR_NOT_STAKED = 4;
     uint8 private constant _STAKE_ERR_LOCKED = 5;
     uint8 private constant _STAKE_ERR_NOT_MAP = 6;
-    uint8 private constant AFFILIATE_STAKE_MAX = 3;
-    uint8 private constant MAP_STAKE_MAX = 3;
+    uint8 private constant _STAKE_ERR_NOT_AFFILIATE = 7;
+    uint8 private constant LEVEL_STAKE_MAX = 20;
+    uint8 private constant MAP_STAKE_MAX = 20;
+    uint8 private constant AFFILIATE_STAKE_MAX = 20;
     uint16 private constant STAKE_TRAIT_SENTINEL = 0xFFFD;
     uint32 private constant VRF_CALLBACK_GAS_LIMIT = 200_000;
     uint16 private constant VRF_REQUEST_CONFIRMATIONS = 10;
@@ -772,10 +775,9 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
             uint256 base = sharedPool / 100;
             uint256 remainder = sharedPool - (base * 100);
             uint256 affiliateTrophyShare = base * 20 + remainder;
-            uint256 legacyAffiliateShare = base * 10;
+            uint256 stakerRewardPool = base * 10;
             uint256 deferredAward = msg.value;
-            if (affiliateTrophyShare + legacyAffiliateShare > deferredAward) revert E();
-            deferredAward -= affiliateTrophyShare + legacyAffiliateShare;
+            deferredAward -= affiliateTrophyShare + stakerRewardPool;
             _awardTrophy(req.exterminator, traitData, deferredAward, levelTokenId);
 
             affiliateRecipients = _selectAffiliateRecipients(randomWord);
@@ -788,12 +790,12 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
                 (uint256(0xFFFE) << 152) | (uint256(req.level) << TROPHY_BASE_LEVEL_SHIFT) | TROPHY_FLAG_AFFILIATE;
             _awardTrophy(affiliateWinner, affiliateData, affiliateTrophyShare, affiliateTokenId);
 
-            if (legacyAffiliateShare != 0) {
+            if (stakerRewardPool != 0) {
                 uint256[] storage source = stakedTrophyIds;
                 uint256 trophyCount = source.length;
                 if (trophyCount != 0) {
                     uint256 rounds = trophyCount == 1 ? 1 : 2;
-                    uint256 baseShare = legacyAffiliateShare / rounds;
+                    uint256 baseShare = stakerRewardPool / rounds;
                     uint256 rand = randomWord;
                     uint256 mask = type(uint64).max;
                     for (uint256 i; i < rounds; ) {
@@ -963,7 +965,22 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
         uint256 info = trophyData[tokenId];
         bool mapTrophy = (info & TROPHY_FLAG_MAP) != 0;
         bool affiliateTrophy = (info & TROPHY_FLAG_AFFILIATE) != 0;
-        if (isMap ? !mapTrophy : !affiliateTrophy) revert TrophyStakeViolation(isMap ? _STAKE_ERR_NOT_MAP : _STAKE_ERR_NOT_AFFILIATE);
+        bool levelTrophy = info != 0 && !mapTrophy && !affiliateTrophy && (info & TROPHY_FLAG_STAKE) == 0;
+        bool targetMap = isMap;
+        bool targetAffiliate = !isMap && affiliateTrophy;
+        bool targetLevel = !isMap && !affiliateTrophy && levelTrophy;
+
+        if (targetMap) {
+            if (!mapTrophy) revert TrophyStakeViolation(_STAKE_ERR_NOT_MAP);
+        } else if (targetAffiliate) {
+            // ok
+        } else if (targetLevel) {
+            // ok
+        } else if (affiliateTrophy) {
+            revert TrophyStakeViolation(_STAKE_ERR_NOT_LEVEL);
+        } else {
+            revert TrophyStakeViolation(_STAKE_ERR_NOT_AFFILIATE);
+        }
 
         if (address(uint160(_packedOwnershipOf(tokenId))) != sender) revert TransferFromIncorrectOwner();
 
@@ -974,8 +991,9 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
             _addStakedTrophy(tokenId);
             if (_tokenApprovals[tokenId] != address(0)) delete _tokenApprovals[tokenId];
             uint8 count;
-            uint16 mapBonus;
-            if (isMap) {
+            uint16 discountBps;
+            uint8 kind;
+            if (targetMap) {
                 uint8 current = mapStakeCount[sender];
                 if (current >= MAP_STAKE_MAX) revert StakeInvalid();
                 unchecked {
@@ -983,8 +1001,9 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
                 }
                 mapStakeCount[sender] = current;
                 count = current;
-                mapBonus = _mapBonusBps(current);
-            } else {
+                discountBps = uint16(_stakeDiscountPct(current) * 100);
+                kind = 1;
+            } else if (targetAffiliate) {
                 uint8 current = affiliateStakeCount[sender];
                 if (current >= AFFILIATE_STAKE_MAX) revert StakeInvalid();
                 unchecked {
@@ -992,17 +1011,29 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
                 }
                 affiliateStakeCount[sender] = current;
                 count = current;
-                mapBonus = _mapBonusBps(mapStakeCount[sender]);
+                discountBps = uint16(_stakeDiscountPct(current) * 100);
+                kind = 2;
+            } else {
+                uint8 current = levelStakeCount[sender];
+                if (current >= LEVEL_STAKE_MAX) revert StakeInvalid();
+                unchecked {
+                    current += 1;
+                }
+                levelStakeCount[sender] = current;
+                count = current;
+                discountBps = uint16(_stakeDiscountPct(current) * 100);
+                kind = 3;
             }
-            emit TrophyStakeChanged(sender, tokenId, isMap ? 1 : 2, true, count, mapBonus);
+            emit TrophyStakeChanged(sender, tokenId, kind, true, count, discountBps);
         } else {
             if (game.gameState() != 3) revert TrophyStakeViolation(_STAKE_ERR_LOCKED);
             if (!currentlyStaked) revert TrophyStakeViolation(_STAKE_ERR_NOT_STAKED);
             trophyStaked[tokenId] = false;
             _removeStakedTrophy(tokenId);
             uint8 count;
-            uint16 mapBonus;
-            if (isMap) {
+            uint16 discountBps;
+            uint8 kind;
+            if (targetMap) {
                 uint8 current = mapStakeCount[sender];
                 if (current == 0) revert StakeInvalid();
                 unchecked {
@@ -1010,8 +1041,9 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
                 }
                 mapStakeCount[sender] = current;
                 count = current;
-                mapBonus = _mapBonusBps(current);
-            } else {
+                discountBps = uint16(_stakeDiscountPct(current) * 100);
+                kind = 1;
+            } else if (targetAffiliate) {
                 uint8 current = affiliateStakeCount[sender];
                 if (current == 0) revert StakeInvalid();
                 unchecked {
@@ -1019,9 +1051,20 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
                 }
                 affiliateStakeCount[sender] = current;
                 count = current;
-                mapBonus = _mapBonusBps(mapStakeCount[sender]);
+                discountBps = uint16(_stakeDiscountPct(current) * 100);
+                kind = 2;
+            } else {
+                uint8 current = levelStakeCount[sender];
+                if (current == 0) revert StakeInvalid();
+                unchecked {
+                    current -= 1;
+                }
+                levelStakeCount[sender] = current;
+                count = current;
+                discountBps = uint16(_stakeDiscountPct(current) * 100);
+                kind = 3;
             }
-            emit TrophyStakeChanged(sender, tokenId, isMap ? 1 : 2, false, count, mapBonus);
+            emit TrophyStakeChanged(sender, tokenId, kind, false, count, discountBps);
         }
     }
 
@@ -1070,12 +1113,19 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
         delete stakedTrophyIndex[tokenId];
     }
 
-    function affiliateStakeBonus(address player) external view returns (uint8) {
-        return _stakeBonusPct(affiliateStakeCount[player]);
+    function levelStakeDiscount(address player) external view returns (uint8) {
+        return _stakeDiscountPct(levelStakeCount[player]);
     }
 
-    function mapStakeBonus(address player) external view returns (uint16) {
-        return _mapBonusBps(mapStakeCount[player]);
+    function mapStakeDiscount(address player) external view returns (uint8) {
+        return _stakeDiscountPct(mapStakeCount[player]);
+    }
+
+    function affiliateStakeBonus(address player) external view returns (uint8) {
+        uint8 count = affiliateStakeCount[player];
+        if (count == 0) return 0;
+        if (count >= 4) return 25;
+        return 10 + (count - 1) * 5;
     }
 
     function ethMintLastLevel(address player) external view returns (uint24) {
@@ -1116,6 +1166,28 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
         tokenId = placeholderId;
         emit StakeTrophyAwarded(to, tokenId, level, principal);
         return tokenId;
+    }
+
+    function purgeTrophy(uint256 tokenId) external {
+        if (trophyStaked[tokenId]) revert TrophyStakeViolation(_STAKE_ERR_TRANSFER_BLOCKED);
+        if (trophyData[tokenId] == 0) revert InvalidToken();
+
+        address sender = msg.sender;
+
+        uint256 packed = _packedOwnershipOf(tokenId);
+        if (address(uint160(packed)) != sender) revert TransferFromIncorrectOwner();
+
+        if (_tokenApprovals[tokenId] != address(0)) {
+            delete _tokenApprovals[tokenId];
+        }
+
+        delete trophyData[tokenId];
+
+        unchecked {
+            totalTrophySupply -= 1;
+        }
+
+        coin.bonusCoinflip(sender, 100_000 * COIN_BASE_UNIT, false, 0);
     }
 
     function burnieNFT() external onlyCoinContract {
@@ -1251,10 +1323,16 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
             }
         }
 
+        uint256 prevData = trophyData[tokenId];
         uint256 newData = data & ~(TROPHY_OWED_MASK | TROPHY_LAST_CLAIM_MASK);
         uint256 owed = deferredWei & TROPHY_OWED_MASK;
         newData |= owed;
         trophyData[tokenId] = newData;
+        if (prevData == 0 && newData != 0 && to != address(game)) {
+            unchecked {
+                totalTrophySupply += 1;
+            }
+        }
     }
 
     function _addTrophyReward(uint256 tokenId, uint256 amountWei, uint24 startLevel) private {
@@ -1267,20 +1345,10 @@ event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 lev
         trophyData[tokenId] = updated;
     }
 
-    function _stakeBonusPct(uint8 count) private pure returns (uint8) {
+    function _stakeDiscountPct(uint8 count) private pure returns (uint8) {
         if (count == 0) return 0;
-        if (count >= AFFILIATE_STAKE_MAX) return 15;
-        if (count == 1) return 7;
-        if (count == 2) return 12;
-        return 15;
-    }
-
-    function _mapBonusBps(uint8 count) private pure returns (uint16) {
-        if (count == 0) return 0;
-        if (count >= MAP_STAKE_MAX) return 300;
-        if (count == 1) return 150;
-        if (count == 2) return 250;
-        return 300;
+        if (count >= 20) return 20;
+        return count;
     }
 
 }
