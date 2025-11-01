@@ -69,6 +69,12 @@ interface IPurgeGameNFT {
 
     function gameMint(address to, uint256 quantity) external returns (uint256 startTokenId);
 
+    function tokenTraitsPacked(uint256 tokenId) external view returns (uint32);
+
+    function purchaseCount() external view returns (uint32);
+
+    function resetPurchaseCount() external;
+
     function purge(address owner, uint256[] calldata tokenIds) external;
 
     function awardTrophy(
@@ -137,7 +143,6 @@ contract PurgeGame {
     event PlayerCredited(address indexed player, uint256 amount);
     event Jackpot(uint256 traits); // Encodes jackpot metadata
     event Purge(address indexed player, uint256[] tokenIds);
-    event TokenCreated(uint256 tokenId, uint32 tokenTraits);
     event Advance(uint8 gameState, uint8 phase);
 
     // -----------------------
@@ -162,7 +167,6 @@ contract PurgeGame {
     uint256 private constant TROPHY_FLAG_MAP = uint256(1) << 200; // Marks trophies sourced from MAP jackpots
     uint8 private constant MAP_FIRST_BATCH = 8; // Consecutive daily jackpots on map-only levels before normal cadence resumes
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
-    uint256 private constant LUCKBOX_BYPASS_THRESHOLD = 100_000 * 1_000_000; // 100k PURGED (6 decimals)
     uint8 private constant EP_THIRTY_MASK = 4; // 30% early-purge threshold bit
     uint8 private constant JACKPOT_KIND_DAILY = 4;
     uint8 private constant JACKPOT_KIND_MAP = 9;
@@ -205,7 +209,6 @@ contract PurgeGame {
     // -----------------------
     // Minting / Airdrops
     // -----------------------
-    uint32 private purchaseCount; // Total purchased NFTs this level
     uint32 private airdropMapsProcessedCount; // Progress inside current map-mint player's queue
     uint32 private airdropIndex; // Progress across players in pending arrays
     uint32 private traitRebuildCursor; // Tokens processed during trait rebuild
@@ -220,7 +223,6 @@ contract PurgeGame {
     // -----------------------
     // Token / Trait State
     // -----------------------
-    mapping(uint256 => uint32) private tokenTraits; // Packed 4×8-bit traits (low to high)
     mapping(address => uint256) private claimableWinnings; // ETH claims accumulated on-chain
     mapping(uint24 => address[][256]) private traitPurgeTicket; // level => traitId => ticket holders
 
@@ -294,12 +296,46 @@ contract PurgeGame {
         prizePoolTarget = lastPrizePool;
         prizePoolCurrent = prizePool;
 
-        enoughPurchases = purchaseCount >= PURCHASE_MINIMUM;
+        enoughPurchases = nft.purchaseCount() >= PURCHASE_MINIMUM;
         earlyPurgeMask = earlyPurgeJackpotPaidMask;
 
     }
 
     // --- State machine: advance one tick ------------------------------------------------
+
+    function currentPhase() external view returns (uint8) {
+        return phase;
+    }
+
+    function mintPrice() external view returns (uint256) {
+        return price;
+    }
+
+    function coinPriceUnit() external view returns (uint256) {
+        return priceCoin;
+    }
+
+    function getNextLevelBaseTokenIdHint() external view returns (uint256) {
+        return nextLevelBaseTokenIdHint;
+    }
+
+    function getEarlyPurgeMask() external view returns (uint8) {
+        return earlyPurgeJackpotPaidMask;
+    }
+
+    function epUnlocked(uint24 lvl) external view returns (bool) {
+        return _epUnlocked(lvl);
+    }
+
+    function creditPrizePool() external payable {
+        if (msg.sender != address(nft)) revert E();
+        prizePool += msg.value;
+    }
+
+    function creditNextPrizePool() external payable {
+        if (msg.sender != address(nft)) revert E();
+        nextPrizePool += msg.value;
+    }
 
     /// @notice Advances the game state machine. Anyone can call, but certain steps
     ///         require the caller to meet a luckbox threshold (payment for work/luckbox bonus).
@@ -346,7 +382,7 @@ contract PurgeGame {
                 if (_phase <= 2) {
                     _updateEarlyPurgeJackpots(lvl);
                     bool prizeReady = prizePool >= lastPrizePool;
-                    bool levelGate = (purchaseCount >= PURCHASE_MINIMUM && prizeReady);
+                    bool levelGate = (nft.purchaseCount() >= PURCHASE_MINIMUM && prizeReady);
                     if (modTwenty == 16) {
                         levelGate = prizeReady;
                     }
@@ -397,20 +433,20 @@ contract PurgeGame {
                     break;
                 }
 
-                uint32 purchases = purchaseCount;
+                uint32 purchases = nft.purchaseCount();
                 bool rebuildComplete = (purchases == 0) || (traitRebuildCursor >= purchases);
                 if (!rebuildComplete) {
                     _rebuildTraitCounts(cap);
                     break;
                 }
                 if (_endJackpot(lvl, cap, day, false, rngWord, _phase)) {
-                    uint32 soldThisLevel = purchaseCount;
+                    uint32 soldThisLevel = purchases;
                     nft.recordSeasonMinted(soldThisLevel);
                     levelStartTime = ts;
                     uint256 baseTokenIdHint = nft.currentBaseTokenId();
                     uint256 startId = baseTokenIdHint + uint256(soldThisLevel);
                     nextLevelBaseTokenIdHint = ((startId + 99) / 100) * 100 + 1;
-                    purchaseCount = 0;
+                    nft.resetPurchaseCount();
                     traitRebuildCursor = 0;
                     gameState = 3;
                 }
@@ -455,155 +491,48 @@ contract PurgeGame {
     /// - ETH path forwards affiliate credit to the coin contract.
     /// - No NFTs are minted here; this only schedules mints and precomputes traits.
     /// - Traits are derived from the current VRF word snapshot (`rngWord`) at call time.
-    /// @param quantity Number of base items to purchase (1..400).
-    /// @param payInCoin If true, burn Purgecoin instead of paying ETH.
-    /// @param affiliateCode Optional affiliate code for ETH purchases (ignored for coin payments).
-    function purchase(uint256 quantity, bool payInCoin, bytes32 affiliateCode) external payable {
-        uint8 _phase = phase;
-        uint24 currentLevel = level;
-        uint8 state = gameState;
-        address buyer = msg.sender;
-        if (quantity == 0 || quantity > 400) revert InvalidQuantity();
+    /// @notice Queue an already-processed purchase from the NFT contract.
+    /// @param buyer         Buyer to credit with pending mints.
+    /// @param quantity      Number of base items purchased.
+    /// @param firstPurchase True when this is the first purchase of the level (resets rebuild cursor).
+    function enqueuePurchase(address buyer, uint32 quantity, bool firstPurchase) external {
+        if (msg.sender != address(nft)) revert E();
+        if (buyer == address(0)) revert E();
+        if (quantity == 0) revert InvalidQuantity();
 
-        bool queueNext = state == 3;
-        uint24 targetLevel = currentLevel;
-        uint256 baseTokenId;
-        if (queueNext) {
-            unchecked {
-                targetLevel = currentLevel + 1;
-                baseTokenId = nextLevelBaseTokenIdHint;
-            }
-        } else {
-            baseTokenId = nft.currentBaseTokenId();
-        }
-
-        if ((targetLevel % 20) == 16) revert NotTimeYet();
-        uint256 _priceCoin = priceCoin;
-        _enforceCenturyLuckbox(targetLevel, _priceCoin);
-        if (!queueNext && nft.rngLocked()) revert RngNotReady();
-
-        // Payment handling (ETH vs coin)
-        uint256 bonusCoinReward = (quantity / 10) * _priceCoin;
-        if (payInCoin) {
-            if (msg.value != 0) revert E();
-            _ensureEpThirtyUnlocked(targetLevel);
-            _coinReceive(quantity * _priceCoin, targetLevel, bonusCoinReward);
-        } else {
-            // Scale quantity by 100 so `_ethReceive` can keep integer math.
-            (uint256 bonus, uint256 luckboxBonus) =
-                _ethReceive(quantity * 100, affiliateCode, quantity, targetLevel, false);
-            if (_phase == 3 && (targetLevel % 100) > 90) {
-                bonus += (quantity * _priceCoin) / 5;
-            }
-            bonus += bonusCoinReward;
-            if (bonus != 0 || luckboxBonus != 0) coin.bonusCoinflip(buyer, bonus, true, luckboxBonus);
-        }
-
-        // Push buyer to the pending list once (de-dup)
         uint32 owed = playerTokensOwed[buyer];
         if (owed == 0) {
             pendingNftMints.push(buyer);
         }
 
-        // Determine token id range for this purchase set.
-        uint32 purchaseCountLocal = purchaseCount;
-        uint256 tokenIdStart = baseTokenId + uint256(purchaseCountLocal);
-        if (purchaseCountLocal == 0) {
+        unchecked {
+            playerTokensOwed[buyer] = owed + quantity;
+        }
+
+        if (firstPurchase) {
             traitRebuildCursor = 0;
         }
-        for (uint32 i; i < quantity; ) {
-            uint256 _tokenId = tokenIdStart + i;
-            uint256 rand = uint256(keccak256(abi.encodePacked(_tokenId, targetLevel)));
-            uint8 tA = _getTrait(uint64(rand));
-            uint8 tB = _getTrait(uint64(rand >> 64)) | 64;
-            uint8 tC = _getTrait(uint64(rand >> 128)) | 128;
-            uint8 tD = _getTrait(uint64(rand >> 192)) | 192;
-
-            uint32 _tokenTraits = uint32(tA) | (uint32(tB) << 8) | (uint32(tC) << 16) | (uint32(tD) << 24);
-            tokenTraits[_tokenId] = _tokenTraits;
-
-            unchecked {
-                ++i;
-                ++purchaseCountLocal;
-            }
-            emit TokenCreated(_tokenId, _tokenTraits);
-        }
-
-        uint32 qty32 = uint32(quantity);
-        unchecked {
-            uint32 newOwed = owed + qty32;
-            playerTokensOwed[buyer] = newOwed;
-            purchaseCount = purchaseCountLocal;
-        }
     }
 
-    // --- “Mint & Purge” map flow: schedule symbol drops --------------------------------------------
-
-    /// @notice Buys map symbols in state 2 and immediately schedules purge-map entries.
-    /// @dev
-    /// - Requires the current RNG word to be already consumed (fresh session).
-    /// - ETH path: converts qualifying rebates into a bonus coinflip credit.
-    /// - No on-chain burning/minting of NFTs here; symbols are scheduled and later batched.
-    /// @param quantity Number of map entries requested (≥1).
-    /// @param payInCoin If true, pay with Purgecoin (with level-conditional multiplier).
-    /// @param affiliateCode Optional affiliate code for ETH payments.
-    function mintAndPurge(uint256 quantity, bool payInCoin, bytes32 affiliateCode) external payable {
-        uint256 priceUnit = priceCoin;
-        uint8 _phase = phase;
-        uint8 state = gameState;
+    /// @notice Queue map mints owed after NFT-side processing.
+    /// @param buyer    Player to credit.
+    /// @param quantity Map entries purchased (1+).
+    function enqueueMap(address buyer, uint32 quantity) external {
+        if (msg.sender != address(nft)) revert E();
+        if (buyer == address(0)) revert E();
         if (quantity == 0) revert InvalidQuantity();
-        uint24 lvl = level;
-        if (state == 3) {
-            unchecked {
-                ++lvl;
-            }
-        }
-        if (nft.rngLocked()) revert RngNotReady();
-        _enforceCenturyLuckbox(lvl, priceUnit);
-        // Pricing / rebates
-        uint256 coinCost = quantity * (priceUnit / 4);
-        uint256 scaledQty = quantity * 25; // Scale to quarter units; divided by 100 within `_ethReceive`
-        uint256 mapRebate = (quantity / 4) * (priceUnit / 10);
-        uint256 mapBonus = (quantity / 40) * priceUnit;
 
-        if (payInCoin) {
-            if (msg.value != 0) revert E();
-            _ensureEpThirtyUnlocked(lvl);
-            _coinReceive(coinCost - mapRebate, lvl, mapBonus);
-        } else {
-            (uint256 bonus, uint256 luckboxBonus) = _ethReceive(
-                scaledQty,
-                affiliateCode,
-                (lvl < 10) ? quantity : 0,
-                lvl,
-                true
-            );
-            if (_phase == 3 && (lvl % 100) > 90) {
-                bonus += coinCost / 5;
-            }
-            uint256 rebateMint = bonus + mapRebate + mapBonus;
-            if (rebateMint != 0 || luckboxBonus != 0) coin.bonusCoinflip(msg.sender, rebateMint, true, luckboxBonus);
+        if (playerMapMintsOwed[buyer] == 0) {
+            pendingMapMints.push(buyer);
         }
 
-        if (playerMapMintsOwed[msg.sender] == 0) pendingMapMints.push(msg.sender);
         unchecked {
-            playerMapMintsOwed[msg.sender] += uint32(quantity);
+            playerMapMintsOwed[buyer] += quantity;
         }
     }
+
     // --- Purging NFTs into tickets & potentially ending the level -----------------------------------
 
-    /// @notice Burn up to 75 owned NFTs to contribute purge tickets; may end the level if a trait hits zero.
-    /// @dev
-    /// Security:
-    /// - Requires `gameState == 3` and a consumed RNG session.
-    /// Accounting:
-    /// - For each token, burns it, updates daily counters and remaining-per-trait,
-    ///   and appends four tickets (one per trait) to the current level’s buckets.
-    /// - If any trait’s remaining count reaches 0 during the loop, `_endLevel(trait)` is invoked
-    ///   and the function returns immediately (tickets for that *last* NFT are not recorded).
-    /// Rewards:
-    /// - Grants a Purgecoin coinflip credit: base `n` plus up to +0.9×n (in tenths) if the NFT
-    ///   included last level’s exterminated trait.
     function purge(uint256[] calldata tokenIds) external {
         if (nft.rngLocked()) revert RngNotReady();
         if (gameState != 3) revert NotTimeYet();
@@ -624,7 +553,7 @@ contract PurgeGame {
         for (uint256 i; i < count; ) {
             uint256 tokenId = tokenIds[i];
 
-            uint32 traits = tokenTraits[tokenId];
+            uint32 traits = nft.tokenTraitsPacked(tokenId);
             uint8 trait0 = uint8(traits & 0xFF);
             uint8 trait1 = (uint8(traits >> 8) & 0xFF);
             uint8 trait2 = (uint8(traits >> 16) & 0xFF);
@@ -1262,93 +1191,6 @@ contract PurgeGame {
     /// @notice Handle ETH payments for purchases; forwards affiliate rewards as coinflip credits.
     /// @param scaledQty Quantity scaled by 100 (to keep integer math with `price`).
     /// @param affiliateCode Affiliate/referral code provided by the buyer.
-    function _ethReceive(
-        uint256 scaledQty,
-        bytes32 affiliateCode,
-        uint256 bonusUnits,
-        uint24 lvl,
-        bool mapPurchase
-    ) private returns (uint256 bonusMint, uint256 luckboxBonus) {
-        uint256 expectedWei = (price * scaledQty) / 100;
-        address payer = msg.sender;
-        if (mapPurchase) {
-            uint8 mapDiscount = nft.mapStakeDiscount(payer);
-            if (mapDiscount != 0) {
-                uint256 discountWei = (expectedWei * mapDiscount) / 100;
-                expectedWei -= discountWei;
-            }
-        } else {
-            uint8 levelDiscount = nft.levelStakeDiscount(payer);
-            if (levelDiscount != 0) {
-                uint256 discountWei = (expectedWei * levelDiscount) / 100;
-                expectedWei -= discountWei;
-            }
-        }
-        if (msg.value != expectedWei) revert E();
-
-        uint8 state = gameState;
-        if (state == 3 || state == 1) {
-            unchecked {
-                nextPrizePool += msg.value;
-            }
-        } else {
-            unchecked {
-                prizePool += msg.value;
-            }
-        }
-
-        uint256 affiliateAmount = (scaledQty * priceCoin) / 1000;
-        uint8 reached = earlyPurgeJackpotPaidMask & 0x3F;
-        unchecked {
-            reached -= (reached >> 1) & 0x55;
-            reached = (reached & 0x33) + ((reached >> 2) & 0x33);
-            reached = (reached + (reached >> 4)) & 0x0F;
-        }
-        uint256 steps = reached > 5 ? 5 : reached;
-        uint256 pct = 25 - (steps * 5);
-        unchecked {
-            affiliateAmount += (affiliateAmount * pct) / 100;
-        }
-        unchecked {
-            coin.payAffiliate(affiliateAmount, affiliateCode, payer, level);
-        }
-
-        (uint256 streakBonus, uint256 streakLuckbox) = nft.recordEthMint(payer, lvl);
-
-        bonusMint = (bonusUnits * priceCoin * pct) / 100;
-        if (streakBonus != 0) {
-            unchecked {
-                bonusMint += streakBonus;
-            }
-        }
-        luckboxBonus = streakLuckbox;
-    }
-
-    /// @notice Handle Purgecoin coin payments for purchases;
-    /// @dev 1.5x cost on steps where `level % 20 == 13`. 10% discount on 18. Applies post-adjustment discount.
-    function _coinReceive(uint256 amount, uint24 lvl, uint256 discount) private {
-        uint8 stepMod = uint8(lvl % 20);
-        if (stepMod == 13) amount = (amount * 3) / 2;
-        else if (stepMod == 18) amount = (amount * 9) / 10;
-        if (discount != 0) amount -= discount;
-        coin.burnCoin(msg.sender, amount);
-    }
-
-    function _enforceCenturyLuckbox(uint24 lvl, uint256 unit) private view {
-        if (lvl != 0 && (lvl % 100 == 0)) {
-            uint256 luck = coin.playerLuckbox(msg.sender);
-            uint256 required = 20 * unit * ((lvl / 100) + 1);
-            if (luck < required) revert LuckboxTooSmall();
-            if (luck < required + LUCKBOX_BYPASS_THRESHOLD) {
-                if (uint256(nft.ethMintLastLevel(msg.sender)) + 1 != uint256(lvl)) revert LuckboxTooSmall();
-            }
-        }
-    }
-
-    function _ensureEpThirtyUnlocked(uint24 lvl) private view {
-        if (!_epUnlocked(lvl)) revert NotTimeYet();
-    }
-
     // --- Map / NFT airdrop batching ------------------------------------------------------------------
 
     /// @notice Process a batch of map mints using a caller-provided writes budget (0 = auto).
@@ -1491,7 +1333,7 @@ contract PurgeGame {
     /// @param tokenBudget Max tokens to process this call (0 => default 4,096).
     /// @return finished True when all tokens for the level have been incorporated.
     function _rebuildTraitCounts(uint32 tokenBudget) private returns (bool finished) {
-        uint32 target = purchaseCount;
+        uint32 target = nft.purchaseCount();
         if (target == 0) {
             traitRebuildCursor = 0;
             return true;
@@ -1513,7 +1355,7 @@ contract PurgeGame {
 
         for (uint32 i; i < batch; ) {
             uint32 tokenOffset = cursor + i;
-            uint32 traitsPacked = tokenTraits[baseTokenId + tokenOffset];
+            uint32 traitsPacked = nft.tokenTraitsPacked(baseTokenId + tokenOffset);
             uint8 t0 = uint8(traitsPacked);
             uint8 t1 = uint8(traitsPacked >> 8);
             uint8 t2 = uint8(traitsPacked >> 16);
@@ -1973,7 +1815,7 @@ contract PurgeGame {
         view
         returns (uint256 metaPacked, uint32[4] memory remaining)
     {
-        uint32 traitsPacked = tokenTraits[tokenId];
+        uint32 traitsPacked = nft.tokenTraitsPacked(tokenId);
 
         uint8 t0 = uint8(traitsPacked);
         uint8 t1 = uint8(traitsPacked >> 8);
