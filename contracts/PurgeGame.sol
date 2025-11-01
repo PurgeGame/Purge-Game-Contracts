@@ -163,6 +163,7 @@ contract PurgeGame {
     uint8 private constant MAP_FIRST_BATCH = 8; // Consecutive daily jackpots on map-only levels before normal cadence resumes
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
     uint256 private constant LUCKBOX_BYPASS_THRESHOLD = 100_000 * 1_000_000; // 100k PURGED (6 decimals)
+    uint8 private constant EP_THIRTY_MASK = 4; // 30% early-purge threshold bit
     uint256 private constant PURCHASE_WEIGHT_TOTAL = 30;
 
     // -----------------------
@@ -464,6 +465,7 @@ contract PurgeGame {
         uint256 bonusCoinReward = (quantity / 10) * _priceCoin;
         if (payInCoin) {
             if (msg.value != 0) revert E();
+            _ensureEpThirtyUnlocked(lvl);
             _coinReceive(quantity * _priceCoin, lvl, bonusCoinReward);
         } else {
             // Scale quantity by 100 so `_ethReceive` can keep integer math.
@@ -548,6 +550,7 @@ contract PurgeGame {
 
         if (payInCoin) {
             if (msg.value != 0) revert E();
+            _ensureEpThirtyUnlocked(lvl);
             _coinReceive(coinCost - mapRebate, lvl, mapBonus);
         } else {
             (uint256 bonus, uint256 luckboxBonus) = _ethReceive(
@@ -1060,114 +1063,35 @@ contract PurgeGame {
         lastPrizePool = prizePool;
         prizePool = effectiveWei;
 
-        // --- Trait plan: 1 full‑range + 2×(Q0,Q1,Q2,Q3), paired per quadrant ---
-        uint8 fullTrait = uint8(rndWord & 0xFF);
-        uint8[4] memory quadTrait;
-        {
-            uint256 r = rndWord >> 8;
-            quadTrait[0] = uint8((r & 0x3F) + 0);
-            r >>= 6; // Q0: 0..63
-            quadTrait[1] = uint8((r & 0x3F) + 64);
-            r >>= 6; // Q1: 64..127
-            quadTrait[2] = uint8((r & 0x3F) + 128);
-            r >>= 6; // Q2: 128..191
-            quadTrait[3] = uint8((r & 0x3F) + 192); // Q3: 192..255
-        }
+        uint8[4] memory winningTraits = _getRandomTraits(rndWord);
 
-        uint256 packedTraits;
-        uint256 totalPaidWei;
-        bool doubleMap = (lvlMod100 == 30) || (lvlMod100 == 50) || (lvlMod100 == 70) || (lvlMod100 == 0);
+        JackpotSpec memory spec = JackpotSpec({
+            payInCoin: false,
+            randomHeadline: false,
+            headlineAddress: coin.lastBiggestFlip(),
+            headlinePct: 10,
+            stakePct: 0,
+            purchaseEachPct: 5,
+            purchaseCount: 5,
+            purchaseSinglePct: 10
+        });
 
-        for (uint8 idx; idx < 9; ) {
-            (uint8 winnersN, uint8 permille) = _mapSpec(idx);
+        (uint256 paidWei, , uint256 entropyOut) = _runJackpot(spec, lvl, effectiveWei, rndWord ^ (uint256(lvl) << 200), winningTraits);
 
-            // idx 0 = full range; then pairs per quadrant: (1,2)=Q0, (3,4)=Q1, (5,6)=Q2, (7,8)=Q3
-            uint8 traitId = (idx == 0) ? fullTrait : quadTrait[(idx - 1) >> 1];
+        entropyOut;
 
-            packedTraits |= uint256(traitId) << (uint256(idx) << 3);
-
-            address[] memory winners = _randTraitTicket(
-                traitPurgeTicket[lvl],
-                rndWord,
-                traitId,
-                winnersN, // Odd idx -> 1 big payout; even idx -> 20 smaller payouts
-                uint8(42 + idx)
-            );
-
-            uint256 bucketWei = (effectiveWei * permille) / 1000;
-            if (doubleMap) bucketWei <<= 1;
-            uint256 winnersLen = winners.length;
-
-            if (idx == 0 && winnersLen != 0) {
-                address trophyWinner;
-                for (uint256 k; k < winnersLen; ) {
-                    address candidate = winners[k];
-                    if (_eligibleJackpotWinner(candidate, lvl)) {
-                        trophyWinner = candidate;
-                        break;
-                    }
-                    unchecked {
-                        ++k;
-                    }
-                }
-                if (trophyWinner != address(0)) {
-                    uint256 immediatePool = bucketWei >> 1;
-                    uint256 deferredAmount = bucketWei - immediatePool;
-                    unchecked {
-                        totalPaidWei += bucketWei;
-                    }
-                    _addClaimableEth(trophyWinner, immediatePool);
-                    uint256 trophyData = (uint256(traitId) << 152) | (uint256(lvl) << 128) | TROPHY_FLAG_MAP;
-                    nft.awardTrophy{value: deferredAmount}(
-                        trophyWinner,
-                        lvl,
-                        IPurgeGameNFT.TrophyKind.Map,
-                        trophyData,
-                        deferredAmount
-                    );
-                }
-            } else if (winnersLen != 0) {
-                uint256 eligibleCount;
-                for (uint256 k; k < winnersLen; ) {
-                    address candidate = winners[k];
-                    if (_eligibleJackpotWinner(candidate, lvl)) {
-                        winners[eligibleCount] = candidate;
-                        unchecked {
-                            ++eligibleCount;
-                        }
-                    }
-                    unchecked {
-                        ++k;
-                    }
-                }
-                if (eligibleCount != 0) {
-                    uint256 prizeEachWei = bucketWei / eligibleCount;
-                    uint256 paidWei = prizeEachWei * eligibleCount;
-                    unchecked {
-                        totalPaidWei += paidWei;
-                    }
-                    for (uint256 k; k < eligibleCount; ) {
-                        _addClaimableEth(winners[k], prizeEachWei);
-                        unchecked {
-                            ++k;
-                        }
-                    }
-                }
-            }
-            unchecked {
-                ++idx;
-            }
-        }
-
-        uint256 newPrizePool;
-        unchecked {
-            newPrizePool = prizePool - totalPaidWei;
-        }
-        prizePool = newPrizePool;
-        levelPrizePool = newPrizePool;
+        uint256 remainingPool = effectiveWei > paidWei ? effectiveWei - paidWei : 0;
+        prizePool = remainingPool;
+        levelPrizePool = remainingPool;
 
         jackpotActivityThisCycle = true;
-        emit Jackpot((uint256(9) << 248) | packedTraits);
+        emit Jackpot(
+            (uint256(9) << 248) |
+                uint256(winningTraits[0]) |
+                (uint256(winningTraits[1]) << 8) |
+                (uint256(winningTraits[2]) << 16) |
+                (uint256(winningTraits[3]) << 24)
+        );
         return true;
     }
 
@@ -1418,6 +1342,11 @@ contract PurgeGame {
                 if (uint256(nft.ethMintLastLevel(msg.sender)) + 1 != uint256(lvl)) revert LuckboxTooSmall();
             }
         }
+    }
+
+    function _ensureEpThirtyUnlocked(uint24 lvl) private view {
+        if (lvl < 10) return;
+        if ((earlyPurgeJackpotPaidMask & EP_THIRTY_MASK) == 0) revert NotTimeYet();
     }
 
     // --- Map / NFT airdrop batching ------------------------------------------------------------------
