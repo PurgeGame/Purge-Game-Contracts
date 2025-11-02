@@ -52,7 +52,6 @@ interface IPurgeGame {
     function coinPriceUnit() external view returns (uint256);
     function getEarlyPurgeMask() external view returns (uint8);
     function epUnlocked(uint24 lvl) external view returns (bool);
-    function enqueuePurchase(address buyer, uint32 quantity, bool firstPurchase) external;
     function enqueueMap(address buyer, uint32 quantity) external;
     function creditPrizePool(address player, uint24 lvl)
         external
@@ -368,7 +367,6 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
             baseTokenId = _currentBaseTokenId();
         }
         uint256 tokenIdStart = baseTokenId + uint256(_purchaseCount);
-        bool firstPurchase = _purchaseCount == 0;
         uint32 qty32 = uint32(quantity);
 
         for (uint32 i; i < qty32; ) {
@@ -397,7 +395,7 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
             _purchaseCount += qty32;
         }
 
-        _recordPurchase(buyer, qty32, firstPurchase);
+        _recordPurchase(buyer, qty32);
     }
 
     function mintAndPurge(uint256 quantity, bool payInCoin, bytes32 affiliateCode) external payable {
@@ -526,7 +524,7 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
         coin.burnCoin(payer, amount);
     }
 
-    function _recordPurchase(address buyer, uint32 quantity, bool firstPurchase) private {
+    function _recordPurchase(address buyer, uint32 quantity) private {
         uint32 owed = _tokensOwed[buyer];
         if (owed == 0) {
             _pendingMintQueue.push(buyer);
@@ -535,8 +533,6 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
         unchecked {
             _tokensOwed[buyer] = owed + quantity;
         }
-
-        game.enqueuePurchase(buyer, quantity, firstPurchase);
     }
 
     function processPendingMints(uint32 playersToProcess) external onlyGame returns (bool finished) {

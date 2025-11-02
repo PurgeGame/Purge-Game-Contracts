@@ -451,32 +451,13 @@ contract PurgeGame {
 
     // --- Purchases: schedule NFT mints (traits precomputed) ----------------------------------------
 
-    /// @notice Records a purchase during state 2, either paying in Purgecoin or ETH.
-    /// @dev
-    /// - ETH path forwards affiliate credit to the coin contract.
-    /// - No NFTs are minted here; this only schedules mints and precomputes traits.
-    /// - Traits are derived from the current VRF word snapshot (`rngWord`) at call time.
-    /// @notice Queue an already-processed purchase from the NFT contract.
-    /// @param buyer         Buyer to credit with pending mints.
-    /// @param quantity      Number of base items purchased.
-    /// @param firstPurchase True when this is the first purchase of the level (resets rebuild cursor).
-    function enqueuePurchase(address buyer, uint32 quantity, bool firstPurchase) external {
-        if (msg.sender != address(nft)) revert E();
-        if (buyer == address(0)) revert E();
-        if (quantity == 0) revert InvalidQuantity();
-
-        if (firstPurchase) {
-            traitRebuildCursor = 0;
-        }
-    }
-
     /// @notice Queue map mints owed after NFT-side processing.
     /// @param buyer    Player to credit.
     /// @param quantity Map entries purchased (1+).
     function enqueueMap(address buyer, uint32 quantity) external {
         if (msg.sender != address(nft)) revert E();
         if (buyer == address(0)) revert E();
-        if (quantity == 0) revert InvalidQuantity();
+        if (quantity == 0) return;
 
         if (playerMapMintsOwed[buyer] == 0) {
             pendingMapMints.push(buyer);
