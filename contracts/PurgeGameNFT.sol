@@ -39,10 +39,10 @@ interface ITokenRenderer {
 }
 
 interface IPurgeGame {
-    function describeBaseToken(uint256 tokenId)
+    function getTraitRemainingQuad(uint8[4] calldata traitIds)
         external
         view
-        returns (uint256 metaPacked, uint32[4] memory remaining);
+        returns (uint16 lastExterminated, uint24 currentLevel, uint32[4] memory remaining);
 
     function level() external view returns (uint24);
 
@@ -302,7 +302,15 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
             revert InvalidToken();
         }
 
-        (uint256 metaPacked, uint32[4] memory remaining) = game.describeBaseToken(tokenId);
+        uint32 traitsPacked = _tokenTraits[tokenId];
+        uint8 t0 = uint8(traitsPacked);
+        uint8 t1 = uint8(traitsPacked >> 8);
+        uint8 t2 = uint8(traitsPacked >> 16);
+        uint8 t3 = uint8(traitsPacked >> 24);
+
+        uint8[4] memory traitIds = [t0, t1, t2, t3];
+        (uint16 lastExterminated, uint24 currentLevel, uint32[4] memory remaining) = game.getTraitRemainingQuad(traitIds);
+        uint256 metaPacked = (uint256(lastExterminated) << 56) | (uint256(currentLevel) << 32) | uint256(traitsPacked);
         return regularRenderer.tokenURI(tokenId, metaPacked, remaining);
     }
 

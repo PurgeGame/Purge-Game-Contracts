@@ -257,6 +257,7 @@ contract Purgecoin {
     BAFState private bafState;
     BAFScan private bs;
     uint256 private extVar; // decimator accumulator/denominator
+    bool private bafCoinflipLocked;
 
     // Decimator tracking
     mapping(address => DecEntry) private decBurn;
@@ -863,6 +864,9 @@ contract Purgecoin {
         bool bonusFlip,
         uint256 rngWord
     ) external onlyPurgeGameContract returns (bool finished) {
+        if (bafCoinflipLocked) {
+            return false;
+        }
         uint256 word = rngWord;
         if (payoutIndex == 0) {
             unchecked {
@@ -959,6 +963,7 @@ contract Purgecoin {
             }
         }
 
+
         // --- Phase 2: bounty payout and tenth-player arming (first window only) -------
         uint256 totalPlayers = coinflipPlayersCount;
 
@@ -1052,6 +1057,9 @@ contract Purgecoin {
             cfHead = cfTail;
             payoutIndex = 0;
             coinflipPlayersCount = 0;
+            if (!bafCoinflipLocked && (level % 20 == 0)) {
+                bafCoinflipLocked = true;
+            }
 
             scanCursor = SS_IDLE;
             emit CoinflipFinished(win);
@@ -1112,6 +1120,10 @@ contract Purgecoin {
         uint32 batch = (cap == 0) ? BAF_BATCH : cap;
 
         uint256 executeWord = rngWord;
+
+        if (kind == 0 && bafCoinflipLocked) {
+            bafCoinflipLocked = false;
+        }
 
         // ----------------------------------------------------------------------
         // Arm a new external run

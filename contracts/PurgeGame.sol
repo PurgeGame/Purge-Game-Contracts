@@ -173,7 +173,9 @@ contract PurgeGame {
     uint32 private airdropMapsProcessedCount; // Progress inside current map-mint player's queue
     uint32 private airdropIndex; // Progress across players in pending arrays
     uint32 private traitRebuildCursor; // Tokens processed during trait rebuild
-
+    bool private traitCountsSeedQueued; // Trait seeding pending after pending mints finish
+    bool private traitCountsShouldOverwrite; // On next rebuild slice, overwrite instead of accumulate
+    uint256[4] private traitOverwriteBitmap; // Tracks which traits were overwritten this rebuild
 
     address[] private pendingMapMints; // Queue of players awaiting map mints
     mapping(address => uint32) private playerMapMintsOwed; // Player => map mints owed
@@ -393,7 +395,8 @@ contract PurgeGame {
 
                 if (_phase == 5) {
                     if (nft.processPendingMints(cap)) {
-                        _seedTraitCounts();
+                        traitCountsSeedQueued = true;
+                        traitRebuildCursor = 0;
                         delete pendingMapMints;
                         airdropIndex = 0;
                         airdropMapsProcessedCount = 0;
@@ -404,6 +407,15 @@ contract PurgeGame {
                 }
 
                 uint32 purchases = nft.purchaseCount();
+                if (traitCountsSeedQueued) {
+                    if (purchases != 0 && traitRebuildCursor < purchases) {
+                        _rebuildTraitCounts(cap);
+                        break;
+                    }
+                    _seedTraitCounts();
+                    traitCountsSeedQueued = false;
+                }
+
                 bool rebuildComplete = (purchases == 0) || (traitRebuildCursor >= purchases);
                 if (!rebuildComplete) {
                     _rebuildTraitCounts(cap);
@@ -657,12 +669,6 @@ contract PurgeGame {
             level++;
         }
 
-        for (uint16 t; t < 256; ) {
-            traitRemaining[t] = 0;
-            unchecked {
-                ++t;
-            }
-        }
         traitRebuildCursor = 0;
         jackpotCounter = 0;
 
@@ -1253,18 +1259,23 @@ contract PurgeGame {
         return airdropIndex >= total;
     }
 
-    function _snapshotTraitRemaining() private view returns (uint32[256] memory snapshot) {
+    function _seedTraitCounts() private {
+        uint32[256] memory snapshot;
         uint32[256] storage remaining = traitRemaining;
+
         for (uint16 t; t < 256; ) {
             snapshot[t] = remaining[t];
             unchecked {
                 ++t;
             }
         }
-    }
 
-    function _seedTraitCounts() private {
-        renderer.setStartingTraitRemaining(_snapshotTraitRemaining());
+        renderer.setStartingTraitRemaining(snapshot);
+        traitCountsShouldOverwrite = true;
+        traitOverwriteBitmap[0] = 0;
+        traitOverwriteBitmap[1] = 0;
+        traitOverwriteBitmap[2] = 0;
+        traitOverwriteBitmap[3] = 0;
     }
 
     /// @notice Rebuild `traitRemaining` by scanning scheduled token traits in capped slices.
@@ -1273,6 +1284,22 @@ contract PurgeGame {
     function _rebuildTraitCounts(uint32 tokenBudget) private returns (bool finished) {
         uint32 target = nft.purchaseCount();
         if (target == 0) {
+            if (traitCountsShouldOverwrite) {
+                uint32[256] storage remZero = traitRemaining;
+                for (uint16 z; z < 256; ) {
+                    if (remZero[z] != 0) {
+                        remZero[z] = 0;
+                    }
+                    unchecked {
+                        ++z;
+                    }
+                }
+                traitCountsShouldOverwrite = false;
+                traitOverwriteBitmap[0] = 0;
+                traitOverwriteBitmap[1] = 0;
+                traitOverwriteBitmap[2] = 0;
+                traitOverwriteBitmap[3] = 0;
+            }
             traitRebuildCursor = 0;
             return true;
         }
@@ -1285,6 +1312,13 @@ contract PurgeGame {
         if (batch > remaining) batch = remaining;
 
         bool startingSlice = cursor == 0;
+        if (startingSlice && traitCountsShouldOverwrite) {
+            traitOverwriteBitmap[0] = 0;
+            traitOverwriteBitmap[1] = 0;
+            traitOverwriteBitmap[2] = 0;
+            traitOverwriteBitmap[3] = 0;
+        }
+
         uint32[256] memory localCounts;
         uint8[256] memory touched;
         uint16 touchedLen;
@@ -1309,25 +1343,41 @@ contract PurgeGame {
         }
 
         uint32[256] storage remainingCounts = traitRemaining;
+        uint256[4] storage overwriteBitmap = traitOverwriteBitmap;
+        bool overwriteMode = traitCountsShouldOverwrite;
         for (uint16 u; u < touchedLen; ) {
             uint8 traitId = touched[u];
-            unchecked {
-                uint32 incoming = localCounts[traitId];
-                if (startingSlice) {
+            uint32 incoming = localCounts[traitId];
+            if (overwriteMode) {
+                uint256 wordIdx = traitId >> 6;
+                uint256 mask = uint256(1) << (traitId & 63);
+                uint256 word = overwriteBitmap[wordIdx];
+                if ((word & mask) == 0) {
                     remainingCounts[traitId] = incoming;
+                    overwriteBitmap[wordIdx] = word | mask;
                 } else {
                     remainingCounts[traitId] += incoming;
                 }
+            } else if (startingSlice) {
+                remainingCounts[traitId] = incoming;
+            } else {
+                remainingCounts[traitId] += incoming;
+            }
+            unchecked {
                 ++u;
             }
         }
 
         traitRebuildCursor = cursor + batch;
         finished = (traitRebuildCursor == target);
+        if (finished) {
+            traitCountsShouldOverwrite = false;
+        }
     }
 
     function _consumeTrait(uint8 traitId, uint32 endLevel) private returns (bool reachedZero) {
         uint32 stored = traitRemaining[traitId];
+        if (stored == 0) return false;
 
         unchecked {
             stored -= 1;
@@ -1470,8 +1520,6 @@ contract PurgeGame {
         internal
         returns (bool finished, uint256 returnedWei)
     {
-
-        if (kind == 0 && (rngWord & 1) == 0) return (true, 0);
 
         (bool isFinished, address[] memory winnersArr, uint256[] memory amountsArr, uint256 returnWei) = coin
             .runExternalJackpot(kind, poolWei, cap, lvl, rngWord);
@@ -1755,26 +1803,21 @@ contract PurgeGame {
         return maxRel;
     }
 
-    // --- Views / metadata ---------------------------------------------------------------------------
-    function describeBaseToken(uint256 tokenId)
+    function getLastExterminatedTrait() external view returns (uint16) {
+        return lastExterminatedTrait;
+    }
+
+    function getTraitRemainingQuad(uint8[4] calldata traitIds)
         external
         view
-        returns (uint256 metaPacked, uint32[4] memory remaining)
+        returns (uint16 lastExterminated, uint24 currentLevel, uint32[4] memory remaining)
     {
-        uint32 traitsPacked = nft.tokenTraitsPacked(tokenId);
-
-        uint8 t0 = uint8(traitsPacked);
-        uint8 t1 = uint8(traitsPacked >> 8);
-        uint8 t2 = uint8(traitsPacked >> 16);
-        uint8 t3 = uint8(traitsPacked >> 24);
-
-        uint256 lastExterminated = lastExterminatedTrait;
-        metaPacked = (uint256(lastExterminated) << 56) | (uint256(level) << 32) | uint256(traitsPacked);
-
-        remaining[0] = traitRemaining[t0];
-        remaining[1] = traitRemaining[t1];
-        remaining[2] = traitRemaining[t2];
-        remaining[3] = traitRemaining[t3];
+        currentLevel = level;
+        lastExterminated = lastExterminatedTrait;
+        remaining[0] = traitRemaining[traitIds[0]];
+        remaining[1] = traitRemaining[traitIds[1]];
+        remaining[2] = traitRemaining[traitIds[2]];
+        remaining[3] = traitRemaining[traitIds[3]];
     }
 
     function getTickets(
