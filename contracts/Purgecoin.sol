@@ -265,9 +265,13 @@ contract Purgecoin {
         _;
     }
 
-    modifier onlyGameOrNft() {
+    modifier onlyGameplayContracts() {
         address sender = msg.sender;
-        if (sender != address(purgeGame) && sender != address(purgeGameNFT)) revert OnlyGame();
+        if (
+            sender != address(purgeGame) &&
+            sender != address(purgeGameNFT) &&
+            sender != address(purgeGameTrophies)
+        ) revert OnlyGame();
         _;
     }
 
@@ -645,7 +649,7 @@ contract Purgecoin {
     function getReferrer(address player) external view returns (address) {
         return referredBy[player];
     }
-    /// @notice Credit affiliate rewards for a purchase (invoked by the game contract).
+    /// @notice Credit affiliate rewards for a purchase (invoked by trusted gameplay contracts).
     /// @dev
     /// Referral rules:
     /// - If `referredBy[sender] == address(1)`: sender is "locked" and we no-op.
@@ -656,7 +660,7 @@ contract Purgecoin {
     /// - `amount` is optionally doubled on levels `level % 25 == 1`.
     /// - Direct ref gets a coinflip credit equal to `amount`; their upline (if any and already active
     ///   this level) receives a 20% bonus coinflip credit of the same (post-doubling) amount.
-    function payAffiliate(uint256 amount, bytes32 code, address sender, uint24 lvl) external onlyGameOrNft {
+    function payAffiliate(uint256 amount, bytes32 code, address sender, uint24 lvl) external onlyGameplayContracts {
         address affiliateAddr = affiliateCode[code];
         address referrer = referredBy[sender];
 
@@ -827,9 +831,11 @@ contract Purgecoin {
     }
 
     /// @notice Grant a pending coinflip stake during gameplay flows instead of minting PURGE.
-    /// @dev Access: PurgeGame or NFT only. Zero address is ignored. Optionally adds a direct luckbox credit.
-    function bonusCoinflip(address player, uint256 amount, bool rngReady, uint256 luckboxBonus) external {
-        if (msg.sender != address(purgeGame) && msg.sender != address(purgeGameNFT)) revert OnlyGame();
+    /// @dev Access: PurgeGame, NFT, or trophy module only. Zero address is ignored. Optionally adds a direct luckbox credit.
+    function bonusCoinflip(address player, uint256 amount, bool rngReady, uint256 luckboxBonus)
+        external
+        onlyGameplayContracts
+    {
         if (player == address(0)) return;
         if (amount != 0) {
             if (!rngReady) {
@@ -847,9 +853,9 @@ contract Purgecoin {
 
     /// @notice Burn PURGE from `target` during gameplay flows (purchases, fees),
     ///         and credit 2% of the burned amount to their luckbox.
-    /// @dev Access: PurgeGame or NFT only. OZ ERC20 `_burn` reverts on zero address or insufficient balance.
+    /// @dev Access: PurgeGame, NFT, or trophy module only. OZ ERC20 `_burn` reverts on zero address or insufficient balance.
     ///      Leaderboard is refreshed only when a non-zero credit is applied.
-    function burnCoin(address target, uint256 amount) external onlyGameOrNft {
+    function burnCoin(address target, uint256 amount) external onlyGameplayContracts {
         _burn(target, amount);
         // 2% luckbox credit; integer division can produce zero for very small burns.
         uint256 credit = amount / 50; // 2%
