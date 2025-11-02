@@ -330,6 +330,10 @@ contract PurgeGame {
             // --- State 1 - Pregame ---
             if (_gameState == 1) {
                 _runEndgameModule(lvl, cap, day, rngWord); // handles payouts, wipes, endgame dist, and jackpots
+                if (gameState == 2 && pendingEndLevel.level == 0 && nft.rngLocked()) {
+                    dailyIdx = day;
+                    nft.releaseRngLock();
+                }
                 break;
             }
 
@@ -428,6 +432,8 @@ contract PurgeGame {
                 if (coinflipAdvanceToPurge) {
                     levelStartTime = ts;
                     nft.finalizePurchasePhase(purchases);
+                    dailyIdx = day;
+                    nft.releaseRngLock();                      
                     traitRebuildCursor = 0;
                     gameState = 3;
                 }
@@ -814,11 +820,11 @@ contract PurgeGame {
             MAP_JACKPOT_SHARES_PACKED
         );
 
-        uint256 remainingPool = effectiveWei > paidWei ? effectiveWei - paidWei : 0;
-        if (remainingPool != 0) {
+        uint256 remainingPool = effectiveWei - paidWei ;
+
             prizePool += remainingPool;
             levelPrizePool += remainingPool;
-        }
+
 
         return true;
     }
