@@ -815,8 +815,10 @@ contract PurgeGame {
         );
 
         uint256 remainingPool = effectiveWei > paidWei ? effectiveWei - paidWei : 0;
-        prizePool = remainingPool;
-        levelPrizePool = remainingPool;
+        if (remainingPool != 0) {
+            prizePool += remainingPool;
+            levelPrizePool += remainingPool;
+        }
 
         return true;
     }
@@ -834,10 +836,25 @@ contract PurgeGame {
         uint256 savePct = _mapCarryoverPercent(lvl, rngWord);
         uint256 saveNextWei = (totalWei * savePct) / 100;
         carryoverForNextLevel = saveNextWei;
-        effectiveWei = totalWei - saveNextWei;
+
+        uint256 jackpotBase = totalWei - saveNextWei;
+        uint256 mapPct = _mapJackpotPercent(lvl);
+        uint256 mapWei = (jackpotBase * mapPct) / 100;
+
+        uint256 mainWei;
+        unchecked {
+            mainWei = jackpotBase - mapWei;
+        }
 
         lastPrizePool = prizePool;
-        prizePool = effectiveWei;
+        prizePool = mainWei;
+        levelPrizePool = mainWei;
+
+        effectiveWei = mapWei;
+    }
+
+    function _mapJackpotPercent(uint24 lvl) private pure returns (uint256) {
+        return (lvl % 20 == 16) ? 30 : 17;
     }
 
     function _mapCarryoverPercent(uint24 lvl, uint256 rngWord) private pure returns (uint256) {
@@ -863,6 +880,11 @@ contract PurgeGame {
         base += lvl / 100;
         if (base > 99) {
             base = 99;
+        }
+
+        uint256 jackpotPct = 100 - base;
+        if (jackpotPct < 17 && jackpotPct != 30) {
+            base = 83;
         }
         return base;
     }
