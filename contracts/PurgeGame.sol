@@ -1062,22 +1062,7 @@ contract PurgeGame {
     /// @return finished True when all tokens for the level have been incorporated.
     function _rebuildTraitCounts(uint32 tokenBudget) private returns (bool finished) {
         uint32 target = nft.purchaseCount();
-        if (target == 0) {
-            if (traitCountsShouldOverwrite) {
-                uint32[256] storage remZero = traitRemaining;
-                for (uint16 z; z < 256; ) {
-                    if (remZero[z] != 0) {
-                        remZero[z] = 0;
-                    }
-                    unchecked {
-                        ++z;
-                    }
-                }
-                traitCountsShouldOverwrite = false;
-            }
-            traitRebuildCursor = 0;
-            return true;
-        }
+
 
         uint32 cursor = traitRebuildCursor;
         if (cursor >= target) return true;
