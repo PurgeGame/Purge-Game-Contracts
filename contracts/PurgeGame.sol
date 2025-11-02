@@ -61,6 +61,8 @@ interface IPurgeGameNFT {
 
     function resetPurchaseCount() external;
 
+    function finalizePurchasePhase(uint32 minted) external;
+
     function purge(address owner, uint256[] calldata tokenIds) external;
 
     function currentBaseTokenId() external view returns (uint256);
@@ -76,12 +78,6 @@ interface IPurgeGameNFT {
     function releaseRngLock() external;
 
     function isRngFulfilled() external view returns (bool);
-
-    function recordEthMint(address player, uint24 level)
-        external
-        returns (uint256 coinReward, uint256 luckboxReward);
-
-    function ethMintLastLevel(address player) external view returns (uint24);
 
     function processPendingMints(uint32 playersToProcess) external returns (bool finished);
 
@@ -133,6 +129,7 @@ contract PurgeGame {
     uint8 private constant EP_THIRTY_MASK = 4; // 30% early-purge threshold bit
     uint8 private constant JACKPOT_KIND_DAILY = 4;
     uint8 private constant JACKPOT_KIND_MAP = 9;
+    uint256 private constant COIN_BASE_UNIT = 1_000_000; // 1 PURGED (6 decimals)
 
     // -----------------------
     // Price
@@ -175,7 +172,6 @@ contract PurgeGame {
     uint32 private airdropMapsProcessedCount; // Progress inside current map-mint player's queue
     uint32 private airdropIndex; // Progress across players in pending arrays
     uint32 private traitRebuildCursor; // Tokens processed during trait rebuild
-    uint256 private nextLevelBaseTokenIdHint; // Precomputed base token id for the upcoming level during purge
     bool private jackpotPending;
 
     address[] private pendingMapMints; // Queue of players awaiting map mints
@@ -204,6 +200,9 @@ contract PurgeGame {
     // -----------------------
     uint32[80] internal dailyPurgeCount; // Layout: 8 symbol, 8 color, 64 trait buckets
     uint32[256] internal traitRemaining; // Remaining supply per trait (0 means exhausted)
+    mapping(address => uint24) private ethMintLastLevel_;
+    mapping(address => uint24) private ethMintLevelCount_;
+    mapping(address => uint24) private ethMintStreakCount_;
 
     // -----------------------
     // Constructor
@@ -277,10 +276,6 @@ contract PurgeGame {
         return priceCoin;
     }
 
-    function getNextLevelBaseTokenIdHint() external view returns (uint256) {
-        return nextLevelBaseTokenIdHint;
-    }
-
     function getEarlyPurgeMask() external view returns (uint8) {
         return earlyPurgeJackpotPaidMask;
     }
@@ -289,14 +284,28 @@ contract PurgeGame {
         return _epUnlocked(lvl);
     }
 
-    function creditPrizePool() external payable {
-        if (msg.sender != address(nft)) revert E();
-        prizePool += msg.value;
+    function ethMintLastLevel(address player) external view returns (uint24) {
+        return ethMintLastLevel_[player];
     }
 
-    function creditNextPrizePool() external payable {
+    function creditPrizePool(address player, uint24 lvl)
+        external
+        payable
+        returns (uint256 coinReward, uint256 luckboxReward)
+    {
+        if (msg.sender != address(nft)) revert E();
+        prizePool += msg.value;
+        return _recordEthMint(player, lvl);
+    }
+
+    function creditNextPrizePool(address player, uint24 lvl)
+        external
+        payable
+        returns (uint256 coinReward, uint256 luckboxReward)
+    {
         if (msg.sender != address(nft)) revert E();
         nextPrizePool += msg.value;
+        return _recordEthMint(player, lvl);
     }
 
     /// @notice Advances the game state machine. Anyone can call, but certain steps
@@ -401,13 +410,8 @@ contract PurgeGame {
                     break;
                 }
                 if (_endJackpot(lvl, cap, day, false, rngWord, _phase)) {
-                    uint32 soldThisLevel = purchases;
-                    nft.recordSeasonMinted(soldThisLevel);
                     levelStartTime = ts;
-                    uint256 baseTokenIdHint = nft.currentBaseTokenId();
-                    uint256 startId = baseTokenIdHint + uint256(soldThisLevel);
-                    nextLevelBaseTokenIdHint = ((startId + 99) / 100) * 100 + 1;
-                    nft.resetPurchaseCount();
+                    nft.finalizePurchasePhase(purchases);
                     traitRebuildCursor = 0;
                     gameState = 3;
                 }
@@ -672,7 +676,6 @@ contract PurgeGame {
             price += (levelSnapshot < 100) ? 0.05 ether : 0.1 ether;
         }
 
-        nextLevelBaseTokenIdHint = 0;
         gameState = 1;
     }
 
@@ -885,15 +888,67 @@ contract PurgeGame {
         emit PlayerCredited(beneficiary, weiAmount);
     }
 
-    /// @notice Expose trait-ticket sampling (view helper for coinJackpot).
-    function getJackpotWinners(
-        uint256 randomWord,
-        uint8 trait,
-        uint8 numWinners,
-        uint8 salt
-    ) external view returns (address[] memory) {
-        return _randTraitTicket(traitPurgeTicket[level], randomWord, trait, numWinners, salt);
+    function _recordEthMint(address player, uint24 lvl)
+        private
+        returns (uint256 coinReward, uint256 luckboxReward)
+    {
+        uint24 prevLevel = ethMintLastLevel_[player];
+        if (prevLevel == lvl) return (0, 0);
+
+        uint24 total = ethMintLevelCount_[player];
+        if (total < type(uint24).max) {
+            unchecked {
+                total = uint24(total + 1);
+            }
+            ethMintLevelCount_[player] = total;
+        }
+
+        uint24 streak = ethMintStreakCount_[player];
+        if (prevLevel != 0 && prevLevel + 1 == lvl) {
+            if (streak < type(uint24).max) {
+                unchecked {
+                    streak = uint24(streak + 1);
+                }
+            }
+        } else {
+            streak = 1;
+        }
+        ethMintStreakCount_[player] = streak;
+        ethMintLastLevel_[player] = lvl;
+
+        uint256 streakReward;
+        if (streak >= 2) {
+            uint256 capped = streak >= 61 ? 60 : uint256(streak - 1);
+            streakReward = capped * 100 * COIN_BASE_UNIT;
+        }
+
+        uint256 totalReward;
+        if (total >= 2) {
+            uint256 cappedTotal = total >= 61 ? 60 : uint256(total - 1);
+            totalReward = (cappedTotal * 100 * COIN_BASE_UNIT * 30) / 100;
+        }
+
+        if (streakReward != 0 || totalReward != 0) {
+            unchecked {
+                luckboxReward = streakReward + totalReward;
+                coinReward = luckboxReward;
+            }
+        }
+
+        if (streak == lvl && lvl >= 20 && (lvl % 10 == 0)) {
+            uint256 milestoneBonus = (uint256(lvl) / 2) * 1000 * COIN_BASE_UNIT;
+            coinReward += milestoneBonus;
+        }
+
+        if (total >= 20 && (total % 10 == 0)) {
+            uint256 totalMilestone = (uint256(total) / 2) * 1000 * COIN_BASE_UNIT;
+            coinReward += (totalMilestone * 30) / 100;
+        }
+
+        return (coinReward, luckboxReward);
     }
+
+
 
     // --- Shared jackpot helpers ----------------------------------------------------------------------
 
@@ -1649,7 +1704,7 @@ contract PurgeGame {
     function _eligibleJackpotWinner(address player, uint24 lvl) private view returns (bool) {
         if (player == address(0)) return false;
         if (!_epUnlocked(lvl)) return true;
-        return nft.ethMintLastLevel(player) == lvl;
+        return ethMintLastLevel_[player] == lvl;
     }
 
     function _executeCoinJackpot(uint24 lvl, uint256 randWord) internal returns (uint8[4] memory winningTraits) {

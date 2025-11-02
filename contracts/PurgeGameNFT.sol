@@ -50,13 +50,19 @@ interface IPurgeGame {
     function currentPhase() external view returns (uint8);
     function mintPrice() external view returns (uint256);
     function coinPriceUnit() external view returns (uint256);
-    function getNextLevelBaseTokenIdHint() external view returns (uint256);
     function getEarlyPurgeMask() external view returns (uint8);
     function epUnlocked(uint24 lvl) external view returns (bool);
     function enqueuePurchase(address buyer, uint32 quantity, bool firstPurchase) external;
     function enqueueMap(address buyer, uint32 quantity) external;
-    function creditPrizePool() external payable;
-    function creditNextPrizePool() external payable;
+    function creditPrizePool(address player, uint24 lvl)
+        external
+        payable
+        returns (uint256 coinReward, uint256 luckboxReward);
+    function creditNextPrizePool(address player, uint24 lvl)
+        external
+        payable
+        returns (uint256 coinReward, uint256 luckboxReward);
+    function ethMintLastLevel(address player) external view returns (uint24);
 }
 
 interface IPurgecoin {
@@ -175,6 +181,7 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
     uint256 private seasonMintedSnapshot;
     uint256 private seasonPurgedCount;
     uint32 private _purchaseCount;
+    uint256 private _nextBaseTokenIdHint;
     address[] private _pendingMintQueue;
     mapping(address => uint32) private _tokensOwed;
     uint256 private _mintQueueIndex;
@@ -182,9 +189,6 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
     uint32 private constant MINT_AIRDROP_PLAYER_BATCH_SIZE = 210; // Max unique recipients per airdrop batch
     uint32 private constant MINT_AIRDROP_TOKEN_CAP = 3_000; // Max tokens distributed per airdrop batch
 
-    mapping(address => uint24) private _ethMintLastLevel;
-    mapping(address => uint24) private _ethMintLevelCount;
-    mapping(address => uint24) private _ethMintStreakCount;
     bool private rngFulfilled;
     bool private rngLockedFlag;
     uint256 private rngRequestId;
@@ -355,7 +359,13 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
             coin.bonusCoinflip(buyer, bonus, true, luckboxBonus);
         }
 
-        uint256 baseTokenId = queueNext ? game.getNextLevelBaseTokenIdHint() : _currentBaseTokenId();
+        uint256 baseTokenId;
+        if (queueNext) {
+            baseTokenId = _nextBaseTokenIdHint;
+            if (baseTokenId == 0) revert NotTimeYet();
+        } else {
+            baseTokenId = _currentBaseTokenId();
+        }
         uint256 tokenIdStart = baseTokenId + uint256(_purchaseCount);
         bool firstPurchase = _purchaseCount == 0;
         uint32 qty32 = uint32(quantity);
@@ -473,10 +483,12 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
 
         if (msg.value != expectedWei) revert E();
 
+        uint256 streakBonus;
+        uint256 streakLuckbox;
         if (creditNextPool) {
-            game.creditNextPrizePool{value: expectedWei}();
+            (streakBonus, streakLuckbox) = game.creditNextPrizePool{value: expectedWei}(payer, lvl);
         } else {
-            game.creditPrizePool{value: expectedWei}();
+            (streakBonus, streakLuckbox) = game.creditPrizePool{value: expectedWei}(payer, lvl);
         }
 
         uint256 priceUnit = game.coinPriceUnit();
@@ -495,8 +507,6 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
         }
 
         coin.payAffiliate(affiliateAmount, affiliateCode, payer, lvl);
-
-        (uint256 streakBonus, uint256 streakLuckbox) = _recordEthMint(payer, lvl);
 
         bonusMint = (bonusUnits * priceUnit * pct) / 100;
         if (streakBonus != 0) {
@@ -587,7 +597,8 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
             uint256 required = 20 * unit * ((lvl / 100) + 1);
             if (luck < required) revert LuckboxTooSmall();
             if (luck < required + LUCKBOX_BYPASS_THRESHOLD) {
-                if (uint256(_ethMintLastLevel[player]) + 1 != uint256(lvl)) revert LuckboxTooSmall();
+                uint24 lastLevel = game.ethMintLastLevel(player);
+                if (uint256(lastLevel) + 1 != uint256(lvl)) revert LuckboxTooSmall();
             }
         }
     }
@@ -1046,77 +1057,21 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
     }
 
 
-    function recordSeasonMinted(uint256 minted) external onlyGame {
+    function _setSeasonMintedSnapshot(uint256 minted) private {
         seasonMintedSnapshot = minted;
         seasonPurgedCount = 0;
     }
 
-    function recordEthMint(address player, uint24 level)
-        external
-        onlyGame
-        returns (uint256 coinReward, uint256 luckboxReward)
-    {
-        return _recordEthMint(player, level);
+    function recordSeasonMinted(uint256 minted) external onlyGame {
+        _setSeasonMintedSnapshot(minted);
     }
 
-    function _recordEthMint(address player, uint24 level)
-        private
-        returns (uint256 coinReward, uint256 luckboxReward)
-    {
-        uint24 prevLevel = _ethMintLastLevel[player];
-        if (prevLevel == level) return (0, 0);
-
-        uint24 total = _ethMintLevelCount[player];
-        if (total < type(uint24).max) {
-            unchecked {
-                total = uint24(total + 1);
-            }
-            _ethMintLevelCount[player] = total;
-        }
-
-        uint24 streak = _ethMintStreakCount[player];
-        if (prevLevel != 0 && prevLevel + 1 == level) {
-            if (streak < type(uint24).max) {
-                unchecked {
-                    streak = uint24(streak + 1);
-                }
-            }
-        } else {
-            streak = 1;
-        }
-        _ethMintStreakCount[player] = streak;
-        _ethMintLastLevel[player] = level;
-
-        uint256 streakReward;
-        if (streak >= 2) {
-            uint256 capped = streak >= 61 ? 60 : uint256(streak - 1);
-            streakReward = capped * 100 * COIN_BASE_UNIT;
-        }
-
-        uint256 totalReward;
-        if (total >= 2) {
-            uint256 cappedTotal = total >= 61 ? 60 : uint256(total - 1);
-            totalReward = (cappedTotal * 100 * COIN_BASE_UNIT * 30) / 100;
-        }
-
-        if (streakReward != 0 || totalReward != 0) {
-            unchecked {
-                luckboxReward = streakReward + totalReward;
-                coinReward = luckboxReward;
-            }
-        }
-
-        if (streak == level && level >= 20 && (level % 10 == 0)) {
-            uint256 milestoneBonus = (uint256(level) / 2) * 1000 * COIN_BASE_UNIT;
-            coinReward += milestoneBonus;
-        }
-
-        if (total >= 20 && (total % 10 == 0)) {
-            uint256 totalMilestone = (uint256(total) / 2) * 1000 * COIN_BASE_UNIT;
-            coinReward += (totalMilestone * 30) / 100;
-        }
-
-        return (coinReward, luckboxReward);
+    function finalizePurchasePhase(uint32 minted) external onlyGame {
+        _setSeasonMintedSnapshot(minted);
+        uint256 baseTokenId = _currentBaseTokenId();
+        uint256 startId = baseTokenId + uint256(minted);
+        _nextBaseTokenIdHint = ((startId + 99) / 100) * 100 + 1;
+        _purchaseCount = 0;
     }
 
     function purge(address owner, uint256[] calldata tokenIds) external onlyGame {
