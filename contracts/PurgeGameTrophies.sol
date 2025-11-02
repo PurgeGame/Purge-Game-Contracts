@@ -135,6 +135,44 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         uint16 discountBps;
     }
 
+    struct TraitWinContext {
+        uint256 levelBits;
+        uint256 traitData;
+        uint256 sharedPool;
+        uint256 base;
+        uint256 stakerRewardPool;
+        uint256 affiliateShare;
+        uint256 deferredAward;
+        uint256 rand;
+        uint256 trophyCount;
+        uint256 rounds;
+        uint256 baseShare;
+    }
+
+    struct MapTimeoutContext {
+        uint256 mapUnit;
+        uint256 valueIn;
+        address affiliateWinner;
+        uint256 stakedCount;
+        uint256 distributed;
+        uint256 draws;
+        uint256 rand;
+    }
+
+    struct ClaimContext {
+        uint256 info;
+        uint256 owed;
+        uint256 newOwed;
+        uint256 payout;
+        uint256 coinAmount;
+        uint24 currentLevel;
+        uint24 lastClaim;
+        uint24 updatedLast;
+        bool ethClaimed;
+        bool coinClaimed;
+        bool isStaked;
+    }
+
     // ---------------------------------------------------------------------
     // Trophy constants
     // ---------------------------------------------------------------------
@@ -255,10 +293,14 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         trophyData_[tokenId] = data;
     }
 
-    function _clearTrophy(uint256 tokenId) private returns (bool hadData) {
+    function _eraseTrophy(uint256 tokenId, uint8 kind, bool adjustSupply) private returns (bool hadData) {
         if (trophyStaked[tokenId]) revert StakeInvalid();
         hadData = trophyData_[tokenId] != 0;
         delete trophyData_[tokenId];
+        nft.setTrophyPackedInfo(tokenId, kind, false);
+        if (adjustSupply && hadData) {
+            nft.decrementTrophySupply(1);
+        }
     }
 
     function _returnValue(address target, uint256 amount) private {
@@ -704,12 +746,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
 
     function clearStakePreview(uint24 level) external override onlyCoinCaller {
         uint256 tokenId = _placeholderTokenId(level, PURGE_TROPHY_KIND_STAKE);
-        if (tokenId == 0) return;
-        if (trophyData_[tokenId] == 0) return;
-        address owner = address(uint160(nft.packedOwnershipOf(tokenId)));
-        if (owner != gameAddress) return;
-        _clearTrophy(tokenId);
-        nft.setTrophyPackedInfo(tokenId, PURGE_TROPHY_KIND_STAKE, false);
+        _eraseTrophy(tokenId, PURGE_TROPHY_KIND_STAKE, false);
     }
 
     function processEndLevel(EndLevelRequest calldata req)
@@ -732,116 +769,170 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         uint256 randomWord = nft.currentRngWord();
 
         if (traitWin) {
-            uint256 traitData = (uint256(req.traitId) << 152) | (uint256(req.level) << TROPHY_BASE_LEVEL_SHIFT);
-            uint256 sharedPool = req.pool / 20;
-            uint256 base = sharedPool / 100;
-            uint256 remainder = sharedPool - (base * 100);
-            uint256 affiliateTrophyShare = base * 20 + remainder;
-            uint256 stakerRewardPool = base * 10;
-            uint256 deferredAward = msg.value;
-
-            if (deferredAward < affiliateTrophyShare + stakerRewardPool) revert InvalidToken();
-            deferredAward -= affiliateTrophyShare + stakerRewardPool;
-
-            _awardTrophyInternal(req.exterminator, PURGE_TROPHY_KIND_LEVEL, traitData, deferredAward, levelTokenId);
-
-            affiliateRecipients = _selectAffiliateRecipients(randomWord);
-            address affiliateWinner = affiliateRecipients[0];
-            if (affiliateWinner == address(0)) {
-                affiliateWinner = req.exterminator;
-                affiliateRecipients[0] = affiliateWinner;
-            }
-
-            uint256 affiliateData =
-                (uint256(0xFFFE) << 152) |
-                (uint256(req.level) << TROPHY_BASE_LEVEL_SHIFT) |
-                TROPHY_FLAG_AFFILIATE;
-            _awardTrophyInternal(affiliateWinner, PURGE_TROPHY_KIND_AFFILIATE, affiliateData, affiliateTrophyShare, affiliateTokenId);
-
-            if (stakerRewardPool != 0) {
-                uint256 trophyCount = stakedTrophyIds.length;
-                if (trophyCount != 0) {
-                    uint256 rounds = trophyCount == 1 ? 1 : 2;
-                    uint256 baseShare = stakerRewardPool / rounds;
-                    uint256 rand = randomWord;
-                    uint256 mask = type(uint64).max;
-                    for (uint256 i; i < rounds; ) {
-                        uint256 idxA = trophyCount == 1 ? 0 : (rand & mask) % trophyCount;
-                        rand >>= 64;
-                        uint256 idxB = trophyCount == 1 ? idxA : (rand & mask) % trophyCount;
-                        rand >>= 64;
-                        uint256 tokenA = stakedTrophyIds[idxA];
-                        uint256 chosen = tokenA;
-                        if (trophyCount != 1) {
-                            uint256 tokenB = stakedTrophyIds[idxB];
-                            chosen = tokenA <= tokenB ? tokenA : tokenB;
-                        }
-                        _addTrophyRewardInternal(chosen, baseShare, nextLevel);
-                        unchecked {
-                            ++i;
-                        }
-                    }
-                }
-            }
+            affiliateRecipients = _processTraitWin(req, nextLevel, levelTokenId, affiliateTokenId, randomWord);
         } else {
-            uint256 poolCarry = req.pool;
-            uint256 mapUnit = poolCarry / 20;
-
-            mapImmediateRecipient = address(uint160(nft.packedOwnershipOf(mapTokenId)));
-
-            _clearTrophy(levelTokenId);
-
-            uint256 valueIn = msg.value;
-            address affiliateWinner = req.exterminator;
-            uint256 affiliateShare = mapUnit;
-            if (affiliateWinner != address(0) && affiliateShare != 0) {
-                uint256 affiliateData =
-                    (uint256(0xFFFE) << 152) |
-                    (uint256(req.level) << TROPHY_BASE_LEVEL_SHIFT) |
-                    TROPHY_FLAG_AFFILIATE;
-                _awardTrophyInternal(affiliateWinner, PURGE_TROPHY_KIND_AFFILIATE, affiliateData, affiliateShare, affiliateTokenId);
-                if (valueIn < affiliateShare) revert InvalidToken();
-                valueIn -= affiliateShare;
-            }
-
-            for (uint8 k; k < 6; ) {
-                affiliateRecipients[k] = affiliateWinner;
-                unchecked {
-                    ++k;
-                }
-            }
-
-            _addTrophyRewardInternal(mapTokenId, mapUnit, nextLevel);
-            if (valueIn < mapUnit) revert InvalidToken();
-            valueIn -= mapUnit;
-
-            uint256 stakedCount = stakedTrophyIds.length;
-            uint256 distributed;
-            if (mapUnit != 0 && stakedCount != 0) {
-                uint256 draws = valueIn / mapUnit;
-                uint256 rand = randomWord;
-                uint256 mask = type(uint64).max;
-                for (uint256 j; j < draws; ) {
-                    uint256 idx = stakedCount == 1 ? 0 : (rand & mask) % stakedCount;
-                    uint256 tokenId = stakedTrophyIds[idx];
-                    _addTrophyRewardInternal(tokenId, mapUnit, nextLevel);
-                    distributed += mapUnit;
-                    rand >>= 64;
-                    unchecked {
-                        ++j;
-                    }
-                }
-                randomWord = rand;
-            }
-
-            uint256 leftover = valueIn - distributed;
-            if (leftover != 0) {
-                (bool ok, ) = payable(gameAddress).call{value: leftover}("");
-                if (!ok) revert InvalidToken();
-            }
+            (mapImmediateRecipient, affiliateRecipients) = _processMapTimeout(
+                req,
+                nextLevel,
+                mapTokenId,
+                levelTokenId,
+                affiliateTokenId,
+                randomWord
+            );
         }
 
         return (mapImmediateRecipient, affiliateRecipients);
+    }
+
+    function _processTraitWin(
+        EndLevelRequest calldata req,
+        uint24 nextLevel,
+        uint256 levelTokenId,
+        uint256 affiliateTokenId,
+        uint256 randomWord
+    ) private returns (address[6] memory recipients) {
+        TraitWinContext memory ctx;
+        ctx.levelBits = uint256(req.level) << TROPHY_BASE_LEVEL_SHIFT;
+        ctx.traitData = (uint256(req.traitId) << 152) | ctx.levelBits;
+        ctx.sharedPool = req.pool / 20;
+        ctx.base = ctx.sharedPool / 100;
+        ctx.stakerRewardPool = ctx.base * 10;
+        ctx.affiliateShare = ctx.sharedPool - ctx.base * 80;
+        ctx.deferredAward = msg.value;
+
+        if (ctx.deferredAward < ctx.affiliateShare + ctx.stakerRewardPool) revert InvalidToken();
+        ctx.deferredAward -= ctx.affiliateShare + ctx.stakerRewardPool;
+
+        _awardTrophyInternal(req.exterminator, PURGE_TROPHY_KIND_LEVEL, ctx.traitData, ctx.deferredAward, levelTokenId);
+
+        recipients = _selectAffiliateRecipients(randomWord);
+        address winner = recipients[0];
+        if (winner == address(0)) {
+            winner = req.exterminator;
+            recipients[0] = winner;
+        }
+
+        _awardTrophyInternal(
+            winner,
+            PURGE_TROPHY_KIND_AFFILIATE,
+            (uint256(0xFFFE) << 152) | ctx.levelBits | TROPHY_FLAG_AFFILIATE,
+            ctx.affiliateShare,
+            affiliateTokenId
+        );
+
+        ctx.trophyCount = stakedTrophyIds.length;
+        if (ctx.stakerRewardPool != 0 && ctx.trophyCount != 0) {
+            ctx.rounds = ctx.trophyCount == 1 ? 1 : 2;
+            ctx.baseShare = ctx.stakerRewardPool / ctx.rounds;
+            ctx.rand = randomWord;
+            for (uint256 i; i < ctx.rounds; ) {
+                uint256 idx = ctx.trophyCount == 1 ? 0 : (ctx.rand & type(uint64).max) % ctx.trophyCount;
+                ctx.rand >>= 64;
+                uint256 chosen = stakedTrophyIds[idx];
+                if (ctx.trophyCount != 1) {
+                    uint256 otherIdx = (ctx.rand & type(uint64).max) % ctx.trophyCount;
+                    ctx.rand >>= 64;
+                    uint256 otherToken = stakedTrophyIds[otherIdx];
+                    if (otherToken < chosen) {
+                        chosen = otherToken;
+                    }
+                }
+                _addTrophyRewardInternal(chosen, ctx.baseShare, nextLevel);
+                unchecked {
+                    ++i;
+                }
+            }
+        }
+    }
+
+    function _processMapTimeout(
+        EndLevelRequest calldata req,
+        uint24 nextLevel,
+        uint256 mapTokenId,
+        uint256 levelTokenId,
+        uint256 affiliateTokenId,
+        uint256 randomWord
+    ) private returns (address mapImmediateRecipient, address[6] memory recipients) {
+        MapTimeoutContext memory ctx;
+        ctx.mapUnit = req.pool / 20;
+        mapImmediateRecipient = address(uint160(nft.packedOwnershipOf(mapTokenId)));
+
+        _eraseTrophy(levelTokenId, PURGE_TROPHY_KIND_LEVEL, false);
+
+        ctx.valueIn = msg.value;
+        ctx.affiliateWinner = req.exterminator;
+
+        if (ctx.affiliateWinner != address(0) && ctx.mapUnit != 0) {
+            _awardTrophyInternal(
+                ctx.affiliateWinner,
+                PURGE_TROPHY_KIND_AFFILIATE,
+                (uint256(0xFFFE) << 152) | (uint256(req.level) << TROPHY_BASE_LEVEL_SHIFT) | TROPHY_FLAG_AFFILIATE,
+                ctx.mapUnit,
+                affiliateTokenId
+            );
+            if (ctx.valueIn < ctx.mapUnit) revert InvalidToken();
+            ctx.valueIn -= ctx.mapUnit;
+        }
+
+        for (uint8 k; k < 6; ) {
+            recipients[k] = ctx.affiliateWinner;
+            unchecked {
+                ++k;
+            }
+        }
+
+        _addTrophyRewardInternal(mapTokenId, ctx.mapUnit, nextLevel);
+        if (ctx.valueIn < ctx.mapUnit) revert InvalidToken();
+        ctx.valueIn -= ctx.mapUnit;
+
+        ctx.stakedCount = stakedTrophyIds.length;
+        if (ctx.mapUnit != 0 && ctx.stakedCount != 0) {
+            ctx.draws = ctx.valueIn / ctx.mapUnit;
+            ctx.rand = randomWord;
+            for (uint256 j; j < ctx.draws; ) {
+                uint256 idx = ctx.stakedCount == 1 ? 0 : (ctx.rand & type(uint64).max) % ctx.stakedCount;
+                uint256 tokenId = stakedTrophyIds[idx];
+                _addTrophyRewardInternal(tokenId, ctx.mapUnit, nextLevel);
+                ctx.distributed += ctx.mapUnit;
+                ctx.rand >>= 64;
+                unchecked {
+                    ++j;
+                }
+            }
+        }
+
+        uint256 leftover = ctx.valueIn - ctx.distributed;
+        if (leftover != 0) {
+            (bool ok, ) = payable(gameAddress).call{value: leftover}("");
+            if (!ok) revert InvalidToken();
+        }
+    }
+
+    function _processMapClaim(ClaimContext memory ctx) private view {
+        uint32 start = uint32((ctx.info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF) + COIN_DRIP_STEPS + 1;
+        uint32 floor = start - 1;
+        uint32 last = ctx.lastClaim;
+        if (last < floor) last = floor;
+        if (ctx.currentLevel > last) {
+            if (nft.rngLocked()) revert CoinPaused();
+            uint32 from = last + 1;
+            uint32 offsetStart = from - start;
+            uint32 offsetEnd = ctx.currentLevel - start;
+
+            uint256 span = uint256(offsetEnd - offsetStart + 1);
+            uint256 periodSize = COIN_DRIP_STEPS;
+            uint256 blocksEnd = uint256(offsetEnd) / periodSize;
+            uint256 blocksStart = uint256(offsetStart) / periodSize;
+            uint256 remEnd = uint256(offsetEnd) % periodSize;
+            uint256 remStart = uint256(offsetStart) % periodSize;
+
+            uint256 prefixEnd = ((blocksEnd * (blocksEnd - 1)) / 2) * periodSize + blocksEnd * (remEnd + 1);
+            uint256 prefixStart = ((blocksStart * (blocksStart - 1)) / 2) * periodSize + blocksStart * (remStart + 1);
+
+            ctx.coinAmount = COIN_EMISSION_UNIT * (span + (prefixEnd - prefixStart));
+            ctx.coinClaimed = true;
+            ctx.updatedLast = ctx.currentLevel;
+        }
     }
 
     function _isTrophyStaked(uint256 tokenId) private view returns (bool) {
@@ -874,78 +965,50 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         address owner = address(uint160(nft.packedOwnershipOf(tokenId)));
         if (owner != msg.sender) revert Unauthorized();
 
-        uint256 info = trophyData_[tokenId];
-        if (info == 0) revert InvalidToken();
+        ClaimContext memory ctx;
+        ctx.info = trophyData_[tokenId];
+        if (ctx.info == 0) revert InvalidToken();
 
-        uint24 currentLevel = game.level();
-        uint24 lastClaim = uint24((info >> TROPHY_LAST_CLAIM_SHIFT) & 0xFFFFFF);
-        bool isCurrentlyStaked = _isTrophyStaked(tokenId);
+        ctx.currentLevel = game.level();
+        ctx.lastClaim = uint24((ctx.info >> TROPHY_LAST_CLAIM_SHIFT) & 0xFFFFFF);
+        ctx.updatedLast = ctx.lastClaim;
+        ctx.isStaked = _isTrophyStaked(tokenId);
 
-        uint256 owed = info & TROPHY_OWED_MASK;
-        uint256 newOwed = owed;
-        uint256 payout;
-        bool ethClaimed;
-        uint24 updatedLast = lastClaim;
+        ctx.owed = ctx.info & TROPHY_OWED_MASK;
+        ctx.newOwed = ctx.owed;
 
-        if (owed != 0 && currentLevel > lastClaim) {
-            if (!isCurrentlyStaked) revert ClaimNotReady();
-            uint24 baseStartLevel = uint24((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF) + 1;
-            if (currentLevel >= baseStartLevel) {
+        if (ctx.owed != 0 && ctx.currentLevel > ctx.lastClaim) {
+            if (!ctx.isStaked) revert ClaimNotReady();
+            uint24 baseStartLevel = uint24((ctx.info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF) + 1;
+            if (ctx.currentLevel >= baseStartLevel) {
                 uint32 vestEnd = uint32(baseStartLevel) + COIN_DRIP_STEPS;
-                uint256 denom = vestEnd > currentLevel ? vestEnd - currentLevel : 1;
-                payout = owed / denom;
-                newOwed = owed - payout;
-                ethClaimed = true;
-                updatedLast = currentLevel;
+                uint256 denom = vestEnd > ctx.currentLevel ? vestEnd - ctx.currentLevel : 1;
+                ctx.payout = ctx.owed / denom;
+                ctx.newOwed = ctx.owed - ctx.payout;
+                ctx.ethClaimed = true;
+                ctx.updatedLast = ctx.currentLevel;
             }
         }
 
-        uint256 coinAmount;
-        bool coinClaimed;
-        bool isMap = (info & TROPHY_FLAG_MAP) != 0;
-        if (isMap) {
-            uint32 start = uint32((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF) + COIN_DRIP_STEPS + 1;
-            uint32 floor = start - 1;
-            uint32 last = lastClaim;
-            if (last < floor) last = floor;
-            if (currentLevel > last) {
-                if (nft.rngLocked()) revert CoinPaused();
-                uint32 from = last + 1;
-                uint32 offsetStart = from - start;
-                uint32 offsetEnd = currentLevel - start;
-
-                uint256 span = uint256(offsetEnd - offsetStart + 1);
-                uint256 periodSize = COIN_DRIP_STEPS;
-                uint256 blocksEnd = uint256(offsetEnd) / periodSize;
-                uint256 blocksStart = uint256(offsetStart) / periodSize;
-                uint256 remEnd = uint256(offsetEnd) % periodSize;
-                uint256 remStart = uint256(offsetStart) % periodSize;
-
-                uint256 prefixEnd =
-                    ((blocksEnd * (blocksEnd - 1)) / 2) * periodSize + blocksEnd * (remEnd + 1);
-                uint256 prefixStart =
-                    ((blocksStart * (blocksStart - 1)) / 2) * periodSize + blocksStart * (remStart + 1);
-
-                coinAmount = COIN_EMISSION_UNIT * (span + (prefixEnd - prefixStart));
-                coinClaimed = true;
-                updatedLast = currentLevel;
-            }
+        if ((ctx.info & TROPHY_FLAG_MAP) != 0) {
+            _processMapClaim(ctx);
         }
-        if (!ethClaimed && !coinClaimed) revert ClaimNotReady();
+
+        if (!ctx.ethClaimed && !ctx.coinClaimed) revert ClaimNotReady();
         uint256 newInfo =
-            (info & ~(TROPHY_OWED_MASK | TROPHY_LAST_CLAIM_MASK)) |
-            (newOwed & TROPHY_OWED_MASK) |
-            (uint256(updatedLast & 0xFFFFFF) << TROPHY_LAST_CLAIM_SHIFT);
+            (ctx.info & ~(TROPHY_OWED_MASK | TROPHY_LAST_CLAIM_MASK)) |
+            (ctx.newOwed & TROPHY_OWED_MASK) |
+            (uint256(ctx.updatedLast & 0xFFFFFF) << TROPHY_LAST_CLAIM_SHIFT);
         _setTrophyData(tokenId, newInfo);
 
-        if (ethClaimed) {
-            (bool ok, ) = msg.sender.call{value: payout}("");
+        if (ctx.ethClaimed) {
+            (bool ok, ) = msg.sender.call{value: ctx.payout}("");
             if (!ok) revert TransferFailed();
-            emit TrophyRewardClaimed(tokenId, msg.sender, payout);
+            emit TrophyRewardClaimed(tokenId, msg.sender, ctx.payout);
         }
 
-        if (coinClaimed) {
-            coin.bonusCoinflip(msg.sender, coinAmount, true, 0);
+        if (ctx.coinClaimed) {
+            coin.bonusCoinflip(msg.sender, ctx.coinAmount, true, 0);
         }
     }
 
@@ -960,58 +1023,42 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         if (address(uint160(nft.packedOwnershipOf(tokenId))) != sender) revert Unauthorized();
 
         bool currentlyStaked = _isTrophyStaked(tokenId);
-        uint24 currentLevel = game.level();
         uint24 effectiveLevel = _effectiveStakeLevel();
         uint8 gameState = game.gameState();
 
         uint256 info = trophyData_[tokenId];
         if (info == 0) revert StakeInvalid();
 
-        bool mapTrophy = (info & TROPHY_FLAG_MAP) != 0;
-        bool affiliateTrophy = (info & TROPHY_FLAG_AFFILIATE) != 0;
-        bool stakeTrophyKind = (info & TROPHY_FLAG_STAKE) != 0;
-        bool levelTrophy = info != 0 && !mapTrophy && !affiliateTrophy && !stakeTrophyKind;
+        uint8 storedKind = _kindFromInfo(info);
 
-        uint24 trophyBaseLevel = uint24((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF);
-        uint24 trophyLevelValue = stakeTrophyKind ? trophyBaseLevel + 1 : trophyBaseLevel;
-        bool pureLevelTrophy = levelTrophy;
-        bool targetMap = isMap;
-        bool targetAffiliate = !isMap && affiliateTrophy;
-        bool targetLevel = !isMap && !affiliateTrophy && levelTrophy;
-        bool targetStake = !isMap && stakeTrophyKind;
+        StakeParams memory params;
+        params.player = sender;
+        params.tokenId = tokenId;
+        params.targetMap = isMap;
+        params.targetStake = !isMap && storedKind == PURGE_TROPHY_KIND_STAKE;
+        params.targetAffiliate = !isMap && storedKind == PURGE_TROPHY_KIND_AFFILIATE;
+        params.targetLevel = !isMap && storedKind == PURGE_TROPHY_KIND_LEVEL;
 
-        if (targetMap) {
-            if (!mapTrophy) revert TrophyStakeViolation(_STAKE_ERR_NOT_MAP);
-        } else if (targetAffiliate) {
+        if (params.targetMap) {
+            if (storedKind != PURGE_TROPHY_KIND_MAP) revert TrophyStakeViolation(_STAKE_ERR_NOT_MAP);
+        } else if (params.targetStake) {
+            if (storedKind != PURGE_TROPHY_KIND_STAKE) revert TrophyStakeViolation(_STAKE_ERR_NOT_STAKE);
+        } else if (params.targetAffiliate) {
             // ok
-        } else if (targetLevel) {
+        } else if (params.targetLevel) {
             // ok
-        } else if (targetStake) {
-            if (!stakeTrophyKind) revert TrophyStakeViolation(_STAKE_ERR_NOT_STAKE);
-        } else if (mapTrophy) {
-            revert TrophyStakeViolation(_STAKE_ERR_NOT_MAP);
-        } else if (affiliateTrophy) {
-            revert TrophyStakeViolation(_STAKE_ERR_NOT_LEVEL);
-        } else if (stakeTrophyKind) {
-            revert TrophyStakeViolation(_STAKE_ERR_NOT_STAKE);
         } else {
+            if (storedKind == PURGE_TROPHY_KIND_MAP) revert TrophyStakeViolation(_STAKE_ERR_NOT_MAP);
+            if (storedKind == PURGE_TROPHY_KIND_STAKE) revert TrophyStakeViolation(_STAKE_ERR_NOT_STAKE);
             revert TrophyStakeViolation(_STAKE_ERR_NOT_AFFILIATE);
         }
 
         if (stake && sender.code.length != 0) revert StakeInvalid();
 
-        StakeParams memory params = StakeParams({
-            player: sender,
-            tokenId: tokenId,
-            targetMap: targetMap,
-            targetAffiliate: targetAffiliate,
-            targetLevel: targetLevel,
-            targetStake: targetStake,
-            pureLevelTrophy: pureLevelTrophy,
-            trophyBaseLevel: trophyBaseLevel,
-            trophyLevelValue: trophyLevelValue,
-            effectiveLevel: effectiveLevel
-        });
+        params.trophyBaseLevel = uint24((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF);
+        params.trophyLevelValue = params.targetStake ? params.trophyBaseLevel + 1 : params.trophyBaseLevel;
+        params.pureLevelTrophy = storedKind == PURGE_TROPHY_KIND_LEVEL;
+        params.effectiveLevel = effectiveLevel;
 
         StakeEventData memory eventData;
         if (stake) {
@@ -1026,8 +1073,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             eventData = _unstakeInternal(params);
         }
 
-        uint8 kind = _kindFromInfo(info);
-        nft.setTrophyPackedInfo(tokenId, kind, stake);
+        nft.setTrophyPackedInfo(tokenId, storedKind, stake);
 
         emit TrophyStakeChanged(
             sender,
@@ -1076,10 +1122,9 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
 
         nft.clearApproval(tokenId);
 
-        bool hadData = _clearTrophy(tokenId);
-        if (hadData) {
-            nft.decrementTrophySupply(1);
-        }
+        uint256 info = trophyData_[tokenId];
+        uint8 kind = _kindFromInfo(info);
+        _eraseTrophy(tokenId, kind, true);
 
         coin.bonusCoinflip(sender, 100_000 * COIN_BASE_UNIT, false, 0);
     }
