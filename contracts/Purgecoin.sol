@@ -265,6 +265,12 @@ contract Purgecoin {
         _;
     }
 
+    modifier onlyGameOrNft() {
+        address sender = msg.sender;
+        if (sender != address(purgeGame) && sender != address(purgeGameNFT)) revert OnlyGame();
+        _;
+    }
+
     // ---------------------------------------------------------------------
     // Constructor
     // ---------------------------------------------------------------------
@@ -650,7 +656,7 @@ contract Purgecoin {
     /// - `amount` is optionally doubled on levels `level % 25 == 1`.
     /// - Direct ref gets a coinflip credit equal to `amount`; their upline (if any and already active
     ///   this level) receives a 20% bonus coinflip credit of the same (post-doubling) amount.
-    function payAffiliate(uint256 amount, bytes32 code, address sender, uint24 lvl) external onlyPurgeGameContract {
+    function payAffiliate(uint256 amount, bytes32 code, address sender, uint24 lvl) external onlyGameOrNft {
         address affiliateAddr = affiliateCode[code];
         address referrer = referredBy[sender];
 
@@ -841,9 +847,9 @@ contract Purgecoin {
 
     /// @notice Burn PURGE from `target` during gameplay flows (purchases, fees),
     ///         and credit 2% of the burned amount to their luckbox.
-    /// @dev Access: PurgeGame only. OZ ERC20 `_burn` reverts on zero address or insufficient balance.
+    /// @dev Access: PurgeGame or NFT only. OZ ERC20 `_burn` reverts on zero address or insufficient balance.
     ///      Leaderboard is refreshed only when a non-zero credit is applied.
-    function burnCoin(address target, uint256 amount) external onlyPurgeGameContract {
+    function burnCoin(address target, uint256 amount) external onlyGameOrNft {
         _burn(target, amount);
         // 2% luckbox credit; integer division can produce zero for very small burns.
         uint256 credit = amount / 50; // 2%
