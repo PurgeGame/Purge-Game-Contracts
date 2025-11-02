@@ -293,6 +293,14 @@ contract PurgeGame {
         return ethMintLastLevel_[player];
     }
 
+    function ethMintLevelCount(address player) external view returns (uint24) {
+        return ethMintLevelCount_[player];
+    }
+
+    function ethMintStreakCount(address player) external view returns (uint24) {
+        return ethMintStreakCount_[player];
+    }
+
     function creditPrizePool(address player, uint24 lvl, bool creditNext)
         external
         payable

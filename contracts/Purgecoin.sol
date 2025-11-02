@@ -6,6 +6,8 @@ import {IPurgeGameTrophies} from "./interfaces/IPurgeGameTrophies.sol";
 interface IPurgeGame {
     function level() external view returns (uint24);
     function gameState() external view returns (uint8);
+    function ethMintLevelCount(address player) external view returns (uint24);
+    function ethMintStreakCount(address player) external view returns (uint24);
     function getJackpotWinners(
         uint256 randomWord,
         uint8 trait,
@@ -357,12 +359,24 @@ contract Purgecoin {
         (bool decOn, uint24 lvl) = _decWindow();
         if (decOn) {
             DecEntry storage e = decBurn[caller];
+            uint256 streak = purgeGame.ethMintStreakCount(caller);
+            uint256 total = purgeGame.ethMintLevelCount(caller);
+            uint256 scale = 1;
+            if (streak != 0 && total != 0) {
+                uint256 product = uint256(streak) * uint256(total);
+                uint256 root = _sqrt(product);
+                if (root > 1) scale = root;
+            }
+            uint256 weighted = uint256(amount) * scale;
+            if (weighted > type(uint232).max) weighted = type(uint232).max;
             if (e.level != lvl) {
                 e.level = lvl;
-                e.burn = uint232(amount);
+                e.burn = uint232(weighted);
                 _decPush(lvl, caller);
             } else {
-                e.burn += uint232(amount);
+                uint256 newBurn = uint256(e.burn) + weighted;
+                if (newBurn > type(uint232).max) newBurn = type(uint232).max;
+                e.burn = uint232(newBurn);
             }
         }
 
@@ -1083,6 +1097,25 @@ contract Purgecoin {
 
     function lastBiggestFlip() external view returns (address) {
         return lastBiggestFlipPlayer;
+    }
+    function _sqrt(uint256 x) private pure returns (uint256 z) {
+        if (x == 0) return 0;
+        z = 1;
+        uint256 y = x;
+        if (y >> 128 > 0) { y >>= 128; z <<= 64; }
+        if (y >> 64 > 0) { y >>= 64; z <<= 32; }
+        if (y >> 32 > 0) { y >>= 32; z <<= 16; }
+        if (y >> 16 > 0) { y >>= 16; z <<= 8; }
+        if (y >> 8 > 0) { y >>= 8; z <<= 4; }
+        if (y >> 4 > 0) { y >>= 4; z <<= 2; }
+        if (y >> 2 > 0) { z <<= 1; }
+        for (uint8 i; i < 7; ) {
+            uint256 next = (z + x / z) >> 1;
+            if (next >= z) break;
+            z = next;
+            unchecked { ++i; }
+        }
+        return z;
     }
     /// @notice Progress an external jackpot: BAF (kind=0) or Decimator (kind=1).
     /// @dev
