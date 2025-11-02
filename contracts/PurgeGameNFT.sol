@@ -184,7 +184,8 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
     uint256 private _nextBaseTokenIdHint;
     address[] private _pendingMintQueue;
     mapping(address => uint32) private _tokensOwed;
-    uint256 private _mintQueueIndex;
+    uint256 private _mintQueueIndex; // Tracks # of queue entries fully processed during airdrop rotation
+    uint256 private _mintQueueStartOffset;
 
     uint32 private constant MINT_AIRDROP_PLAYER_BATCH_SIZE = 210; // Max unique recipients per airdrop batch
     uint32 private constant MINT_AIRDROP_TOKEN_CAP = 3_000; // Max tokens distributed per airdrop batch
@@ -540,8 +541,8 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
 
     function processPendingMints(uint32 playersToProcess) external onlyGame returns (bool finished) {
         uint256 total = _pendingMintQueue.length;
-        uint256 index = _mintQueueIndex;
 
+        uint256 index = _mintQueueIndex;
         if (index >= total) {
             finished = true;
         } else {
@@ -553,7 +554,8 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
 
             uint32 minted;
             while (index < end) {
-                address player = _pendingMintQueue[index];
+                uint256 rawIdx = (index + _mintQueueStartOffset) % total;
+                address player = _pendingMintQueue[rawIdx];
                 uint32 owed = _tokensOwed[player];
                 if (owed == 0) {
                     unchecked {
@@ -578,6 +580,8 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
                     unchecked {
                         ++index;
                     }
+                } else {
+                    break;
                 }
             }
 
@@ -588,6 +592,7 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
         if (finished) {
             delete _pendingMintQueue;
             _mintQueueIndex = 0;
+            _mintQueueStartOffset = 0;
         }
     }
 
@@ -1072,6 +1077,9 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
         uint256 startId = baseTokenId + uint256(minted);
         _nextBaseTokenIdHint = ((startId + 99) / 100) * 100 + 1;
         _purchaseCount = 0;
+        _mintQueueIndex = 0;
+        uint256 queueLength = _pendingMintQueue.length;
+        _mintQueueStartOffset = queueLength > 1 ? ((rngWord % (queueLength - 1)) + 1) : 0;
     }
 
     function purge(address owner, uint256[] calldata tokenIds) external onlyGame {
