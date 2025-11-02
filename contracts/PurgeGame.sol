@@ -131,6 +131,8 @@ contract PurgeGame {
     uint8 private constant JACKPOT_KIND_MAP = 9;
     uint256 private constant COIN_BASE_UNIT = 1_000_000; // 1 PURGED (6 decimals)
     bytes32 private constant COIN_JACKPOT_TAG = keccak256("coin-jackpot");
+    uint16[4] private constant MAP_JACKPOT_SHARES = [uint16(6000), uint16(1333), uint16(1333), uint16(1334)];
+    uint16[4] private constant DAILY_JACKPOT_SHARES = [uint16(2000), uint16(2000), uint16(2000), uint16(2000)];
 
     // -----------------------
     // Price
@@ -1015,7 +1017,6 @@ contract PurgeGame {
 
         uint8[4] memory winningTraits = _getRandomTraits(rndWord);
 
-        uint16[4] memory shares = [uint16(6000), uint16(1333), uint16(1333), uint16(1334)];
         (uint256 paidWei, , ) = _runJackpot(
             JACKPOT_KIND_MAP,
             lvl,
@@ -1024,7 +1025,7 @@ contract PurgeGame {
             true,
             rndWord ^ (uint256(lvl) << 200),
             winningTraits,
-            shares
+            MAP_JACKPOT_SHARES
         );
 
         uint256 remainingPool = effectiveWei > paidWei ? effectiveWei - paidWei : 0;
@@ -1038,35 +1039,27 @@ contract PurgeGame {
 
     /// @notice Pay daily or early‑purge jackpots (ETH/coin payouts) using the shared trait distribution.
     function payDailyJackpot(bool isDaily, uint24 lvl, uint256 randWord) internal {
+        uint256 entropyWord = randWord;
         uint8[4] memory winningTraits;
         if (isDaily) {
-            winningTraits = _getWinningTraits(randWord, dailyPurgeCount);
+            winningTraits = _getWinningTraits(entropyWord, dailyPurgeCount);
         } else {
-            randWord = _scrambleJackpotEntropy(randWord, jackpotCounter);
-            winningTraits = _getRandomTraits(randWord);
+            entropyWord = _scrambleJackpotEntropy(entropyWord, jackpotCounter);
+            winningTraits = _getRandomTraits(entropyWord);
         }
 
-        uint256 poolWei;
-        if (isDaily) {
-            poolWei = (levelPrizePool * (250 + uint256(jackpotCounter) * 50)) / 10_000;
-        } else {
-            uint256 baseWei = carryoverForNextLevel;
-            if ((lvl % 20) == 0) poolWei = baseWei / 100;
-            else if (lvl >= 21 && (lvl % 10) == 1) poolWei = (baseWei * 6) / 100;
-            else poolWei = baseWei / 40;
-        }
-
+        uint256 poolWei = isDaily ? _dailyJackpotPool() : _earlyPurgeJackpotPool(lvl);
         (uint256 coinPool, ) = coin.prepareCoinJackpot();
-        uint16[4] memory shares = [uint16(2000), uint16(2000), uint16(2000), uint16(2000)];
+
         (uint256 paidWei, , uint256 coinRemainder) = _runJackpot(
             JACKPOT_KIND_DAILY,
             lvl,
             poolWei,
             coinPool,
             false,
-            randWord ^ (uint256(lvl) << 192),
+            entropyWord ^ (uint256(lvl) << 192),
             winningTraits,
-            shares
+            DAILY_JACKPOT_SHARES
         );
 
         coin.addToBounty(coinRemainder);
@@ -1075,30 +1068,45 @@ contract PurgeGame {
         dailyIdx = currentDay;
         nft.releaseRngLock();
 
-        if (isDaily) {
-            unchecked {
-                ++jackpotCounter;
-            }
-            uint256 currentPool = prizePool;
-            prizePool = paidWei > currentPool ? 0 : currentPool - paidWei;
-            if (jackpotCounter >= 15) {
-                _endLevel(TRAIT_ID_TIMEOUT);
-                return;
-            }
-            _clearDailyPurgeCount();
-        } else {
-            unchecked {
-                if (jackpotCounter != 0) {
-                    --jackpotCounter;
-                }
-            }
-            uint256 carry = carryoverForNextLevel;
-            carryoverForNextLevel = paidWei > carry ? 0 : carry - paidWei;
-            if (jackpotCounter >= 15) {
-                _endLevel(TRAIT_ID_TIMEOUT);
-                return;
-            }
+        bool levelEnded = isDaily ? _afterDailyJackpot(paidWei) : _afterEarlyPurgeJackpot(paidWei);
+        if (levelEnded) return;
+    }
+
+    function _dailyJackpotPool() private view returns (uint256) {
+        return (levelPrizePool * (250 + uint256(jackpotCounter) * 50)) / 10_000;
+    }
+
+    function _earlyPurgeJackpotPool(uint24 lvl) private view returns (uint256) {
+        uint256 baseWei = carryoverForNextLevel;
+        if ((lvl % 20) == 0) return baseWei / 100;
+        if (lvl >= 21 && (lvl % 10) == 1) return (baseWei * 6) / 100;
+        return baseWei / 40;
+    }
+
+    function _afterDailyJackpot(uint256 paidWei) private returns (bool ended) {
+        unchecked {
+            ++jackpotCounter;
         }
+
+        uint256 currentPool = prizePool;
+        prizePool = paidWei > currentPool ? 0 : currentPool - paidWei;
+        if (jackpotCounter >= 15) {
+            _endLevel(TRAIT_ID_TIMEOUT);
+            return true;
+        }
+
+        _clearDailyPurgeCount();
+        return false;
+    }
+
+    function _afterEarlyPurgeJackpot(uint256 paidWei) private returns (bool ended) {
+        unchecked {
+            --jackpotCounter;
+        }
+
+        uint256 carry = carryoverForNextLevel;
+        carryoverForNextLevel = paidWei > carry ? 0 : carry - paidWei;
+        return false;
     }
 
     /// @notice Track early‑purge jackpot thresholds as the prize pool grows during purchase phase.
