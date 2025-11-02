@@ -368,14 +368,14 @@ contract PurgeGame {
                     }
                     if (jackpotCounter > 0) {
                         bool coinflipDailyOk = true;
-                        if (_phase >= 3 || modTwenty != 0) {
+                        if (modTwenty != 0) {
                             coinflipDailyOk = coinContract.processCoinflipPayouts(lvl, cap, false, rngWord);
                         }
                         if (!coinflipDailyOk) break;
                         payDailyJackpot(false, lvl, rngWord);
                         break;
                     }
-                    if (_phase >= 3 || modTwenty != 0) {
+                    if (modTwenty != 0) {
                         coinContract.processCoinflipPayouts(lvl, cap, false, rngWord);
                     }
                     break;
@@ -392,7 +392,7 @@ contract PurgeGame {
 
                 if (_phase == 4) {
                     bool coinflipMapOk = true;
-                    if (_phase >= 3 || modTwenty != 0) {
+                    if (modTwenty != 0) {
                         coinflipMapOk = coinContract.processCoinflipPayouts(lvl, cap, false, rngWord);
                     }
                     if (!coinflipMapOk) break;
@@ -432,7 +432,7 @@ contract PurgeGame {
                     break;
                 }
                 bool coinflipAdvanceToPurge = true;
-                if (_phase >= 3 || modTwenty != 0) {
+                if (modTwenty != 0) {
                     coinflipAdvanceToPurge = coinContract.processCoinflipPayouts(lvl, cap, false, rngWord);
                 }
                 if (coinflipAdvanceToPurge) {
@@ -475,9 +475,7 @@ contract PurgeGame {
 
             // --- State 0 ---
             if (_gameState == 0) {
-                if (_phase >= 3 || modTwenty != 0) {
-                    coinContract.processCoinflipPayouts(lvl, cap, false, rngWord);
-                }
+                coinContract.processCoinflipPayouts(lvl, cap, false, rngWord);
             }
         } while (false);
 
