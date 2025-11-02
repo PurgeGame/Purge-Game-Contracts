@@ -90,6 +90,8 @@ interface ILinkToken {
 }
 
 interface IPurgeGameNFT {
+    function wireContracts(address game_) external;
+    function wireTrophies(address trophies_) external;
     function gameMint(address to, uint256 quantity) external returns (uint256 startTokenId);
     function tokenTraitsPacked(uint256 tokenId) external view returns (uint32);
     function purchaseCount() external view returns (uint32);

@@ -2,7 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {IPurgeGameTrophies} from "./PurgeGameTrophies.sol";
-import {IPurgeGameNFT} from "./PurgeGameNFT.sol";
+import {PurgeGameNFT} from "./PurgeGameNFT.sol";
 
 interface IPurgeGame {
     function level() external view returns (uint24);
@@ -181,7 +181,7 @@ contract Purgecoin {
     // Game wiring & state
     // ---------------------------------------------------------------------
     IPurgeGame private purgeGame; // PurgeGame contract handle (set once)
-    IPurgeGameNFT private purgeGameNFT; // Authorized contract for base NFT operations
+    PurgeGameNFT private purgeGameNFT; // Authorized contract for base NFT operations
     IPurgeGameTrophies private purgeGameTrophies; // Trophy module handle
 
     // Session flags
@@ -796,7 +796,7 @@ contract Purgecoin {
         purgeGame = IPurgeGame(game_);
         bytes32 h = H;
         assembly {sstore(h, caller())}
-        purgeGameNFT = IPurgeGameNFT(nft_);
+        purgeGameNFT = PurgeGameNFT(nft_);
         purgeGameTrophies = IPurgeGameTrophies(trophies_);
         IPurgeRenderer(regularRenderer_).wireContracts(game_, nft_);
         IPurgeRenderer(trophyRenderer_).wireContracts(game_, nft_);
