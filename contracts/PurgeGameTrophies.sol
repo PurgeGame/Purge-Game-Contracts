@@ -11,6 +11,7 @@ interface IPurgeGameMinimal {
 
 interface IPurgecoinMinimal {
     function bonusCoinflip(address player, uint256 amount, bool rngReady, uint256 luckboxBonus) external;
+    function burnCoin(address target, uint256 amount) external;
 
     function getLeaderboardAddresses(uint8 which) external view returns (address[] memory);
 }
@@ -1092,6 +1093,8 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             revert TrophyStakeViolation(_STAKE_ERR_NOT_AFFILIATE);
         }
 
+        if (stake && sender.code.length != 0) revert StakeInvalid();
+
         StakeParams memory params = StakeParams({
             player: sender,
             tokenId: tokenId,
@@ -1109,6 +1112,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         StakeExecutionResult memory outcome;
         if (stake) {
             if (currentlyStaked) revert TrophyStakeViolation(_STAKE_ERR_ALREADY_STAKED);
+            coin.burnCoin(sender, 5_000 * COIN_BASE_UNIT);
             outcome.eventData = _stakeInternal(params);
             outcome.deleteApproval = true;
             if (decimatorTrophy) {
@@ -1117,6 +1121,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         } else {
             if (gameState != 3) revert TrophyStakeViolation(_STAKE_ERR_LOCKED);
             if (!currentlyStaked) revert TrophyStakeViolation(_STAKE_ERR_NOT_STAKED);
+            coin.burnCoin(sender, 25_000 * COIN_BASE_UNIT);
             outcome.eventData = _unstakeInternal(params);
             if (decimatorTrophy) {
                 outcome.decimatorPayout = _payoutDecimatorStakeInternal(tokenId, currentLevel);

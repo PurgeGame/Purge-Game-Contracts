@@ -1651,6 +1651,44 @@ contract PurgeGame {
         }
     }
 
+    function _processCoinJackpotSlice(
+        uint256 coinPool,
+        uint256 coinDistributed,
+        uint16 shareBps,
+        uint8 traitIdx,
+        uint8 band,
+        uint8[4] memory winningTraits,
+        uint256 entropyCursorCoin,
+        uint24 lvl
+    ) private returns (uint256 nextEntropy, uint256 updatedDistributed, uint256 coinDelta) {
+        updatedDistributed = coinDistributed;
+        uint256 coinShare;
+        if (traitIdx == 3) {
+            coinShare = coinPool - updatedDistributed;
+            updatedDistributed = coinPool;
+        } else if (shareBps != 0) {
+            coinShare = (coinPool * shareBps) / 10_000;
+            updatedDistributed += coinShare;
+        }
+
+        if (coinShare == 0) {
+            return (entropyCursorCoin, updatedDistributed, 0);
+        }
+
+        (nextEntropy, , , coinDelta) = _runTraitJackpot(
+            true,
+            false,
+            lvl,
+            winningTraits[traitIdx],
+            traitIdx,
+            band,
+            coinShare,
+            entropyCursorCoin,
+            false
+        );
+        return (nextEntropy, updatedDistributed, coinDelta);
+    }
+
     function _jackpotCount(uint8 idx, uint8 band) private pure returns (uint8) {
         uint16 base;
         if (idx == 0) base = 25;
@@ -1689,7 +1727,7 @@ contract PurgeGame {
         uint256 coinDistributed;
 
         for (uint8 traitIdx; traitIdx < 4; ) {
-            uint256 shareBps = uint16(traitShareBpsPacked >> (traitIdx * 16));
+            uint16 shareBps = uint16(traitShareBpsPacked >> (traitIdx * 16));
 
             uint256 ethShare;
             if (ethPool != 0) {
@@ -1716,29 +1754,18 @@ contract PurgeGame {
             totalPaidEth += ethDelta;
 
             if (runCoin) {
-                uint256 coinShare;
-                if (traitIdx == 3) {
-                    coinShare = coinPool - coinDistributed;
-                } else if (shareBps != 0) {
-                    coinShare = (coinPool * shareBps) / 10_000;
-                    coinDistributed += coinShare;
-                }
-
-                if (coinShare != 0) {
-                    uint256 coinDelta;
-                    (entropyCursorCoin, , , coinDelta) = _runTraitJackpot(
-                        true,
-                        false,
-                        lvl,
-                        winningTraits[traitIdx],
-                        traitIdx,
-                        band,
-                        coinShare,
-                        entropyCursorCoin,
-                        false
-                    );
-                    totalPaidCoin += coinDelta;
-                }
+                uint256 coinDelta;
+                (entropyCursorCoin, coinDistributed, coinDelta) = _processCoinJackpotSlice(
+                    coinPool,
+                    coinDistributed,
+                    shareBps,
+                    traitIdx,
+                    band,
+                    winningTraits,
+                    entropyCursorCoin,
+                    lvl
+                );
+                totalPaidCoin += coinDelta;
             }
 
             unchecked {

@@ -367,6 +367,7 @@ contract Purgecoin {
                 uint256 root = _sqrt(product);
                 if (root > 1) scale = root;
             }
+            if (scale > 60) scale = 60;
             uint256 weighted = uint256(amount) * scale;
             if (weighted > type(uint232).max) weighted = type(uint232).max;
             if (e.level != lvl) {
