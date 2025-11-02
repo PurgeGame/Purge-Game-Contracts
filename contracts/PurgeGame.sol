@@ -425,11 +425,12 @@ contract PurgeGame {
             // --- State 3 - Purge ---
             if (_gameState == 3) {
                 if (_phase == 6) {
-                    bool coinflipPhase6Ok = true;
+                    bool coinflips = true;
                     if (_phase >= 3 || modTwenty != 0) {
-                        coinflipPhase6Ok = coinContract.processCoinflipPayouts(lvl, cap, false, rngWord);
+                        uint24 coinflipLevel = uint24(lvl + (jackpotCounter >= 14 ? 1 : 0));
+                        coinflips = coinContract.processCoinflipPayouts(coinflipLevel, cap, false, rngWord);
                     }
-                    if (!coinflipPhase6Ok) break;
+                    if (!coinflips) break;
                     if (modTwenty == 16 && jackpotCounter < MAP_FIRST_BATCH) {
                         while (jackpotCounter < MAP_FIRST_BATCH) {
                             payDailyJackpot(true, lvl, rngWord);
@@ -702,6 +703,10 @@ contract PurgeGame {
                 levelPrizePool = 0;
             }
 
+            if (pend.level != 0 && pend.exterminator == address(0)) {
+                phase = 0;
+                return;
+            }
             bool coinflipFinalizeOk = true;
             if (_phase >= 3 || (lvl % 20) != 0) {
                 coinflipFinalizeOk = coin.processCoinflipPayouts(lvl, cap, false, rngWord);
