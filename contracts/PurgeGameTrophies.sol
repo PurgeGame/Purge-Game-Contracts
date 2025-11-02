@@ -18,15 +18,12 @@ interface IPurgeGameNftModule {
     function currentRngWord() external view returns (uint256);
 }
 
+uint8 constant PURGE_TROPHY_KIND_MAP = 0;
+uint8 constant PURGE_TROPHY_KIND_LEVEL = 1;
+uint8 constant PURGE_TROPHY_KIND_AFFILIATE = 2;
+uint8 constant PURGE_TROPHY_KIND_STAKE = 3;
+
 interface IPurgeGameTrophies {
-    enum TrophyKind {
-        Map,
-        Level,
-        Affiliate,
-        Stake,
-        Baf,
-        Decimator
-    }
 
     struct EndLevelRequest {
         address exterminator;
@@ -41,13 +38,7 @@ interface IPurgeGameTrophies {
 
     function prepareNextLevel(uint24 nextLevel) external;
 
-    function awardTrophy(
-        address to,
-        uint24 level,
-        TrophyKind kind,
-        uint256 data,
-        uint256 deferredWei
-    ) external payable;
+    function awardTrophy(address to, uint24 level, uint8 kind, uint256 data, uint256 deferredWei) external payable;
 
     function processEndLevel(EndLevelRequest calldata req)
         external
@@ -61,21 +52,17 @@ interface IPurgeGameTrophies {
     function refreshStakeBonuses(
         uint256[] calldata mapTokenIds,
         uint256[] calldata levelTokenIds,
-        uint256[] calldata stakeTokenIds,
-        uint256[] calldata bafTokenIds
+        uint256[] calldata stakeTokenIds
     ) external;
 
     function affiliateStakeBonus(address player) external view returns (uint8);
 
     function stakeTrophyBonus(address player) external view returns (uint8);
 
-    function bafStakeBonusBps(address player) external view returns (uint16);
-
     function mapStakeDiscount(address player) external view returns (uint8);
 
     function levelStakeDiscount(address player) external view returns (uint8);
 
-    function awardStakeTrophy(address to, uint24 level, uint256 principal) external returns (uint256 tokenId);
 
     function purgeTrophy(uint256 tokenId) external;
 
@@ -137,7 +124,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         bool targetLevel;
         bool targetStake;
         bool pureLevelTrophy;
-        bool bafTrophy;
         uint24 trophyBaseLevel;
         uint24 trophyLevelValue;
         uint24 effectiveLevel;
@@ -149,23 +135,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         uint16 discountBps;
     }
 
-    struct StakeExecutionRequest {
-        address player;
-        uint256 tokenId;
-        bool isMap;
-        bool stake;
-        bool currentlyStaked;
-        uint24 currentLevel;
-        uint24 effectiveLevel;
-        uint8 gameState;
-    }
-
-    struct StakeExecutionResult {
-        StakeEventData eventData;
-        bool deleteApproval;
-        uint256 decimatorPayout;
-    }
-
     // ---------------------------------------------------------------------
     // Trophy constants
     // ---------------------------------------------------------------------
@@ -175,12 +144,11 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     uint256 private constant TROPHY_FLAG_MAP = uint256(1) << 200;
     uint256 private constant TROPHY_FLAG_AFFILIATE = uint256(1) << 201;
     uint256 private constant TROPHY_FLAG_STAKE = uint256(1) << 202;
-    uint256 private constant TROPHY_FLAG_BAF = uint256(1) << 203;
-    uint256 private constant TROPHY_FLAG_DECIMATOR = uint256(1) << 204;
     uint256 private constant TROPHY_OWED_MASK = (uint256(1) << 128) - 1;
     uint256 private constant TROPHY_BASE_LEVEL_SHIFT = 128;
     uint256 private constant TROPHY_LAST_CLAIM_SHIFT = 168;
     uint256 private constant TROPHY_LAST_CLAIM_MASK = uint256(0xFFFFFF) << TROPHY_LAST_CLAIM_SHIFT;
+    uint48 private constant _PLACEHOLDER_OFFSETS_PACKED = 0x050504030102;
 
     uint8 private constant _STAKE_ERR_TRANSFER_BLOCKED = 1;
     uint8 private constant _STAKE_ERR_NOT_LEVEL = 2;
@@ -196,19 +164,8 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     uint8 private constant AFFILIATE_STAKE_MAX = 20;
     uint8 private constant STAKE_TROPHY_MAX = 20;
 
-    uint16 private constant BAF_TRAIT_SENTINEL = 0xFFFA;
-    uint16 private constant DECIMATOR_TRAIT_SENTINEL = 0xFFFB;
     uint16 private constant STAKE_TRAIT_SENTINEL = 0xFFFD;
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
-
-    uint24 private constant STAKE_PREVIEW_START_LEVEL = 12;
-
-    uint8 private constant _BONUS_MAP = 0;
-    uint8 private constant _BONUS_LEVEL = 1;
-    uint8 private constant _BONUS_STAKE = 2;
-    uint8 private constant _BONUS_BAF = 3;
-
-    uint256 private constant LUCKBOX_BYPASS_THRESHOLD = 100_000 * 1_000_000;
 
     // ---------------------------------------------------------------------
     // Storage
@@ -232,8 +189,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     mapping(address => uint8) private levelStakeBonusPct_;
     mapping(address => uint8) private stakeStakeCount_;
     mapping(address => uint8) private stakeStakeBonusPct_;
-    mapping(address => uint8) private bafStakeCount_;
-    mapping(address => uint16) private bafStakeBonusBps_;
 
     // ---------------------------------------------------------------------
     // Constructor
@@ -270,17 +225,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     // Internal helpers
     // ---------------------------------------------------------------------
 
-    function _hasBafTrophy(uint24 level) private pure returns (bool) {
-        if (level == 0) return false;
-        return level % 20 == 0;
-    }
-
-    function _hasDecimatorTrophy(uint24 level) private pure returns (bool) {
-        if (level < 25) return false;
-        if (level % 10 != 5) return false;
-        return (level % 100) != 95;
-    }
-
     function _stakePreviewData(uint24 level) private pure returns (uint256) {
         uint24 baseLevel = level == 0 ? 0 : uint24(level - 1);
         return
@@ -289,37 +233,21 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             TROPHY_FLAG_STAKE;
     }
 
-    function _placeholderBase(uint24 level) private view returns (uint256 base) {
+    function _placeholderTokenId(uint24 level, uint8 kind) private view returns (uint256) {
+        if (kind > PURGE_TROPHY_KIND_STAKE) return 0;
         (uint256 previousBase, uint256 currentBase) = nft.getBasePointers();
         uint24 currentLevel = game.level();
+
+        uint256 base;
         if (level == currentLevel) {
             base = currentBase;
-            if (base == 0) revert InvalidToken();
-            return base;
-        }
-        if (level + 1 == currentLevel) {
+        } else if (level + 1 == currentLevel) {
             base = previousBase;
-            if (base == 0) revert InvalidToken();
-            return base;
         }
-        revert InvalidToken();
-    }
+        if (base == 0) return 0;
 
-    function _placeholderTokenId(uint24 level, IPurgeGameTrophies.TrophyKind kind) private view returns (uint256) {
-        uint256 base = _placeholderBase(level);
-        if (kind == IPurgeGameTrophies.TrophyKind.Level) return base - 1;
-        if (kind == IPurgeGameTrophies.TrophyKind.Map) return base - 2;
-        if (kind == IPurgeGameTrophies.TrophyKind.Affiliate) return base - 3;
-        if (kind == IPurgeGameTrophies.TrophyKind.Stake) return base - 4;
-        if (kind == IPurgeGameTrophies.TrophyKind.Baf) {
-            if (!_hasBafTrophy(level)) revert InvalidToken();
-            return base - 5;
-        }
-        if (kind == IPurgeGameTrophies.TrophyKind.Decimator) {
-            if (!_hasDecimatorTrophy(level)) revert InvalidToken();
-            return base - 5;
-        }
-        revert InvalidToken();
+        uint8 offset = uint8(_PLACEHOLDER_OFFSETS_PACKED >> (uint8(kind) * 8));
+        return base - offset;
     }
 
 
@@ -331,6 +259,14 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         if (trophyStaked[tokenId]) revert StakeInvalid();
         hadData = trophyData_[tokenId] != 0;
         delete trophyData_[tokenId];
+    }
+
+    function _returnValue(address target, uint256 amount) private {
+        if (amount == 0) return;
+        (bool ok, ) = payable(target).call{value: amount}("");
+        if (!ok) {
+            // best-effort refund; ignore failure to avoid bubbling a revert
+        }
     }
 
     function _awardTrophyData(
@@ -355,49 +291,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             | (owed & TROPHY_OWED_MASK)
             | (base << TROPHY_BASE_LEVEL_SHIFT);
         trophyData_[tokenId] = updated;
-    }
-
-    function _setDecimatorBaselineInternal(uint256 tokenId, uint24 level) private {
-        uint256 info = trophyData_[tokenId];
-        uint256 cleared = info & ~TROPHY_LAST_CLAIM_MASK;
-        uint256 updated = cleared | (uint256(level & 0xFFFFFF) << TROPHY_LAST_CLAIM_SHIFT);
-        trophyData_[tokenId] = updated;
-    }
-
-    function _payoutDecimatorStakeInternal(uint256 tokenId, uint24 currentLevel) private returns (uint256) {
-        uint256 info = trophyData_[tokenId];
-        uint24 lastClaim = uint24((info >> TROPHY_LAST_CLAIM_SHIFT) & 0xFFFFFF);
-        if (currentLevel <= lastClaim) return 0;
-        uint256 amount = _decimatorCoinBetween(lastClaim, currentLevel);
-        if (amount == 0) return 0;
-        uint256 newInfo = (info & ~TROPHY_LAST_CLAIM_MASK) | (uint256(currentLevel) << TROPHY_LAST_CLAIM_SHIFT);
-        trophyData_[tokenId] = newInfo;
-        return amount;
-    }
-
-    function _decimatorCoinBetween(uint24 fromLevel, uint24 toLevel) private pure returns (uint256 reward) {
-        if (toLevel <= fromLevel) return 0;
-        uint256 start = uint256(fromLevel) + 1;
-        uint256 end = uint256(toLevel);
-        uint256 bucketStart = (start - 1) / 10;
-        uint256 bucketEnd = (end - 1) / 10;
-        for (uint256 bucket = bucketStart; bucket <= bucketEnd; ) {
-            uint256 bucketLow = bucket * 10 + 1;
-            uint256 bucketHigh = bucketLow + 9;
-            if (bucketHigh > end) bucketHigh = end;
-            uint256 segStart = start > bucketLow ? start : bucketLow;
-            uint256 segEnd = end < bucketHigh ? end : bucketHigh;
-            if (segStart <= segEnd) {
-                uint256 count = segEnd - segStart + 1;
-                uint256 multiplier = bucket + 1;
-                if (multiplier > 10) multiplier = 10;
-                reward += count * multiplier;
-            }
-            if (bucket == bucketEnd) break;
-            unchecked {
-                bucket += 1;
-            }
-        }
     }
 
     function _addStakedTrophy(uint256 tokenId) private {
@@ -442,12 +335,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         if (count == 2) return 10;
         if (count == 3) return 15;
         return 20;
-    }
-
-    function _bafBonusFromLevel(uint24 level) private pure returns (uint16) {
-        uint256 bonus = uint256(level) * 10;
-        if (bonus > 220) bonus = 220;
-        return uint16(bonus);
     }
 
     function _ensurePlayerOwnsStaked(address player, uint256 tokenId) private view {
@@ -552,19 +439,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             data.count = current;
         }
 
-        if (params.bafTrophy) {
-            uint8 current = bafStakeCount_[params.player];
-            unchecked {
-                current += 1;
-            }
-            bafStakeCount_[params.player] = current;
-            uint16 candidate = _bafBonusFromLevel(params.trophyBaseLevel);
-            uint16 prev = bafStakeBonusBps_[params.player];
-            if (candidate > prev) {
-                bafStakeBonusBps_[params.player] = candidate;
-            }
-        }
-
         data.discountBps = uint16(discountPct) * 100;
         return data;
     }
@@ -631,19 +505,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             data.count = current;
         }
 
-        if (params.bafTrophy) {
-            uint8 current = bafStakeCount_[params.player];
-            if (current != 0) {
-                unchecked {
-                    current -= 1;
-                }
-            }
-            bafStakeCount_[params.player] = current;
-            if (current == 0) {
-                bafStakeBonusBps_[params.player] = 0;
-            }
-        }
-
         data.discountBps = 0;
         return data;
     }
@@ -690,9 +551,9 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             uint256 tokenId = tokenIds[i];
             _ensurePlayerOwnsStaked(player, tokenId);
             uint256 info = trophyData_[tokenId];
-            bool invalid = (info & TROPHY_FLAG_MAP) != 0 || (info & TROPHY_FLAG_AFFILIATE) != 0
-                || (info & TROPHY_FLAG_STAKE) != 0 || (info & TROPHY_FLAG_BAF) != 0
-                || (info & TROPHY_FLAG_DECIMATOR) != 0;
+            bool invalid = (info & TROPHY_FLAG_MAP) != 0
+                || (info & TROPHY_FLAG_AFFILIATE) != 0
+                || (info & TROPHY_FLAG_STAKE) != 0;
             if (invalid) revert StakeInvalid();
             uint24 base = uint24((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF);
             if (base > best) best = base;
@@ -732,38 +593,9 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         stakeStakeBonusPct_[player] = uint8(best > cap ? cap : best);
     }
 
-    function _refreshBafBonus(address player, uint256[] calldata tokenIds) private {
-        uint8 expected = bafStakeCount_[player];
-        if (tokenIds.length == 0) {
-            if (expected == 0) {
-                bafStakeBonusBps_[player] = 0;
-                return;
-            }
-            revert StakeInvalid();
-        }
-        if (expected == 0 || tokenIds.length != expected) revert StakeInvalid();
-        uint24 best;
-        for (uint256 i; i < tokenIds.length; ) {
-            uint256 tokenId = tokenIds[i];
-            _ensurePlayerOwnsStaked(player, tokenId);
-            uint256 info = trophyData_[tokenId];
-            if ((info & TROPHY_FLAG_BAF) == 0) revert StakeInvalid();
-            uint24 base = uint24((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF);
-            if (base > best) best = base;
-            unchecked {
-                ++i;
-            }
-        }
-        if (best == 0) revert StakeInvalid();
-        bafStakeBonusBps_[player] = _bafBonusFromLevel(best);
-    }
-
     function _mintTrophyPlaceholders(uint24 level) private returns (uint256 newBaseTokenId) {
         uint256 baseData = (uint256(0xFFFF) << 152) | (uint256(level) << TROPHY_BASE_LEVEL_SHIFT);
-        bool mintBaf = _hasBafTrophy(level);
-        bool mintDec = _hasDecimatorTrophy(level);
-
-        uint256 placeholderCount = mintBaf || mintDec ? 5 : 4;
+        uint256 placeholderCount = 4;
         uint256 startId = nft.nextTokenId();
         uint256 mintedCount = placeholderCount;
 
@@ -782,55 +614,31 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         uint256 firstPlaceholderId = startId + mintedCount - placeholderCount;
         uint256 nextId = firstPlaceholderId;
 
-        if (mintBaf || mintDec) {
-            uint256 specialTokenId = nextId++;
-            if (mintBaf) {
-                _setTrophyData(specialTokenId, baseData | TROPHY_FLAG_BAF);
-                nft.setTrophyPackedInfo(specialTokenId, uint8(IPurgeGameTrophies.TrophyKind.Baf), false);
-            } else {
-                _setTrophyData(specialTokenId, baseData | TROPHY_FLAG_DECIMATOR);
-                nft.setTrophyPackedInfo(specialTokenId, uint8(IPurgeGameTrophies.TrophyKind.Decimator), false);
-            }
-        }
-
         uint256 stakeTokenId = nextId++;
-        if (level >= STAKE_PREVIEW_START_LEVEL) {
-            _setTrophyData(stakeTokenId, _stakePreviewData(level));
-        } else {
-            _clearTrophy(stakeTokenId);
-        }
-        nft.setTrophyPackedInfo(stakeTokenId, uint8(IPurgeGameTrophies.TrophyKind.Stake), false);
+        _setTrophyData(stakeTokenId, _stakePreviewData(level));
+        nft.setTrophyPackedInfo(stakeTokenId, PURGE_TROPHY_KIND_STAKE, false);
 
         uint256 affiliateTokenId = nextId++;
         _setTrophyData(affiliateTokenId, baseData | TROPHY_FLAG_AFFILIATE);
-        nft.setTrophyPackedInfo(affiliateTokenId, uint8(IPurgeGameTrophies.TrophyKind.Affiliate), false);
+        nft.setTrophyPackedInfo(affiliateTokenId, PURGE_TROPHY_KIND_AFFILIATE, false);
 
         uint256 mapTokenId = nextId++;
         _setTrophyData(mapTokenId, baseData | TROPHY_FLAG_MAP);
-        nft.setTrophyPackedInfo(mapTokenId, uint8(IPurgeGameTrophies.TrophyKind.Map), false);
+        nft.setTrophyPackedInfo(mapTokenId, PURGE_TROPHY_KIND_MAP, false);
 
         uint256 levelTokenId = nextId++;
         _setTrophyData(levelTokenId, baseData);
-        nft.setTrophyPackedInfo(levelTokenId, uint8(IPurgeGameTrophies.TrophyKind.Level), false);
+        nft.setTrophyPackedInfo(levelTokenId, PURGE_TROPHY_KIND_LEVEL, false);
 
         newBaseTokenId = startId + mintedCount;
     }
 
     // ---------------------------------------------------------------------
-    // Trophy placeholder lifecycle
+    // Trophy awarding & end-level flows
     // ---------------------------------------------------------------------
-
-    function clearStakePreview(uint24 level) external override onlyCoinCaller {
-        uint256 tokenId = _placeholderTokenId(level, IPurgeGameTrophies.TrophyKind.Stake);
-        if (trophyData_[tokenId] == 0) return;
-        address owner = address(uint160(nft.packedOwnershipOf(tokenId)));
-        if (owner != gameAddress) return;
-        _clearTrophy(tokenId);
-    }
-
     function _awardTrophyInternal(
         address to,
-        IPurgeGameTrophies.TrophyKind kind,
+        uint8 kind,
         uint256 data,
         uint256 deferredWei,
         uint256 tokenId
@@ -848,34 +656,60 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             nft.incrementTrophySupply(1);
         }
 
-        nft.setTrophyPackedInfo(tokenId, uint8(kind), false);
+        nft.setTrophyPackedInfo(tokenId, kind, false);
     }
-
-    // ---------------------------------------------------------------------
-    // Trophy awarding & end-level flows
-    // ---------------------------------------------------------------------
 
     function awardTrophy(
         address to,
         uint24 level,
-        IPurgeGameTrophies.TrophyKind kind,
+        uint8 kind,
         uint256 data,
         uint256 deferredWei
     ) external payable override {
         bool fromGame = msg.sender == gameAddress;
         bool fromCoin = msg.sender == coinAddress;
-        if (!fromGame && !fromCoin) revert Unauthorized();
+        if (!fromGame && !fromCoin) {
+            _returnValue(msg.sender, deferredWei);
+            return;
+        }
 
-        if (kind == IPurgeGameTrophies.TrophyKind.Stake) revert StakeInvalid();
-
-        if (fromGame) {
-            if (kind == IPurgeGameTrophies.TrophyKind.Baf || kind == IPurgeGameTrophies.TrophyKind.Decimator) revert StakeInvalid();
+        if (kind == PURGE_TROPHY_KIND_STAKE) {
+            if (!fromCoin) {
+                _returnValue(msg.sender, deferredWei);
+                return;
+            }
         } else {
-            if (kind != IPurgeGameTrophies.TrophyKind.Baf && kind != IPurgeGameTrophies.TrophyKind.Decimator) revert OnlyCoin();
+            if (!fromGame || kind > PURGE_TROPHY_KIND_AFFILIATE) {
+                _returnValue(msg.sender, deferredWei);
+                return;
+            }
         }
 
         uint256 tokenId = _placeholderTokenId(level, kind);
+        if (tokenId == 0) {
+            _returnValue(msg.sender, deferredWei);
+            return;
+        }
+        uint256 stakePrincipal;
+        if (kind == PURGE_TROPHY_KIND_STAKE) {
+            stakePrincipal = deferredWei;
+            deferredWei = 0;
+            data = _stakePreviewData(level);
+        }
         _awardTrophyInternal(to, kind, data, deferredWei, tokenId);
+        if (stakePrincipal != 0) {
+            emit StakeTrophyAwarded(to, tokenId, level, stakePrincipal);
+        }
+    }
+
+    function clearStakePreview(uint24 level) external override onlyCoinCaller {
+        uint256 tokenId = _placeholderTokenId(level, PURGE_TROPHY_KIND_STAKE);
+        if (tokenId == 0) return;
+        if (trophyData_[tokenId] == 0) return;
+        address owner = address(uint160(nft.packedOwnershipOf(tokenId)));
+        if (owner != gameAddress) return;
+        _clearTrophy(tokenId);
+        nft.setTrophyPackedInfo(tokenId, PURGE_TROPHY_KIND_STAKE, false);
     }
 
     function processEndLevel(EndLevelRequest calldata req)
@@ -886,9 +720,13 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         returns (address mapImmediateRecipient, address[6] memory affiliateRecipients)
     {
         uint24 nextLevel = req.level + 1;
-        uint256 mapTokenId = _placeholderTokenId(req.level, IPurgeGameTrophies.TrophyKind.Map);
-        uint256 levelTokenId = _placeholderTokenId(req.level, IPurgeGameTrophies.TrophyKind.Level);
-        uint256 affiliateTokenId = _placeholderTokenId(req.level, IPurgeGameTrophies.TrophyKind.Affiliate);
+        uint256 mapTokenId = _placeholderTokenId(req.level, PURGE_TROPHY_KIND_MAP);
+        uint256 levelTokenId = _placeholderTokenId(req.level, PURGE_TROPHY_KIND_LEVEL);
+        uint256 affiliateTokenId = _placeholderTokenId(req.level, PURGE_TROPHY_KIND_AFFILIATE);
+
+        if (mapTokenId == 0 || levelTokenId == 0 || affiliateTokenId == 0) {
+            return (address(0), affiliateRecipients);
+        }
 
         bool traitWin = req.traitId != TRAIT_ID_TIMEOUT;
         uint256 randomWord = nft.currentRngWord();
@@ -905,7 +743,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             if (deferredAward < affiliateTrophyShare + stakerRewardPool) revert InvalidToken();
             deferredAward -= affiliateTrophyShare + stakerRewardPool;
 
-            _awardTrophyInternal(req.exterminator, IPurgeGameTrophies.TrophyKind.Level, traitData, deferredAward, levelTokenId);
+            _awardTrophyInternal(req.exterminator, PURGE_TROPHY_KIND_LEVEL, traitData, deferredAward, levelTokenId);
 
             affiliateRecipients = _selectAffiliateRecipients(randomWord);
             address affiliateWinner = affiliateRecipients[0];
@@ -918,7 +756,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
                 (uint256(0xFFFE) << 152) |
                 (uint256(req.level) << TROPHY_BASE_LEVEL_SHIFT) |
                 TROPHY_FLAG_AFFILIATE;
-            _awardTrophyInternal(affiliateWinner, IPurgeGameTrophies.TrophyKind.Affiliate, affiliateData, affiliateTrophyShare, affiliateTokenId);
+            _awardTrophyInternal(affiliateWinner, PURGE_TROPHY_KIND_AFFILIATE, affiliateData, affiliateTrophyShare, affiliateTokenId);
 
             if (stakerRewardPool != 0) {
                 uint256 trophyCount = stakedTrophyIds.length;
@@ -961,7 +799,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
                     (uint256(0xFFFE) << 152) |
                     (uint256(req.level) << TROPHY_BASE_LEVEL_SHIFT) |
                     TROPHY_FLAG_AFFILIATE;
-                _awardTrophyInternal(affiliateWinner, IPurgeGameTrophies.TrophyKind.Affiliate, affiliateData, affiliateShare, affiliateTokenId);
+                _awardTrophyInternal(affiliateWinner, PURGE_TROPHY_KIND_AFFILIATE, affiliateData, affiliateShare, affiliateTokenId);
                 if (valueIn < affiliateShare) revert InvalidToken();
                 valueIn -= affiliateShare;
             }
@@ -1006,18 +844,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         return (mapImmediateRecipient, affiliateRecipients);
     }
 
-    function _addTrophyReward(uint256 tokenId, uint256 amountWei, uint24 startLevel) private {
-        _addTrophyRewardInternal(tokenId, amountWei, startLevel);
-    }
-
-    function _setDecimatorBaseline(uint256 tokenId, uint24 level) private {
-        _setDecimatorBaselineInternal(tokenId, level);
-    }
-
-    function _payoutDecimatorStake(uint256 tokenId, uint24 currentLevel) private returns (uint256) {
-        return _payoutDecimatorStakeInternal(tokenId, currentLevel);
-    }
-
     function _isTrophyStaked(uint256 tokenId) private view returns (bool) {
         return trophyStaked[tokenId];
     }
@@ -1033,13 +859,11 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         return lvl;
     }
 
-    function _kindFromInfo(uint256 info) private pure returns (IPurgeGameTrophies.TrophyKind kind) {
-        if (info & TROPHY_FLAG_MAP != 0) return IPurgeGameTrophies.TrophyKind.Map;
-        if (info & TROPHY_FLAG_AFFILIATE != 0) return IPurgeGameTrophies.TrophyKind.Affiliate;
-        if (info & TROPHY_FLAG_STAKE != 0) return IPurgeGameTrophies.TrophyKind.Stake;
-        if (info & TROPHY_FLAG_BAF != 0) return IPurgeGameTrophies.TrophyKind.Baf;
-        if (info & TROPHY_FLAG_DECIMATOR != 0) return IPurgeGameTrophies.TrophyKind.Decimator;
-        return IPurgeGameTrophies.TrophyKind.Level;
+    function _kindFromInfo(uint256 info) private pure returns (uint8 kind) {
+        if (info & TROPHY_FLAG_MAP != 0) return PURGE_TROPHY_KIND_MAP;
+        if (info & TROPHY_FLAG_AFFILIATE != 0) return PURGE_TROPHY_KIND_AFFILIATE;
+        if (info & TROPHY_FLAG_STAKE != 0) return PURGE_TROPHY_KIND_STAKE;
+        return PURGE_TROPHY_KIND_LEVEL;
     }
 
     // ---------------------------------------------------------------------
@@ -1079,8 +903,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         uint256 coinAmount;
         bool coinClaimed;
         bool isMap = (info & TROPHY_FLAG_MAP) != 0;
-        bool isDecimator = (info & TROPHY_FLAG_DECIMATOR) != 0;
-        bool replaceData = true;
         if (isMap) {
             uint32 start = uint32((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF) + COIN_DRIP_STEPS + 1;
             uint32 floor = start - 1;
@@ -1108,27 +930,13 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
                 coinClaimed = true;
                 updatedLast = currentLevel;
             }
-        } else if (isDecimator) {
-            if (!_isTrophyStaked(tokenId)) revert ClaimNotReady();
-            if (currentLevel > lastClaim) {
-                if (nft.rngLocked()) revert CoinPaused();
-                uint256 decCoin = _payoutDecimatorStake(tokenId, currentLevel);
-                if (decCoin != 0) {
-                    coinAmount = decCoin;
-                    coinClaimed = true;
-                    replaceData = false;
-                }
-            }
         }
-
         if (!ethClaimed && !coinClaimed) revert ClaimNotReady();
-        if (replaceData) {
-            uint256 newInfo =
-                (info & ~(TROPHY_OWED_MASK | TROPHY_LAST_CLAIM_MASK)) |
-                (newOwed & TROPHY_OWED_MASK) |
-                (uint256(updatedLast & 0xFFFFFF) << TROPHY_LAST_CLAIM_SHIFT);
-            _setTrophyData(tokenId, newInfo);
-        }
+        uint256 newInfo =
+            (info & ~(TROPHY_OWED_MASK | TROPHY_LAST_CLAIM_MASK)) |
+            (newOwed & TROPHY_OWED_MASK) |
+            (uint256(updatedLast & 0xFFFFFF) << TROPHY_LAST_CLAIM_SHIFT);
+        _setTrophyData(tokenId, newInfo);
 
         if (ethClaimed) {
             (bool ok, ) = msg.sender.call{value: payout}("");
@@ -1163,12 +971,10 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         bool affiliateTrophy = (info & TROPHY_FLAG_AFFILIATE) != 0;
         bool stakeTrophyKind = (info & TROPHY_FLAG_STAKE) != 0;
         bool levelTrophy = info != 0 && !mapTrophy && !affiliateTrophy && !stakeTrophyKind;
-        bool bafTrophy = (info & TROPHY_FLAG_BAF) != 0;
-        bool decimatorTrophy = (info & TROPHY_FLAG_DECIMATOR) != 0;
 
         uint24 trophyBaseLevel = uint24((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF);
         uint24 trophyLevelValue = stakeTrophyKind ? trophyBaseLevel + 1 : trophyBaseLevel;
-        bool pureLevelTrophy = levelTrophy && !bafTrophy && !decimatorTrophy;
+        bool pureLevelTrophy = levelTrophy;
         bool targetMap = isMap;
         bool targetAffiliate = !isMap && affiliateTrophy;
         bool targetLevel = !isMap && !affiliateTrophy && levelTrophy;
@@ -1202,61 +1008,46 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             targetLevel: targetLevel,
             targetStake: targetStake,
             pureLevelTrophy: pureLevelTrophy,
-            bafTrophy: bafTrophy,
             trophyBaseLevel: trophyBaseLevel,
             trophyLevelValue: trophyLevelValue,
             effectiveLevel: effectiveLevel
         });
 
-        StakeExecutionResult memory outcome;
+        StakeEventData memory eventData;
         if (stake) {
             if (currentlyStaked) revert TrophyStakeViolation(_STAKE_ERR_ALREADY_STAKED);
             coin.burnCoin(sender, 5_000 * COIN_BASE_UNIT);
-            outcome.eventData = _stakeInternal(params);
-            outcome.deleteApproval = true;
-            if (decimatorTrophy) {
-                _setDecimatorBaselineInternal(tokenId, currentLevel);
-            }
+            eventData = _stakeInternal(params);
+            nft.clearApproval(tokenId);
         } else {
             if (gameState != 3) revert TrophyStakeViolation(_STAKE_ERR_LOCKED);
             if (!currentlyStaked) revert TrophyStakeViolation(_STAKE_ERR_NOT_STAKED);
             coin.burnCoin(sender, 25_000 * COIN_BASE_UNIT);
-            outcome.eventData = _unstakeInternal(params);
-            if (decimatorTrophy) {
-                outcome.decimatorPayout = _payoutDecimatorStakeInternal(tokenId, currentLevel);
-            }
+            eventData = _unstakeInternal(params);
         }
 
-        if (stake && outcome.deleteApproval) {
-            nft.clearApproval(tokenId);
-        }
-        if (!stake && outcome.decimatorPayout != 0) {
-            coin.bonusCoinflip(sender, outcome.decimatorPayout, true, 0);
-        }
-        IPurgeGameTrophies.TrophyKind kind = _kindFromInfo(info);
-        nft.setTrophyPackedInfo(tokenId, uint8(kind), stake);
+        uint8 kind = _kindFromInfo(info);
+        nft.setTrophyPackedInfo(tokenId, kind, stake);
 
         emit TrophyStakeChanged(
             sender,
             tokenId,
-            outcome.eventData.kind,
+            eventData.kind,
             stake,
-            outcome.eventData.count,
-            outcome.eventData.discountBps
+            eventData.count,
+            eventData.discountBps
         );
     }
 
     function refreshStakeBonuses(
         uint256[] calldata mapTokenIds,
         uint256[] calldata levelTokenIds,
-        uint256[] calldata stakeTokenIds,
-        uint256[] calldata bafTokenIds
+        uint256[] calldata stakeTokenIds
     ) external override {
         address player = msg.sender;
         _refreshMapBonus(player, mapTokenIds);
         _refreshLevelBonus(player, levelTokenIds);
         _refreshStakeBonus(player, stakeTokenIds);
-        _refreshBafBonus(player, bafTokenIds);
     }
 
     function affiliateStakeBonus(address player) external view override returns (uint8) {
@@ -1268,30 +1059,12 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         return stakeStakeBonusPct_[player];
     }
 
-    function bafStakeBonusBps(address player) external view override returns (uint16) {
-        return bafStakeBonusBps_[player];
-    }
-
     function mapStakeDiscount(address player) external view override returns (uint8) {
         return mapStakeBonusPct_[player];
     }
 
     function levelStakeDiscount(address player) external view override returns (uint8) {
         return levelStakeBonusPct_[player];
-    }
-
-    function awardStakeTrophy(address to, uint24 level, uint256 principal)
-        external
-        override
-        onlyCoinCaller
-        returns (uint256 tokenId)
-    {
-        uint256 data = _stakePreviewData(level);
-        uint256 placeholderId = _placeholderTokenId(level, IPurgeGameTrophies.TrophyKind.Stake);
-
-        _awardTrophyInternal(to, IPurgeGameTrophies.TrophyKind.Stake, data, 0, placeholderId);
-        emit StakeTrophyAwarded(to, placeholderId, level, principal);
-        return placeholderId;
     }
 
     function purgeTrophy(uint256 tokenId) external override {

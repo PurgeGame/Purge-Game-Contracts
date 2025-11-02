@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {IPurgeGameTrophies} from "./PurgeGameTrophies.sol";
+import {IPurgeGameTrophies, PURGE_TROPHY_KIND_STAKE} from "./PurgeGameTrophies.sol";
 import {PurgeGameNFT} from "./PurgeGameNFT.sol";
 
 interface IPurgeGame {
@@ -134,11 +134,6 @@ contract Purgecoin {
         uint24 level;
     }
 
-    struct StakeTrophyCandidate {
-        address player;
-        uint256 principal;
-        uint24 level;
-    }
 
     // ---------------------------------------------------------------------
     // Constants (units & limits)
@@ -209,6 +204,8 @@ contract Purgecoin {
     uint256 private dailyCoinBurn;
     uint256 private prevDailyCoinBurn;
     address private lastBiggestFlipPlayer;
+    PlayerScore[4] private lastTopBettors;
+    uint8 private lastTopLen;
     uint256 private currentTenthPlayerBonusPool;
 
     // Coinflip roster stored as a reusable ring buffer.
@@ -232,6 +229,11 @@ contract Purgecoin {
     // Staking
     mapping(uint24 => address[]) private stakeAddr; // level => stakers
     mapping(uint24 => mapping(address => uint256)) private stakeAmt; // level => packed stake lanes (principal/risk)
+    struct StakeTrophyCandidate {
+        address player;
+        uint256 principal;
+        uint24 level;
+    }
     StakeTrophyCandidate private stakeTrophyCandidate;
 
     // Leaderboard index maps (1-based positions)
@@ -338,13 +340,6 @@ contract Purgecoin {
                 }
             }
             // Internal flip accounting; assumed non-reentrant / no external calls.
-            if (depositWithBonus != 0) {
-                uint16 bafBonusBps = purgeGameTrophies.bafStakeBonusBps(caller);
-                if (bafBonusBps != 0) {
-                    uint256 extra = (depositWithBonus * bafBonusBps) / 10_000;
-                    depositWithBonus += extra;
-                }
-            }
             addFlip(caller, depositWithBonus, true);
         }
 
@@ -485,10 +480,10 @@ contract Purgecoin {
         if (lanes < STAKE_MAX_LANES) {
             return _setLane(encoded, lanes, laneValue);
         }
-        if (strictCapacity) revert StakeInvalid();
-        // all slots occupied with different maturities
-        revert StakeInvalid();
-    }
+    if (strictCapacity) revert StakeInvalid();
+    // all slots occupied with different maturities
+    revert StakeInvalid();
+}
 
     function _recordStakeTrophyCandidate(uint24 level, address player, uint256 principal) private {
         if (player == address(0) || principal == 0) return;
@@ -506,7 +501,16 @@ contract Purgecoin {
     function _finalizeStakeTrophy(uint24 level, bool award) private {
         StakeTrophyCandidate memory cand = stakeTrophyCandidate;
         if (award && cand.level == level && cand.player != address(0) && cand.principal != 0) {
-            purgeGameTrophies.awardStakeTrophy(cand.player, level, cand.principal);
+            purgeGameTrophies.awardTrophy(
+                cand.player,
+                level,
+                PURGE_TROPHY_KIND_STAKE,
+                0,
+                cand.principal
+            );
+        }
+        if (!award) {
+            purgeGameTrophies.clearStakePreview(level);
         }
         if (cand.level == level || !award) {
             delete stakeTrophyCandidate;
@@ -927,16 +931,16 @@ contract Purgecoin {
                             address player = roster[i];
                             uint256 enc = stakeAmt[level][player];
                             for (uint8 li; li < STAKE_MAX_LANES; ) {
-                                uint256 lane = _laneAt(enc, li);
-                                if (lane != 0) {
-                                    (uint256 principal, uint8 riskFactor) = _decodeStakeLane(lane);
-                                    if (riskFactor <= 1) {
-                                        _recordStakeTrophyCandidate(level, player, principal);
-                                        uint256 fivePct = principal / 20;
-                                        uint256 newLuck = playerLuckbox[player] + fivePct;
-                                        playerLuckbox[player] = newLuck;
-                                        _updatePlayerScore(0, player, newLuck);
-                                        addFlip(player, fivePct * 19, false);
+                                    uint256 lane = _laneAt(enc, li);
+                                    if (lane != 0) {
+                                        (uint256 principal, uint8 riskFactor) = _decodeStakeLane(lane);
+                                        if (riskFactor <= 1) {
+                                            _recordStakeTrophyCandidate(level, player, principal);
+                                            uint256 fivePct = principal / 20;
+                                            uint256 newLuck = playerLuckbox[player] + fivePct;
+                                            playerLuckbox[player] = newLuck;
+                                            _updatePlayerScore(0, player, newLuck);
+                                            addFlip(player, fivePct * 19, false);
                                     } else {
                                         uint24 nextL = level + 1;
                                         uint8 newRf = riskFactor - 1;
@@ -1051,14 +1055,16 @@ contract Purgecoin {
         payoutIndex = uint32(end);
         // --- Phase 4: cleanup (single shot) -------------------------------------------
         if (end >= totalPlayers) {
-            lastBiggestFlipPlayer = topBettors[0].player;
             PlayerScore[4] memory cached = topBettors;
             uint8 len = topLen;
-            delete topBettors;
-            topLen = 0;
-            for (uint8 k; k < len; ) {
-                address q = cached[k].player;
-                if (q != address(0)) topPos[q] = 0;
+            lastBiggestFlipPlayer = cached[0].player;
+            lastTopLen = len;
+            for (uint8 k; k < 4; ) {
+                if (k < len) {
+                    lastTopBettors[k] = cached[k];
+                } else if (lastTopBettors[k].player != address(0) || lastTopBettors[k].score != 0) {
+                    delete lastTopBettors[k];
+                }
                 unchecked {
                     ++k;
                 }
@@ -1080,7 +1086,11 @@ contract Purgecoin {
         return false;
     }
 
-    function prepareCoinJackpot() external onlyPurgeGameContract returns (uint256 poolAmount, address biggestFlip) {
+    function prepareCoinJackpot()
+        external
+        onlyPurgeGameContract
+        returns (uint256 poolAmount, address biggestFlip)
+    {
         uint256 burnBase = prevDailyCoinBurn;
         uint256 pool = (burnBase * 60) / 100;
         uint256 minPool = 10_000 * MILLION;
@@ -1492,16 +1502,42 @@ contract Purgecoin {
             }
         } else if (which == 2) {
             uint8 len = topLen;
-            out = new address[](len);
-            for (uint8 i; i < len; ) {
-                out[i] = topBettors[i].player;
-                unchecked {
-                    ++i;
+            if (len != 0) {
+                out = new address[](len);
+                for (uint8 i; i < len; ) {
+                    out[i] = topBettors[i].player;
+                    unchecked {
+                        ++i;
+                    }
+                }
+            } else {
+                len = lastTopLen;
+                out = new address[](len);
+                for (uint8 i; i < len; ) {
+                    out[i] = lastTopBettors[i].player;
+                    unchecked {
+                        ++i;
+                    }
                 }
             }
         } else {
             revert InvalidLeaderboard();
         }
+    }
+
+    function resetCoinflipLeaderboard() external onlyPurgeGameContract {
+        uint8 len = topLen;
+        for (uint8 k; k < len; ) {
+            address player = topBettors[k].player;
+            if (player != address(0)) {
+                topPos[player] = 0;
+            }
+            unchecked {
+                ++k;
+            }
+        }
+        delete topBettors;
+        topLen = 0;
     }
 
     /// @notice Eligibility gate requiring both luckbox balance and active coinflip stake >= `min`.
