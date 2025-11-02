@@ -131,8 +131,16 @@ contract PurgeGame {
     uint8 private constant JACKPOT_KIND_MAP = 9;
     uint256 private constant COIN_BASE_UNIT = 1_000_000; // 1 PURGED (6 decimals)
     bytes32 private constant COIN_JACKPOT_TAG = keccak256("coin-jackpot");
-    uint16[4] private constant MAP_JACKPOT_SHARES = [uint16(6000), uint16(1333), uint16(1333), uint16(1334)];
-    uint16[4] private constant DAILY_JACKPOT_SHARES = [uint16(2000), uint16(2000), uint16(2000), uint16(2000)];
+    uint64 private constant MAP_JACKPOT_SHARES_PACKED =
+        (uint64(6000)) |
+        (uint64(1333) << 16) |
+        (uint64(1333) << 32) |
+        (uint64(1334) << 48);
+    uint64 private constant DAILY_JACKPOT_SHARES_PACKED =
+        (uint64(2000)) |
+        (uint64(2000) << 16) |
+        (uint64(2000) << 32) |
+        (uint64(2000) << 48);
 
     // -----------------------
     // Price
@@ -346,7 +354,7 @@ contract PurgeGame {
                     }
                     if (_phase == 2 && levelGate) {
                         bool coinflipAdvanceOk = true;
-                        if (_phase >= 3 || modTwenty != 0) {
+                        if (modTwenty != 0) {
                             coinflipAdvanceOk = coinContract.processCoinflipPayouts(lvl, cap, true, rngWord);
                         }
                         if (coinflipAdvanceOk) {
@@ -441,7 +449,7 @@ contract PurgeGame {
                 if (_phase == 6) {
                     bool coinflips = true;
                     if (_phase >= 3 || modTwenty != 0) {
-                        uint24 coinflipLevel = uint24(lvl + (jackpotCounter >= 14 ? 1 : 0));
+                        uint24 coinflipLevel = uint24(lvl + (jackpotCounter >= 9 ? 1 : 0));
                         coinflips = coinContract.processCoinflipPayouts(coinflipLevel, cap, false, rngWord);
                     }
                     if (!coinflips) break;
@@ -989,7 +997,7 @@ contract PurgeGame {
             true,
             rngWord,
             winningTraits,
-            MAP_JACKPOT_SHARES
+            MAP_JACKPOT_SHARES_PACKED
         );
 
         uint256 remainingPool = effectiveWei > paidWei ? effectiveWei - paidWei : 0;
@@ -1006,8 +1014,8 @@ contract PurgeGame {
         returns (uint256 effectiveWei)
     {
         uint256 totalWei = carryoverForNextLevel + prizePool;
-        uint256 burnAmount = (totalWei * 5 * priceCoin) / 1 ether;
-        coin.burnie(burnAmount);
+        uint256 burnieAmount = (totalWei * 5 * priceCoin) / 1 ether;
+        coin.burnie(burnieAmount);
 
         uint256 savePct = _mapCarryoverPercent(lvl, rngWord);
         uint256 saveNextWei = (totalWei * savePct) / 100;
@@ -1027,16 +1035,21 @@ contract PurgeGame {
             return pct > 20 ? 20 : pct;
         }
 
-        uint8 lvlMod10 = uint8(lvl % 10);
-        if ((rngWord % 1_000_000_000) == TRAIT_ID_TIMEOUT) return 10;
-        if (lvl < 10) return uint256(lvl) * 5;
-        if (lvl < 20) return 55 + (rngWord % 16);
-        if (lvl < 40) return 55 + (rngWord % 21);
-        if (lvl < 60) return 60 + (rngWord % 21);
-        if (lvl < 80) return 60 + (rngWord % 26);
-        if (lvl == 99) return 93;
-        uint256 base = 65 + (rngWord % 26);
-        if (lvlMod10 == 9) base += 5;
+        uint256 base;
+        if ((rngWord % 1_000_000_000) == TRAIT_ID_TIMEOUT) base = 10;
+        else if (lvl < 10) base = uint256(lvl) * 5;
+        else if (lvl < 20) base = 55 + (rngWord % 16);
+        else if (lvl < 40) base = 55 + (rngWord % 21);
+        else if (lvl < 60) base = 60 + (rngWord % 21);
+        else if (lvl < 80) base = 60 + (rngWord % 26);
+        else if (lvlMod100 == 99) base = 93;
+        else base = 65 + (rngWord % 26);
+
+        if ((lvl % 10) == 9) base += 5;
+        base += lvl / 100;
+        if (base > 99) {
+            base = 99;
+        }
         return base;
     }
 
@@ -1055,7 +1068,8 @@ contract PurgeGame {
 
         uint256 poolWei;
         if (isDaily) {
-            poolWei = (levelPrizePool * (250 + uint256(jackpotCounter) * 50)) / 10_000;
+            // 10-day ramp: 4.5%, 5.5%, ..., 13.5% -> 90% total by the final run.
+            poolWei = (levelPrizePool * (450 + uint256(jackpotCounter) * 100)) / 10_000;
         } else {
             uint256 baseWei = carryoverForNextLevel;
             if ((lvl % 20) == 0) poolWei = baseWei / 100;
@@ -1072,7 +1086,7 @@ contract PurgeGame {
             false,
             entropyWord ^ (uint256(lvl) << 192),
             winningTraits,
-            DAILY_JACKPOT_SHARES
+            DAILY_JACKPOT_SHARES_PACKED
         );
 
         coin.addToBounty(coinRemainder);
@@ -1087,7 +1101,7 @@ contract PurgeGame {
             }
             uint256 currentPool = prizePool;
             prizePool = paidWei > currentPool ? 0 : currentPool - paidWei;
-            if (jackpotCounter >= 15) {
+            if (jackpotCounter >= 10) {
                 _endLevel(TRAIT_ID_TIMEOUT);
                 return;
             }
@@ -1653,25 +1667,9 @@ contract PurgeGame {
         bool mapTrophy,
         uint256 entropy,
         uint8[4] memory winningTraits,
-        uint16[4] memory traitShareBps
+        uint64 traitShareBpsPacked
     ) private returns (uint256 totalPaidEth, uint256 totalPaidCoin, uint256 coinRemainder) {
         uint8 band = uint8((lvl % 100) / 20) + 1; // 1..5
-
-        uint256[4] memory ethShares;
-        uint256[4] memory coinShares;
-
-        for (uint8 traitIdx; traitIdx < 4; ) {
-            uint256 shareBps = traitShareBps[traitIdx];
-            if (shareBps != 0 && ethPool != 0) {
-                ethShares[traitIdx] = (ethPool * shareBps) / 10_000;
-            }
-            if (coinPool != 0 && shareBps != 0) {
-                coinShares[traitIdx] = (coinPool * shareBps) / 10_000;
-            }
-            unchecked {
-                ++traitIdx;
-            }
-        }
 
         bool trophyGiven;
         uint256 entropyCursorEth = entropy;
@@ -1681,7 +1679,22 @@ contract PurgeGame {
             entropyCursorCoin = entropy ^ uint256(COIN_JACKPOT_TAG);
         }
 
+        uint256 ethDistributed;
+        uint256 coinDistributed;
+
         for (uint8 traitIdx; traitIdx < 4; ) {
+            uint256 shareBps = uint16(traitShareBpsPacked >> (traitIdx * 16));
+
+            uint256 ethShare;
+            if (ethPool != 0) {
+                if (traitIdx == 3) {
+                    ethShare = ethPool - ethDistributed;
+                } else if (shareBps != 0) {
+                    ethShare = (ethPool * shareBps) / 10_000;
+                    ethDistributed += ethShare;
+                }
+            }
+
             uint256 ethDelta;
             (entropyCursorEth, trophyGiven, ethDelta, ) = _runTraitJackpot(
                 false,
@@ -1690,26 +1703,36 @@ contract PurgeGame {
                 winningTraits[traitIdx],
                 traitIdx,
                 band,
-                ethShares[traitIdx],
+                ethShare,
                 entropyCursorEth,
                 trophyGiven
             );
             totalPaidEth += ethDelta;
 
-            if (runCoin && coinShares[traitIdx] != 0) {
-                uint256 coinDelta;
-                (entropyCursorCoin, , , coinDelta) = _runTraitJackpot(
-                    true,
-                    false,
-                    lvl,
-                    winningTraits[traitIdx],
-                    traitIdx,
-                    band,
-                    coinShares[traitIdx],
-                    entropyCursorCoin,
-                    false
-                );
-                totalPaidCoin += coinDelta;
+            if (runCoin) {
+                uint256 coinShare;
+                if (traitIdx == 3) {
+                    coinShare = coinPool - coinDistributed;
+                } else if (shareBps != 0) {
+                    coinShare = (coinPool * shareBps) / 10_000;
+                    coinDistributed += coinShare;
+                }
+
+                if (coinShare != 0) {
+                    uint256 coinDelta;
+                    (entropyCursorCoin, , , coinDelta) = _runTraitJackpot(
+                        true,
+                        false,
+                        lvl,
+                        winningTraits[traitIdx],
+                        traitIdx,
+                        band,
+                        coinShare,
+                        entropyCursorCoin,
+                        false
+                    );
+                    totalPaidCoin += coinDelta;
+                }
             }
 
             unchecked {
