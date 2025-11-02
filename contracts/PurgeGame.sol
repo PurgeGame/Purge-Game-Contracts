@@ -388,7 +388,8 @@ contract PurgeGame {
                         coinflipMapOk = coinContract.processCoinflipPayouts(lvl, cap, false, rngWord);
                     }
                     if (!coinflipMapOk) break;
-                    if (payMapJackpot(cap, lvl, rngWord)) {
+                    uint256 mapEffectiveWei = _calcPrizePoolForJackpot(lvl, rngWord);
+                    if (payMapJackpot(lvl, rngWord, mapEffectiveWei)) {
                         phase = 5;
                     }
                     break;
@@ -972,63 +973,21 @@ contract PurgeGame {
 
     // --- Map jackpot payout (end of purchase phase) -------------------------------------------------
 
-    /// @notice Compute carry split, set the new prize pool, and pay the map jackpot using the shared trait flow.
+    /// @notice Compute trait draws internally then pay the map jackpot using the provided pool.
     /// @dev Trait[0] captures 60% of the pool (single winner quadrant); the remaining 40% is split evenly across the other traits.
-    function payMapJackpot(uint32 cap, uint24 lvl, uint256 rngWord) internal returns (bool finished) {
-        uint256 carryWei = carryoverForNextLevel;
-        uint8 lvlMod20 = uint8(lvl % 20);
-
-        // External jackpots first (may need multiple calls)
-        if (lvlMod20 == 0) {
-            uint256 bafPoolWei = (carryWei * 24) / 100;
-            (bool finishedBaf, ) = _progressExternal(0, bafPoolWei, cap, lvl, rngWord);
-            if (!finishedBaf) return false;
-            carryWei = carryoverForNextLevel;
-        }
-
-        uint256 totalWei = carryWei + prizePool;
-        uint256 lvlMod100 = lvl % 100;
-        uint8 lvlMod10 = uint8(lvlMod100 % 10);
-        coin.burnie((totalWei * 5 * priceCoin) / 1 ether);
-
-        // Save % for next level (randomized bands per range)
-        uint256 rndWord = rngWord;
-        uint256 savePct;
-        if (lvlMod100 == 0) {
-            // Two d12 rolls (capped at 20%) decide how much carryover persists into the next level.
-            uint256 rollA = (uint256(uint64(rndWord)) * 12) >> 64;
-            uint256 rollB = (uint256(uint64(rndWord >> 64)) * 12) >> 64;
-            savePct = rollA + rollB + 2;
-            if (savePct > 20) savePct = 20;
-        } else {
-            if ((rndWord % 1_000_000_000) == TRAIT_ID_TIMEOUT) {
-                savePct = 10;
-            } else if (lvl < 10) savePct = uint256(lvl) * 5;
-            else if (lvl < 20) savePct = 55 + (rndWord % 16);
-            else if (lvl < 40) savePct = 55 + (rndWord % 21);
-            else if (lvl < 60) savePct = 60 + (rndWord % 21);
-            else if (lvl < 80) savePct = 60 + (rndWord % 26);
-            else if (lvl == 99) savePct = 93;
-            else savePct = 65 + (rndWord % 26);
-            if (lvlMod10 == 9) savePct += 5;
-        }
-
-        uint256 saveNextWei = (totalWei * savePct) / 100;
-        carryoverForNextLevel = saveNextWei;
-        uint256 effectiveWei = totalWei - saveNextWei;
-
-        lastPrizePool = prizePool;
-        prizePool = effectiveWei;
-
-        uint8[4] memory winningTraits = _getRandomTraits(rndWord);
-
+    function payMapJackpot(
+        uint24 lvl,
+        uint256 rngWord,
+        uint256 effectiveWei
+    ) internal returns (bool finished) {
+        uint8[4] memory winningTraits = _getRandomTraits(rngWord);
         (uint256 paidWei, , ) = _runJackpot(
             JACKPOT_KIND_MAP,
             lvl,
             effectiveWei,
             0,
             true,
-            rndWord ^ (uint256(lvl) << 200),
+            rngWord,
             winningTraits,
             MAP_JACKPOT_SHARES
         );
@@ -1038,6 +997,47 @@ contract PurgeGame {
         levelPrizePool = remainingPool;
 
         return true;
+    }
+
+    /// @notice Burn, reserve carryover, and snapshot the prize pool ahead of a jackpot.
+    /// @return effectiveWei Pool balance allocated to the jackpot.
+    function _calcPrizePoolForJackpot(uint24 lvl, uint256 rngWord)
+        private
+        returns (uint256 effectiveWei)
+    {
+        uint256 totalWei = carryoverForNextLevel + prizePool;
+        uint256 burnAmount = (totalWei * 5 * priceCoin) / 1 ether;
+        coin.burnie(burnAmount);
+
+        uint256 savePct = _mapCarryoverPercent(lvl, rngWord);
+        uint256 saveNextWei = (totalWei * savePct) / 100;
+        carryoverForNextLevel = saveNextWei;
+        effectiveWei = totalWei - saveNextWei;
+
+        lastPrizePool = prizePool;
+        prizePool = effectiveWei;
+    }
+
+    function _mapCarryoverPercent(uint24 lvl, uint256 rngWord) private pure returns (uint256) {
+        uint256 lvlMod100 = lvl % 100;
+        if (lvlMod100 == 0) {
+            uint256 rollA = (uint256(uint64(rngWord)) * 12) >> 64;
+            uint256 rollB = (uint256(uint64(rngWord >> 64)) * 12) >> 64;
+            uint256 pct = rollA + rollB + 2;
+            return pct > 20 ? 20 : pct;
+        }
+
+        uint8 lvlMod10 = uint8(lvl % 10);
+        if ((rngWord % 1_000_000_000) == TRAIT_ID_TIMEOUT) return 10;
+        if (lvl < 10) return uint256(lvl) * 5;
+        if (lvl < 20) return 55 + (rngWord % 16);
+        if (lvl < 40) return 55 + (rngWord % 21);
+        if (lvl < 60) return 60 + (rngWord % 21);
+        if (lvl < 80) return 60 + (rngWord % 26);
+        if (lvl == 99) return 93;
+        uint256 base = 65 + (rngWord % 26);
+        if (lvlMod10 == 9) base += 5;
+        return base;
     }
 
     // --- Daily & early‑purge jackpots ---------------------------------------------------------------
