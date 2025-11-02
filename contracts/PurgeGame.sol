@@ -172,7 +172,7 @@ contract PurgeGame {
     uint32 private airdropMapsProcessedCount; // Progress inside current map-mint player's queue
     uint32 private airdropIndex; // Progress across players in pending arrays
     uint32 private traitRebuildCursor; // Tokens processed during trait rebuild
-    bool private jackpotPending;
+
 
     address[] private pendingMapMints; // Queue of players awaiting map mints
     mapping(address => uint32) private playerMapMintsOwed; // Player => map mints owed
@@ -325,14 +325,10 @@ contract PurgeGame {
             if (cap == 0 && coinContract.playerLuckbox(msg.sender) < priceCoin * lvl * (lvl / 100 + 1) << 1)
                 revert LuckboxTooSmall();
             uint256 rngWord;
-            if (jackpotPending) {
             rngWord = rngAndTimeGate(day);
-            } else {
-                rngWord = rngAndTimeGate(day);
-                if (rngWord == 1) {
-                    rngReady = false;
-                    break;
-                }
+            if (rngWord == 1) {
+                rngReady = false;
+                break;
             }
             // --- State 1 - Pregame ---
             if (_gameState == 1) {
@@ -1047,6 +1043,8 @@ contract PurgeGame {
             winningTraits
         );
 
+        _runCoinJackpotIfReady(lvl, randWord, winningTraits);
+
         if (isDaily) {
             unchecked {
                 ++jackpotCounter;
@@ -1076,7 +1074,7 @@ contract PurgeGame {
     function _endJackpot(
         uint24 lvl,
         uint32 cap,
-        uint48 dayIdx,
+        uint48 /*dayIdx*/,
         bool bonusFlip,
         uint256 rngWord,
         uint8 phaseSnapshot
@@ -1084,14 +1082,6 @@ contract PurgeGame {
         private
         returns (bool ok)
     {
-        if (jackpotPending) {
-            _executeCoinJackpot(lvl, rngWord);
-            nft.releaseRngLock();
-            dailyIdx = dayIdx;
-            jackpotPending = false;
-            return true;
-        }
-
         uint8 lvlMod20 = uint8(lvl % 20);
 
         if (phaseSnapshot >= 3 || lvlMod20 != 0) {
@@ -1099,8 +1089,8 @@ contract PurgeGame {
             if (!ok) return false;
         }
 
-        jackpotPending = true;
-        return false;
+
+        return true;
     }
 
     /// @notice Track early‑purge jackpot thresholds as the prize pool grows during purchase phase.
@@ -1676,18 +1666,26 @@ contract PurgeGame {
         return ethMintLastLevel_[player] == lvl;
     }
 
-    function _executeCoinJackpot(uint24 lvl, uint256 randWord) internal returns (uint8[4] memory winningTraits) {
-        winningTraits = _getRandomTraits(randWord);
+    function _runCoinJackpotIfReady(
+        uint24 lvl,
+        uint256 randWord,
+        uint8[4] memory winningTraits
+    ) private {
+
 
         (uint256 pool, ) = coin.prepareCoinJackpot();
-        if (pool == 0) return winningTraits;
-
-        JackpotSpec memory spec = JackpotSpec({payInCoin: true, mapTrophy: false});
-
-        (, uint256 remaining) = _runJackpot(spec, lvl, pool, randWord ^ (uint256(lvl) << 192), winningTraits);
-        if (remaining != 0) {
-            coin.addToBounty(remaining);
+        if (pool != 0) {
+            JackpotSpec memory spec = JackpotSpec({payInCoin: true, mapTrophy: false});
+            uint256 entropy = randWord ^ (uint256(lvl) << 192) ^ uint256(keccak256("coin-jackpot"));
+            (, uint256 remaining) = _runJackpot(spec, lvl, pool, entropy, winningTraits);
+            if (remaining != 0) {
+                coin.addToBounty(remaining);
+            }
         }
+        
+        uint48 currentDay = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
+        dailyIdx = currentDay;
+        nft.releaseRngLock();
     }
 
     function _getRandomTraits(uint256 rw) internal pure returns (uint8[4] memory w) {
