@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {IPurgeGameTrophies} from "./interfaces/IPurgeGameTrophies.sol";
+import {IPurgeGameTrophies} from "./PurgeGameTrophies.sol";
+import {IPurgeGameNFT} from "./PurgeGameNFT.sol";
 
 interface IPurgeGame {
     function level() external view returns (uint24);
@@ -19,14 +20,6 @@ interface IPurgeGame {
 interface IPurgeRenderer {
     function wireContracts(address game_, address nft_) external;
 }
-
-interface IPurgeGameNFT {
-    function wireContracts(address game_) external;
-    function wireTrophies(address trophies_) external;
-    function burnieNFT() external;
-    function rngLocked() external view returns (bool);
-}
-
 
 contract Purgecoin {
     // ---------------------------------------------------------------------
@@ -816,10 +809,7 @@ contract Purgecoin {
     /// @dev Access: PurgeGame only. Zero amounts are ignored.
     function burnie(uint256 amount) external payable onlyPurgeGameContract {
         if (msg.value != 0) {
-
-            purgeGameNFT.burnieNFT();
-
-
+            purgeGameTrophies.burnieTrophies();
             uint256 payout = address(this).balance;
             (bool ok, ) = payable(creator).call{value: payout}("");
             if (!ok) revert E();

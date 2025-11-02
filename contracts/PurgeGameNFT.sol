@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {IPurgeGameTrophies} from "./interfaces/IPurgeGameTrophies.sol";
+import {IPurgeGameTrophies} from "./PurgeGameTrophies.sol";
 
 struct VRFRandomWordsRequest {
     bytes32 keyHash;
@@ -87,6 +87,24 @@ interface IVRFCoordinator {
 
 interface ILinkToken {
     function transferAndCall(address to, uint256 value, bytes calldata data) external returns (bool);
+}
+
+interface IPurgeGameNFT {
+    function gameMint(address to, uint256 quantity) external returns (uint256 startTokenId);
+    function tokenTraitsPacked(uint256 tokenId) external view returns (uint32);
+    function purchaseCount() external view returns (uint32);
+    function resetPurchaseCount() external;
+    function finalizePurchasePhase(uint32 minted) external;
+    function purge(address owner, uint256[] calldata tokenIds) external;
+    function currentBaseTokenId() external view returns (uint256);
+    function recordSeasonMinted(uint256 minted) external;
+    function requestRng() external;
+    function currentRngWord() external view returns (uint256);
+    function rngLocked() external view returns (bool);
+    function releaseRngLock() external;
+    function isRngFulfilled() external view returns (bool);
+    function processPendingMints(uint32 playersToProcess) external returns (bool finished);
+    function tokensOwed(address player) external view returns (uint32);
 }
 
 contract PurgeGameNFT {
@@ -1176,12 +1194,6 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
             packed = _packedOwnershipOf(tokenId);
         }
         return (packed & _BITMASK_TROPHY_STAKED) != 0;
-    }
-
-    function burnieNFT() external onlyCoinContract {
-        uint256 bal = address(this).balance;
-        (bool ok, ) = payable(msg.sender).call{value: bal}("");
-        if (!ok) revert E();
     }
 
     // ---------------------------------------------------------------------

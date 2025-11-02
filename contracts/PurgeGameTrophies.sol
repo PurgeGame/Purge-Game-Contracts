@@ -1,8 +1,92 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {IPurgeGameNftModule} from "./interfaces/IPurgeGameNftModule.sol";
-import {IPurgeGameTrophies} from "./interfaces/IPurgeGameTrophies.sol";
+interface IPurgeGameNftModule {
+    function nextTokenId() external view returns (uint256);
+    function mintPlaceholders(uint256 quantity) external returns (uint256 startTokenId);
+    function getBasePointers() external view returns (uint256 previousBase, uint256 currentBase);
+    function setBasePointers(uint256 previousBase, uint256 currentBase) external;
+    function packedOwnershipOf(uint256 tokenId) external view returns (uint256 packed);
+    function transferTrophy(address from, address to, uint256 tokenId) external;
+    function setTrophyPackedInfo(uint256 tokenId, uint8 kind, bool staked) external;
+    function clearApproval(uint256 tokenId) external;
+    function incrementTrophySupply(uint256 amount) external;
+    function decrementTrophySupply(uint256 amount) external;
+    function gameAddress() external view returns (address);
+    function coinAddress() external view returns (address);
+    function rngLocked() external view returns (bool);
+    function currentRngWord() external view returns (uint256);
+}
+
+interface IPurgeGameTrophies {
+    enum TrophyKind {
+        Map,
+        Level,
+        Affiliate,
+        Stake,
+        Baf,
+        Decimator
+    }
+
+    struct EndLevelRequest {
+        address exterminator;
+        uint16 traitId;
+        uint24 level;
+        uint256 pool;
+    }
+
+    function wire(address game_, address coin_) external;
+
+    function clearStakePreview(uint24 level) external;
+
+    function prepareNextLevel(uint24 nextLevel) external;
+
+    function awardTrophy(
+        address to,
+        uint24 level,
+        TrophyKind kind,
+        uint256 data,
+        uint256 deferredWei
+    ) external payable;
+
+    function processEndLevel(EndLevelRequest calldata req)
+        external
+        payable
+        returns (address mapImmediateRecipient, address[6] memory affiliateRecipients);
+
+    function claimTrophy(uint256 tokenId) external;
+
+    function setTrophyStake(uint256 tokenId, bool isMap, bool stake) external;
+
+    function refreshStakeBonuses(
+        uint256[] calldata mapTokenIds,
+        uint256[] calldata levelTokenIds,
+        uint256[] calldata stakeTokenIds,
+        uint256[] calldata bafTokenIds
+    ) external;
+
+    function affiliateStakeBonus(address player) external view returns (uint8);
+
+    function stakeTrophyBonus(address player) external view returns (uint8);
+
+    function bafStakeBonusBps(address player) external view returns (uint16);
+
+    function mapStakeDiscount(address player) external view returns (uint8);
+
+    function levelStakeDiscount(address player) external view returns (uint8);
+
+    function awardStakeTrophy(address to, uint24 level, uint256 principal) external returns (uint256 tokenId);
+
+    function purgeTrophy(uint256 tokenId) external;
+
+    function stakedTrophySample(uint64 salt) external view returns (address owner);
+
+    function hasTrophy(uint256 tokenId) external view returns (bool);
+
+    function trophyData(uint256 tokenId) external view returns (uint256 rawData);
+
+    function burnieTrophies() external;
+}
 
 interface IPurgeGameMinimal {
     function level() external view returns (uint24);
@@ -387,6 +471,19 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     function _stakeInternal(StakeParams memory params) private returns (StakeEventData memory data) {
         if (trophyData_[params.tokenId] == 0) revert StakeInvalid();
         if (trophyStaked[params.tokenId]) revert TrophyStakeViolation(_STAKE_ERR_ALREADY_STAKED);
+        uint256 info = trophyData_[params.tokenId];
+        uint256 owed = info & TROPHY_OWED_MASK;
+        if (owed != 0) {
+            uint256 levelBits = uint256(params.effectiveLevel & 0xFFFFFF);
+            uint256 baseCleared = info & ~(uint256(0xFFFFFF) << TROPHY_BASE_LEVEL_SHIFT);
+            uint256 lastCleared = baseCleared & ~TROPHY_LAST_CLAIM_MASK;
+            uint256 updatedInfo =
+                lastCleared |
+                (levelBits << TROPHY_BASE_LEVEL_SHIFT) |
+                (levelBits << TROPHY_LAST_CLAIM_SHIFT);
+            trophyData_[params.tokenId] = updatedInfo;
+            info = updatedInfo;
+        }
         trophyStaked[params.tokenId] = true;
         _addStakedTrophy(params.tokenId);
 
@@ -958,6 +1055,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
 
         uint24 currentLevel = game.level();
         uint24 lastClaim = uint24((info >> TROPHY_LAST_CLAIM_SHIFT) & 0xFFFFFF);
+        bool isCurrentlyStaked = _isTrophyStaked(tokenId);
 
         uint256 owed = info & TROPHY_OWED_MASK;
         uint256 newOwed = owed;
@@ -966,6 +1064,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         uint24 updatedLast = lastClaim;
 
         if (owed != 0 && currentLevel > lastClaim) {
+            if (!isCurrentlyStaked) revert ClaimNotReady();
             uint24 baseStartLevel = uint24((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF) + 1;
             if (currentLevel >= baseStartLevel) {
                 uint32 vestEnd = uint32(baseStartLevel) + COIN_DRIP_STEPS;
@@ -1231,6 +1330,15 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
 
     function trophyData(uint256 tokenId) external view override returns (uint256 rawData) {
         return trophyData_[tokenId];
+    }
+
+    /// @notice Drain any ETH held by the trophy module (deferred payouts) back to the coin contract.
+    /// @dev Access: PURGE coin contract only. Used during emergency shutdown via `burnie`.
+    function burnieTrophies() external onlyCoinCaller {
+        uint256 bal = address(this).balance;
+        if (bal == 0) return;
+        (bool ok, ) = payable(msg.sender).call{value: bal}("");
+        if (!ok) revert TransferFailed();
     }
 
     // ---------------------------------------------------------------------
