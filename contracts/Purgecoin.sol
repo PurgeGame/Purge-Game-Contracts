@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+import {IPurgeGameTrophies} from "./interfaces/IPurgeGameTrophies.sol";
+
 interface IPurgeGame {
     function level() external view returns (uint24);
     function gameState() external view returns (uint8);
@@ -18,17 +20,11 @@ interface IPurgeRenderer {
 
 interface IPurgeGameNFT {
     function wireContracts(address game_) external;
+    function wireTrophies(address trophies_) external;
     function burnieNFT() external;
-    function mapStakeDiscount(address player) external view returns (uint8);
-    function levelStakeDiscount(address player) external view returns (uint8);
-    function affiliateStakeBonus(address player) external view returns (uint8);
     function rngLocked() external view returns (bool);
-    function awardStakeTrophy(address to, uint24 level, uint256 principal) external;
-    function stakedTrophySample(uint64 salt) external view returns (address);
-    function bafStakeBonusBps(address player) external view returns (uint16);
-    function stakeTrophyBonus(address player) external view returns (uint8);
-
 }
+
 
 contract Purgecoin {
     // ---------------------------------------------------------------------
@@ -190,7 +186,8 @@ contract Purgecoin {
     // Game wiring & state
     // ---------------------------------------------------------------------
     IPurgeGame private purgeGame; // PurgeGame contract handle (set once)
-    IPurgeGameNFT private purgeGameNFT; // Authorized contract for trophy coin drops (PurgeGameNFT)
+    IPurgeGameNFT private purgeGameNFT; // Authorized contract for base NFT operations
+    IPurgeGameTrophies private purgeGameTrophies; // Trophy module handle
 
     // Session flags
     bool private tbActive; // "tenth player" bonus active
@@ -337,7 +334,7 @@ contract Purgecoin {
             }
             // Internal flip accounting; assumed non-reentrant / no external calls.
             if (depositWithBonus != 0) {
-                uint16 bafBonusBps = purgeGameNFT.bafStakeBonusBps(caller);
+                uint16 bafBonusBps = purgeGameTrophies.bafStakeBonusBps(caller);
                 if (bafBonusBps != 0) {
                     uint256 extra = (depositWithBonus * bafBonusBps) / 10_000;
                     depositWithBonus += extra;
@@ -491,7 +488,7 @@ contract Purgecoin {
     function _finalizeStakeTrophy(uint24 level, bool award) private {
         StakeTrophyCandidate memory cand = stakeTrophyCandidate;
         if (award && cand.level == level && cand.player != address(0) && cand.principal != 0) {
-            purgeGameNFT.awardStakeTrophy(cand.player, level, cand.principal);
+            purgeGameTrophies.awardStakeTrophy(cand.player, level, cand.principal);
         }
         if (cand.level == level || !award) {
             delete stakeTrophyCandidate;
@@ -605,7 +602,7 @@ contract Purgecoin {
             boostedPrincipal = (boostedPrincipal * 3) / 2;
         }
 
-        uint8 stakeTrophyBoost = purgeGameNFT.stakeTrophyBonus(sender);
+        uint8 stakeTrophyBoost = purgeGameTrophies.stakeTrophyBonus(sender);
         if (stakeTrophyBoost != 0) {
             boostedPrincipal += (boostedPrincipal * stakeTrophyBoost) / 100;
         }
@@ -671,7 +668,7 @@ contract Purgecoin {
             // Pay direct affiliate (skip sentinels)
             if (affiliateAddr != address(0) && affiliateAddr != address(1)) {
                 uint256 payout = baseAmount;
-                uint8 stakeBonus = purgeGameNFT.affiliateStakeBonus(affiliateAddr);
+                uint8 stakeBonus = purgeGameTrophies.affiliateStakeBonus(affiliateAddr);
                 if (stakeBonus != 0) {
                     payout += (payout * stakeBonus) / 100;
                 }
@@ -686,7 +683,7 @@ contract Purgecoin {
             if (upline != address(0) && upline != address(1) && upline != sender && earned[upline] > 0) {
                 uint256 bonus = baseAmount / 5;
                 if (bonus != 0) {
-                    uint8 stakeBonusUpline = purgeGameNFT.affiliateStakeBonus(upline);
+                    uint8 stakeBonusUpline = purgeGameTrophies.affiliateStakeBonus(upline);
                     if (stakeBonusUpline != 0) {
                         bonus += (bonus * stakeBonusUpline) / 100;
                     }
@@ -782,6 +779,7 @@ contract Purgecoin {
     function wire(
         address game_,
         address nft_,
+        address trophies_,
         address regularRenderer_,
         address trophyRenderer_
     ) external {
@@ -791,9 +789,12 @@ contract Purgecoin {
         bytes32 h = H;
         assembly {sstore(h, caller())}
         purgeGameNFT = IPurgeGameNFT(nft_);
+        purgeGameTrophies = IPurgeGameTrophies(trophies_);
         IPurgeRenderer(regularRenderer_).wireContracts(game_, nft_);
         IPurgeRenderer(trophyRenderer_).wireContracts(game_, nft_);
         purgeGameNFT.wireContracts(game_);
+        purgeGameNFT.wireTrophies(trophies_);
+        purgeGameTrophies.wire(game_, address(this));
     }
 
     /// @notice Credit the creator's share of gameplay proceeds.
@@ -1201,7 +1202,7 @@ contract Purgecoin {
                     ];
                     for (uint256 s; s < 4; ) {
                         uint256 prize = shares[s];
-                        address w = purgeGameNFT.stakedTrophySample(uint64(uint256(keccak256(abi.encodePacked(executeWord, s, "st")))));
+                        address w = purgeGameTrophies.stakedTrophySample(uint64(uint256(keccak256(abi.encodePacked(executeWord, s, "st")))));
                         if (w != address(0)) {
                             tmpW[n] = w;
                             tmpA[n] = prize;

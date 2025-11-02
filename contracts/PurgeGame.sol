@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+import {IPurgeGameTrophies} from "./interfaces/IPurgeGameTrophies.sol";
+
 /**
  * @title Purge Game — Core NFT game contract
  * @notice This file defines the on-chain game logic surface (interfaces + core state).
@@ -51,22 +53,6 @@ interface IPurgeRenderer {
  * @dev Minimal interface to the dedicated NFT contract owned by the game.
  */
 interface IPurgeGameNFT {
-    struct EndLevelRequest {
-        address exterminator;
-        uint16 traitId;
-        uint24 level;
-        uint256 pool;
-    }
-
-    enum TrophyKind {
-        Map,
-        Level,
-        Affiliate,
-        Stake,
-        Baf,
-        Decimator
-    }
-
     function gameMint(address to, uint256 quantity) external returns (uint256 startTokenId);
 
     function tokenTraitsPacked(uint256 tokenId) external view returns (uint32);
@@ -76,23 +62,6 @@ interface IPurgeGameNFT {
     function resetPurchaseCount() external;
 
     function purge(address owner, uint256[] calldata tokenIds) external;
-
-    function awardTrophy(
-        address to,
-        uint24 level,
-        TrophyKind kind,
-        uint256 data,
-        uint256 deferredWei
-    ) external payable;
-
-    function processEndLevel(EndLevelRequest calldata req)
-        external
-        payable
-        returns (address mapImmediateRecipient, address[6] memory affiliateRecipients);
-
-    function prepareNextLevel(uint24 nextLevel) external;
-
-    function clearStakePreview(uint24 level) external;
 
     function currentBaseTokenId() external view returns (uint256);
 
@@ -113,16 +82,7 @@ interface IPurgeGameNFT {
         returns (uint256 coinReward, uint256 luckboxReward);
 
     function ethMintLastLevel(address player) external view returns (uint24);
-
-    function levelStakeDiscount(address player) external view returns (uint8);
-
-    function mapStakeDiscount(address player) external view returns (uint8);
-
-    function affiliateStakeBonus(address player) external view returns (uint8);
-
-    function stakedTrophySample(uint64 salt) external view returns (address);
 }
-
 // ===========================================================================
 // Contract
 // ===========================================================================
@@ -151,6 +111,7 @@ contract PurgeGame {
     IPurgeRenderer private immutable renderer; // Trusted renderer; used for tokenURI composition
     IPurgeCoinInterface private immutable coin; // Trusted coin/game-side coordinator (PURGE ERC20)
     IPurgeGameNFT private immutable nft; // ERC721 interface for mint/burn/metadata surface
+    IPurgeGameTrophies private immutable trophies; // Dedicated trophy module
 
 
     // -----------------------
@@ -254,10 +215,11 @@ contract PurgeGame {
      *
      * @dev ERC721 sentinel trophy token is minted lazily during the first transition to state 2.
      */
-    constructor(address purgeCoinContract, address renderer_, address nftContract) {
+    constructor(address purgeCoinContract, address renderer_, address nftContract, address trophiesContract) {
         coin = IPurgeCoinInterface(purgeCoinContract);
         renderer = IPurgeRenderer(renderer_);
         nft = IPurgeGameNFT(nftContract);
+        trophies = IPurgeGameTrophies(trophiesContract);
     }
 
     // --- View: lightweight game status -------------------------------------------------
@@ -697,7 +659,7 @@ contract PurgeGame {
         }
 
         uint24 nextLevel = levelSnapshot + 1;
-        nft.prepareNextLevel(nextLevel);
+        trophies.prepareNextLevel(nextLevel);
 
         unchecked {
             levelSnapshot++;
@@ -815,10 +777,10 @@ contract PurgeGame {
                 affiliateTrophyRecipient = pend.exterminator;
             }
 
-            (, address[6] memory affiliateRecipients) = nft.processEndLevel{
+            (, address[6] memory affiliateRecipients) = trophies.processEndLevel{
                 value: deferredWei + affiliateTrophyShare + legacyAffiliateShare
             }(
-                IPurgeGameNFT.EndLevelRequest({
+                IPurgeGameTrophies.EndLevelRequest({
                     exterminator: pend.exterminator,
                     traitId: lastExterminatedTrait,
                     level: prevLevelPending,
@@ -848,8 +810,8 @@ contract PurgeGame {
             uint256 affiliateAward = topAffiliate == address(0) ? 0 : mapUnit;
             uint256 mapPayoutValue = mapUnit * 4 + affiliateAward;
 
-            (address mapRecipient, address[6] memory mapAffiliates) = nft.processEndLevel{value: mapPayoutValue}(
-                IPurgeGameNFT.EndLevelRequest({
+            (address mapRecipient, address[6] memory mapAffiliates) = trophies.processEndLevel{value: mapPayoutValue}(
+                IPurgeGameTrophies.EndLevelRequest({
                     exterminator: topAffiliate,
                     traitId: TRAIT_ID_TIMEOUT,
                     level: prevLevelPending,
@@ -1678,7 +1640,7 @@ contract PurgeGame {
             if (half != 0) { _addClaimableEth(finalWinner, half); ethDelta += half; }
             if (deferred != 0) {
                 uint256 trophyData = (uint256(traitId) << 152) | (uint256(lvl) << 128) | TROPHY_FLAG_MAP;
-                nft.awardTrophy{value: deferred}(finalWinner, lvl, IPurgeGameNFT.TrophyKind.Map, trophyData, deferred);
+                trophies.awardTrophy{value: deferred}(finalWinner, lvl, IPurgeGameTrophies.TrophyKind.Map, trophyData, deferred);
                 ethDelta += deferred;
             }
         } else if (_eligibleJackpotWinner(finalWinner, lvl) && _creditJackpot(payCoin, finalWinner, perWinner)) {
