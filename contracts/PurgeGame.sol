@@ -82,6 +82,10 @@ interface IPurgeGameNFT {
         returns (uint256 coinReward, uint256 luckboxReward);
 
     function ethMintLastLevel(address player) external view returns (uint24);
+
+    function processPendingMints(uint32 playersToProcess) external returns (bool finished);
+
+    function tokensOwed(address player) external view returns (uint32);
 }
 // ===========================================================================
 // Contract
@@ -118,8 +122,6 @@ contract PurgeGame {
     // Game Constants
     // -----------------------
     uint48 private constant JACKPOT_RESET_TIME = 82620; // Offset anchor for "daily" windows
-    uint32 private constant NFT_AIRDROP_PLAYER_BATCH_SIZE = 210; // Max unique recipients per airdrop batch
-    uint32 private constant NFT_AIRDROP_TOKEN_CAP = 3_000; // Max tokens distributed per airdrop batch
     uint32 private constant DEFAULT_PAYOUTS_PER_TX = 420; // Keeps participant payouts safely under ~15M gas
     uint32 private constant PURCHASE_MINIMUM = 1_500; // Minimum purchases to unlock game start
     uint32 private constant WRITES_BUDGET_SAFE = 640; // Keeps map batching within the ~15M gas budget
@@ -176,9 +178,7 @@ contract PurgeGame {
     uint256 private nextLevelBaseTokenIdHint; // Precomputed base token id for the upcoming level during purge
     bool private jackpotPending;
 
-    address[] private pendingNftMints; // Queue of players awaiting NFT mints
     address[] private pendingMapMints; // Queue of players awaiting map mints
-    mapping(address => uint32) private playerTokensOwed; // Player => NFTs owed
     mapping(address => uint32) private playerMapMintsOwed; // Player => map mints owed
 
     // -----------------------
@@ -383,9 +383,8 @@ contract PurgeGame {
                 }
 
                 if (_phase == 5) {
-                    if (_processNftBatch(cap)) {
+                    if (nft.processPendingMints(cap)) {
                         _seedTraitCounts();
-                        delete pendingNftMints;
                         delete pendingMapMints;
                         airdropIndex = 0;
                         airdropMapsProcessedCount = 0;
@@ -461,15 +460,6 @@ contract PurgeGame {
         if (msg.sender != address(nft)) revert E();
         if (buyer == address(0)) revert E();
         if (quantity == 0) revert InvalidQuantity();
-
-        uint32 owed = playerTokensOwed[buyer];
-        if (owed == 0) {
-            pendingNftMints.push(buyer);
-        }
-
-        unchecked {
-            playerTokensOwed[buyer] = owed + quantity;
-        }
 
         if (firstPurchase) {
             traitRebuildCursor = 0;
@@ -1230,53 +1220,6 @@ contract PurgeGame {
         return airdropIndex >= total;
     }
 
-    /// @notice Mint a batch of NFTs owed to players, bounded by the number of players and a token cap.
-    /// @dev
-    /// - Processes up to `playersToProcess` players starting at `airdropIndex`.
-    /// - Mints up to `NFT_AIRDROP_TOKEN_CAP` tokens in total for this transaction.
-    /// @param playersToProcess If zero, defaults to `NFT_AIRDROP_PLAYER_BATCH_SIZE`.
-    /// @return finished True if all pending NFT mints have been fully processed.
-    function _processNftBatch(uint32 playersToProcess) private returns (bool finished) {
-        uint256 totalPlayers = pendingNftMints.length;
-        if (airdropIndex >= totalPlayers) return true;
-
-        uint32 players = (playersToProcess == 0) ? NFT_AIRDROP_PLAYER_BATCH_SIZE : playersToProcess;
-        uint256 endIdx = airdropIndex + players;
-        if (endIdx > totalPlayers) endIdx = totalPlayers;
-
-        // Hard cap on total NFTs minted per call to control work.
-        uint32 tokenCap = NFT_AIRDROP_TOKEN_CAP;
-        uint32 minted = 0;
-
-        while (airdropIndex < endIdx) {
-            address player = pendingNftMints[airdropIndex];
-            uint32 owed = playerTokensOwed[player];
-            if (owed == 0) {
-                unchecked {
-                    ++airdropIndex;
-                }
-                continue;
-            }
-
-            uint32 room = tokenCap - minted;
-            if (room == 0) return false;
-
-            uint32 chunk = owed > room ? room : owed;
-            nft.gameMint(player, chunk);
-
-            minted += chunk;
-            owed -= chunk;
-            playerTokensOwed[player] = owed;
-
-            if (owed == 0) {
-                unchecked {
-                    ++airdropIndex;
-                }
-            }
-        }
-        return airdropIndex >= totalPlayers;
-    }
-
     function _snapshotTraitRemaining() private view returns (uint32[256] memory snapshot) {
         uint32[256] storage remaining = traitRemaining;
         for (uint16 t; t < 256; ) {
@@ -1818,7 +1761,7 @@ contract PurgeGame {
 
     /// @notice Return pending mints/maps owed to a player (airdrop queues).
     function getPlayerPurchases(address player) external view returns (uint32 mints, uint32 maps) {
-        mints = playerTokensOwed[player];
+        mints = nft.tokensOwed(player);
         maps = playerMapMintsOwed[player];
     }
     receive() external payable {}

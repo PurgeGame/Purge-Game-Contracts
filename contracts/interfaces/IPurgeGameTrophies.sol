@@ -20,8 +20,6 @@ interface IPurgeGameTrophies {
 
     function wire(address game_, address coin_) external;
 
-    function wireStaking(address staking_) external;
-
     function clearStakePreview(uint24 level) external;
 
     function prepareNextLevel(uint24 nextLevel) external;

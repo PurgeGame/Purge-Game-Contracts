@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {IPurgeTrophyStaking} from "./PurgeTrophyStaking.sol";
 import {IPurgeGameTrophies} from "./interfaces/IPurgeGameTrophies.sol";
 
 struct VRFRandomWordsRequest {
@@ -162,7 +161,6 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
     ITokenRenderer private immutable regularRenderer;
     ITokenRenderer private immutable trophyRenderer;
     IPurgecoin private immutable coin;
-    IPurgeTrophyStaking private trophyStaking;
     IPurgeGameTrophies private trophyModule;
     IVRFCoordinator private immutable vrfCoordinator;
     bytes32 private immutable vrfKeyHash;
@@ -177,6 +175,12 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
     uint256 private seasonMintedSnapshot;
     uint256 private seasonPurgedCount;
     uint32 private _purchaseCount;
+    address[] private _pendingMintQueue;
+    mapping(address => uint32) private _tokensOwed;
+    uint256 private _mintQueueIndex;
+
+    uint32 private constant MINT_AIRDROP_PLAYER_BATCH_SIZE = 210; // Max unique recipients per airdrop batch
+    uint32 private constant MINT_AIRDROP_TOKEN_CAP = 3_000; // Max tokens distributed per airdrop batch
 
     mapping(address => uint24) private _ethMintLastLevel;
     mapping(address => uint24) private _ethMintLevelCount;
@@ -290,7 +294,7 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
     }
 
     function tokenURI(uint256 tokenId) external view returns (string memory) {
-        uint256 info = trophyStaking.getTrophyData(tokenId);
+        uint256 info = address(trophyModule) == address(0) ? 0 : trophyModule.trophyData(tokenId);
         if (info != 0) {
             uint32[4] memory empty;
             return trophyRenderer.tokenURI(tokenId, info, empty);
@@ -382,7 +386,7 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
             _purchaseCount += qty32;
         }
 
-        game.enqueuePurchase(buyer, qty32, firstPurchase);
+        _recordPurchase(buyer, qty32, firstPurchase);
     }
 
     function mintAndPurge(uint256 quantity, bool payInCoin, bytes32 affiliateCode) external payable {
@@ -450,17 +454,17 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
         uint256 expectedWei = (game.mintPrice() * scaledQty) / 100;
 
         if (mapPurchase) {
-            uint8 mapDiscount = address(trophyStaking) == address(0)
+            uint8 mapDiscount = address(trophyModule) == address(0)
                 ? 0
-                : trophyStaking.mapStakeDiscount(payer);
+                : trophyModule.mapStakeDiscount(payer);
             if (mapDiscount != 0) {
                 uint256 discountWei = (expectedWei * mapDiscount) / 100;
                 expectedWei -= discountWei;
             }
         } else {
-            uint8 levelDiscount = address(trophyStaking) == address(0)
+            uint8 levelDiscount = address(trophyModule) == address(0)
                 ? 0
-                : trophyStaking.levelStakeDiscount(payer);
+                : trophyModule.levelStakeDiscount(payer);
             if (levelDiscount != 0) {
                 uint256 discountWei = (expectedWei * levelDiscount) / 100;
                 expectedWei -= discountWei;
@@ -509,6 +513,72 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
         else if (stepMod == 18) amount = (amount * 9) / 10;
         if (discount != 0) amount -= discount;
         coin.burnCoin(payer, amount);
+    }
+
+    function _recordPurchase(address buyer, uint32 quantity, bool firstPurchase) private {
+        uint32 owed = _tokensOwed[buyer];
+        if (owed == 0) {
+            _pendingMintQueue.push(buyer);
+        }
+
+        unchecked {
+            _tokensOwed[buyer] = owed + quantity;
+        }
+
+        game.enqueuePurchase(buyer, quantity, firstPurchase);
+    }
+
+    function processPendingMints(uint32 playersToProcess) external onlyGame returns (bool finished) {
+        uint256 total = _pendingMintQueue.length;
+        uint256 index = _mintQueueIndex;
+
+        if (index >= total) {
+            finished = true;
+        } else {
+            uint32 players = playersToProcess == 0 ? MINT_AIRDROP_PLAYER_BATCH_SIZE : playersToProcess;
+            uint256 end = index + players;
+            if (end > total) {
+                end = total;
+            }
+
+            uint32 minted;
+            while (index < end) {
+                address player = _pendingMintQueue[index];
+                uint32 owed = _tokensOwed[player];
+                if (owed == 0) {
+                    unchecked {
+                        ++index;
+                    }
+                    continue;
+                }
+
+                uint32 room = MINT_AIRDROP_TOKEN_CAP - minted;
+                if (room == 0) {
+                    break;
+                }
+
+                uint32 chunk = owed > room ? room : owed;
+                _mint(player, chunk);
+
+                minted += chunk;
+                owed -= chunk;
+                _tokensOwed[player] = owed;
+
+                if (owed == 0) {
+                    unchecked {
+                        ++index;
+                    }
+                }
+            }
+
+            _mintQueueIndex = index;
+            finished = index >= total;
+        }
+
+        if (finished) {
+            delete _pendingMintQueue;
+            _mintQueueIndex = 0;
+        }
     }
 
     function _enforceCenturyLuckbox(address player, uint24 lvl, uint256 unit) private view {
@@ -566,7 +636,7 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
 
 
 
-        if (tokenId < _currentBaseTokenId() && !trophyStaking.hasTrophy(tokenId)) {
+        if (tokenId < _currentBaseTokenId() && (address(trophyModule) == address(0) || !trophyModule.hasTrophy(tokenId))) {
             revert InvalidToken();
         }
 
@@ -601,7 +671,7 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
 
     function _exists(uint256 tokenId) internal view returns (bool) {
         if (tokenId < _currentBaseTokenId()) {
-            if (trophyStaking.hasTrophy(tokenId)) return true;
+            if (address(trophyModule) != address(0) && trophyModule.hasTrophy(tokenId)) return true;
             uint256 packed = _packedOwnerships[tokenId];
             if (packed == 0) {
                 unchecked {
@@ -802,18 +872,7 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
 
     function wireContracts(address game_) external {
         if (msg.sender != address(coin)) revert E();
-        if (address(trophyStaking) != address(0)) {
-            trophyStaking.setGame(game_);
-        }
         game = IPurgeGame(game_);
-    }
-
-    function wireStaking(address staking_) external onlyCoinContract {
-        if (staking_ == address(0)) revert E();
-        trophyStaking = IPurgeTrophyStaking(staking_);
-        if (address(game) != address(0)) {
-            trophyStaking.setGame(address(game));
-        }
     }
 
     function wireTrophies(address trophies_) external onlyCoinContract {
@@ -1154,8 +1213,11 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
     }
 
     function _isTrophyStaked(uint256 tokenId) private view returns (bool) {
-        if (address(trophyStaking) == address(0)) return false;
-        return trophyStaking.isStaked(tokenId);
+        uint256 packed = _packedOwnerships[tokenId];
+        if (packed == 0) {
+            packed = _packedOwnershipOf(tokenId);
+        }
+        return (packed & _BITMASK_TROPHY_STAKED) != 0;
     }
 
     function burnieNFT() external onlyCoinContract {
@@ -1180,6 +1242,10 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
         return _purchaseCount;
     }
 
+    function tokensOwed(address player) external view returns (uint32) {
+        return _tokensOwed[player];
+    }
+
     function resetPurchaseCount() external onlyGame {
         _purchaseCount = 0;
     }
@@ -1189,7 +1255,7 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
         view
         returns (uint256 owedWei, uint24 baseLevel, uint24 lastClaimLevel, uint16 traitId, bool isMap)
     {
-        uint256 raw = trophyStaking.getTrophyData(tokenId);
+        uint256 raw = address(trophyModule) == address(0) ? 0 : trophyModule.trophyData(tokenId);
         owedWei = raw & TROPHY_OWED_MASK;
         uint256 shiftedBase = raw >> TROPHY_BASE_LEVEL_SHIFT;
         baseLevel = uint24(shiftedBase);
