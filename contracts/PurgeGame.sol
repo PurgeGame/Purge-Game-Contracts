@@ -1578,6 +1578,17 @@ contract PurgeGame {
         }
     }
 
+    function _sliceJackpotShare(uint256 pool, uint16 shareBps, uint8 traitIdx, uint256 distributed)
+        private
+        pure
+        returns (uint256 slice)
+    {
+        if (pool == 0) return 0;
+        if (traitIdx == 3) return pool - distributed;
+        if (shareBps == 0) return 0;
+        slice = (pool * shareBps) / 10_000;
+    }
+
     function _runTraitJackpot(
         bool payCoin,
         bool mapTrophy,
@@ -1651,44 +1662,6 @@ contract PurgeGame {
         }
     }
 
-    function _processCoinJackpotSlice(
-        uint256 coinPool,
-        uint256 coinDistributed,
-        uint16 shareBps,
-        uint8 traitIdx,
-        uint8 band,
-        uint8[4] memory winningTraits,
-        uint256 entropyCursorCoin,
-        uint24 lvl
-    ) private returns (uint256 nextEntropy, uint256 updatedDistributed, uint256 coinDelta) {
-        updatedDistributed = coinDistributed;
-        uint256 coinShare;
-        if (traitIdx == 3) {
-            coinShare = coinPool - updatedDistributed;
-            updatedDistributed = coinPool;
-        } else if (shareBps != 0) {
-            coinShare = (coinPool * shareBps) / 10_000;
-            updatedDistributed += coinShare;
-        }
-
-        if (coinShare == 0) {
-            return (entropyCursorCoin, updatedDistributed, 0);
-        }
-
-        (nextEntropy, , , coinDelta) = _runTraitJackpot(
-            true,
-            false,
-            lvl,
-            winningTraits[traitIdx],
-            traitIdx,
-            band,
-            coinShare,
-            entropyCursorCoin,
-            false
-        );
-        return (nextEntropy, updatedDistributed, coinDelta);
-    }
-
     function _jackpotCount(uint8 idx, uint8 band) private pure returns (uint8) {
         uint16 base;
         if (idx == 0) base = 25;
@@ -1729,43 +1702,47 @@ contract PurgeGame {
         for (uint8 traitIdx; traitIdx < 4; ) {
             uint16 shareBps = uint16(traitShareBpsPacked >> (traitIdx * 16));
 
-            uint256 ethShare;
-            if (ethPool != 0) {
-                if (traitIdx == 3) {
-                    ethShare = ethPool - ethDistributed;
-                } else if (shareBps != 0) {
-                    ethShare = (ethPool * shareBps) / 10_000;
-                    ethDistributed += ethShare;
+            uint256 share;
+            share = _sliceJackpotShare(ethPool, shareBps, traitIdx, ethDistributed);
+            if (traitIdx < 3) {
+                unchecked {
+                    ethDistributed += share;
                 }
             }
 
-            uint256 ethDelta;
-            (entropyCursorEth, trophyGiven, ethDelta, ) = _runTraitJackpot(
+            uint256 delta;
+            (entropyCursorEth, trophyGiven, delta, ) = _runTraitJackpot(
                 false,
                 mapTrophy,
                 lvl,
                 winningTraits[traitIdx],
                 traitIdx,
                 band,
-                ethShare,
+                share,
                 entropyCursorEth,
                 trophyGiven
             );
-            totalPaidEth += ethDelta;
+            totalPaidEth += delta;
 
             if (runCoin) {
-                uint256 coinDelta;
-                (entropyCursorCoin, coinDistributed, coinDelta) = _processCoinJackpotSlice(
-                    coinPool,
-                    coinDistributed,
-                    shareBps,
+                share = _sliceJackpotShare(coinPool, shareBps, traitIdx, coinDistributed);
+                if (traitIdx < 3) {
+                    unchecked {
+                        coinDistributed += share;
+                    }
+                }
+                (entropyCursorCoin, , , delta) = _runTraitJackpot(
+                    true,
+                    false,
+                    lvl,
+                    winningTraits[traitIdx],
                     traitIdx,
                     band,
-                    winningTraits,
+                    share,
                     entropyCursorCoin,
-                    lvl
+                    false
                 );
-                totalPaidCoin += coinDelta;
+                totalPaidCoin += delta;
             }
 
             unchecked {
