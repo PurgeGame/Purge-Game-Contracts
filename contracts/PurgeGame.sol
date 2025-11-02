@@ -2,7 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {IPurgeGameNFT} from "./PurgeGameNFT.sol";
-import {IPurgeGameTrophies} from "./PurgeGameTrophies.sol";
+import {IPurgeGameTrophies, PURGE_TROPHY_KIND_MAP} from "./PurgeGameTrophies.sol";
 
 /**
  * @title Purge Game — Core NFT game contract
@@ -38,6 +38,7 @@ interface IPurgeCoin {
         uint256 rngWord
     ) external returns (bool finished, address[] memory winners, uint256[] memory amounts, uint256 returnAmountWei);
     function resetAffiliateLeaderboard(uint24 lvl) external;
+    function resetCoinflipLeaderboard() external;
     function getLeaderboardAddresses(uint8 which) external view returns (address[] memory);
     function playerLuckbox(address player) external view returns (uint256);
 }
@@ -819,7 +820,8 @@ contract PurgeGame {
             true,
             rngWord,
             winningTraits,
-            MAP_JACKPOT_SHARES_PACKED
+            MAP_JACKPOT_SHARES_PACKED,
+            false
         );
 
         uint256 remainingPool = effectiveWei - paidWei ;
@@ -920,7 +922,10 @@ contract PurgeGame {
             else if (lvl >= 21 && (lvl % 10) == 1) poolWei = (baseWei * 6) / 100;
             else poolWei = baseWei / 40;
         }
-        (uint256 coinPool, ) = coin.prepareCoinJackpot();
+        (uint256 coinPool, address biggestFlip) = coin.prepareCoinJackpot();
+        address[] memory topBettors = coin.getLeaderboardAddresses(2);
+        address thirdFlip = topBettors.length > 2 ? topBettors[2] : address(0);
+        address fourthFlip = topBettors.length > 3 ? topBettors[3] : address(0);
 
         (uint256 paidWei, , uint256 coinRemainder) = _runJackpot(
             JACKPOT_KIND_DAILY,
@@ -930,10 +935,49 @@ contract PurgeGame {
             false,
             entropyWord ^ (uint256(lvl) << 192),
             winningTraits,
-            DAILY_JACKPOT_SHARES_PACKED
+            DAILY_JACKPOT_SHARES_PACKED,
+            isDaily
         );
 
-        coin.addToBounty(coinRemainder);
+        if (coinRemainder != 0) {
+            uint256 biggestShare = coinRemainder / 2;
+            uint256 secondaryShare = coinRemainder / 4;
+            uint256 bountyShare = coinRemainder - biggestShare - secondaryShare;
+            uint256 bountyOverflow;
+
+            if (biggestShare != 0) {
+                if (biggestFlip != address(0)) {
+                    coin.bonusCoinflip(biggestFlip, biggestShare, true, 0);
+                } else {
+                    bountyOverflow += biggestShare;
+                }
+            }
+
+            if (secondaryShare != 0) {
+                address candidate;
+                if (thirdFlip != address(0) && fourthFlip != address(0)) {
+                    uint256 selector = uint256(keccak256(abi.encode(entropyWord, lvl, jackpotCounter)));
+                    candidate = (selector & 1) == 0 ? thirdFlip : fourthFlip;
+                } else if (thirdFlip != address(0)) {
+                    candidate = thirdFlip;
+                } else if (fourthFlip != address(0)) {
+                    candidate = fourthFlip;
+                }
+
+                if (candidate != address(0)) {
+                    coin.bonusCoinflip(candidate, secondaryShare, true, 0);
+                } else {
+                    bountyOverflow += secondaryShare;
+                }
+            }
+
+            bountyOverflow += bountyShare;
+            if (bountyOverflow != 0) {
+                coin.addToBounty(bountyOverflow);
+            }
+        }
+
+        coin.resetCoinflipLeaderboard();
 
         uint48 currentDay = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
         dailyIdx = currentDay;
@@ -1447,7 +1491,7 @@ contract PurgeGame {
             if (half != 0) { _addClaimableEth(finalWinner, half); ethDelta += half; }
             if (deferred != 0) {
                 uint256 trophyData = (uint256(traitId) << 152) | (uint256(lvl) << 128) | TROPHY_FLAG_MAP;
-                trophies.awardTrophy{value: deferred}(finalWinner, lvl, IPurgeGameTrophies.TrophyKind.Map, trophyData, deferred);
+                trophies.awardTrophy{value: deferred}(finalWinner, lvl, PURGE_TROPHY_KIND_MAP, trophyData, deferred);
                 ethDelta += deferred;
             }
         } else if (_eligibleJackpotWinner(finalWinner, lvl) && _creditJackpot(payCoin, finalWinner, perWinner)) {
@@ -1477,70 +1521,45 @@ contract PurgeGame {
         bool mapTrophy,
         uint256 entropy,
         uint8[4] memory winningTraits,
-        uint64 traitShareBpsPacked
+        uint64 traitShareBpsPacked,
+        bool redistributeEthRemainder
     ) private returns (uint256 totalPaidEth, uint256 totalPaidCoin, uint256 coinRemainder) {
         uint8 band = uint8((lvl % 100) / 20) + 1; // 1..5
 
+        uint256 entropyCursorEth;
         bool trophyGiven;
-        uint256 entropyCursorEth = entropy;
-        bool runCoin = coinPool != 0;
-        uint256 entropyCursorCoin;
-        if (runCoin) {
-            entropyCursorCoin = entropy ^ uint256(COIN_JACKPOT_TAG);
+        (totalPaidEth, entropyCursorEth, trophyGiven) = _runJackpotEth(
+            mapTrophy,
+            lvl,
+            band,
+            ethPool,
+            entropy,
+            winningTraits,
+            traitShareBpsPacked
+        );
+
+        if (coinPool != 0) {
+            totalPaidCoin = _runJackpotCoin(
+                lvl,
+                coinPool,
+                band,
+                entropy ^ uint256(COIN_JACKPOT_TAG),
+                winningTraits,
+                traitShareBpsPacked
+            );
         }
 
-        uint256 ethDistributed;
-        uint256 coinDistributed;
-
-        for (uint8 traitIdx; traitIdx < 4; ) {
-            uint16 shareBps = uint16(traitShareBpsPacked >> (traitIdx * 16));
-
-            uint256 share;
-            share = _sliceJackpotShare(ethPool, shareBps, traitIdx, ethDistributed);
-            if (traitIdx < 3) {
-                unchecked {
-                    ethDistributed += share;
-                }
-            }
-
-            uint256 delta;
-            (entropyCursorEth, trophyGiven, delta, ) = _runTraitJackpot(
-                false,
-                mapTrophy,
+        if (redistributeEthRemainder && !mapTrophy && ethPool > totalPaidEth) {
+            (totalPaidEth, entropyCursorEth, trophyGiven) = _redistributeJackpotRemainder(
+                ethPool,
+                totalPaidEth,
+                eventKind,
                 lvl,
-                winningTraits[traitIdx],
-                traitIdx,
+                winningTraits,
                 band,
-                share,
                 entropyCursorEth,
                 trophyGiven
             );
-            totalPaidEth += delta;
-
-            if (runCoin) {
-                share = _sliceJackpotShare(coinPool, shareBps, traitIdx, coinDistributed);
-                if (traitIdx < 3) {
-                    unchecked {
-                        coinDistributed += share;
-                    }
-                }
-                (entropyCursorCoin, , , delta) = _runTraitJackpot(
-                    true,
-                    false,
-                    lvl,
-                    winningTraits[traitIdx],
-                    traitIdx,
-                    band,
-                    share,
-                    entropyCursorCoin,
-                    false
-                );
-                totalPaidCoin += delta;
-            }
-
-            unchecked {
-                ++traitIdx;
-            }
         }
 
         coinRemainder = coinPool > totalPaidCoin ? coinPool - totalPaidCoin : 0;
@@ -1552,6 +1571,119 @@ contract PurgeGame {
                 (uint256(winningTraits[2]) << 16) |
                 (uint256(winningTraits[3]) << 24)
         );
+    }
+
+    function _runJackpotEth(
+        bool mapTrophy,
+        uint24 lvl,
+        uint8 band,
+        uint256 ethPool,
+        uint256 entropy,
+        uint8[4] memory winningTraits,
+        uint64 traitShareBpsPacked
+    ) private returns (uint256 totalPaidEth, uint256 entropyCursor, bool trophyGiven) {
+        uint256 ethDistributed;
+        entropyCursor = entropy;
+        for (uint8 traitIdx; traitIdx < 4; ) {
+            uint16 shareBps = uint16(traitShareBpsPacked >> (traitIdx * 16));
+            uint256 share = _sliceJackpotShare(ethPool, shareBps, traitIdx, ethDistributed);
+            if (traitIdx < 3) {
+                unchecked {
+                    ethDistributed += share;
+                }
+            }
+            uint256 delta;
+            (entropyCursor, trophyGiven, delta, ) = _runTraitJackpot(
+                false,
+                mapTrophy,
+                lvl,
+                winningTraits[traitIdx],
+                traitIdx,
+                band,
+                share,
+                entropyCursor,
+                trophyGiven
+            );
+            totalPaidEth += delta;
+            unchecked {
+                ++traitIdx;
+            }
+        }
+    }
+
+    function _runJackpotCoin(
+        uint24 lvl,
+        uint256 coinPool,
+        uint8 band,
+        uint256 entropy,
+        uint8[4] memory winningTraits,
+        uint64 traitShareBpsPacked
+    ) private returns (uint256 totalPaidCoin) {
+        uint256 coinDistributed;
+        for (uint8 traitIdx; traitIdx < 4; ) {
+            uint16 shareBps = uint16(traitShareBpsPacked >> (traitIdx * 16));
+            uint256 share = _sliceJackpotShare(coinPool, shareBps, traitIdx, coinDistributed);
+            if (traitIdx < 3) {
+                unchecked {
+                    coinDistributed += share;
+                }
+            }
+            uint256 delta;
+            (entropy, , , delta) = _runTraitJackpot(
+                true,
+                false,
+                lvl,
+                winningTraits[traitIdx],
+                traitIdx,
+                band,
+                share,
+                entropy,
+                false
+            );
+            totalPaidCoin += delta;
+            unchecked {
+                ++traitIdx;
+            }
+        }
+    }
+
+    function _redistributeJackpotRemainder(
+        uint256 ethPool,
+        uint256 totalPaidEth,
+        uint8 eventKind,
+        uint24 lvl,
+        uint8[4] memory winningTraits,
+        uint8 band,
+        uint256 entropyCursorEth,
+        bool trophyGiven
+    ) private returns (uint256 newTotalPaidEth, uint256 newEntropyCursor, bool trophyGivenOut) {
+        uint256 ethRemainder = ethPool - totalPaidEth;
+        if (ethRemainder == 0) {
+            return (totalPaidEth, entropyCursorEth, trophyGiven);
+        }
+
+        uint256 remainderEntropy = _entropyStep(
+            entropyCursorEth ^ (uint256(eventKind) << 192) ^ ethRemainder
+        );
+        uint8 extraIdx = uint8(remainderEntropy & 3);
+        uint256 nextEntropy;
+        uint256 extraPaid;
+        (nextEntropy, trophyGivenOut, extraPaid, ) = _runTraitJackpot(
+            false,
+            false,
+            lvl,
+            winningTraits[extraIdx],
+            extraIdx,
+            band,
+            ethRemainder,
+            remainderEntropy,
+            trophyGiven
+        );
+        newTotalPaidEth = totalPaidEth;
+        if (extraPaid != 0) {
+            newTotalPaidEth += extraPaid;
+        }
+        newEntropyCursor = nextEntropy;
     }
 
     function _epUnlocked(uint24 lvl) private view returns (bool) {
