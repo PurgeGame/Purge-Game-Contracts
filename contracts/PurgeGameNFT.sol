@@ -53,11 +53,7 @@ interface IPurgeGame {
     function getEarlyPurgeMask() external view returns (uint8);
     function epUnlocked(uint24 lvl) external view returns (bool);
     function enqueueMap(address buyer, uint32 quantity) external;
-    function creditPrizePool(address player, uint24 lvl)
-        external
-        payable
-        returns (uint256 coinReward, uint256 luckboxReward);
-    function creditNextPrizePool(address player, uint24 lvl)
+    function creditPrizePool(address player, uint24 lvl, bool creditNext)
         external
         payable
         returns (uint256 coinReward, uint256 luckboxReward);
@@ -482,13 +478,8 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
 
         if (msg.value != expectedWei) revert E();
 
-        uint256 streakBonus;
-        uint256 streakLuckbox;
-        if (creditNextPool) {
-            (streakBonus, streakLuckbox) = game.creditNextPrizePool{value: expectedWei}(payer, lvl);
-        } else {
-            (streakBonus, streakLuckbox) = game.creditPrizePool{value: expectedWei}(payer, lvl);
-        }
+        (uint256 streakBonus, uint256 streakLuckbox) =
+            game.creditPrizePool{value: expectedWei}(payer, lvl, creditNextPool);
 
         uint256 priceUnit = game.coinPriceUnit();
         uint256 affiliateAmount = (scaledQty * priceUnit) / 1000;

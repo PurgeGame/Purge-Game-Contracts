@@ -256,10 +256,8 @@ contract PurgeGame {
         carry_ = carryoverForNextLevel;
         prizePoolTarget = lastPrizePool;
         prizePoolCurrent = prizePool;
-
         enoughPurchases = nft.purchaseCount() >= PURCHASE_MINIMUM;
         earlyPurgeMask = earlyPurgeJackpotPaidMask;
-
     }
 
     // --- State machine: advance one tick ------------------------------------------------
@@ -288,23 +286,17 @@ contract PurgeGame {
         return ethMintLastLevel_[player];
     }
 
-    function creditPrizePool(address player, uint24 lvl)
+    function creditPrizePool(address player, uint24 lvl, bool creditNext)
         external
         payable
         returns (uint256 coinReward, uint256 luckboxReward)
     {
         if (msg.sender != address(nft)) revert E();
+        if (creditNext) {
+            nextPrizePool += msg.value;
+        } else {
         prizePool += msg.value;
-        return _recordEthMint(player, lvl);
-    }
-
-    function creditNextPrizePool(address player, uint24 lvl)
-        external
-        payable
-        returns (uint256 coinReward, uint256 luckboxReward)
-    {
-        if (msg.sender != address(nft)) revert E();
-        nextPrizePool += msg.value;
+        }
         return _recordEthMint(player, lvl);
     }
 
@@ -933,16 +925,6 @@ contract PurgeGame {
 
     // --- Shared jackpot helpers ----------------------------------------------------------------------
 
-    function _emitJackpot(uint8 kind, uint8[4] memory winningTraits) private {
-        emit Jackpot(
-            (uint256(kind) << 248) |
-                uint256(winningTraits[0]) |
-                (uint256(winningTraits[1]) << 8) |
-                (uint256(winningTraits[2]) << 16) |
-                (uint256(winningTraits[3]) << 24)
-        );
-    }
-
     function _runJackpotAndEmit(
         uint8 eventKind,
         JackpotSpec memory spec,
@@ -952,7 +934,13 @@ contract PurgeGame {
         uint8[4] memory winningTraits
     ) private returns (uint256 paidEth, uint256 remainingCoin) {
         (paidEth, remainingCoin) = _runJackpot(spec, lvl, poolAmount, entropy, winningTraits);
-        _emitJackpot(eventKind, winningTraits);
+        emit Jackpot(
+            (uint256(eventKind) << 248) |
+                uint256(winningTraits[0]) |
+                (uint256(winningTraits[1]) << 8) |
+                (uint256(winningTraits[2]) << 16) |
+                (uint256(winningTraits[3]) << 24)
+        );
     }
 
     // --- Map jackpot payout (end of purchase phase) -------------------------------------------------
