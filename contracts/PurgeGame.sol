@@ -94,7 +94,7 @@ contract PurgeGame {
     uint48 private constant JACKPOT_RESET_TIME = 82620; // Offset anchor for "daily" windows
     uint32 private constant DEFAULT_PAYOUTS_PER_TX = 420; // Keeps participant payouts safely under ~15M gas
     uint32 private constant PURCHASE_MINIMUM = 1_500; // Minimum purchases to unlock game start
-    uint32 private constant WRITES_BUDGET_SAFE = 640; // Keeps map batching within the ~15M gas budget
+    uint32 private constant WRITES_BUDGET_SAFE = 800; // Keeps map batching within the ~15M gas budget
     uint32 private constant TRAIT_REBUILD_TOKENS_PER_TX = 4_096; // Max tokens processed per trait rebuild slice
     uint64 private constant MAP_LCG_MULT = 0x5851F42D4C957F2D; // LCG multiplier for map RNG slices
     uint256 private constant TROPHY_FLAG_MAP = uint256(1) << 200; // Marks trophies sourced from MAP jackpots
@@ -360,17 +360,19 @@ contract PurgeGame {
                         _processMapBatch(cap);
                         break;
                     }
-                    if (jackpotCounter > 0) {
+                    if (modTwenty != 0) {
                         bool coinflipDailyOk = true;
                         if (modTwenty != 0) {
                             coinflipDailyOk = coinContract.processCoinflipPayouts(lvl, cap, false, rngWord);
                         }
                         if (!coinflipDailyOk) break;
-                        payDailyJackpot(false, lvl, rngWord);
-                        break;
                     }
-                    if (modTwenty != 0) {
-                        coinContract.processCoinflipPayouts(lvl, cap, false, rngWord);
+                    if (jackpotCounter > 0) {
+                        payDailyJackpot(false, lvl, rngWord);
+                    }
+                    dailyIdx = day;
+                    if (nft.rngLocked()) {
+                        nft.releaseRngLock();
                     }
                     break;
                 }
@@ -380,7 +382,7 @@ contract PurgeGame {
                         phase = 4;
                         airdropIndex = 0;
                         airdropMapsProcessedCount = 0;
-                    }
+                    }        
                     break;
                 }
 
