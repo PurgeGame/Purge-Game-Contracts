@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {IPurgeGameNFT} from "./interfaces/IPurgeGameNFT.sol";
-import {IPurgeGameTrophies} from "./interfaces/IPurgeGameTrophies.sol";
-import {IPurgeCoinInterface} from "./interfaces/IPurgeCoinInterface.sol";
-import {IPurgeRenderer} from "./interfaces/IPurgeRenderer.sol";
+import {IPurgeGameNFT} from "./PurgeGameNFT.sol";
+import {IPurgeGameTrophies} from "./PurgeGameTrophies.sol";
 
 /**
  * @title Purge Game — Core NFT game contract
@@ -18,13 +16,43 @@ import {IPurgeRenderer} from "./interfaces/IPurgeRenderer.sol";
 /**
  * @dev Interface to the delegate module handling slow-path endgame settlement.
  */
+interface IPurgeCoin {
+    function bonusCoinflip(address player, uint256 amount, bool rngReady, uint256 luckboxBonus) external;
+    function burnie(uint256 amount) external payable;
+    function burnCoin(address target, uint256 amount) external;
+    function payAffiliate(uint256 amount, bytes32 code, address sender, uint24 lvl) external;
+    function processCoinflipPayouts(
+        uint24 level,
+        uint32 cap,
+        bool bonusFlip,
+        uint256 rngWord
+    ) external returns (bool);
+    function prepareCoinJackpot() external returns (uint256 poolAmount, address biggestFlip);
+    function addToBounty(uint256 amount) external;
+    function lastBiggestFlip() external view returns (address);
+    function runExternalJackpot(
+        uint8 kind,
+        uint256 poolWei,
+        uint32 cap,
+        uint24 lvl,
+        uint256 rngWord
+    ) external returns (bool finished, address[] memory winners, uint256[] memory amounts, uint256 returnAmountWei);
+    function resetAffiliateLeaderboard(uint24 lvl) external;
+    function getLeaderboardAddresses(uint8 which) external view returns (address[] memory);
+    function playerLuckbox(address player) external view returns (uint256);
+}
+
+interface IPurgeRendererLike {
+    function setStartingTraitRemaining(uint32[256] calldata values) external;
+}
+
 interface IPurgeGameEndgameModule {
     function finalizeEndgame(
         uint24 lvl,
         uint32 cap,
         uint48 day,
         uint256 rngWord,
-        IPurgeCoinInterface coinContract,
+        IPurgeCoin coinContract,
         IPurgeGameTrophies trophiesContract
     ) external;
 }
@@ -53,8 +81,8 @@ contract PurgeGame {
     // -----------------------
     // Immutable Addresses
     // -----------------------
-    IPurgeRenderer private immutable renderer; // Trusted renderer; used for tokenURI composition
-    IPurgeCoinInterface private immutable coin; // Trusted coin/game-side coordinator (PURGE ERC20)
+    IPurgeRendererLike private immutable renderer; // Trusted renderer; used for tokenURI composition
+    IPurgeCoin private immutable coin; // Trusted coin/game-side coordinator (PURGE ERC20)
     IPurgeGameNFT private immutable nft; // ERC721 interface for mint/burn/metadata surface
     IPurgeGameTrophies private immutable trophies; // Dedicated trophy module
     address private immutable endgameModule; // Delegate module for endgame settlement
@@ -174,8 +202,8 @@ contract PurgeGame {
         address trophiesContract,
         address endgameModule_
     ) {
-        coin = IPurgeCoinInterface(purgeCoinContract);
-        renderer = IPurgeRenderer(renderer_);
+        coin = IPurgeCoin(purgeCoinContract);
+        renderer = IPurgeRendererLike(renderer_);
         nft = IPurgeGameNFT(nftContract);
         trophies = IPurgeGameTrophies(trophiesContract);
         if (endgameModule_ == address(0)) revert E();
@@ -275,7 +303,7 @@ contract PurgeGame {
     ///            Using cap removes Purgecoin payment.
     function advanceGame(uint32 cap) external {
         uint48 ts = uint48(block.timestamp);
-        IPurgeCoinInterface coinContract = coin;
+        IPurgeCoin coinContract = coin;
         // Liveness drain
         if (ts - 365 days > levelStartTime) {
             gameState = 0;
