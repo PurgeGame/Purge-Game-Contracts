@@ -342,7 +342,11 @@ contract PurgeGame {
                         levelGate = prizeReady;
                     }
                     if (_phase == 2 && levelGate) {
-                        if (_endJackpot(lvl, cap, day, true, rngWord, _phase)) {
+                        bool coinflipAdvanceOk = true;
+                        if (_phase >= 3 || modTwenty != 0) {
+                            coinflipAdvanceOk = coinContract.processCoinflipPayouts(lvl, cap, true, rngWord);
+                        }
+                        if (coinflipAdvanceOk) {
                             phase = 3;
                         }
                         break;
@@ -352,11 +356,17 @@ contract PurgeGame {
                         break;
                     }
                     if (jackpotCounter > 0) {
-                        if (!_endJackpot(lvl, cap, day, false, rngWord, _phase)) break;
+                        bool coinflipDailyOk = true;
+                        if (_phase >= 3 || modTwenty != 0) {
+                            coinflipDailyOk = coinContract.processCoinflipPayouts(lvl, cap, false, rngWord);
+                        }
+                        if (!coinflipDailyOk) break;
                         payDailyJackpot(false, lvl, rngWord);
                         break;
                     }
-                    _endJackpot(lvl, cap, day, false, rngWord, _phase);
+                    if (_phase >= 3 || modTwenty != 0) {
+                        coinContract.processCoinflipPayouts(lvl, cap, false, rngWord);
+                    }
                     break;
                 }
 
@@ -370,7 +380,11 @@ contract PurgeGame {
                 }
 
                 if (_phase == 4) {
-                    if (!_endJackpot(lvl, cap, day, false, rngWord, _phase)) break;
+                    bool coinflipMapOk = true;
+                    if (_phase >= 3 || modTwenty != 0) {
+                        coinflipMapOk = coinContract.processCoinflipPayouts(lvl, cap, false, rngWord);
+                    }
+                    if (!coinflipMapOk) break;
                     if (payMapJackpot(cap, lvl, rngWord)) {
                         phase = 5;
                     }
@@ -395,7 +409,11 @@ contract PurgeGame {
                     _rebuildTraitCounts(cap);
                     break;
                 }
-                if (_endJackpot(lvl, cap, day, false, rngWord, _phase)) {
+                bool coinflipAdvanceToPurge = true;
+                if (_phase >= 3 || modTwenty != 0) {
+                    coinflipAdvanceToPurge = coinContract.processCoinflipPayouts(lvl, cap, false, rngWord);
+                }
+                if (coinflipAdvanceToPurge) {
                     levelStartTime = ts;
                     nft.finalizePurchasePhase(purchases);
                     traitRebuildCursor = 0;
@@ -407,7 +425,11 @@ contract PurgeGame {
             // --- State 3 - Purge ---
             if (_gameState == 3) {
                 if (_phase == 6) {
-                    if (!_endJackpot(lvl, cap, day, false, rngWord, _phase)) break;
+                    bool coinflipPhase6Ok = true;
+                    if (_phase >= 3 || modTwenty != 0) {
+                        coinflipPhase6Ok = coinContract.processCoinflipPayouts(lvl, cap, false, rngWord);
+                    }
+                    if (!coinflipPhase6Ok) break;
                     if (modTwenty == 16 && jackpotCounter < MAP_FIRST_BATCH) {
                         while (jackpotCounter < MAP_FIRST_BATCH) {
                             payDailyJackpot(true, lvl, rngWord);
@@ -420,13 +442,19 @@ contract PurgeGame {
                     phase = 7;
                     break;
                 }
-                if (_endJackpot(lvl, cap, day, false, rngWord, _phase)) phase = 6;
+                bool coinflipPhase7EntryOk = true;
+                if (_phase >= 3 || modTwenty != 0) {
+                    coinflipPhase7EntryOk = coinContract.processCoinflipPayouts(lvl, cap, false, rngWord);
+                }
+                if (coinflipPhase7EntryOk) phase = 6;
                 break;
             }
 
             // --- State 0 ---
             if (_gameState == 0) {
-                _endJackpot(lvl, cap, day, false, rngWord, _phase);
+                if (_phase >= 3 || modTwenty != 0) {
+                    coinContract.processCoinflipPayouts(lvl, cap, false, rngWord);
+                }
             }
         } while (false);
 
@@ -651,7 +679,7 @@ contract PurgeGame {
     /// @dev Order: (A) participant payouts -> (B) ticket wipes -> (C) affiliate/trophy/exterminator
     ///      -> (D) finish coinflip payouts (jackpot end) and move to state 2.
     ///      Pass `cap` from advanceGame to keep tx gas ≤ target.
-    function _finalizeEndgame(uint24 lvl, uint32 cap, uint48 day, uint256 rngWord) internal {
+    function _finalizeEndgame(uint24 lvl, uint32 cap, uint48 /*day*/, uint256 rngWord) internal {
         PendingEndLevel storage pend = pendingEndLevel;
 
         uint8 _phase = phase;
@@ -674,7 +702,11 @@ contract PurgeGame {
                 levelPrizePool = 0;
             }
 
-            if (_endJackpot(lvl, cap, day, false, rngWord, _phase)) {
+            bool coinflipFinalizeOk = true;
+            if (_phase >= 3 || (lvl % 20) != 0) {
+                coinflipFinalizeOk = coin.processCoinflipPayouts(lvl, cap, false, rngWord);
+            }
+            if (coinflipFinalizeOk) {
                 phase = 0;
                 return;
             }
@@ -1073,28 +1105,6 @@ contract PurgeGame {
                 return;
             }
         }
-    }
-
-    function _endJackpot(
-        uint24 lvl,
-        uint32 cap,
-        uint48 /*dayIdx*/,
-        bool bonusFlip,
-        uint256 rngWord,
-        uint8 phaseSnapshot
-    )
-        private
-        returns (bool ok)
-    {
-        uint8 lvlMod20 = uint8(lvl % 20);
-
-        if (phaseSnapshot >= 3 || lvlMod20 != 0) {
-            ok = coin.processCoinflipPayouts(lvl, cap, bonusFlip, rngWord);
-            if (!ok) return false;
-        }
-
-
-        return true;
     }
 
     /// @notice Track early‑purge jackpot thresholds as the prize pool grows during purchase phase.
