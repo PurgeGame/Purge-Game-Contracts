@@ -175,7 +175,6 @@ contract PurgeGame {
     uint32 private traitRebuildCursor; // Tokens processed during trait rebuild
     bool private traitCountsSeedQueued; // Trait seeding pending after pending mints finish
     bool private traitCountsShouldOverwrite; // On next rebuild slice, overwrite instead of accumulate
-    uint256[4] private traitOverwriteBitmap; // Tracks which traits were overwritten this rebuild
 
     address[] private pendingMapMints; // Queue of players awaiting map mints
     mapping(address => uint32) private playerMapMintsOwed; // Player => map mints owed
@@ -1272,10 +1271,6 @@ contract PurgeGame {
 
         renderer.setStartingTraitRemaining(snapshot);
         traitCountsShouldOverwrite = true;
-        traitOverwriteBitmap[0] = 0;
-        traitOverwriteBitmap[1] = 0;
-        traitOverwriteBitmap[2] = 0;
-        traitOverwriteBitmap[3] = 0;
     }
 
     /// @notice Rebuild `traitRemaining` by scanning scheduled token traits in capped slices.
@@ -1295,10 +1290,6 @@ contract PurgeGame {
                     }
                 }
                 traitCountsShouldOverwrite = false;
-                traitOverwriteBitmap[0] = 0;
-                traitOverwriteBitmap[1] = 0;
-                traitOverwriteBitmap[2] = 0;
-                traitOverwriteBitmap[3] = 0;
             }
             traitRebuildCursor = 0;
             return true;
@@ -1312,16 +1303,8 @@ contract PurgeGame {
         if (batch > remaining) batch = remaining;
 
         bool startingSlice = cursor == 0;
-        if (startingSlice && traitCountsShouldOverwrite) {
-            traitOverwriteBitmap[0] = 0;
-            traitOverwriteBitmap[1] = 0;
-            traitOverwriteBitmap[2] = 0;
-            traitOverwriteBitmap[3] = 0;
-        }
 
         uint32[256] memory localCounts;
-        uint8[256] memory touched;
-        uint16 touchedLen;
 
         uint256 baseTokenId = nft.currentBaseTokenId();
 
@@ -1334,43 +1317,35 @@ contract PurgeGame {
             uint8 t3 = uint8(traitsPacked >> 24);
 
             unchecked {
-                if (localCounts[t0]++ == 0) touched[touchedLen++] = t0;
-                if (localCounts[t1]++ == 0) touched[touchedLen++] = t1;
-                if (localCounts[t2]++ == 0) touched[touchedLen++] = t2;
-                if (localCounts[t3]++ == 0) touched[touchedLen++] = t3;
+                ++localCounts[t0];
+                ++localCounts[t1];
+                ++localCounts[t2];
+                ++localCounts[t3];
                 ++i;
             }
         }
 
         uint32[256] storage remainingCounts = traitRemaining;
-        uint256[4] storage overwriteBitmap = traitOverwriteBitmap;
-        bool overwriteMode = traitCountsShouldOverwrite;
-        for (uint16 u; u < touchedLen; ) {
-            uint8 traitId = touched[u];
+        for (uint16 traitId; traitId < 256; ) {
             uint32 incoming = localCounts[traitId];
-            if (overwriteMode) {
-                uint256 wordIdx = traitId >> 6;
-                uint256 mask = uint256(1) << (traitId & 63);
-                uint256 word = overwriteBitmap[wordIdx];
-                if ((word & mask) == 0) {
+            if (incoming != 0) {
+                if (startingSlice) {
                     remainingCounts[traitId] = incoming;
-                    overwriteBitmap[wordIdx] = word | mask;
                 } else {
                     remainingCounts[traitId] += incoming;
                 }
-            } else if (startingSlice) {
-                remainingCounts[traitId] = incoming;
-            } else {
-                remainingCounts[traitId] += incoming;
             }
             unchecked {
-                ++u;
+                ++traitId;
             }
         }
 
         traitRebuildCursor = cursor + batch;
         finished = (traitRebuildCursor == target);
         if (finished) {
+            traitCountsShouldOverwrite = false;
+        } else if (startingSlice) {
+            // After the first slice we always accumulate, leveraging that all traits were hit once.
             traitCountsShouldOverwrite = false;
         }
     }
