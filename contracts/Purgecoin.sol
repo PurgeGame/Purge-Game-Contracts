@@ -813,6 +813,7 @@ contract Purgecoin {
         purgeGameNFT.wireContracts(game_);
         purgeGameNFT.wireTrophies(trophies_);
         purgeGameTrophies.wire(game_, address(this));
+        purgeGameTrophies.prepareNextLevel(1);
     }
 
     /// @notice Credit the creator's share of gameplay proceeds.
