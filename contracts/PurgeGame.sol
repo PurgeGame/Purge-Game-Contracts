@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+import {IPurgeGameNFT} from "./interfaces/IPurgeGameNFT.sol";
 import {IPurgeGameTrophies} from "./interfaces/IPurgeGameTrophies.sol";
+import {IPurgeCoinInterface} from "./interfaces/IPurgeCoinInterface.sol";
+import {IPurgeRenderer} from "./interfaces/IPurgeRenderer.sol";
 
 /**
  * @title Purge Game — Core NFT game contract
@@ -13,75 +16,17 @@ import {IPurgeGameTrophies} from "./interfaces/IPurgeGameTrophies.sol";
 // ===========================================================================
 
 /**
- * @dev Interface to the PURGE ERC20 + game-side coordinator.
- *      All calls are trusted (set via constructor in the ERC20 contract).
+ * @dev Interface to the delegate module handling slow-path endgame settlement.
  */
-interface IPurgeCoinInterface {
-    function bonusCoinflip(address player, uint256 amount, bool rngReady, uint256 luckboxBonus) external;
-    function burnie(uint256 amount) external payable;
-    function burnCoin(address target, uint256 amount) external;
-    function payAffiliate(uint256 amount, bytes32 code, address sender, uint24 lvl) external;
-    function processCoinflipPayouts(
-        uint24 level,
-        uint32 cap,
-        bool bonusFlip,
-        uint256 rngWord
-    ) external returns (bool);
-    function prepareCoinJackpot() external returns (uint256 poolAmount, address biggestFlip);
-    function addToBounty(uint256 amount) external;
-    function lastBiggestFlip() external view returns (address);
-    function runExternalJackpot(
-        uint8 kind,
-        uint256 poolWei,
-        uint32 cap,
+interface IPurgeGameEndgameModule {
+    function finalizeEndgame(
         uint24 lvl,
-        uint256 rngWord
-    ) external returns (bool finished, address[] memory winners, uint256[] memory amounts, uint256 returnAmountWei);
-    function resetAffiliateLeaderboard(uint24 lvl) external;
-    function getLeaderboardAddresses(uint8 which) external view returns (address[] memory);
-    function playerLuckbox(address player) external view returns (uint256);
-}
-
-/**
- * @dev Interface to the on-chain renderer used for tokenURI generation.
- */
-interface IPurgeRenderer {
-    function setStartingTraitRemaining(uint32[256] calldata values) external;
-}
-
-/**
- * @dev Minimal interface to the dedicated NFT contract owned by the game.
- */
-interface IPurgeGameNFT {
-    function gameMint(address to, uint256 quantity) external returns (uint256 startTokenId);
-
-    function tokenTraitsPacked(uint256 tokenId) external view returns (uint32);
-
-    function purchaseCount() external view returns (uint32);
-
-    function resetPurchaseCount() external;
-
-    function finalizePurchasePhase(uint32 minted) external;
-
-    function purge(address owner, uint256[] calldata tokenIds) external;
-
-    function currentBaseTokenId() external view returns (uint256);
-
-    function recordSeasonMinted(uint256 minted) external;
-
-    function requestRng() external;
-
-    function currentRngWord() external view returns (uint256);
-
-    function rngLocked() external view returns (bool);
-
-    function releaseRngLock() external;
-
-    function isRngFulfilled() external view returns (bool);
-
-    function processPendingMints(uint32 playersToProcess) external returns (bool finished);
-
-    function tokensOwed(address player) external view returns (uint32);
+        uint32 cap,
+        uint48 day,
+        uint256 rngWord,
+        IPurgeCoinInterface coinContract,
+        IPurgeGameTrophies trophiesContract
+    ) external;
 }
 // ===========================================================================
 // Contract
@@ -112,6 +57,7 @@ contract PurgeGame {
     IPurgeCoinInterface private immutable coin; // Trusted coin/game-side coordinator (PURGE ERC20)
     IPurgeGameNFT private immutable nft; // ERC721 interface for mint/burn/metadata surface
     IPurgeGameTrophies private immutable trophies; // Dedicated trophy module
+    address private immutable endgameModule; // Delegate module for endgame settlement
 
 
     // -----------------------
@@ -221,11 +167,19 @@ contract PurgeGame {
      *
      * @dev ERC721 sentinel trophy token is minted lazily during the first transition to state 2.
      */
-    constructor(address purgeCoinContract, address renderer_, address nftContract, address trophiesContract) {
+    constructor(
+        address purgeCoinContract,
+        address renderer_,
+        address nftContract,
+        address trophiesContract,
+        address endgameModule_
+    ) {
         coin = IPurgeCoinInterface(purgeCoinContract);
         renderer = IPurgeRenderer(renderer_);
         nft = IPurgeGameNFT(nftContract);
         trophies = IPurgeGameTrophies(trophiesContract);
+        if (endgameModule_ == address(0)) revert E();
+        endgameModule = endgameModule_;
     }
 
     // --- View: lightweight game status -------------------------------------------------
@@ -347,7 +301,7 @@ contract PurgeGame {
             }
             // --- State 1 - Pregame ---
             if (_gameState == 1) {
-                _finalizeEndgame(lvl, cap, day, rngWord); // handles payouts, wipes, endgame dist, and jackpots
+                _runEndgameModule(lvl, cap, day, rngWord); // handles payouts, wipes, endgame dist, and jackpots
                 break;
             }
 
@@ -698,194 +652,27 @@ contract PurgeGame {
         gameState = 1;
     }
 
-    /// @notice Resolve prior level endgame in bounded slices and advance to purchase when ready.
-    /// @dev Order: (A) participant payouts -> (B) ticket wipes -> (C) affiliate/trophy/exterminator
-    ///      -> (D) finish coinflip payouts (jackpot end) and move to state 2.
-    ///      Pass `cap` from advanceGame to keep tx gas ≤ target.
-    function _finalizeEndgame(uint24 lvl, uint32 cap, uint48 /*day*/, uint256 rngWord) internal {
-        PendingEndLevel storage pend = pendingEndLevel;
-
-        uint8 _phase = phase;
-        uint24 prevLevel = lvl - 1;
-        uint8 prevMod10 = uint8(prevLevel % 10);
-        uint8 prevMod100 = uint8(prevLevel % 100);
-
-        if (_phase > 3) {
-            if (lastExterminatedTrait != TRAIT_ID_TIMEOUT) {
-                if (prizePool != 0) {
-                    _payoutParticipants(cap, prevLevel);
-                    return;
-                }
-
-                uint256 poolTotal = levelPrizePool;
-
-                pend.level = prevLevel;
-                pend.sidePool = poolTotal;
-
-                levelPrizePool = 0;
-            }
-
-            if (pend.level != 0 && pend.exterminator == address(0)) {
-                phase = 0;
-                return;
-            }
-            bool coinflipFinalizeOk = true;
-            if (_phase >= 3 || (lvl % 20) != 0) {
-                coinflipFinalizeOk = coin.processCoinflipPayouts(lvl, cap, false, rngWord);
-            }
-            if (coinflipFinalizeOk) {
-                phase = 0;
-                return;
-            }
-        } else {
-            bool decWindow = prevLevel >= 25 && prevMod10 == 5 && prevMod100 != 95;
-            if (prevLevel != 0 && (prevLevel % 20) == 0) {
-                uint256 bafPoolWei = (carryoverForNextLevel * 24) / 100;
-                (bool bafFinished, ) = _progressExternal(0, bafPoolWei, cap, prevLevel, rngWord);
-                if (!bafFinished) return;
-            }
-            if (decWindow) {
-                uint256 decPoolWei = (carryoverForNextLevel * 15) / 100;
-                (bool decFinished, ) = _progressExternal(1, decPoolWei, cap, prevLevel, rngWord);
-                if (!decFinished) return;
-            }
-
-            if (lvl > 1) {
-                _clearDailyPurgeCount();
-
-                prizePool = 0;
-                phase = 0;
-            }
-            uint256 pendingPool = nextPrizePool;
-            if (pendingPool != 0) {
-                prizePool = pendingPool;
-                nextPrizePool = 0;
-            }
-            gameState = 2;
-            traitRebuildCursor = 0;
-        }
-
-        if (pend.level == 0) {
-            return;
-        }
-
-        bool traitWin = pend.exterminator != address(0);
-        uint24 prevLevelPending = pend.level;
-        uint256 poolValue = pend.sidePool;
-
-        if (traitWin) {
-            uint256 exterminatorShare = (prevLevelPending % 10 == 4 && prevLevelPending != 4)
-                ? (poolValue * 40) / 100
-                : (poolValue * 20) / 100;
-
-            uint256 immediate = exterminatorShare >> 1;
-            uint256 deferredWei = exterminatorShare - immediate;
-            _addClaimableEth(pend.exterminator, immediate);
-
-            uint256 sharedPool = poolValue / 20;
-            uint256 base = sharedPool / 100;
-            uint256 remainder = sharedPool - (base * 100);
-            uint256 affiliateTrophyShare = base * 20 + remainder;
-            uint256 legacyAffiliateShare = base * 10;
-            uint256[6] memory affiliatePayouts = [
-                base * 20,
-                base * 20,
-                base * 10,
-                base * 8,
-                base * 7,
-                base * 5
-            ];
-
-            address[] memory affLeaders = coin.getLeaderboardAddresses(1);
-            address affiliateTrophyRecipient = affLeaders.length != 0 ? affLeaders[0] : pend.exterminator;
-            if (affiliateTrophyRecipient == address(0)) {
-                affiliateTrophyRecipient = pend.exterminator;
-            }
-
-            (, address[6] memory affiliateRecipients) = trophies.processEndLevel{
-                value: deferredWei + affiliateTrophyShare + legacyAffiliateShare
-            }(
-                IPurgeGameTrophies.EndLevelRequest({
-                    exterminator: pend.exterminator,
-                    traitId: lastExterminatedTrait,
-                    level: prevLevelPending,
-                    pool: poolValue
-                })
-            );
-            for (uint8 i; i < 6; ) {
-                address recipient = affiliateRecipients[i];
-                if (recipient == address(0)) {
-                    recipient = affiliateTrophyRecipient;
-                }
-                uint256 amount = affiliatePayouts[i];
-                if (amount != 0) {
-                    _addClaimableEth(recipient, amount);
-                }
-                unchecked {
-                    ++i;
-                }
-            }
-
-            // mapImmediateRecipient is unused for trait wins
-        } else {
-            uint256 poolCarry = poolValue;
-            uint256 mapUnit = poolCarry / 20;
-            address[] memory affLeaders = coin.getLeaderboardAddresses(1);
-            address topAffiliate = affLeaders.length != 0 ? affLeaders[0] : address(0);
-            uint256 affiliateAward = topAffiliate == address(0) ? 0 : mapUnit;
-            uint256 mapPayoutValue = mapUnit * 4 + affiliateAward;
-
-            (address mapRecipient, address[6] memory mapAffiliates) = trophies.processEndLevel{value: mapPayoutValue}(
-                IPurgeGameTrophies.EndLevelRequest({
-                    exterminator: topAffiliate,
-                    traitId: TRAIT_ID_TIMEOUT,
-                    level: prevLevelPending,
-                    pool: poolCarry
-                })
-            );
-            mapAffiliates;
-            _addClaimableEth(mapRecipient, mapUnit);
-        }
-
-        delete pendingEndLevel;
-
-        coin.resetAffiliateLeaderboard(lvl);
+    /// @notice Delegatecall into the endgame module to resolve slow settlement paths.
+    function _runEndgameModule(uint24 lvl, uint32 cap, uint48 day, uint256 rngWord) private {
+        (bool ok, bytes memory data) = endgameModule.delegatecall(
+            abi.encodeWithSelector(
+                IPurgeGameEndgameModule.finalizeEndgame.selector,
+                lvl,
+                cap,
+                day,
+                rngWord,
+                coin,
+                trophies
+            )
+        );
+        if (!ok) _bubbleRevert(data);
     }
 
-    function _payoutParticipants(uint32 capHint, uint24 prevLevel) internal {
-        address[] storage arr = traitPurgeTicket[prevLevel][uint8(lastExterminatedTrait)];
-        uint32 len = uint32(arr.length);
-        if (len == 0) {
-            prizePool = 0;
-            return;
+    function _bubbleRevert(bytes memory data) private pure {
+        if (data.length == 0) revert E();
+        assembly {
+            revert(add(data, 0x20), mload(data))
         }
-
-        uint32 cap = (capHint == 0) ? DEFAULT_PAYOUTS_PER_TX : capHint;
-        uint32 i = airdropIndex;
-        uint32 end = i + cap;
-        if (end > len) end = len;
-
-        uint256 unitPayout = prizePool;
-        if (end == len) {
-            prizePool = 0;
-        }
-
-        while (i < end) {
-            address w = arr[i];
-            uint32 run = 1;
-            unchecked {
-                while (i + run < end && arr[i + run] == w) ++run; // coalesce contiguous
-            }
-            _addClaimableEth(w, unitPayout * run);
-            unchecked {
-                i += run;
-            }
-        }
-
-        airdropIndex = i;
-        if (i == len) {
-            airdropIndex = 0;
-        } // finished (tickets can be wiped)
     }
 
     // --- Claiming winnings (ETH) --------------------------------------------------------------------
@@ -1488,35 +1275,6 @@ contract PurgeGame {
     }
 
     // --- External jackpot coordination ---------------------------------------------------------------
-
-    /// @notice Progress an external jackpot (BAF / Decimator) and account winners locally.
-    /// @param kind            External jackpot kind (0 = BAF, 1 = Decimator).
-    /// @param poolWei         Total wei allocated for this external jackpot stage.
-    /// @param cap             Step cap forwarded to the external processor.
-    /// @return finished True if the external stage reports completion.
-    /// @return returnedWei Wei to be returned to carryover (non-zero only on completion).
-    function _progressExternal(uint8 kind, uint256 poolWei, uint32 cap, uint24 lvl, uint256 rngWord)
-        internal
-        returns (bool finished, uint256 returnedWei)
-    {
-
-        (bool isFinished, address[] memory winnersArr, uint256[] memory amountsArr, uint256 returnWei) = coin
-            .runExternalJackpot(kind, poolWei, cap, lvl, rngWord);
-
-        for (uint256 i; i < winnersArr.length; ) {
-            _addClaimableEth(winnersArr[i], amountsArr[i]);
-            unchecked {
-                ++i;
-            }
-        }
-
-        if (isFinished) {
-            // Decrease carryover by the spent portion (poolWei - returnWei).
-            carryoverForNextLevel -= (poolWei - returnWei);
-            returnedWei = returnWei;
-        }
-        return (isFinished, returnedWei);
-    }
 
     function _randTraitTicket(
         address[][256] storage traitPurgeTicket_,
