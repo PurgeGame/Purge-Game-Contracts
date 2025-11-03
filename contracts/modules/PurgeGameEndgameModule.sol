@@ -166,6 +166,8 @@ contract PurgeGameEndgameModule {
         bool traitWin = pend.exterminator != address(0);
         uint24 prevLevelPending = pend.level;
         uint256 poolValue = pend.sidePool;
+        address[] memory topAffiliates = coinContract.getLeaderboardAddresses(1);
+        address topAffiliate = topAffiliates.length != 0 ? topAffiliates[0] : address(0);
 
         if (traitWin) {
             uint256 exterminatorShare = (prevLevelPending % 10 == 4 && prevLevelPending != 4)
@@ -179,19 +181,19 @@ contract PurgeGameEndgameModule {
             uint256 sharedPool = poolValue / 20;
             uint256 base = sharedPool / 100;
             uint256 remainder = sharedPool - (base * 100);
-            uint256 affiliateTrophyShare = base * 20 + remainder;
+            uint256 baseTimes20 = base * 20;
+            uint256 affiliateTrophyShare = baseTimes20 + remainder;
             uint256 legacyAffiliateShare = base * 10;
             uint256[6] memory affiliatePayouts = [
-                base * 20,
-                base * 20,
+                baseTimes20,
+                baseTimes20,
                 base * 10,
                 base * 8,
                 base * 7,
                 base * 5
             ];
 
-            address[] memory affLeaders = coinContract.getLeaderboardAddresses(1);
-            address affiliateTrophyRecipient = affLeaders.length != 0 ? affLeaders[0] : pend.exterminator;
+            address affiliateTrophyRecipient = topAffiliate != address(0) ? topAffiliate : pend.exterminator;
             if (affiliateTrophyRecipient == address(0)) {
                 affiliateTrophyRecipient = pend.exterminator;
             }
@@ -222,12 +224,10 @@ contract PurgeGameEndgameModule {
         } else {
             uint256 poolCarry = poolValue;
             uint256 mapUnit = poolCarry / 20;
-            address[] memory affLeaders = coinContract.getLeaderboardAddresses(1);
-            address topAffiliate = affLeaders.length != 0 ? affLeaders[0] : address(0);
             uint256 affiliateAward = topAffiliate == address(0) ? 0 : mapUnit;
             uint256 mapPayoutValue = mapUnit * 4 + affiliateAward;
 
-            (address mapRecipient, address[6] memory mapAffiliates) = trophiesContract.processEndLevel{value: mapPayoutValue}(
+            (address mapRecipient, ) = trophiesContract.processEndLevel{value: mapPayoutValue}(
                 IPurgeGameTrophiesModule.EndLevelRequest({
                     exterminator: topAffiliate,
                     traitId: TRAIT_ID_TIMEOUT,
@@ -235,7 +235,6 @@ contract PurgeGameEndgameModule {
                     pool: poolCarry
                 })
             );
-            mapAffiliates;
             _addClaimableEth(mapRecipient, mapUnit);
         }
 
