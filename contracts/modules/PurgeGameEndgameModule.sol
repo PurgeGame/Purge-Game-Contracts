@@ -94,7 +94,7 @@ contract PurgeGameEndgameModule {
     function finalizeEndgame(
         uint24 lvl,
         uint32 cap,
-        uint48 /*day*/,
+        uint48 day,
         uint256 rngWord,
         IPurgeCoinModule coinContract,
         IPurgeGameTrophiesModule trophiesContract
@@ -127,7 +127,7 @@ contract PurgeGameEndgameModule {
             }
             bool coinflipFinalizeOk = true;
             if (_phase >= 3 || (lvl % 20) != 0) {
-                coinflipFinalizeOk = coinContract.processCoinflipPayouts(lvl, cap, false, rngWord);
+                coinflipFinalizeOk = coinContract.processCoinflipPayouts(lvl, cap, false, rngWord, day);
             }
             if (coinflipFinalizeOk) {
                 phase = 0;
@@ -147,8 +147,6 @@ contract PurgeGameEndgameModule {
             }
 
             if (lvl > 1) {
-                _clearDailyPurgeCount();
-
                 prizePool = 0;
                 phase = 0;
             }
@@ -314,12 +312,4 @@ contract PurgeGameEndgameModule {
         return (isFinished, returnedWei);
     }
 
-    function _clearDailyPurgeCount() private {
-        for (uint8 i; i < 80; ) {
-            dailyPurgeCount[i] = 0;
-            unchecked {
-                ++i;
-            }
-        }
-    }
 }

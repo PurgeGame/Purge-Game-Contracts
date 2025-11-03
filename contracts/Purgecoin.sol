@@ -155,13 +155,13 @@ contract Purgecoin {
     uint256 private constant STAKE_LANE_RISK_SHIFT = STAKE_LANE_PRINCIPAL_BITS;
     uint256 private constant STAKE_LANE_RISK_MASK = ((uint256(1) << STAKE_LANE_RISK_BITS) - 1) << STAKE_LANE_RISK_SHIFT;
     uint256 private constant STAKE_PRINCIPAL_FACTOR = MILLION;
-uint256 private constant STAKE_MAX_PRINCIPAL = STAKE_LANE_PRINCIPAL_MASK * STAKE_PRINCIPAL_FACTOR;
-uint256 private constant PRESALE_SUPPLY_TOKENS = 4_000_000;
-uint256 private constant PRESALE_START_PRICE = 0.000012 ether;
-uint256 private constant PRESALE_END_PRICE = 0.000018 ether;
-uint256 private constant PRESALE_PRICE_SLOPE = (PRESALE_END_PRICE - PRESALE_START_PRICE) / PRESALE_SUPPLY_TOKENS;
-uint256 private constant PRESALE_MAX_ETH_PER_TX = 0.25 ether;
-uint256 private constant AFFILIATE_STREAK_BASE_THRESHOLD = 15 * 1000 * MILLION;
+    uint256 private constant STAKE_MAX_PRINCIPAL = STAKE_LANE_PRINCIPAL_MASK * STAKE_PRINCIPAL_FACTOR;
+    uint256 private constant PRESALE_SUPPLY_TOKENS = 4_000_000;
+    uint256 private constant PRESALE_START_PRICE = 0.000012 ether;
+    uint256 private constant PRESALE_END_PRICE = 0.000018 ether;
+    uint256 private constant PRESALE_PRICE_SLOPE = (PRESALE_END_PRICE - PRESALE_START_PRICE) / PRESALE_SUPPLY_TOKENS;
+    uint256 private constant PRESALE_MAX_ETH_PER_TX = 0.25 ether;
+    uint256 private constant AFFILIATE_STREAK_BASE_THRESHOLD = 15 * 1000 * MILLION;
 
     // Scan sentinels
     // ---------------------------------------------------------------------
@@ -198,15 +198,11 @@ uint256 private constant AFFILIATE_STREAK_BASE_THRESHOLD = 15 * 1000 * MILLION;
     // Scan cursors / progress
     uint24 private stakeLevelComplete;
     uint32 private scanCursor = SS_IDLE;
-    uint32 private coinflipPlayersCount;
     uint32 private payoutIndex;
 
     // Daily jackpot accounting
     uint256 private dailyCoinBurn;
     uint256 private prevDailyCoinBurn;
-    address private lastBiggestFlipPlayer;
-    PlayerScore[4] private lastTopBettors;
-    uint8 private lastTopLen;
     uint256 private currentTenthPlayerBonusPool;
 
     // Coinflip roster stored as a reusable ring buffer.
@@ -234,7 +230,7 @@ uint256 private constant AFFILIATE_STREAK_BASE_THRESHOLD = 15 * 1000 * MILLION;
     mapping(uint24 => mapping(address => uint256)) private stakeAmt; // level => packed stake lanes (principal/risk)
     struct StakeTrophyCandidate {
         address player;
-        uint256 principal;
+        uint72 principal; // fits with address+level in one slot
         uint24 level;
     }
     StakeTrophyCandidate private stakeTrophyCandidate;
@@ -245,7 +241,7 @@ uint256 private constant AFFILIATE_STREAK_BASE_THRESHOLD = 15 * 1000 * MILLION;
     mapping(address => uint8) private topPos;
     mapping(address => uint32) private luckyFlipStreak;
     mapping(address => uint48) private lastLuckyStreakEpoch;
-    uint48 private streakEpoch = 1;
+    uint48 private streakEpoch;
 
     // Bounty / BAF heads
     uint128 public currentBounty = ONEK;
@@ -301,7 +297,7 @@ uint256 private constant AFFILIATE_STREAK_BASE_THRESHOLD = 15 * 1000 * MILLION;
     /// - Credits luckbox with `amount + coinflipDeposit/50` and updates the luckbox leaderboard.
     /// - If the Decimator window is active, accumulates the caller's burn for the current level.
     function luckyCoinBurn(uint256 amount, uint256 coinflipDeposit) external {
-        if (_rngLocked()) revert BettingPaused();
+        if (purgeGameNFT.rngLocked()) revert BettingPaused();
         if (amount < MIN) revert AmountLTMin();
 
         address caller = msg.sender;
@@ -309,6 +305,7 @@ uint256 private constant AFFILIATE_STREAK_BASE_THRESHOLD = 15 * 1000 * MILLION;
         uint256 depositWithBonus = coinflipDeposit;
         uint256 prevStakeBefore = coinflipAmount[caller];
         uint256 bal = balanceOf[msg.sender];
+        uint256 luck = playerLuckbox[caller];
         if (burnTotal == bal) burnTotal -= 1; // leave 1 unit to avoid zero balance
 
         if (coinflipDeposit != 0) {
@@ -337,9 +334,7 @@ uint256 private constant AFFILIATE_STREAK_BASE_THRESHOLD = 15 * 1000 * MILLION;
                     lastLuckyStreakEpoch[caller] = epoch;
                     uint256 bonusTotal = _streakExtra(streak);
                     depositWithBonus += bonusTotal;
-                    uint256 newLuckBonus = playerLuckbox[caller] + bonusTotal;
-                    playerLuckbox[caller] = newLuckBonus;
-                    _updatePlayerScore(0, caller, newLuckBonus);
+                    luck += bonusTotal;
                 }
             }
             // Internal flip accounting; assumed non-reentrant / no external calls.
@@ -349,12 +344,11 @@ uint256 private constant AFFILIATE_STREAK_BASE_THRESHOLD = 15 * 1000 * MILLION;
         unchecked {
             // Track aggregate burn and grow caller luckbox (adds +2% of deposit).
             dailyCoinBurn += amount;
-            uint256 newLuck = playerLuckbox[caller] + amount + depositWithBonus / 50;
-            playerLuckbox[caller] = newLuck;
-
-            // Update luckbox leaderboard (board 0 = luckbox).
-            _updatePlayerScore(0, caller, newLuck);
+            luck += amount + depositWithBonus / 50;
         }
+
+        playerLuckbox[caller] = luck;
+        _updatePlayerScore(0, caller, luck);
 
         // If Decimator window is active, accumulate burn this level.
         (bool decOn, uint24 lvl) = _decWindow();
@@ -448,7 +442,7 @@ uint256 private constant AFFILIATE_STREAK_BASE_THRESHOLD = 15 * 1000 * MILLION;
             uint256 lane = _laneAt(encoded, i);
             if (lane == 0) break;
             lanes++;
-            (, uint8 haveRisk) = _decodeStakeLane(lane);
+            uint8 haveRisk = uint8((lane & STAKE_LANE_RISK_MASK) >> STAKE_LANE_RISK_SHIFT);
             if (haveRisk != expectRisk) revert StakeInvalid();
             unchecked {
                 ++i;
@@ -456,8 +450,8 @@ uint256 private constant AFFILIATE_STREAK_BASE_THRESHOLD = 15 * 1000 * MILLION;
         }
     }
 
-    function _insertLane(uint256 encoded, uint256 laneValue, bool strictCapacity) private pure returns (uint256) {
-        (, uint8 riskNew) = _decodeStakeLane(laneValue);
+    function _insertLane(uint256 encoded, uint256 laneValue) private pure returns (uint256) {
+        uint8 riskNew = uint8((laneValue & STAKE_LANE_RISK_MASK) >> STAKE_LANE_RISK_SHIFT);
 
         uint8 lanes;
 
@@ -466,7 +460,7 @@ uint256 private constant AFFILIATE_STREAK_BASE_THRESHOLD = 15 * 1000 * MILLION;
             uint256 target = _laneAt(encoded, idx);
             if (target == 0) break;
             lanes++;
-            (, uint8 riskExisting) = _decodeStakeLane(target);
+            uint8 riskExisting = uint8((target & STAKE_LANE_RISK_MASK) >> STAKE_LANE_RISK_SHIFT);
             if (riskExisting == riskNew) {
                 uint256 unitsExisting = target & STAKE_LANE_PRINCIPAL_MASK;
                 uint256 unitsNew = laneValue & STAKE_LANE_PRINCIPAL_MASK;
@@ -483,39 +477,47 @@ uint256 private constant AFFILIATE_STREAK_BASE_THRESHOLD = 15 * 1000 * MILLION;
         if (lanes < STAKE_MAX_LANES) {
             return _setLane(encoded, lanes, laneValue);
         }
-    if (strictCapacity) revert StakeInvalid();
-    // all slots occupied with different maturities
-    revert StakeInvalid();
-}
+        // all slots occupied with different maturities
+        revert StakeInvalid();
+    }
+
+    function _capStakePrincipal(uint256 principal) private pure returns (uint72) {
+        if (principal > type(uint72).max) return type(uint72).max;
+        return uint72(principal);
+    }
 
     function _recordStakeTrophyCandidate(uint24 level, address player, uint256 principal) private {
         if (player == address(0) || principal == 0) return;
+        uint72 principalCapped = _capStakePrincipal(principal);
         StakeTrophyCandidate storage cand = stakeTrophyCandidate;
         if (cand.level != level) {
-            stakeTrophyCandidate = StakeTrophyCandidate({player: player, principal: principal, level: level});
+            stakeTrophyCandidate = StakeTrophyCandidate({player: player, principal: principalCapped, level: level});
             return;
         }
-        if (principal > cand.principal) {
+        if (principalCapped > cand.principal) {
             cand.player = player;
-            cand.principal = principal;
+            cand.principal = principalCapped;
         }
     }
 
     function _finalizeStakeTrophy(uint24 level, bool award) private {
-        StakeTrophyCandidate memory cand = stakeTrophyCandidate;
-        if (award && cand.level == level && cand.player != address(0) && cand.principal != 0) {
+        StakeTrophyCandidate storage cand = stakeTrophyCandidate;
+        address player = cand.player;
+        uint24 candLevel = cand.level;
+        uint72 principal = cand.principal;
+        if (award && candLevel == level && player != address(0) && principal != 0) {
             purgeGameTrophies.awardTrophy(
-                cand.player,
+                player,
                 level,
                 PURGE_TROPHY_KIND_STAKE,
                 0,
-                cand.principal
+                uint256(principal)
             );
         }
         if (!award) {
             purgeGameTrophies.clearStakePreview(level);
         }
-        if (cand.level == level || !award) {
+        if (candLevel == level || !award) {
             delete stakeTrophyCandidate;
         }
     }
@@ -529,7 +531,7 @@ uint256 private constant AFFILIATE_STREAK_BASE_THRESHOLD = 15 * 1000 * MILLION;
     /// - Enforces no overlap/collision with caller's existing stakes.
     function stake(uint256 burnAmt, uint24 targetLevel, uint8 risk) external {
         if (burnAmt < 250 * MILLION) revert AmountLTMin();
-        if (_rngLocked()) revert BettingPaused();
+        if (purgeGameNFT.rngLocked()) revert BettingPaused();
         address sender = msg.sender;
         uint24 currLevel = purgeGame.level();
         if (targetLevel < currLevel) revert StakeInvalid();
@@ -559,11 +561,11 @@ uint256 private constant AFFILIATE_STREAK_BASE_THRESHOLD = 15 * 1000 * MILLION;
 
         // 1) Guard against direct collisions in the risk window [placeLevel .. placeLevel+risk-1]
         uint256 existingEncoded;
-        for (uint24 offset = 0; offset < risk; ) {
-            uint24 checkLevel = uint24(placeLevel + offset);
+        for (uint8 offset; offset < risk; ) {
+            uint24 checkLevel = placeLevel + uint24(offset);
             existingEncoded = stakeAmt[checkLevel][sender];
             if (existingEncoded != 0) {
-                uint8 wantRisk = uint8(risk - offset);
+                uint8 wantRisk = risk - offset;
                 uint8 lanes = _ensureCompatible(existingEncoded, wantRisk);
                 if (lanes >= STAKE_MAX_LANES) revert StakeInvalid();
             }
@@ -604,15 +606,15 @@ uint256 private constant AFFILIATE_STREAK_BASE_THRESHOLD = 15 * 1000 * MILLION;
 
         // Base credit and compounded boost factors
         uint256 cappedDist = distance > 200 ? 200 : distance;
-        uint256 levelBps = 100 + (uint256(cappedDist) * 200) / 200;
+        uint256 levelBps = 100 + cappedDist;
         uint256 riskBps = 25 * uint256(risk - 1);
         uint256 stepBps = levelBps + riskBps; // per-level growth in bps
 
         // Luckbox: +5% of burn
         uint256 fivePercent = burnAmt / 20;
-        uint256 updatedLuck = playerLuckbox[sender] + fivePercent;
-        playerLuckbox[sender] = updatedLuck;
-        _updatePlayerScore(0, sender, updatedLuck);
+        uint256 luck = playerLuckbox[sender] + fivePercent;
+        playerLuckbox[sender] = luck;
+        _updatePlayerScore(0, sender, luck);
 
         // Compounded boost starting from 95% of burn (fivePercent * 19)
         uint256 boostedPrincipal = fivePercent * 19;
@@ -645,8 +647,7 @@ uint256 private constant AFFILIATE_STREAK_BASE_THRESHOLD = 15 * 1000 * MILLION;
             stakeAmt[placeLevel][sender] = newLane;
             stakeAddr[placeLevel].push(sender);
         } else {
-            _ensureCompatible(existingAtPlace, risk);
-            stakeAmt[placeLevel][sender] = _insertLane(existingAtPlace, newLane, true);
+            stakeAmt[placeLevel][sender] = _insertLane(existingAtPlace, newLane);
         }
 
         emit StakeCreated(sender, targetLevel, risk, principalRounded);
@@ -685,26 +686,26 @@ uint256 private constant AFFILIATE_STREAK_BASE_THRESHOLD = 15 * 1000 * MILLION;
             return;
         }
 
-        if (amount != 0) {
-            uint256 baseAmountForThreshold = amount;
-            uint256 baseAmount = amount;
-            if (lvl % 25 == 1) baseAmount <<= 1;
+        uint256 baseAmountForThreshold = amount;
+        uint256 baseAmount = amount;
+        if (lvl % 25 == 1) baseAmount <<= 1;
 
-            mapping(address => uint256) storage earned = affiliateCoinEarned[lvl];
-            // Pay direct affiliate (skip sentinels)
-            if (affiliateAddr != address(0) && affiliateAddr != address(1)) {
-                uint256 payout = baseAmount;
-                uint8 stakeBonus = purgeGameTrophies.affiliateStakeBonus(affiliateAddr);
-                if (stakeBonus != 0) {
-                    payout += (payout * stakeBonus) / 100;
-                }
-                uint256 newTotal = earned[affiliateAddr] + payout;
-                earned[affiliateAddr] = newTotal;
-                addFlip(affiliateAddr, payout, false);
+        mapping(address => uint256) storage earned = affiliateCoinEarned[lvl];
+        // Pay direct affiliate (skip sentinels)
+        if (affiliateAddr != address(0) && affiliateAddr != address(1)) {
+            uint256 payout = baseAmount;
+            uint8 stakeBonus = purgeGameTrophies.affiliateStakeBonus(affiliateAddr);
+            if (stakeBonus != 0) {
+                payout += (payout * stakeBonus) / 100;
+            }
+            uint256 newTotal = earned[affiliateAddr];
+            newTotal += payout;
+            earned[affiliateAddr] = newTotal;
+            addFlip(affiliateAddr, payout, false);
 
-                uint256 streakBonus = _updateAffiliateDailyStreak(affiliateAddr, baseAmountForThreshold);
-                if (streakBonus != 0) {
-                    newTotal += streakBonus;
+            uint256 streakBonus = _updateAffiliateDailyStreak(affiliateAddr, baseAmountForThreshold);
+            if (streakBonus != 0) {
+                newTotal += streakBonus;
                     earned[affiliateAddr] = newTotal;
                     addFlip(affiliateAddr, streakBonus, false);
                 }
@@ -713,21 +714,24 @@ uint256 private constant AFFILIATE_STREAK_BASE_THRESHOLD = 15 * 1000 * MILLION;
             }
 
             // Upline bonus (20%) only if upline is active this level
-            address upline = referredBy[affiliateAddr];
-            if (upline != address(0) && upline != address(1) && upline != sender && earned[upline] > 0) {
+        address upline = referredBy[affiliateAddr];
+        if (upline != address(0) && upline != address(1) && upline != sender) {
+            uint256 uplineTotal = earned[upline];
+            if (uplineTotal != 0) {
                 uint256 bonus = baseAmount / 5;
                 if (bonus != 0) {
                     uint8 stakeBonusUpline = purgeGameTrophies.affiliateStakeBonus(upline);
                     if (stakeBonusUpline != 0) {
                         bonus += (bonus * stakeBonusUpline) / 100;
                     }
-                    uint256 newTotalU = earned[upline] + bonus;
-                    earned[upline] = newTotalU;
+                    uplineTotal += bonus;
+                    earned[upline] = uplineTotal;
                     addFlip(upline, bonus, false);
-                    _updatePlayerScore(1, upline, newTotalU);
+                    _updatePlayerScore(1, upline, uplineTotal);
                 }
             }
         }
+        
 
         emit Affiliate(amount, code, sender);
     }
@@ -737,8 +741,7 @@ uint256 private constant AFFILIATE_STREAK_BASE_THRESHOLD = 15 * 1000 * MILLION;
         uint8 len = affiliateLen;
         PlayerScore[8] storage board = affiliateLeaderboard;
         for (uint8 i; i < len; ) {
-            address addr = board[i].player;
-            delete affiliatePos[addr];
+            delete affiliatePos[board[i].player];
             unchecked {
                 ++i;
             }
@@ -759,7 +762,7 @@ uint256 private constant AFFILIATE_STREAK_BASE_THRESHOLD = 15 * 1000 * MILLION;
             }
             bonusActive = aff;
         }
-        delete affiliateLeaderboard; // zero out fixed-size array entries
+        delete affiliateLeaderboard;
         affiliateLen = 0;
     }
     /// @notice Buy PURGE during the presale; price increases linearly as tokens are sold.
@@ -772,40 +775,40 @@ uint256 private constant AFFILIATE_STREAK_BASE_THRESHOLD = 15 * 1000 * MILLION;
         if (ethIn == 0) revert Zero();
         if (ethIn > PRESALE_MAX_ETH_PER_TX) revert PresalePerTxLimit();
 
-        uint256 contractBalance = balanceOf[address(this)];
-        if (contractBalance == 0) revert PresaleExceedsRemaining();
-
-        uint256 inventoryTokens = contractBalance / MILLION;
-        uint256 remainingTokens = inventoryTokens;
+        uint256 inventoryTokens = balanceOf[address(this)] / MILLION;
+        if (inventoryTokens == 0) revert PresaleExceedsRemaining();
 
         uint256 tokensSold = PRESALE_SUPPLY_TOKENS - inventoryTokens;
-        uint256 firstPrice = PRESALE_START_PRICE + PRESALE_PRICE_SLOPE * tokensSold;
-        if (firstPrice > PRESALE_END_PRICE) firstPrice = PRESALE_END_PRICE;
-        if (firstPrice == 0 || firstPrice > ethIn) revert Insufficient();
+        uint256 price = PRESALE_START_PRICE + PRESALE_PRICE_SLOPE * tokensSold;
+        if (price > PRESALE_END_PRICE) price = PRESALE_END_PRICE;
+        if (price == 0 || price > ethIn) revert Insufficient();
 
-        uint256 tokensOut = ethIn / firstPrice;
-        if (tokensOut > remainingTokens) {
-            tokensOut = remainingTokens;
-        }
+        uint256 tokensOut = ethIn / price;
         if (tokensOut == 0) revert Insufficient();
+        if (tokensOut > inventoryTokens) {
+            tokensOut = inventoryTokens;
+        }
 
-        uint256 costWei = tokensOut * firstPrice;
+        uint256 costWei = tokensOut * price;
         uint256 refund = ethIn - costWei;
 
         uint256 amountBase = tokensOut * MILLION;
-        uint256 newSold = uint256(totalPresaleSold) + amountBase;
-        totalPresaleSold = uint96(newSold);
+        totalPresaleSold = uint96(uint256(totalPresaleSold) + amountBase);
 
-        // Interactions
-        _transfer(address(this), msg.sender, amountBase);
+        address payable buyer = payable(msg.sender);
+        _transfer(address(this), buyer, amountBase);
 
-        (bool ok, ) = payable(creator).call{value: costWei}("");
-        if (!ok) revert Insufficient();
-
-        if (refund != 0) {
-            (bool refundOk, ) = payable(msg.sender).call{value: refund}("");
-            if (!refundOk) revert Insufficient();
+        address gameAddr = address(purgeGame);
+        uint256 gameCut;
+        if (gameAddr != address(0)) {
+            gameCut = (costWei * 80) / 100;
+            (bool gameOk, ) = gameAddr.call{value: gameCut}("");
+            if (!gameOk) revert Insufficient();
         }
+
+        uint256 creatorCut = costWei - gameCut + refund;
+        (bool ok, ) = payable(creator).call{value: creatorCut}("");
+        if (!ok) revert Insufficient();
     }
 
     /// @notice Wire the game, NFT, and renderer contracts required by Purgecoin.
@@ -826,10 +829,8 @@ uint256 private constant AFFILIATE_STREAK_BASE_THRESHOLD = 15 * 1000 * MILLION;
         purgeGameTrophies = IPurgeGameTrophies(trophies_);
         IPurgeRenderer(regularRenderer_).wireContracts(game_, nft_);
         IPurgeRenderer(trophyRenderer_).wireContracts(game_, nft_);
-        purgeGameNFT.wireContracts(game_);
-        purgeGameNFT.wireTrophies(trophies_);
-        purgeGameTrophies.wire(game_, address(this));
-        purgeGameTrophies.prepareNextLevel(1);
+        purgeGameNFT.wireAll(game_, trophies_);
+        purgeGameTrophies.wireAndPrime(game_, address(this), 1);
     }
 
     /// @notice Credit the creator's share of gameplay proceeds.
@@ -895,14 +896,14 @@ uint256 private constant AFFILIATE_STREAK_BASE_THRESHOLD = 15 * 1000 * MILLION;
         uint24 level,
         uint32 cap,
         bool bonusFlip,
-        uint256 rngWord
+        uint256 rngWord,
+        uint48 epoch
     ) external onlyPurgeGameContract returns (bool finished) {
         uint256 word = rngWord;
         if (payoutIndex == 0) {
-            unchecked {
-                ++streakEpoch;
-            }
-            if (streakEpoch == 0) streakEpoch = 1;
+            uint48 currentEpoch = epoch;
+            if (currentEpoch == 0) currentEpoch = 1;
+            streakEpoch = currentEpoch;
             if (bonusActive && ((word & 1) == 0)) {unchecked { ++word;}}
         }
         // --- Step sizing (bounded work) ----------------------------------------------------
@@ -943,27 +944,32 @@ uint256 private constant AFFILIATE_STREAK_BASE_THRESHOLD = 15 * 1000 * MILLION;
                             address player = roster[i];
                             uint256 enc = stakeAmt[level][player];
                             for (uint8 li; li < STAKE_MAX_LANES; ) {
-                                    uint256 lane = _laneAt(enc, li);
-                                    if (lane != 0) {
-                                        (uint256 principal, uint8 riskFactor) = _decodeStakeLane(lane);
-                                        if (riskFactor <= 1) {
-                                            _recordStakeTrophyCandidate(level, player, principal);
-                                            uint256 fivePct = principal / 20;
-                                            uint256 newLuck = playerLuckbox[player] + fivePct;
-                                            playerLuckbox[player] = newLuck;
-                                            _updatePlayerScore(0, player, newLuck);
-                                            addFlip(player, fivePct * 19, false);
+                                uint256 lane = _laneAt(enc, li);
+                                if (lane == 0) break;
+
+                                uint256 principalRounded = (lane & STAKE_LANE_PRINCIPAL_MASK) * STAKE_PRINCIPAL_FACTOR;
+                                uint8 riskFactor = uint8((lane & STAKE_LANE_RISK_MASK) >> STAKE_LANE_RISK_SHIFT);
+
+                                if (riskFactor <= 1) {
+                                    _recordStakeTrophyCandidate(level, player, principalRounded);
+                                    uint256 fivePct = principalRounded / 20;
+                                    uint256 luck = playerLuckbox[player] + fivePct;
+                                    playerLuckbox[player] = luck;
+                                    _updatePlayerScore(0, player, luck);
+                                    addFlip(player, fivePct * 19, false);
+                                } else {
+                                    uint24 nextL = level + 1;
+                                    uint8 newRf = riskFactor - 1;
+                                    uint256 units = (lane & STAKE_LANE_PRINCIPAL_MASK) << 1; // double principal units
+                                    if (units > STAKE_LANE_PRINCIPAL_MASK) units = STAKE_LANE_PRINCIPAL_MASK;
+                                    uint256 laneValue = (units & STAKE_LANE_PRINCIPAL_MASK) |
+                                        (uint256(newRf) << STAKE_LANE_RISK_SHIFT);
+                                    uint256 nextEnc = stakeAmt[nextL][player];
+                                    if (nextEnc == 0) {
+                                        stakeAmt[nextL][player] = laneValue;
+                                        stakeAddr[nextL].push(player);
                                     } else {
-                                        uint24 nextL = level + 1;
-                                        uint8 newRf = riskFactor - 1;
-                                        uint256 laneValue = _encodeStakeLane(principal * 2, newRf);
-                                        uint256 nextEnc = stakeAmt[nextL][player];
-                                        if (nextEnc == 0) {
-                                            stakeAmt[nextL][player] = laneValue;
-                                            stakeAddr[nextL].push(player);
-                                        } else {
-                                            stakeAmt[nextL][player] = _insertLane(nextEnc, laneValue, false);
-                                        }
+                                        stakeAmt[nextL][player] = _insertLane(nextEnc, laneValue);
                                     }
                                 }
                                 unchecked {
@@ -995,7 +1001,7 @@ uint256 private constant AFFILIATE_STREAK_BASE_THRESHOLD = 15 * 1000 * MILLION;
 
 
         // --- Phase 2: bounty payout and tenth-player arming (first window only) -------
-        uint256 totalPlayers = coinflipPlayersCount;
+        uint256 totalPlayers = _coinflipCount();
 
         // Bounty: convert any owed bounty into a flip credit on the first window.
         if (totalPlayers != 0 && payoutIndex == 0 && bountyOwedTo != address(0) && currentBounty > 0) {
@@ -1021,7 +1027,7 @@ uint256 private constant AFFILIATE_STREAK_BASE_THRESHOLD = 15 * 1000 * MILLION;
                 _addToBounty(bonusPool);
                 tbActive = false;
             }
-            tbMod = uint8(uint256(keccak256(abi.encodePacked(word, "tenthMod"))) % 10); // wheel offset 0..9
+            tbMod = uint8(word % 10); // wheel offset 0..9
         }
 
         // --- Phase 3: player payouts (windowed by stepPayout) -----------------------------------
@@ -1067,28 +1073,12 @@ uint256 private constant AFFILIATE_STREAK_BASE_THRESHOLD = 15 * 1000 * MILLION;
         payoutIndex = uint32(end);
         // --- Phase 4: cleanup (single shot) -------------------------------------------
         if (end >= totalPlayers) {
-            PlayerScore[4] memory cached = topBettors;
-            uint8 len = topLen;
-            lastBiggestFlipPlayer = cached[0].player;
-            lastTopLen = len;
-            for (uint8 k; k < 4; ) {
-                if (k < len) {
-                    lastTopBettors[k] = cached[k];
-                } else if (lastTopBettors[k].player != address(0) || lastTopBettors[k].score != 0) {
-                    delete lastTopBettors[k];
-                }
-                unchecked {
-                    ++k;
-                }
-            }
-
             tbActive = false;
             tbRemain = 0;
             tbPrize = 0;
             tbMod = 0;
             cfHead = cfTail;
             payoutIndex = 0;
-            coinflipPlayersCount = 0;
 
             scanCursor = SS_IDLE;
             emit CoinflipFinished(win);
@@ -1109,8 +1099,7 @@ uint256 private constant AFFILIATE_STREAK_BASE_THRESHOLD = 15 * 1000 * MILLION;
         if (pool < minPool) pool = minPool;
 
         poolAmount = pool;
-        biggestFlip = lastBiggestFlipPlayer;
-        lastBiggestFlipPlayer = address(0);
+        biggestFlip = topBettors[0].player;
 
         prevDailyCoinBurn = dailyCoinBurn;
         dailyCoinBurn = 0;
@@ -1122,7 +1111,7 @@ uint256 private constant AFFILIATE_STREAK_BASE_THRESHOLD = 15 * 1000 * MILLION;
     }
 
     function lastBiggestFlip() external view returns (address) {
-        return lastBiggestFlipPlayer;
+        return topBettors[0].player;
     }
     function _sqrt(uint256 x) private pure returns (uint256 z) {
         if (x == 0) return 0;
@@ -1182,7 +1171,7 @@ uint256 private constant AFFILIATE_STREAK_BASE_THRESHOLD = 15 * 1000 * MILLION;
 
             bafState.inProgress = true;
 
-            uint32 limit = (kind == 0) ? uint32(coinflipPlayersCount) : uint32(decPlayersCount[lvl]);
+            uint32 limit = (kind == 0) ? uint32(_coinflipCount()) : uint32(decPlayersCount[lvl]);
 
             // Randomize the stride modulo for the 10-way sharded buckets
             bs.offset = uint8(executeWord % 10);
@@ -1390,12 +1379,11 @@ uint256 private constant AFFILIATE_STREAK_BASE_THRESHOLD = 15 * 1000 * MILLION;
         if (extMode == 2) {
             uint32 end = scanCursor + batch;
             if (end > bs.limit) end = bs.limit;
-            uint256 lbMin = (ONEK / 2) * uint256(lvl);
 
             for (uint32 i = scanCursor; i < end; ) {
                 address p = _srcPlayer(1, lvl, i);
                 DecEntry storage e = decBurn[p];
-                if (e.level == lvl && _eligibleLuckbox(p, lbMin)) {
+                if (e.level == lvl && e.burn != 0) {
                     extVar += e.burn;
                 }
                 unchecked {
@@ -1435,7 +1423,6 @@ uint256 private constant AFFILIATE_STREAK_BASE_THRESHOLD = 15 * 1000 * MILLION;
             uint256[] memory tmpAmounts = new uint256[](tmpCap);
             uint256 n2;
 
-            uint256 lbMin = (ONEK / 2) * uint256(lvl);
             uint256 pool = uint256(bafState.totalPrizePoolWei);
             uint256 denom = extVar;
             uint256 paid = uint256(bafState.returnAmountWei);
@@ -1443,7 +1430,7 @@ uint256 private constant AFFILIATE_STREAK_BASE_THRESHOLD = 15 * 1000 * MILLION;
             for (uint32 i = scanCursor; i < end; ) {
                 address p = _srcPlayer(1, lvl, i);
                 DecEntry storage e = decBurn[p];
-                if (e.level == lvl && _eligibleLuckbox(p, lbMin)) {
+                if (e.level == lvl && e.burn != 0) {
                     uint256 amt = (pool * e.burn) / denom;
                     if (amt != 0) {
                         tmpWinners[n2] = p;
@@ -1514,22 +1501,11 @@ uint256 private constant AFFILIATE_STREAK_BASE_THRESHOLD = 15 * 1000 * MILLION;
             }
         } else if (which == 2) {
             uint8 len = topLen;
-            if (len != 0) {
-                out = new address[](len);
-                for (uint8 i; i < len; ) {
-                    out[i] = topBettors[i].player;
-                    unchecked {
-                        ++i;
-                    }
-                }
-            } else {
-                len = lastTopLen;
-                out = new address[](len);
-                for (uint8 i; i < len; ) {
-                    out[i] = lastTopBettors[i].player;
-                    unchecked {
-                        ++i;
-                    }
+            out = new address[](len);
+            for (uint8 i; i < len; ) {
+                out[i] = topBettors[i].player;
+                unchecked {
+                    ++i;
                 }
             }
         } else {
@@ -1564,18 +1540,16 @@ uint256 private constant AFFILIATE_STREAK_BASE_THRESHOLD = 15 * 1000 * MILLION;
 
     /// @notice Eligibility gate requiring both luckbox balance and active coinflip stake >= `min`.
     function _eligible(address player, uint256 min) internal view returns (bool) {
-        return playerLuckbox[player] >= min && coinflipAmount[player] >= min;
-    }
-
-    /// @notice Eligibility gate requiring only luckbox balance >= `min` (no coinflip amount check).
-    function _eligibleLuckbox(address player, uint256 min) internal view returns (bool) {
-        return playerLuckbox[player] >= min;
+        uint256 coinflipReq = _coinflipRequirement(player);
+        uint256 requiredStake = coinflipReq > min ? coinflipReq : min;
+        if (coinflipAmount[player] < requiredStake) return false;
+        return playerLuckbox[player] >= _luckboxRequirement(player);
     }
 
     /// @notice Pick the first eligible player when scanning up to 300 candidates from a pseudo-random start.
     /// @dev Uses stride 2 for odd N to cover the ring without repeats; stride 1 for even N (contiguous window).
     function _randomEligible(uint256 seed, uint256 min) internal view returns (address) {
-        uint256 total = coinflipPlayersCount;
+        uint256 total = _coinflipCount();
         if (total == 0) return address(0);
 
         uint256 idx = seed % total;
@@ -1593,9 +1567,35 @@ uint256 private constant AFFILIATE_STREAK_BASE_THRESHOLD = 15 * 1000 * MILLION;
         }
         return address(0);
     }
+    function _luckboxRequirement(address player) internal view returns (uint256) {
+        // Base requirement starts at 25,000 PURGE and decreases by 1,250 PURGE per ETH mint level.
+        uint256 base = 25_000 * MILLION;
+        uint256 levels = purgeGame.ethMintLevelCount(player);
+        uint256 reduction = levels * 1_250 * MILLION;
+        uint256 requirement = reduction >= base ? 0 : base - reduction;
+        if (levels > 20) {
+            uint256 segments = (levels - 20) / 20; // completed 20-level blocks beyond level 20
+            for (uint256 i; i < segments; ) {
+                requirement = (requirement * 3) / 2;
+                unchecked {
+                    ++i;
+                }
+            }
+        }
+        return requirement;
+    }
+
+    function _coinflipRequirement(address player) internal view returns (uint256) {
+        uint256 levels = purgeGame.ethMintLevelCount(player);
+        return levels * 1_000 * MILLION;
+    }
+    function _coinflipCount() internal view returns (uint256) {
+        return uint256(uint128(cfTail) - uint128(cfHead));
+    }
+
     /// @notice Return player address at global coinflip index `idx`.
     /// @dev Indexing is flattened into fixed-size buckets to avoid resizing a single array.
-    ///      Callers must ensure 0 <= idx < coinflipPlayersCount for the current session.
+    ///      Callers must ensure 0 <= idx < `_coinflipCount()` for the current session.
     function _playerAt(uint256 idx) internal view returns (address) {
         return cfPlayers[cfHead + idx];
     }
@@ -1613,7 +1613,7 @@ uint256 private constant AFFILIATE_STREAK_BASE_THRESHOLD = 15 * 1000 * MILLION;
         return decBuckets[lvl][uint24(bucketIdx)][offsetInBucket];
     }
 
-    // Append to the queue, reusing storage slots and keeping coinflipPlayersCount in sync.
+    // Append to the queue, reusing storage slots while advancing the ring tail.
     function _pushPlayer(address p) internal {
         uint256 pos = uint256(cfTail);
         if (pos == cfPlayers.length) {
@@ -1623,7 +1623,6 @@ uint256 private constant AFFILIATE_STREAK_BASE_THRESHOLD = 15 * 1000 * MILLION;
         }
         unchecked {
             cfTail = uint128(pos + 1);
-            coinflipPlayersCount = uint32(uint256(cfTail) - uint256(cfHead));
         }
     }
 
@@ -1972,7 +1971,5 @@ uint256 private constant AFFILIATE_STREAK_BASE_THRESHOLD = 15 * 1000 * MILLION;
         return true;
     }
 
-    function _rngLocked() private view returns (bool) {
-        return purgeGameNFT.rngLocked();
-    }
+
 }

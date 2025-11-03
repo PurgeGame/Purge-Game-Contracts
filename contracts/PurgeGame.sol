@@ -30,7 +30,8 @@ interface IPurgeCoin {
         uint24 level,
         uint32 cap,
         bool bonusFlip,
-        uint256 rngWord
+        uint256 rngWord,
+        uint48 epoch
     ) external returns (bool);
     function prepareCoinJackpot() external returns (uint256 poolAmount, address biggestFlip);
     function addToBounty(uint256 amount) external;
@@ -441,7 +442,7 @@ contract PurgeGame {
                     if (_phase == 2 && levelGate) {
                         bool coinflipAdvanceOk = true;
                         if (modTwenty != 0) {
-                            coinflipAdvanceOk = coinContract.processCoinflipPayouts(lvl, cap, true, rngWord);
+                            coinflipAdvanceOk = coinContract.processCoinflipPayouts(lvl, cap, true, rngWord, day);
                         }
                         if (coinflipAdvanceOk) {
                             phase = 3;
@@ -452,7 +453,7 @@ contract PurgeGame {
                         _processMapBatch(cap);
                         break;
                     }
-                    if (modTwenty != 0 && !coinContract.processCoinflipPayouts(lvl, cap, false, rngWord)) break;
+                    if (modTwenty != 0 && !coinContract.processCoinflipPayouts(lvl, cap, false, rngWord, day)) break;
                     payDailyJackpot(false, lvl, rngWord);
                     dailyIdx = day;
                     if (nft.rngLocked()) {
@@ -473,7 +474,7 @@ contract PurgeGame {
                 if (_phase == 4) {
                     bool coinflipMapOk = true;
                     if (modTwenty != 0) {
-                        coinflipMapOk = coinContract.processCoinflipPayouts(lvl, cap, false, rngWord);
+                        coinflipMapOk = coinContract.processCoinflipPayouts(lvl, cap, false, rngWord, day);
                     }
                     if (!coinflipMapOk) break;
                     uint256 mapEffectiveWei = _calcPrizePoolForJackpot(lvl, rngWord);
@@ -513,7 +514,7 @@ contract PurgeGame {
                 }
                 bool coinflipAdvanceToPurge = true;
                 if (modTwenty != 0) {
-                    coinflipAdvanceToPurge = coinContract.processCoinflipPayouts(lvl, cap, false, rngWord);
+                    coinflipAdvanceToPurge = coinContract.processCoinflipPayouts(lvl, cap, false, rngWord, day);
                 }
                 if (coinflipAdvanceToPurge) {
                     levelStartTime = ts;
@@ -530,7 +531,7 @@ contract PurgeGame {
             if (_gameState == 3) {
                 if (_phase == 6) {
                     uint24 coinflipLevel = uint24(lvl + (jackpotCounter >= 9 ? 1 : 0));
-                    if (!coinContract.processCoinflipPayouts(coinflipLevel, cap, false, rngWord)) break;
+                    if (!coinContract.processCoinflipPayouts(coinflipLevel, cap, false, rngWord, day)) break;
                     if (modTwenty == 16 && jackpotCounter < MAP_FIRST_BATCH) {
                         while (jackpotCounter < MAP_FIRST_BATCH) {
                             payDailyJackpot(true, lvl, rngWord);
@@ -545,13 +546,13 @@ contract PurgeGame {
                     phase = 7;
                     break;
                 }
-                if (coinContract.processCoinflipPayouts(lvl, cap, false, rngWord)) phase = 6;
+                if (coinContract.processCoinflipPayouts(lvl, cap, false, rngWord, day)) phase = 6;
                 break;
             }
 
             // --- State 0 ---
             if (_gameState == 0) {
-                coinContract.processCoinflipPayouts(lvl, cap, false, rngWord);
+                coinContract.processCoinflipPayouts(lvl, cap, false, rngWord, day);
             }
         } while (false);
 

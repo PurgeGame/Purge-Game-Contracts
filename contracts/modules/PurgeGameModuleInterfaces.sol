@@ -10,7 +10,8 @@ interface IPurgeCoinModule {
         uint24 level,
         uint32 cap,
         bool bonusFlip,
-        uint256 rngWord
+        uint256 rngWord,
+        uint48 epoch
     ) external returns (bool);
     function prepareCoinJackpot() external returns (uint256 poolAmount, address biggestFlip);
     function addToBounty(uint256 amount) external;

@@ -913,10 +913,23 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
 
     function wireContracts(address game_) external {
         if (msg.sender != address(coin)) revert E();
-        game = IPurgeGame(game_);
+        _wireGame(game_);
     }
 
     function wireTrophies(address trophies_) external onlyCoinContract {
+        _wireTrophies(trophies_);
+    }
+
+    function wireAll(address game_, address trophies_) external onlyCoinContract {
+        _wireGame(game_);
+        _wireTrophies(trophies_);
+    }
+
+    function _wireGame(address game_) private {
+        game = IPurgeGame(game_);
+    }
+
+    function _wireTrophies(address trophies_) private {
         if (trophies_ == address(0)) revert E();
         if (address(trophyModule) != address(0)) revert E();
         trophyModule = IPurgeGameTrophies(trophies_);

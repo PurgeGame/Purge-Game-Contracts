@@ -33,6 +33,7 @@ interface IPurgeGameTrophies {
     }
 
     function wire(address game_, address coin_) external;
+    function wireAndPrime(address game_, address coin_, uint24 firstLevel) external;
 
     function clearStakePreview(uint24 level) external;
 
@@ -240,13 +241,12 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     // Wiring
     // ---------------------------------------------------------------------
     function wire(address game_, address coin_) external override {
-        if (gameAddress != address(0)) revert AlreadyWired();
-        if (game_ == address(0) || coin_ == address(0)) revert ZeroAddress();
-        if (msg.sender != coin_) revert OnlyCoin();
-        gameAddress = game_;
-        coinAddress = coin_;
-        game = IPurgeGameMinimal(game_);
-        coin = IPurgecoinMinimal(coin_);
+        _wire(game_, coin_);
+    }
+
+    function wireAndPrime(address game_, address coin_, uint24 firstLevel) external override {
+        _wire(game_, coin_);
+        prepareNextLevel(firstLevel);
     }
 
     modifier onlyGame() {
@@ -1260,13 +1260,23 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         return recipients;
     }
 
-    function prepareNextLevel(uint24 nextLevel) external override {
+    function prepareNextLevel(uint24 nextLevel) public override {
         (uint256 previousBase, uint256 currentBase) = nft.getBasePointers();
         if (msg.sender != gameAddress) {
             if (msg.sender != coinAddress || currentBase != 0) revert Unauthorized();
         }
         uint256 newBase = _mintTrophyPlaceholders(nextLevel);
         nft.setBasePointers(previousBase, newBase);
+    }
+
+    function _wire(address game_, address coin_) private {
+        if (gameAddress != address(0)) revert AlreadyWired();
+        if (game_ == address(0) || coin_ == address(0)) revert ZeroAddress();
+        if (msg.sender != coin_) revert OnlyCoin();
+        gameAddress = game_;
+        coinAddress = coin_;
+        game = IPurgeGameMinimal(game_);
+        coin = IPurgecoinMinimal(coin_);
     }
 
 }

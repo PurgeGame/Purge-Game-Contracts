@@ -31,19 +31,6 @@ contract PurgeGameJackpotModule {
     bytes32 private constant COIN_JACKPOT_TAG = keccak256("coin-jackpot");
     uint256 private constant TROPHY_FLAG_MAP = uint256(1) << 200;
 
-    uint256 private constant MINT_MASK_24 = (uint256(1) << 24) - 1;
-    uint256 private constant MINT_MASK_20 = (uint256(1) << 20) - 1;
-    uint256 private constant MINT_MASK_32 = (uint256(1) << 32) - 1;
-    uint256 private constant ETH_LAST_LEVEL_SHIFT = 0;
-    uint256 private constant ETH_LEVEL_COUNT_SHIFT = 24;
-    uint256 private constant ETH_LEVEL_STREAK_SHIFT = 48;
-    uint256 private constant ETH_DAY_SHIFT = 72;
-    uint256 private constant ETH_DAY_STREAK_SHIFT = 104;
-    uint256 private constant COIN_DAY_SHIFT = 124;
-    uint256 private constant COIN_DAY_STREAK_SHIFT = 156;
-    uint256 private constant AGG_DAY_SHIFT = 176;
-    uint256 private constant AGG_DAY_STREAK_SHIFT = 208;
-
     // -----------------------
     // Storage layout mirror
     // -----------------------
@@ -54,7 +41,7 @@ contract PurgeGameJackpotModule {
     uint256 private levelPrizePool;
     uint256 private prizePool;
     uint256 private nextPrizePool;
-    uint256 private carryOver;
+    uint256 private carryoverForNextLevel;
 
     uint48 private levelStartTime = type(uint48).max;
     uint48 private dailyIdx;
@@ -89,38 +76,6 @@ contract PurgeGameJackpotModule {
     uint32[256] internal traitRemaining;
     mapping(address => uint256) private mintPacked_;
 
-    struct DailyJackpotBonus {
-        address dailyBest;
-        uint24 dailyStreak;
-        uint24 dailyEthStreak;
-        address levelBest;
-        uint24 levelStreak;
-        uint24 levelDailyStreak;
-        uint24 levelDailyEthStreak;
-    }
-
-    struct DailyJackpotContext {
-        uint256 poolWei;
-        uint256 coinPool;
-        address biggestFlip;
-        address thirdFlip;
-        address fourthFlip;
-        uint8 extraTrait;
-        uint256 baseEthShare;
-        uint256 extraEthShare;
-        uint256 dailyBonusPool;
-        uint256 levelBonusPool;
-        uint256 baseCoinShare;
-        uint256 extraCoinShare;
-        uint8 band;
-        uint256 entropyCursor;
-        uint256 paidEth;
-        uint256 paidCoin;
-        DailyJackpotBonus bonus;
-    }
-
-    constructor() {}
-
     function payDailyJackpot(
         bool isDaily,
         uint24 lvl,
@@ -142,15 +97,13 @@ contract PurgeGameJackpotModule {
 
             uint24 targetLevel = lvl + 1;
             (uint256 dailyCoinPool, ) = coinContract.prepareCoinJackpot();
-            uint256 carryBal = carryOver;
+            uint256 carryBal = carryoverForNextLevel;
             uint256 ethPool = (carryBal * 50) / 10_000;
             if (ethPool > carryBal) ethPool = carryBal;
 
             uint256 dailyPaidEth;
-            uint256 unusedCoinPaid;
             uint256 dailyCoinRemainder;
-            (dailyPaidEth, unusedCoinPaid, dailyCoinRemainder) = _runJackpot(
-                JACKPOT_KIND_DAILY,
+            (dailyPaidEth, , dailyCoinRemainder) = _runJackpot(
                 targetLevel,
                 ethPool,
                 dailyCoinPool,
@@ -160,7 +113,6 @@ contract PurgeGameJackpotModule {
                 DAILY_JACKPOT_SHARES_PACKED,
                 coinContract,
                 trophiesContract,
-                true,
                 0,
                 0
             );
@@ -193,8 +145,8 @@ contract PurgeGameJackpotModule {
             coinContract.resetCoinflipLeaderboard();
 
             if (dailyPaidEth != 0) {
-                uint256 carryAfter = carryOver;
-                carryOver = dailyPaidEth > carryAfter ? 0 : carryAfter - dailyPaidEth;
+                uint256 carryAfter = carryoverForNextLevel;
+                carryoverForNextLevel = dailyPaidEth > carryAfter ? 0 : carryAfter - dailyPaidEth;
             }
 
             uint48 dayIndex = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
@@ -216,7 +168,7 @@ contract PurgeGameJackpotModule {
         bool coinOnly = percentBefore >= EARLY_PURGE_COIN_ONLY_THRESHOLD;
         uint256 poolWei;
         if (!coinOnly && gameState == 2 && phase <= 2) {
-            uint256 carryBal = carryOver;
+            uint256 carryBal = carryoverForNextLevel;
             uint256 poolBps = 50; // default 0.5%
             bool initialTrigger = percentBefore == 0;
             bool thresholdTrigger =
@@ -243,10 +195,8 @@ contract PurgeGameJackpotModule {
         address fourthFlip = topBettors.length > 3 ? topBettors[3] : address(0);
 
         uint256 paidWei;
-        uint256 unusedCoinPaidDaily;
         uint256 coinRemainder;
-        (paidWei, unusedCoinPaidDaily, coinRemainder) = _runJackpot(
-            JACKPOT_KIND_DAILY,
+        (paidWei, , coinRemainder) = _runJackpot(
             lvl,
             poolWei,
             coinPool,
@@ -256,7 +206,6 @@ contract PurgeGameJackpotModule {
             DAILY_JACKPOT_SHARES_PACKED,
             coinContract,
             trophiesContract,
-            false,
             0,
             0
         );
@@ -301,19 +250,17 @@ contract PurgeGameJackpotModule {
 
         coinContract.resetCoinflipLeaderboard();
 
-        earlyPurgePercent = _currentEarlyPurgePercent();
+        earlyPurgePercent = percentAfter;
 
         uint48 currentDay = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
         dailyIdx = currentDay;
         nftContract.releaseRngLock();
 
-        if (jackpotCounter != 0) {
-            unchecked {
-                --jackpotCounter;
-            }
+        unchecked {
+            --jackpotCounter;
         }
-        uint256 carry = carryOver;
-        carryOver = paidWei > carry ? 0 : carry - paidWei;
+        uint256 carry = carryoverForNextLevel;
+        carryoverForNextLevel = paidWei > carry ? 0 : carry - paidWei;
     }
 
     function payMapJackpot(
@@ -352,7 +299,6 @@ contract PurgeGameJackpotModule {
         uint256 paidWeiMap;
         uint256 coinRemainder;
         (paidWeiMap, , coinRemainder) = _runJackpot(
-            JACKPOT_KIND_MAP,
             lvl,
             effectiveWei,
             0,
@@ -362,7 +308,6 @@ contract PurgeGameJackpotModule {
             MAP_JACKPOT_SHARES_PACKED,
             coinContract,
             trophiesContract,
-            false,
             stakeTotal,
             mapTrophyFallback
         );
@@ -389,13 +334,13 @@ contract PurgeGameJackpotModule {
         uint256 rngWord,
         IPurgeCoinModule coinContract
     ) external returns (uint256 effectiveWei) {
-        uint256 totalWei = carryOver + prizePool;
+        uint256 totalWei = carryoverForNextLevel + prizePool;
         uint256 burnieAmount = (totalWei * 5 * priceCoin) / 1 ether;
         coinContract.burnie(burnieAmount);
 
         uint256 savePct = _mapCarryoverPercent(lvl, rngWord);
         uint256 saveNextWei = (totalWei * savePct) / 100;
-        carryOver = saveNextWei;
+        carryoverForNextLevel = saveNextWei;
 
         uint256 jackpotBase = totalWei - saveNextWei;
         uint256 mapPct = _mapJackpotPercent(lvl);
@@ -411,128 +356,6 @@ contract PurgeGameJackpotModule {
         levelPrizePool = mainWei;
 
         effectiveWei = mapWei;
-    }
-
-    function _distributeDailyJackpot(
-        uint24 lvl,
-        uint256 entropyWord,
-        uint8[4] memory winningTraits,
-        IPurgeCoinModule coinContract,
-        IPurgeGameNFTModule nftContract
-    ) private {
-        DailyJackpotContext memory ctx;
-        ctx.poolWei = (levelPrizePool * (450 + uint256(jackpotCounter) * 100)) / 10_000;
-        (ctx.coinPool, ctx.biggestFlip) = coinContract.prepareCoinJackpot();
-        address[] memory topBettors = coinContract.getLeaderboardAddresses(2);
-        ctx.thirdFlip = topBettors.length > 2 ? topBettors[2] : address(0);
-        ctx.fourthFlip = topBettors.length > 3 ? topBettors[3] : address(0);
-        ctx.extraTrait = uint8(entropyWord & 3);
-        ctx.baseEthShare = (ctx.poolWei * 20) / 100;
-        ctx.extraEthShare = (ctx.poolWei * 10) / 100;
-        ctx.dailyBonusPool = (ctx.poolWei * 5) / 100;
-        ctx.levelBonusPool = (ctx.poolWei * 5) / 100;
-        uint256 plannedEth = (ctx.baseEthShare * 4) + ctx.extraEthShare + ctx.dailyBonusPool + ctx.levelBonusPool;
-        if (ctx.poolWei > plannedEth) {
-            ctx.extraEthShare += ctx.poolWei - plannedEth;
-        }
-        ctx.baseCoinShare = (ctx.coinPool * 20) / 100;
-        ctx.extraCoinShare = (ctx.coinPool * 10) / 100;
-        ctx.band = uint8((lvl % 100) / 20) + 1;
-        ctx.entropyCursor = entropyWord ^ (uint256(lvl) << 192);
-        uint16[4] memory bucketCounts = _traitBucketCounts(ctx.band, entropyWord >> 32);
-
-        for (uint8 traitIdx; traitIdx < 4; ) {
-            uint256 ethDelta;
-            uint256 coinDelta;
-            (ctx.entropyCursor, ethDelta, coinDelta, ctx.bonus) = _accumulateDailyTrait(
-                lvl,
-                winningTraits[traitIdx],
-                traitIdx,
-                bucketCounts[traitIdx],
-                _dailyTraitShare(ctx.baseEthShare, ctx.extraEthShare, traitIdx, ctx.extraTrait),
-                _dailyTraitShare(ctx.baseCoinShare, ctx.extraCoinShare, traitIdx, ctx.extraTrait),
-                ctx.entropyCursor,
-                ctx.bonus,
-                coinContract
-            );
-            ctx.paidEth += ethDelta;
-            ctx.paidCoin += coinDelta;
-            unchecked {
-                ++traitIdx;
-            }
-        }
-
-        if (ctx.dailyBonusPool != 0 && ctx.bonus.dailyBest != address(0)) {
-            _addClaimableEth(ctx.bonus.dailyBest, ctx.dailyBonusPool);
-            ctx.paidEth += ctx.dailyBonusPool;
-        }
-        if (ctx.levelBonusPool != 0 && ctx.bonus.levelBest != address(0)) {
-            _addClaimableEth(ctx.bonus.levelBest, ctx.levelBonusPool);
-            ctx.paidEth += ctx.levelBonusPool;
-        }
-
-        uint256 coinRemainder = ctx.coinPool > ctx.paidCoin ? ctx.coinPool - ctx.paidCoin : 0;
-        if (coinRemainder != 0) {
-            uint256 biggestShare = coinRemainder / 2;
-            uint256 secondaryShare = coinRemainder / 4;
-            uint256 bountyShare = coinRemainder - biggestShare - secondaryShare;
-            uint256 bountyOverflow;
-
-            if (biggestShare != 0) {
-                if (ctx.biggestFlip != address(0)) {
-                    coinContract.bonusCoinflip(ctx.biggestFlip, biggestShare, true, 0);
-                } else {
-                    bountyOverflow += biggestShare;
-                }
-            }
-
-            if (secondaryShare != 0) {
-                address candidate;
-                if (ctx.thirdFlip != address(0) && ctx.fourthFlip != address(0)) {
-                    uint256 selector = uint256(keccak256(abi.encode(entropyWord, lvl, jackpotCounter)));
-                    candidate = (selector & 1) == 0 ? ctx.thirdFlip : ctx.fourthFlip;
-                } else if (ctx.thirdFlip != address(0)) {
-                    candidate = ctx.thirdFlip;
-                } else if (ctx.fourthFlip != address(0)) {
-                    candidate = ctx.fourthFlip;
-                }
-
-                if (candidate != address(0)) {
-                    coinContract.bonusCoinflip(candidate, secondaryShare, true, 0);
-                } else {
-                    bountyOverflow += secondaryShare;
-                }
-            }
-
-            bountyOverflow += bountyShare;
-            if (bountyOverflow != 0) {
-                coinContract.addToBounty(bountyOverflow);
-            }
-        }
-
-        coinContract.resetCoinflipLeaderboard();
-
-        uint48 currentDay = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
-        dailyIdx = currentDay;
-        nftContract.releaseRngLock();
-
-        unchecked {
-            ++jackpotCounter;
-        }
-        uint256 currentPool = prizePool;
-        prizePool = ctx.paidEth > currentPool ? 0 : currentPool - ctx.paidEth;
-
-        emit Jackpot(
-            (uint256(JACKPOT_KIND_DAILY) << 248) |
-                uint256(winningTraits[0]) |
-                (uint256(winningTraits[1]) << 8) |
-                (uint256(winningTraits[2]) << 16) |
-                (uint256(winningTraits[3]) << 24)
-        );
-
-        if (jackpotCounter < 10) {
-            _clearDailyPurgeCount();
-        }
     }
 
     function _addClaimableEth(address beneficiary, uint256 weiAmount) private {
@@ -559,39 +382,27 @@ contract PurgeGameJackpotModule {
     }
 
     function _mapCarryoverPercent(uint24 lvl, uint256 rngWord) private pure returns (uint256) {
-        if ((rngWord % 1_000_000_000) == TRAIT_ID_TIMEOUT) {
-            return 10;
-        }
-
         uint256 base;
-        if (lvl < 5) {
-            base = 20 + uint256(lvl) * 7;
-        } else if (lvl < 60) {
-            base = 50 + (uint256(lvl) / 4);
-        } else {
-            base = uint256(lvl);
+        uint256 lvlMod100 = lvl % 100;
+
+        if ((rngWord % 1_000_000_000) == TRAIT_ID_TIMEOUT) base = 10;
+        else if (lvl < 10) base = uint256(lvl) * 5;
+        else if (lvl < 20) base = 55 + (rngWord % 16);
+        else if (lvl < 40) base = 55 + (rngWord % 21);
+        else if (lvl < 60) base = 60 + (rngWord % 21);
+        else if (lvl < 80) base = 60 + (rngWord % 26);
+        else if (lvlMod100 == 99) base = 93;
+        else base = 65 + (rngWord % 26);
+
+        if ((lvl % 10) == 9) base += 5;
+        base += lvl / 100;
+        if (base > 99) {
+            base = 99;
         }
 
-        if (lvl < 90) {
-            uint256 roll = rngWord % 21; // 0..20
-            if (roll <= 10) {
-                uint256 sub = 10 - roll;
-                base = (base > sub) ? base - sub : 0;
-            } else {
-                base += (roll - 10);
-            }
-        } else {
-            uint256 roll = rngWord % 5; // 0..4
-            if (roll <= 2) {
-                uint256 sub = 2 - roll;
-                base = (base > sub) ? base - sub : 0;
-            } else {
-                base += (roll - 2);
-            }
-        }
-
-        if (base > 98) {
-            base = 98;
+        uint256 jackpotPct = 100 - base;
+        if (jackpotPct < 17 && jackpotPct != 30) {
+            base = 83;
         }
         return base;
     }
@@ -601,7 +412,6 @@ contract PurgeGameJackpotModule {
     }
 
     function _runJackpot(
-        uint8 eventKind,
         uint24 lvl,
         uint256 ethPool,
         uint256 coinPool,
@@ -611,16 +421,13 @@ contract PurgeGameJackpotModule {
         uint64 traitShareBpsPacked,
         IPurgeCoinModule coinContract,
         IPurgeGameTrophiesModule trophiesContract,
-        bool redistributeEthRemainder,
         uint256 mapStakeSiphon,
         uint256 mapTrophyBonus
     ) private returns (uint256 totalPaidEth, uint256 totalPaidCoin, uint256 coinRemainder) {
         uint8 band = uint8((lvl % 100) / 20) + 1;
         uint16[4] memory bucketCounts = _traitBucketCounts(band, entropy);
 
-        uint256 entropyCursorEth;
-        bool trophyGiven;
-        (totalPaidEth, entropyCursorEth, trophyGiven) = _runJackpotEth(
+        (totalPaidEth, , ) = _runJackpotEth(
             mapTrophy,
             lvl,
             ethPool,
@@ -646,21 +453,6 @@ contract PurgeGameJackpotModule {
             );
         }
 
-        if (redistributeEthRemainder && !mapTrophy && ethPool > totalPaidEth) {
-            (totalPaidEth, entropyCursorEth, trophyGiven) = _redistributeJackpotRemainder(
-                ethPool,
-                totalPaidEth,
-                eventKind,
-                lvl,
-                winningTraits,
-                entropyCursorEth,
-                trophyGiven,
-                bucketCounts,
-                coinContract,
-                trophiesContract
-            );
-        }
-
         coinRemainder = coinPool > totalPaidCoin ? coinPool - totalPaidCoin : 0;
     }
 
@@ -682,6 +474,8 @@ contract PurgeGameJackpotModule {
         for (uint8 traitIdx; traitIdx < 4; ) {
             uint16 shareBps = uint16(traitShareBpsPacked >> (traitIdx * 16));
             uint256 share = _sliceJackpotShare(ethPool, shareBps, traitIdx, ethDistributed);
+            uint8 traitId = winningTraits[traitIdx];
+            uint16 bucketCount = bucketCounts[traitIdx];
             if (mapTrophy && traitIdx == 0) {
                 if (mapStakeSiphon != 0) {
                     uint256 siphon = mapStakeSiphon > share ? share : mapStakeSiphon;
@@ -705,12 +499,12 @@ contract PurgeGameJackpotModule {
                 false,
                 mapTrophy,
                 lvl,
-                winningTraits[traitIdx],
+                traitId,
                 traitIdx,
                 share,
                 entropyCursor,
                 trophyGiven,
-                bucketCounts[traitIdx]
+                bucketCount
             );
             totalPaidEth += delta;
             unchecked {
@@ -732,6 +526,8 @@ contract PurgeGameJackpotModule {
         for (uint8 traitIdx; traitIdx < 4; ) {
             uint16 shareBps = uint16(traitShareBpsPacked >> (traitIdx * 16));
             uint256 share = _sliceJackpotShare(coinPool, shareBps, traitIdx, coinDistributed);
+            uint8 traitId = winningTraits[traitIdx];
+            uint16 bucketCount = bucketCounts[traitIdx];
             if (traitIdx < 3) {
                 unchecked {
                     coinDistributed += share;
@@ -744,12 +540,12 @@ contract PurgeGameJackpotModule {
                 true,
                 false,
                 lvl,
-                winningTraits[traitIdx],
+                traitId,
                 traitIdx,
                 share,
                 entropy,
                 false,
-                bucketCounts[traitIdx]
+                bucketCount
             );
             totalPaidCoin += delta;
             unchecked {
@@ -905,179 +701,6 @@ contract PurgeGameJackpotModule {
             newTotalPaidEth += extraPaid;
         }
         newEntropyCursor = nextEntropy;
-    }
-
-    function _accumulateDailyTrait(
-        uint24 lvl,
-        uint8 traitId,
-        uint8 traitIdx,
-        uint16 winnerCount,
-        uint256 ethShare,
-        uint256 coinShare,
-        uint256 entropyCursor,
-        DailyJackpotBonus memory bonus,
-        IPurgeCoinModule coinContract
-    )
-        private
-        returns (
-            uint256 nextEntropy,
-            uint256 ethDelta,
-            uint256 coinDelta,
-            DailyJackpotBonus memory updatedBonus
-        )
-    {
-        (nextEntropy, ethDelta, coinDelta, updatedBonus) = _runDailyTraitJackpot(
-            lvl,
-            traitId,
-            traitIdx,
-            winnerCount,
-            ethShare,
-            coinShare,
-            entropyCursor,
-            bonus,
-            coinContract
-        );
-    }
-
-    function _dailyTraitShare(
-        uint256 baseShare,
-        uint256 extraShare,
-        uint8 traitIdx,
-        uint8 extraTraitIdx
-    ) private pure returns (uint256) {
-        return traitIdx == extraTraitIdx ? baseShare + extraShare : baseShare;
-    }
-
-    function _runDailyTraitJackpot(
-        uint24 lvl,
-        uint8 traitId,
-        uint8 traitIdx,
-        uint16 winnerCount,
-        uint256 ethShare,
-        uint256 coinShare,
-        uint256 entropy,
-        DailyJackpotBonus memory bonus,
-        IPurgeCoinModule coinContract
-    )
-        private
-        returns (
-            uint256 nextEntropy,
-            uint256 ethDelta,
-            uint256 coinDelta,
-            DailyJackpotBonus memory updatedBonus
-        )
-    {
-        nextEntropy = entropy;
-        updatedBonus = bonus;
-        if (ethShare == 0 && coinShare == 0) return (nextEntropy, 0, 0, updatedBonus);
-
-        uint16 totalCount = winnerCount;
-        if (totalCount == 0) return (nextEntropy, 0, 0, updatedBonus);
-
-        uint256 perWinnerEth = ethShare / totalCount;
-        uint256 perWinnerCoin = coinShare / totalCount;
-        if (perWinnerEth == 0 && perWinnerCoin == 0) return (nextEntropy, 0, 0, updatedBonus);
-
-        uint8 requested = uint8(totalCount);
-        nextEntropy = _entropyStep(nextEntropy ^ (uint256(traitIdx) << 72) ^ ethShare ^ coinShare);
-        address[] memory winners = _randTraitTicket(
-            traitPurgeTicket[lvl],
-            nextEntropy,
-            traitId,
-            requested,
-            uint8(200 + traitIdx)
-        );
-        uint8 len = uint8(winners.length);
-        if (len > requested) len = requested;
-
-        for (uint8 i; i < len; ) {
-            uint256 ethCredited;
-            uint256 coinCredited;
-            (updatedBonus, ethCredited, coinCredited) = _awardDailyWinner(
-                updatedBonus,
-                winners[i],
-                perWinnerEth,
-                perWinnerCoin,
-                lvl,
-                coinContract
-            );
-            ethDelta += ethCredited;
-            coinDelta += coinCredited;
-            unchecked {
-                ++i;
-            }
-        }
-    }
-
-    function _awardDailyWinner(
-        DailyJackpotBonus memory bonus,
-        address player,
-        uint256 perWinnerEth,
-        uint256 perWinnerCoin,
-        uint24 lvl,
-        IPurgeCoinModule coinContract
-    )
-        private
-        returns (
-            DailyJackpotBonus memory updatedBonus,
-            uint256 ethCredited,
-            uint256 coinCredited
-        )
-    {
-        updatedBonus = bonus;
-        if (player == address(0)) return (updatedBonus, 0, 0);
-        if (!_eligibleJackpotWinner(player, lvl)) return (updatedBonus, 0, 0);
-
-        if (perWinnerEth != 0 && _creditJackpot(coinContract, false, player, perWinnerEth)) {
-            ethCredited = perWinnerEth;
-        }
-        if (perWinnerCoin != 0 && _creditJackpot(coinContract, true, player, perWinnerCoin)) {
-            coinCredited = perWinnerCoin;
-        }
-        if (ethCredited != 0 || coinCredited != 0) {
-            updatedBonus = _updateDailyBonus(updatedBonus, player);
-        }
-    }
-
-    function _updateDailyBonus(DailyJackpotBonus memory bonus, address player)
-        private
-        view
-        returns (DailyJackpotBonus memory)
-    {
-        uint256 packed = mintPacked_[player];
-        uint24 dailyStreak = uint24((packed >> AGG_DAY_STREAK_SHIFT) & MINT_MASK_20);
-        uint24 dailyEthStreak = uint24((packed >> ETH_DAY_STREAK_SHIFT) & MINT_MASK_20);
-        uint24 levelStreak = uint24((packed >> ETH_LEVEL_STREAK_SHIFT) & MINT_MASK_24);
-
-        if (
-            bonus.dailyBest == address(0) ||
-            dailyStreak > bonus.dailyStreak ||
-            (dailyStreak == bonus.dailyStreak && dailyEthStreak > bonus.dailyEthStreak) ||
-            (dailyStreak == bonus.dailyStreak &&
-                dailyEthStreak == bonus.dailyEthStreak &&
-                player < bonus.dailyBest)
-        ) {
-            bonus.dailyBest = player;
-            bonus.dailyStreak = dailyStreak;
-            bonus.dailyEthStreak = dailyEthStreak;
-        }
-
-        if (
-            bonus.levelBest == address(0) ||
-            levelStreak > bonus.levelStreak ||
-            (levelStreak == bonus.levelStreak &&
-                (dailyStreak > bonus.levelDailyStreak ||
-                    (dailyStreak == bonus.levelDailyStreak &&
-                        (dailyEthStreak > bonus.levelDailyEthStreak ||
-                            (dailyEthStreak == bonus.levelDailyEthStreak && player < bonus.levelBest)))))
-        ) {
-            bonus.levelBest = player;
-            bonus.levelStreak = levelStreak;
-            bonus.levelDailyStreak = dailyStreak;
-            bonus.levelDailyEthStreak = dailyEthStreak;
-        }
-
-        return bonus;
     }
 
     function _getRandomTraits(uint256 rw) private pure returns (uint8[4] memory w) {
