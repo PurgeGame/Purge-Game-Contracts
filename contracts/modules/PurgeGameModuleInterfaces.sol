@@ -26,6 +26,7 @@ interface IPurgeCoinModule {
     function resetCoinflipLeaderboard() external;
     function getLeaderboardAddresses(uint8 which) external view returns (address[] memory);
     function playerLuckbox(address player) external view returns (uint256);
+    function affiliateDailyStreak(address affiliate) external view returns (uint32 lastDay, uint32 streak);
 }
 
 interface IPurgeGameNFTModule {
@@ -48,4 +49,6 @@ interface IPurgeGameTrophiesModule {
         returns (address mapImmediateRecipient, address[6] memory affiliateRecipients);
 
     function awardTrophy(address to, uint24 level, uint8 kind, uint256 data, uint256 deferredWei) external payable;
+
+    function stakedTrophySample(uint64 salt) external view returns (address owner);
 }

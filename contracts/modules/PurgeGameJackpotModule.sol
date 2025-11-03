@@ -27,11 +27,7 @@ contract PurgeGameJackpotModule {
         (uint64(1333) << 16) |
         (uint64(1333) << 32) |
         (uint64(1334) << 48);
-    uint64 private constant DAILY_JACKPOT_SHARES_PACKED =
-        (uint64(2000)) |
-        (uint64(2000) << 16) |
-        (uint64(2000) << 32) |
-        (uint64(2000) << 48);
+    uint64 private constant DAILY_JACKPOT_SHARES_PACKED = uint64(2000) * 0x0001000100010001;
     bytes32 private constant COIN_JACKPOT_TAG = keccak256("coin-jackpot");
     uint256 private constant TROPHY_FLAG_MAP = uint256(1) << 200;
 
@@ -150,7 +146,10 @@ contract PurgeGameJackpotModule {
             uint256 ethPool = (carryBal * 50) / 10_000;
             if (ethPool > carryBal) ethPool = carryBal;
 
-            (uint256 dailyPaidEth, , uint256 dailyCoinRemainder) = _runJackpot(
+            uint256 dailyPaidEth;
+            uint256 unusedCoinPaid;
+            uint256 dailyCoinRemainder;
+            (dailyPaidEth, unusedCoinPaid, dailyCoinRemainder) = _runJackpot(
                 JACKPOT_KIND_DAILY,
                 targetLevel,
                 ethPool,
@@ -161,7 +160,9 @@ contract PurgeGameJackpotModule {
                 DAILY_JACKPOT_SHARES_PACKED,
                 coinContract,
                 trophiesContract,
-                true
+                true,
+                0,
+                0
             );
 
             if (dailyCoinRemainder != 0) {
@@ -241,7 +242,10 @@ contract PurgeGameJackpotModule {
         address thirdFlip = topBettors.length > 2 ? topBettors[2] : address(0);
         address fourthFlip = topBettors.length > 3 ? topBettors[3] : address(0);
 
-        (uint256 paidWei, , uint256 coinRemainder) = _runJackpot(
+        uint256 paidWei;
+        uint256 unusedCoinPaidDaily;
+        uint256 coinRemainder;
+        (paidWei, unusedCoinPaidDaily, coinRemainder) = _runJackpot(
             JACKPOT_KIND_DAILY,
             lvl,
             poolWei,
@@ -252,7 +256,9 @@ contract PurgeGameJackpotModule {
             DAILY_JACKPOT_SHARES_PACKED,
             coinContract,
             trophiesContract,
-            false
+            false,
+            0,
+            0
         );
 
         if (coinRemainder != 0) {
@@ -317,7 +323,33 @@ contract PurgeGameJackpotModule {
         IPurgeGameTrophiesModule trophiesContract
     ) external returns (bool finished) {
         uint8[4] memory winningTraits = _getRandomTraits(rngWord);
-        (uint256 paidWei, , ) = _runJackpot(
+        uint256 stakeTotal = (effectiveWei * 5) / 100;
+        uint256 stakePer = stakeTotal / 2;
+        uint256 stakePaid;
+        uint256 mapTrophyFallback;
+        uint256 stakeRemainder = stakeTotal - (stakePer * 2);
+
+        for (uint256 s; s < 2; ) {
+            if (stakePer != 0) {
+                bytes32 stakeEntropy = keccak256(abi.encode(rngWord, lvl, s, "map-stake"));
+                uint64 salt = uint64(uint256(stakeEntropy));
+                address staker = trophiesContract.stakedTrophySample(salt);
+                if (staker != address(0)) {
+                    _addClaimableEth(staker, stakePer);
+                    stakePaid += stakePer;
+                } else {
+                    mapTrophyFallback += stakePer;
+                }
+            }
+            unchecked {
+                ++s;
+            }
+        }
+        mapTrophyFallback += stakeRemainder;
+
+        uint256 paidWeiMap;
+        uint256 coinRemainder;
+        (paidWeiMap, , coinRemainder) = _runJackpot(
             JACKPOT_KIND_MAP,
             lvl,
             effectiveWei,
@@ -328,10 +360,20 @@ contract PurgeGameJackpotModule {
             MAP_JACKPOT_SHARES_PACKED,
             coinContract,
             trophiesContract,
-            false
+            false,
+            stakeTotal,
+            mapTrophyFallback
         );
 
-        uint256 remainingPool = effectiveWei - paidWei;
+        if (coinRemainder != 0) {
+            coinContract.addToBounty(coinRemainder);
+        }
+
+        uint256 distributedEth = paidWeiMap + stakePaid;
+        if (distributedEth > effectiveWei) {
+            distributedEth = effectiveWei;
+        }
+        uint256 remainingPool = effectiveWei - distributedEth;
         prizePool += remainingPool;
         levelPrizePool += remainingPool;
 
@@ -555,7 +597,9 @@ contract PurgeGameJackpotModule {
         uint64 traitShareBpsPacked,
         IPurgeCoinModule coinContract,
         IPurgeGameTrophiesModule trophiesContract,
-        bool redistributeEthRemainder
+        bool redistributeEthRemainder,
+        uint256 mapStakeSiphon,
+        uint256 mapTrophyBonus
     ) private returns (uint256 totalPaidEth, uint256 totalPaidCoin, uint256 coinRemainder) {
         uint8 band = uint8((lvl % 100) / 20) + 1;
         uint16[4] memory bucketCounts = _traitBucketCounts(band, entropy);
@@ -571,7 +615,9 @@ contract PurgeGameJackpotModule {
             traitShareBpsPacked,
             bucketCounts,
             coinContract,
-            trophiesContract
+            trophiesContract,
+            mapStakeSiphon,
+            mapTrophyBonus
         );
 
         if (coinPool != 0) {
@@ -613,13 +659,26 @@ contract PurgeGameJackpotModule {
         uint64 traitShareBpsPacked,
         uint16[4] memory bucketCounts,
         IPurgeCoinModule coinContract,
-        IPurgeGameTrophiesModule trophiesContract
+        IPurgeGameTrophiesModule trophiesContract,
+        uint256 mapStakeSiphon,
+        uint256 mapTrophyBonus
     ) private returns (uint256 totalPaidEth, uint256 entropyCursor, bool trophyGiven) {
         uint256 ethDistributed;
         entropyCursor = entropy;
         for (uint8 traitIdx; traitIdx < 4; ) {
             uint16 shareBps = uint16(traitShareBpsPacked >> (traitIdx * 16));
             uint256 share = _sliceJackpotShare(ethPool, shareBps, traitIdx, ethDistributed);
+            if (mapTrophy && traitIdx == 0) {
+                if (mapStakeSiphon != 0) {
+                    uint256 siphon = mapStakeSiphon > share ? share : mapStakeSiphon;
+                    share -= siphon;
+                    mapStakeSiphon -= siphon;
+                }
+                if (mapTrophyBonus != 0) {
+                    share += mapTrophyBonus;
+                    mapTrophyBonus = 0;
+                }
+            }
             if (traitIdx < 3) {
                 unchecked {
                     ethDistributed += share;
