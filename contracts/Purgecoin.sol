@@ -202,7 +202,6 @@ contract Purgecoin {
 
     // Daily jackpot accounting
     uint256 private dailyCoinBurn;
-    uint256 private prevDailyCoinBurn;
     uint256 private currentTenthPlayerBonusPool;
 
     // Coinflip roster stored as a reusable ring buffer.
@@ -1093,7 +1092,7 @@ contract Purgecoin {
         onlyPurgeGameContract
         returns (uint256 poolAmount, address biggestFlip)
     {
-        uint256 burnBase = prevDailyCoinBurn;
+        uint256 burnBase = dailyCoinBurn;
         uint256 pool = (burnBase * 60) / 100;
         uint256 minPool = 10_000 * MILLION;
         if (pool < minPool) pool = minPool;
@@ -1101,7 +1100,6 @@ contract Purgecoin {
         poolAmount = pool;
         biggestFlip = topBettors[0].player;
 
-        prevDailyCoinBurn = dailyCoinBurn;
         dailyCoinBurn = 0;
     }
 

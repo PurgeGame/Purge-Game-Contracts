@@ -260,7 +260,7 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
     uint8 private constant _STAKE_ERR_NOT_MAP = 6;
     uint8 private constant _STAKE_ERR_NOT_AFFILIATE = 7;
     uint8 private constant _STAKE_ERR_NOT_STAKE = 8;
-    uint8 private constant LEVEL_STAKE_MAX = 20;
+    uint8 private constant EXTERMINATOR_STAKE_MAX = 20;
     uint8 private constant MAP_STAKE_MAX = 20;
     uint8 private constant AFFILIATE_STAKE_MAX = 20;
     uint8 private constant STAKE_TROPHY_MAX = 20;
@@ -577,7 +577,7 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
         } else {
             uint8 levelDiscount = address(trophyModule) == address(0)
                 ? 0
-                : trophyModule.levelStakeDiscount(payer);
+                : trophyModule.exterminatorStakeDiscount(payer);
             if (levelDiscount != 0) {
                 uint256 discountWei = (expectedWei * levelDiscount) / 100;
                 expectedWei -= discountWei;
