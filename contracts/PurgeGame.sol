@@ -306,8 +306,8 @@ contract PurgeGame {
         return earlyPurgePercent;
     }
 
-    function epUnlocked(uint24 lvl) external view returns (bool) {
-        return _epUnlocked(lvl);
+    function coinMintUnlock(uint24 lvl) external view returns (bool) {
+        return lvl < 5 || earlyPurgePercent >= EARLY_PURGE_UNLOCK_PERCENT;
     }
 
     function ethMintLastLevel(address player) external view returns (uint24) {
@@ -1363,23 +1363,6 @@ contract PurgeGame {
         uint8 sub = _w8(uint32(rnd >> 32));
         return (category << 3) | sub;
     }
-
-    // --- External jackpot coordination ---------------------------------------------------------------
-
-
-
-
-
-
-
-
-
-
-
-    function _epUnlocked(uint24 lvl) private view returns (bool) {
-        return lvl < 5 || earlyPurgePercent >= EARLY_PURGE_UNLOCK_PERCENT;
-    }
-
 
     function getLastExterminatedTrait() external view returns (uint16) {
         return lastExterminatedTrait;
