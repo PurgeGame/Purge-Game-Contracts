@@ -54,7 +54,7 @@ contract PurgeGameJackpotModule {
     uint256 private levelPrizePool;
     uint256 private prizePool;
     uint256 private nextPrizePool;
-    uint256 private carryoverForNextLevel;
+    uint256 private carryOver;
 
     uint48 private levelStartTime = type(uint48).max;
     uint48 private dailyIdx;
@@ -142,7 +142,7 @@ contract PurgeGameJackpotModule {
 
             uint24 targetLevel = lvl + 1;
             (uint256 dailyCoinPool, ) = coinContract.prepareCoinJackpot();
-            uint256 carryBal = carryoverForNextLevel;
+            uint256 carryBal = carryOver;
             uint256 ethPool = (carryBal * 50) / 10_000;
             if (ethPool > carryBal) ethPool = carryBal;
 
@@ -193,8 +193,8 @@ contract PurgeGameJackpotModule {
             coinContract.resetCoinflipLeaderboard();
 
             if (dailyPaidEth != 0) {
-                uint256 carryAfter = carryoverForNextLevel;
-                carryoverForNextLevel = dailyPaidEth > carryAfter ? 0 : carryAfter - dailyPaidEth;
+                uint256 carryAfter = carryOver;
+                carryOver = dailyPaidEth > carryAfter ? 0 : carryAfter - dailyPaidEth;
             }
 
             uint48 dayIndex = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
@@ -216,7 +216,7 @@ contract PurgeGameJackpotModule {
         bool coinOnly = percentBefore >= EARLY_PURGE_COIN_ONLY_THRESHOLD;
         uint256 poolWei;
         if (!coinOnly && gameState == 2 && phase <= 2) {
-            uint256 carryBal = carryoverForNextLevel;
+            uint256 carryBal = carryOver;
             uint256 poolBps = 50; // default 0.5%
             bool initialTrigger = percentBefore == 0;
             bool thresholdTrigger =
@@ -307,11 +307,13 @@ contract PurgeGameJackpotModule {
         dailyIdx = currentDay;
         nftContract.releaseRngLock();
 
-        unchecked {
-            --jackpotCounter;
+        if (jackpotCounter != 0) {
+            unchecked {
+                --jackpotCounter;
+            }
         }
-        uint256 carry = carryoverForNextLevel;
-        carryoverForNextLevel = paidWei > carry ? 0 : carry - paidWei;
+        uint256 carry = carryOver;
+        carryOver = paidWei > carry ? 0 : carry - paidWei;
     }
 
     function payMapJackpot(
@@ -387,13 +389,13 @@ contract PurgeGameJackpotModule {
         uint256 rngWord,
         IPurgeCoinModule coinContract
     ) external returns (uint256 effectiveWei) {
-        uint256 totalWei = carryoverForNextLevel + prizePool;
+        uint256 totalWei = carryOver + prizePool;
         uint256 burnieAmount = (totalWei * 5 * priceCoin) / 1 ether;
         coinContract.burnie(burnieAmount);
 
         uint256 savePct = _mapCarryoverPercent(lvl, rngWord);
         uint256 saveNextWei = (totalWei * savePct) / 100;
-        carryoverForNextLevel = saveNextWei;
+        carryOver = saveNextWei;
 
         uint256 jackpotBase = totalWei - saveNextWei;
         uint256 mapPct = _mapJackpotPercent(lvl);
@@ -557,27 +559,39 @@ contract PurgeGameJackpotModule {
     }
 
     function _mapCarryoverPercent(uint24 lvl, uint256 rngWord) private pure returns (uint256) {
-        uint256 base;
-        uint256 lvlMod100 = lvl % 100;
-
-        if ((rngWord % 1_000_000_000) == TRAIT_ID_TIMEOUT) base = 10;
-        else if (lvl < 10) base = uint256(lvl) * 5;
-        else if (lvl < 20) base = 55 + (rngWord % 16);
-        else if (lvl < 40) base = 55 + (rngWord % 21);
-        else if (lvl < 60) base = 60 + (rngWord % 21);
-        else if (lvl < 80) base = 60 + (rngWord % 26);
-        else if (lvlMod100 == 99) base = 93;
-        else base = 65 + (rngWord % 26);
-
-        if ((lvl % 10) == 9) base += 5;
-        base += lvl / 100;
-        if (base > 99) {
-            base = 99;
+        if ((rngWord % 1_000_000_000) == TRAIT_ID_TIMEOUT) {
+            return 10;
         }
 
-        uint256 jackpotPct = 100 - base;
-        if (jackpotPct < 17 && jackpotPct != 30) {
-            base = 83;
+        uint256 base;
+        if (lvl < 5) {
+            base = 20 + uint256(lvl) * 7;
+        } else if (lvl < 60) {
+            base = 50 + (uint256(lvl) / 4);
+        } else {
+            base = uint256(lvl);
+        }
+
+        if (lvl < 90) {
+            uint256 roll = rngWord % 21; // 0..20
+            if (roll <= 10) {
+                uint256 sub = 10 - roll;
+                base = (base > sub) ? base - sub : 0;
+            } else {
+                base += (roll - 10);
+            }
+        } else {
+            uint256 roll = rngWord % 5; // 0..4
+            if (roll <= 2) {
+                uint256 sub = 2 - roll;
+                base = (base > sub) ? base - sub : 0;
+            } else {
+                base += (roll - 2);
+            }
+        }
+
+        if (base > 98) {
+            base = 98;
         }
         return base;
     }

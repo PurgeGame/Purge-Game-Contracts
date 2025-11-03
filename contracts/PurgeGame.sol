@@ -162,7 +162,7 @@ contract PurgeGame {
     uint256 private levelPrizePool; // Snapshot for endgame distribution of current level
     uint256 private prizePool; // Live ETH pool for current level
     uint256 private nextPrizePool; // ETH collected during purge for upcoming level
-    uint256 private carryoverForNextLevel; // Carryover amount reserved for the next level (wei)
+    uint256 private carryOver; // Carryover amount reserved for the next level (wei)
 
     // -----------------------
     // Time / Session Tracking
@@ -280,7 +280,7 @@ contract PurgeGame {
         phase_ = phase;
         jackpotCounter_ = jackpotCounter;
         price_ = price;
-        carry_ = carryoverForNextLevel;
+        carry_ = carryOver;
         prizePoolTarget = lastPrizePool;
         prizePoolCurrent = prizePool;
         enoughPurchases = nft.purchaseCount() >= PURCHASE_MINIMUM;
@@ -433,7 +433,6 @@ contract PurgeGame {
             // --- State 2 - Purchase / Airdrop ---
             if (_gameState == 2) {
                 if (_phase <= 2) {
-                    _refreshEarlyPurgeJackpots(lvl);
                     bool prizeReady = prizePool >= lastPrizePool;
                     bool levelGate = (nft.purchaseCount() >= PURCHASE_MINIMUM && prizeReady);
                     if (modTwenty == 16) {
@@ -453,16 +452,8 @@ contract PurgeGame {
                         _processMapBatch(cap);
                         break;
                     }
-                    if (modTwenty != 0) {
-                        bool coinflipDailyOk = true;
-                        if (modTwenty != 0) {
-                            coinflipDailyOk = coinContract.processCoinflipPayouts(lvl, cap, false, rngWord);
-                        }
-                        if (!coinflipDailyOk) break;
-                    }
-                    if (jackpotCounter > 0) {
-                        payDailyJackpot(false, lvl, rngWord);
-                    }
+                    if (modTwenty != 0 && !coinContract.processCoinflipPayouts(lvl, cap, false, rngWord)) break;
+                    payDailyJackpot(false, lvl, rngWord);
                     dailyIdx = day;
                     if (nft.rngLocked()) {
                         nft.releaseRngLock();
@@ -538,12 +529,8 @@ contract PurgeGame {
             // --- State 3 - Purge ---
             if (_gameState == 3) {
                 if (_phase == 6) {
-                    bool coinflips = true;
-                    if (_phase >= 3 || modTwenty != 0) {
-                        uint24 coinflipLevel = uint24(lvl + (jackpotCounter >= 9 ? 1 : 0));
-                        coinflips = coinContract.processCoinflipPayouts(coinflipLevel, cap, false, rngWord);
-                    }
-                    if (!coinflips) break;
+                    uint24 coinflipLevel = uint24(lvl + (jackpotCounter >= 9 ? 1 : 0));
+                    if (!coinContract.processCoinflipPayouts(coinflipLevel, cap, false, rngWord)) break;
                     if (modTwenty == 16 && jackpotCounter < MAP_FIRST_BATCH) {
                         while (jackpotCounter < MAP_FIRST_BATCH) {
                             payDailyJackpot(true, lvl, rngWord);
@@ -558,11 +545,7 @@ contract PurgeGame {
                     phase = 7;
                     break;
                 }
-                bool coinflipPhase7EntryOk = true;
-                if (_phase >= 3 || modTwenty != 0) {
-                    coinflipPhase7EntryOk = coinContract.processCoinflipPayouts(lvl, cap, false, rngWord);
-                }
-                if (coinflipPhase7EntryOk) phase = 6;
+                if (coinContract.processCoinflipPayouts(lvl, cap, false, rngWord)) phase = 6;
                 break;
             }
 
@@ -585,8 +568,7 @@ contract PurgeGame {
     /// @param quantity Map entries purchased (1+).
     function enqueueMap(address buyer, uint32 quantity) external {
         if (msg.sender != address(nft)) revert E();
-        if (buyer == address(0)) revert E();
-        if (quantity == 0) return;
+
 
         if (playerMapMintsOwed[buyer] == 0) {
             pendingMapMints.push(buyer);
@@ -609,6 +591,10 @@ contract PurgeGame {
         nft.purge(caller, tokenIds);
 
         uint24 lvl = level;
+        bool isSeventhStep = (lvl % 10 == 7);
+        bool isDoubleCountStep = (lvl % 10 == 2);
+        bool levelNinety = (lvl == 90);
+        uint32 endLevelFlag = isSeventhStep ? 1 : 0;
 
         uint16 prevExterminated = lastExterminatedTrait;
         uint256 bonusTenths;
@@ -620,10 +606,10 @@ contract PurgeGame {
             uint256 tokenId = tokenIds[i];
 
             uint32 traits = nft.tokenTraitsPacked(tokenId);
-            uint8 trait0 = uint8(traits & 0xFF);
-            uint8 trait1 = (uint8(traits >> 8) & 0xFF);
-            uint8 trait2 = (uint8(traits >> 16) & 0xFF);
-            uint8 trait3 = (uint8(traits >> 24) & 0xFF);
+            uint8 trait0 = uint8(traits);
+            uint8 trait1 = uint8(traits >> 8);
+            uint8 trait2 = uint8(traits >> 16);
+            uint8 trait3 = uint8(traits >> 24);
 
             uint8 color0 = trait0 >> 3;
             uint8 color1 = (trait1 & 0x3F) >> 3;
@@ -635,7 +621,7 @@ contract PurgeGame {
                 }
             }
 
-            if (lvl == 90) {
+            if (levelNinety) {
                 unchecked {
                     bonusTenths += 9;
                 }
@@ -651,21 +637,19 @@ contract PurgeGame {
             }
 
             unchecked {
-                uint32 endLevel = (lvl % 10 == 7) ? 1 : 0;
-
-                if (_consumeTrait(trait0, endLevel)) {
+                if (_consumeTrait(trait0, endLevelFlag)) {
                     winningTrait = trait0;
                     break;
                 }
-                if (_consumeTrait(trait1, endLevel)) {
+                if (_consumeTrait(trait1, endLevelFlag)) {
                     winningTrait = trait1;
                     break;
                 }
-                if (_consumeTrait(trait2, endLevel)) {
+                if (_consumeTrait(trait2, endLevelFlag)) {
                     winningTrait = trait2;
                     break;
                 }
-                if (_consumeTrait(trait3, endLevel)) {
+                if (_consumeTrait(trait3, endLevelFlag)) {
                     winningTrait = trait3;
                     break;
                 }
@@ -681,8 +665,9 @@ contract PurgeGame {
             tickets[trait3].push(caller);
         }
 
-        if (lvl % 10 == 2) count <<= 1;
-        coin.bonusCoinflip(caller, (count + bonusTenths) * (priceCoin / 10), true, 0);
+        if (isDoubleCountStep) count <<= 1;
+        uint256 priceUnit = priceCoin / 10;
+        coin.bonusCoinflip(caller, (count + bonusTenths) * priceUnit, true, 0);
         emit Purge(msg.sender, tokenIds);
 
         if (winningTrait != TRAIT_ID_TIMEOUT) {
@@ -722,18 +707,18 @@ contract PurgeGame {
 
         if (exterminated < 256) {
             uint8 exTrait = uint8(exterminated);
+            bool repeatOrNinety = (uint16(exTrait) == lastExterminatedTrait) || (levelSnapshot == 90);
             uint256 pool = prizePool;
 
-
-            uint16 prev = lastExterminatedTrait;
-            if (exterminated == prev ||levelSnapshot == 90) {
+            if (repeatOrNinety) {
                 uint256 keep = pool >> 1;
-                carryoverForNextLevel += keep;
+                carryOver += keep;
                 pool -= keep;
             }
 
             uint256 ninetyPercent = (pool * 90) / 100;
-            uint256 exterminatorShare = (levelSnapshot % 10 == 4 && levelSnapshot != 4)
+            uint256 mod10 = levelSnapshot % 10;
+            uint256 exterminatorShare = (mod10 == 4 && levelSnapshot != 4)
                 ? (pool * 40) / 100
                 : (pool * 20) / 100;
             uint256 participantShare = ninetyPercent - exterminatorShare;
@@ -774,9 +759,10 @@ contract PurgeGame {
         jackpotCounter = 0;
 
         uint256 mod100 = levelSnapshot % 100;
+        uint256 mod20 = levelSnapshot % 20;
         if (mod100 == 10 || mod100 == 0) {
             price <<= 1;
-        } else if (levelSnapshot % 20 == 0) {
+        } else if (mod20 == 0) {
             price += (levelSnapshot < 100) ? 0.05 ether : 0.1 ether;
         }
 
@@ -1073,22 +1059,6 @@ contract PurgeGame {
             return false;
         }
         return true;
-    }
-
-    /// @notice Refresh early‑purge percent snapshot for UI and daily jackpot rules.
-    function _refreshEarlyPurgeJackpots(uint24 lvl) private {
-        if (lvl == 99) return;
-
-        uint8 currentPercent = _currentEarlyPurgePercent();
-        earlyPurgePercent = currentPercent;
-    }
-
-    function _currentEarlyPurgePercent() private view returns (uint8) {
-        uint256 prevPoolWei = lastPrizePool;
-        if (prevPoolWei == 0) return 0;
-        uint256 pct = (prizePool * 100) / prevPoolWei;
-        if (pct > type(uint8).max) return type(uint8).max;
-        return uint8(pct);
     }
 
     // --- Flips, VRF, payments, rarity ----------------------------------------------------------------
@@ -1406,7 +1376,7 @@ contract PurgeGame {
 
 
     function _epUnlocked(uint24 lvl) private view returns (bool) {
-        return lvl < 10 || earlyPurgePercent >= EARLY_PURGE_UNLOCK_PERCENT;
+        return lvl < 5 || earlyPurgePercent >= EARLY_PURGE_UNLOCK_PERCENT;
     }
 
 
@@ -1455,5 +1425,7 @@ contract PurgeGame {
         mints = nft.tokensOwed(player);
         maps = playerMapMintsOwed[player];
     }
-    receive() external payable {}
+    receive() external payable {
+        carryOver += msg.value;
+    }
 }

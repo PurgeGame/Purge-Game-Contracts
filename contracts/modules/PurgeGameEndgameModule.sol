@@ -38,7 +38,7 @@ contract PurgeGameEndgameModule {
     uint256 private levelPrizePool;
     uint256 private prizePool;
     uint256 private nextPrizePool;
-    uint256 private carryoverForNextLevel;
+    uint256 private carryOver;
 
     // -----------------------
     // Time / Session Tracking
@@ -136,12 +136,12 @@ contract PurgeGameEndgameModule {
         } else {
             bool decWindow = prevLevel >= 25 && prevMod10 == 5 && prevMod100 != 95;
             if (prevLevel != 0 && (prevLevel % 20) == 0) {
-                uint256 bafPoolWei = (carryoverForNextLevel * 24) / 100;
+                uint256 bafPoolWei = (carryOver * 24) / 100;
                 (bool bafFinished, ) = _progressExternal(0, bafPoolWei, cap, prevLevel, rngWord, coinContract);
                 if (!bafFinished) return;
             }
             if (decWindow) {
-                uint256 decPoolWei = (carryoverForNextLevel * 15) / 100;
+                uint256 decPoolWei = (carryOver * 15) / 100;
                 (bool decFinished, ) = _progressExternal(1, decPoolWei, cap, prevLevel, rngWord, coinContract);
                 if (!decFinished) return;
             }
@@ -308,7 +308,7 @@ contract PurgeGameEndgameModule {
         }
 
         if (isFinished) {
-            carryoverForNextLevel -= (poolWei - returnWei);
+            carryOver -= (poolWei - returnWei);
             returnedWei = returnWei;
         }
         return (isFinished, returnedWei);

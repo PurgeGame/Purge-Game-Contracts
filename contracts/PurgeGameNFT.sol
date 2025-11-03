@@ -378,7 +378,7 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
 
         if (payInCoin) {
             if (msg.value != 0) revert E();
-            _ensureEpThirtyUnlocked(targetLevel);
+            if (!game.epUnlocked(targetLevel)) revert NotTimeYet();
             _coinReceive(buyer, quantity * priceCoinUnit, targetLevel, bonusCoinReward);
         } else {
             uint8 phase = game.currentPhase();
@@ -468,7 +468,7 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
 
         if (payInCoin) {
             if (msg.value != 0) revert E();
-            _ensureEpThirtyUnlocked(lvl);
+            if (!game.epUnlocked(lvl)) revert NotTimeYet();
             _coinReceive(buyer, coinCost - mapRebate, lvl, mapBonus);
         } else {
             bool creditNext = (state == 3 || state == 1);
@@ -635,10 +635,6 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
                 if (uint256(lastLevel) + 1 != uint256(lvl)) revert LuckboxTooSmall();
             }
         }
-    }
-
-    function _ensureEpThirtyUnlocked(uint24 lvl) private view {
-        if (!game.epUnlocked(lvl)) revert NotTimeYet();
     }
 
     function _w8(uint32 rnd) private pure returns (uint8) {
