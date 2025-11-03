@@ -50,7 +50,7 @@ interface IPurgeGame {
     function currentPhase() external view returns (uint8);
     function mintPrice() external view returns (uint256);
     function coinPriceUnit() external view returns (uint256);
-    function getEarlyPurgeMask() external view returns (uint8);
+    function getEarlyPurgePercent() external view returns (uint8);
     function epUnlocked(uint24 lvl) external view returns (bool);
     function ethMintLastDay(address player) external view returns (uint48);
     function ethMintDayStreak(address player) external view returns (uint24);
@@ -265,7 +265,6 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
     uint16 private constant VRF_REQUEST_CONFIRMATIONS = 10;
     uint24 private constant STAKE_PREVIEW_START_LEVEL = 12;
     uint256 private constant LUCKBOX_BYPASS_THRESHOLD = 100_000 * 1_000_000;
-    uint8 private constant EP_THIRTY_MASK = 4;
 
     function _currentBaseTokenId() private view returns (uint256) {
         return uint256(uint128(basePointers));
@@ -532,14 +531,8 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
         uint256 priceUnit = game.coinPriceUnit();
         uint256 affiliateAmount = (scaledQty * priceUnit) / 1000;
 
-        uint8 reached = game.getEarlyPurgeMask() & 0x3F;
-        unchecked {
-            reached -= (reached >> 1) & 0x55;
-            reached = (reached & 0x33) + ((reached >> 2) & 0x33);
-            reached = (reached + (reached >> 4)) & 0x0F;
-        }
-        uint256 steps = reached > 5 ? 5 : reached;
-        uint256 pct = 25 - (steps * 5);
+        uint8 percentReached = game.getEarlyPurgePercent();
+        uint256 pct = percentReached >= 30 ? 0 : 25 - ((uint256(percentReached) * 25) / 30);
         unchecked {
             affiliateAmount += (affiliateAmount * pct) / 100;
         }

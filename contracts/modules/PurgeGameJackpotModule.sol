@@ -19,7 +19,7 @@ contract PurgeGameJackpotModule {
     uint48 private constant JACKPOT_RESET_TIME = 82620;
     uint8 private constant JACKPOT_KIND_DAILY = 4;
     uint8 private constant JACKPOT_KIND_MAP = 9;
-    uint8 private constant EP_THIRTY_MASK = 4;
+    uint8 private constant EARLY_PURGE_COIN_ONLY_THRESHOLD = 50;
     uint8 private constant PURGE_TROPHY_KIND_MAP = 0;
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
     uint64 private constant MAP_JACKPOT_SHARES_PACKED =
@@ -66,7 +66,7 @@ contract PurgeGameJackpotModule {
     uint24 public level = 1;
     uint8 public gameState = 1;
     uint8 private jackpotCounter;
-    uint8 private earlyPurgeJackpotPaidMask;
+    uint8 private earlyPurgePercent;
     uint8 private phase;
     uint16 private lastExterminatedTrait = TRAIT_ID_TIMEOUT;
 
@@ -133,23 +133,108 @@ contract PurgeGameJackpotModule {
         IPurgeGameNFTModule nftContract,
         IPurgeGameTrophiesModule trophiesContract
     ) external {
+        uint8 percentBefore = earlyPurgePercent;
+        uint8 percentAfter = _currentEarlyPurgePercent();
+        earlyPurgePercent = percentAfter;
+
         uint256 entropyWord = randWord;
         uint8[4] memory winningTraits;
 
         if (isDaily) {
-            winningTraits = _getWinningTraits(entropyWord, dailyPurgeCount);
-            _distributeDailyJackpot(lvl, entropyWord, winningTraits, coinContract, nftContract);
+            entropyWord = _scrambleJackpotEntropy(entropyWord, jackpotCounter);
+            winningTraits = _getRandomTraits(entropyWord);
+
+            uint24 targetLevel = lvl + 1;
+            (uint256 dailyCoinPool, ) = coinContract.prepareCoinJackpot();
+            uint256 carryBal = carryoverForNextLevel;
+            uint256 ethPool = (carryBal * 50) / 10_000;
+            if (ethPool > carryBal) ethPool = carryBal;
+
+            (uint256 dailyPaidEth, , uint256 dailyCoinRemainder) = _runJackpot(
+                JACKPOT_KIND_DAILY,
+                targetLevel,
+                ethPool,
+                dailyCoinPool,
+                false,
+                entropyWord ^ (uint256(targetLevel) << 192),
+                winningTraits,
+                DAILY_JACKPOT_SHARES_PACKED,
+                coinContract,
+                trophiesContract,
+                true
+            );
+
+            if (dailyCoinRemainder != 0) {
+                bool distributedRemainder;
+                for (uint8 traitIdx; traitIdx < 4 && !distributedRemainder; ) {
+                    address[] memory fallbackWinners = _randTraitTicket(
+                        traitPurgeTicket[targetLevel],
+                        entropyWord,
+                        winningTraits[traitIdx],
+                        1,
+                        uint8(240 + traitIdx)
+                    );
+                    if (fallbackWinners.length != 0) {
+                        address candidate = fallbackWinners[0];
+                        if (_creditJackpot(coinContract, true, candidate, dailyCoinRemainder)) {
+                            distributedRemainder = true;
+                        }
+                    }
+                    unchecked {
+                        ++traitIdx;
+                    }
+                }
+                if (!distributedRemainder) {
+                    coinContract.addToBounty(dailyCoinRemainder);
+                }
+            }
+
+            coinContract.resetCoinflipLeaderboard();
+
+            if (dailyPaidEth != 0) {
+                uint256 carryAfter = carryoverForNextLevel;
+                carryoverForNextLevel = dailyPaidEth > carryAfter ? 0 : carryAfter - dailyPaidEth;
+            }
+
+            uint48 dayIndex = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
+            dailyIdx = dayIndex;
+            nftContract.releaseRngLock();
+
+            unchecked {
+                ++jackpotCounter;
+            }
+            if (jackpotCounter < 10) {
+                _clearDailyPurgeCount();
+            }
             return;
         }
 
         entropyWord = _scrambleJackpotEntropy(entropyWord, jackpotCounter);
         winningTraits = _getRandomTraits(entropyWord);
 
-        uint256 baseWei = carryoverForNextLevel;
+        bool coinOnly = percentBefore >= EARLY_PURGE_COIN_ONLY_THRESHOLD;
         uint256 poolWei;
-        if ((lvl % 20) == 0) poolWei = baseWei / 100;
-        else if (lvl >= 21 && (lvl % 10) == 1) poolWei = (baseWei * 6) / 100;
-        else poolWei = baseWei / 40;
+        if (!coinOnly && gameState == 2 && phase <= 2) {
+            uint256 carryBal = carryoverForNextLevel;
+            uint256 poolBps = 50; // default 0.5%
+            bool initialTrigger = percentBefore == 0;
+            bool thresholdTrigger =
+                percentBefore < EARLY_PURGE_COIN_ONLY_THRESHOLD &&
+                percentAfter >= EARLY_PURGE_COIN_ONLY_THRESHOLD;
+
+            if (percentBefore == 0) {
+                poolBps = 400;
+            } else if (
+                percentBefore < EARLY_PURGE_COIN_ONLY_THRESHOLD &&
+                percentAfter >= EARLY_PURGE_COIN_ONLY_THRESHOLD
+            ) {
+                poolBps = 400;
+            }
+            if (initialTrigger && thresholdTrigger) {
+                poolBps = 600;
+            }
+            poolWei = (carryBal * poolBps) / 10_000;
+        }
 
         (uint256 coinPool, address biggestFlip) = coinContract.prepareCoinJackpot();
         address[] memory topBettors = coinContract.getLeaderboardAddresses(2);
@@ -210,6 +295,8 @@ contract PurgeGameJackpotModule {
 
         coinContract.resetCoinflipLeaderboard();
 
+        earlyPurgePercent = _currentEarlyPurgePercent();
+
         uint48 currentDay = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
         dailyIdx = currentDay;
         nftContract.releaseRngLock();
@@ -248,6 +335,8 @@ contract PurgeGameJackpotModule {
         prizePool += remainingPool;
         levelPrizePool += remainingPool;
 
+        earlyPurgePercent = 0;
+
         return true;
     }
 
@@ -278,37 +367,6 @@ contract PurgeGameJackpotModule {
         levelPrizePool = mainWei;
 
         effectiveWei = mapWei;
-    }
-
-    function updateEarlyPurgeJackpots(uint24 lvl) external {
-        if (lvl == 99) return;
-
-        uint256 prevPoolWei = lastPrizePool;
-        uint256 pctOfLast = (prizePool * 100) / prevPoolWei;
-
-        uint8 targetMask = (pctOfLast >= 10 ? uint8(1) : 0) |
-            (pctOfLast >= 20 ? uint8(2) : 0) |
-            (pctOfLast >= 30 ? uint8(4) : 0) |
-            (pctOfLast >= 40 ? uint8(8) : 0) |
-            (pctOfLast >= 50 ? uint8(16) : 0) |
-            (pctOfLast >= 75 ? uint8(32) : 0);
-
-        uint8 paidMask = earlyPurgeJackpotPaidMask;
-        earlyPurgeJackpotPaidMask = targetMask;
-
-        if (lvl < 10) return;
-
-        uint8 addMask = targetMask & ~paidMask;
-        if (addMask == 0) return;
-
-        uint8 newCountBits = addMask;
-        unchecked {
-            newCountBits = newCountBits - ((newCountBits >> 1) & 0x55);
-            newCountBits = (newCountBits & 0x33) + ((newCountBits >> 2) & 0x33);
-            newCountBits = (newCountBits + (newCountBits >> 4)) & 0x0F;
-        }
-
-        jackpotCounter += newCountBits;
     }
 
     function _distributeDailyJackpot(
@@ -1029,13 +1087,15 @@ contract PurgeGameJackpotModule {
         }
     }
 
-    function _epUnlocked(uint24 lvl) private view returns (bool) {
-        return lvl < 10 || (earlyPurgeJackpotPaidMask & EP_THIRTY_MASK) != 0;
+    function _currentEarlyPurgePercent() private view returns (uint8) {
+        uint256 prevPoolWei = lastPrizePool;
+        if (prevPoolWei == 0) return 0;
+        uint256 pct = (prizePool * 100) / prevPoolWei;
+        if (pct > type(uint8).max) return type(uint8).max;
+        return uint8(pct);
     }
 
-    function _eligibleJackpotWinner(address player, uint24 lvl) private view returns (bool) {
-        if (player == address(0)) return false;
-        if (!_epUnlocked(lvl)) return true;
-        return uint24((mintPacked_[player] >> ETH_LAST_LEVEL_SHIFT) & MINT_MASK_24) == lvl;
+    function _eligibleJackpotWinner(address player, uint24 /*lvl*/) private pure returns (bool) {
+        return player != address(0);
     }
 }

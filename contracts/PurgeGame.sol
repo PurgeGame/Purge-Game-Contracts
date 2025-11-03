@@ -88,7 +88,6 @@ interface IPurgeGameJackpotModule {
         IPurgeCoinModule coinContract
     ) external returns (uint256 effectiveWei);
 
-    function updateEarlyPurgeJackpots(uint24 lvl) external;
 }
 // ===========================================================================
 // Contract
@@ -134,7 +133,7 @@ contract PurgeGame {
     uint64 private constant MAP_LCG_MULT = 0x5851F42D4C957F2D; // LCG multiplier for map RNG slices
     uint8 private constant MAP_FIRST_BATCH = 8; // Consecutive daily jackpots on map-only levels before normal cadence resumes
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
-    uint8 private constant EP_THIRTY_MASK = 4; // 30% early-purge threshold bit
+    uint8 private constant EARLY_PURGE_UNLOCK_PERCENT = 30; // 30% early-purge threshold gate
     uint256 private constant COIN_BASE_UNIT = 1_000_000; // 1 PURGED (6 decimals)
 
     uint256 private constant MINT_MASK_24 = (uint256(1) << 24) - 1;
@@ -177,7 +176,7 @@ contract PurgeGame {
     uint24 public level = 1; // 1-based level counter
     uint8 public gameState = 1; // Phase FSM
     uint8 private jackpotCounter; // # of daily jackpots paid in current level
-    uint8 private earlyPurgeJackpotPaidMask; // Bitmask for early purge jackpots paid (progressive)
+    uint8 private earlyPurgePercent; // Cached ratio of current prize pool relative to the prior level (0-255)
     uint8 private phase; // Airdrop sub-phase (0..7)
     uint16 private lastExterminatedTrait = TRAIT_ID_TIMEOUT; // The winning trait from the previous season (timeout sentinel)
 
@@ -261,7 +260,7 @@ contract PurgeGame {
     /// @return prizePoolTarget  Last level's prize pool snapshot (wei)
     /// @return prizePoolCurrent Active prize pool (levelPrizePool when purging)
     /// @return enoughPurchases  True if purchaseCount >= 1,500
-    /// @return earlyPurgeMask   Bitmask of early-purge jackpot thresholds crossed (10/20/30/40/50/75%)
+    /// @return earlyPurgePercent_ Ratio of current prize pool vs. prior level prize pool (percent, capped at 255)
     function gameInfo()
         external
         view
@@ -274,7 +273,7 @@ contract PurgeGame {
             uint256 prizePoolTarget,
             uint256 prizePoolCurrent,
             bool enoughPurchases,
-            uint8 earlyPurgeMask
+            uint8 earlyPurgePercent_
         )
     {
         gameState_ = gameState;
@@ -285,7 +284,7 @@ contract PurgeGame {
         prizePoolTarget = lastPrizePool;
         prizePoolCurrent = prizePool;
         enoughPurchases = nft.purchaseCount() >= PURCHASE_MINIMUM;
-        earlyPurgeMask = earlyPurgeJackpotPaidMask;
+        earlyPurgePercent_ = earlyPurgePercent;
     }
 
     // --- State machine: advance one tick ------------------------------------------------
@@ -302,8 +301,8 @@ contract PurgeGame {
         return priceCoin;
     }
 
-    function getEarlyPurgeMask() external view returns (uint8) {
-        return earlyPurgeJackpotPaidMask;
+    function getEarlyPurgePercent() external view returns (uint8) {
+        return earlyPurgePercent;
     }
 
     function epUnlocked(uint24 lvl) external view returns (bool) {
@@ -434,7 +433,7 @@ contract PurgeGame {
             // --- State 2 - Purchase / Airdrop ---
             if (_gameState == 2) {
                 if (_phase <= 2) {
-                    _updateEarlyPurgeJackpots(lvl);
+                    _refreshEarlyPurgeJackpots(lvl);
                     bool prizeReady = prizePool >= lastPrizePool;
                     bool levelGate = (nft.purchaseCount() >= PURCHASE_MINIMUM && prizeReady);
                     if (modTwenty == 16) {
@@ -500,7 +499,7 @@ contract PurgeGame {
                         delete pendingMapMints;
                         airdropIndex = 0;
                         airdropMapsProcessedCount = 0;
-                        earlyPurgeJackpotPaidMask = 0;
+                        earlyPurgePercent = 0;
                         phase = 6;
                     }
                     break;
@@ -841,19 +840,52 @@ contract PurgeGame {
         uint256 data;
 
         if (coinMint) {
+            uint24 prevAggStreak = uint24((prevData >> AGG_DAY_STREAK_SHIFT) & MINT_MASK_20);
             data = _applyMintDay(prevData, day, COIN_DAY_SHIFT, MINT_MASK_32, COIN_DAY_STREAK_SHIFT, MINT_MASK_20);
+
+            uint24 aggStreak = uint24((data >> AGG_DAY_STREAK_SHIFT) & MINT_MASK_20);
+            if (aggStreak > prevAggStreak) {
+                uint256 dailyBonus = _dailyStreakBonus(aggStreak);
+                if (dailyBonus != 0) {
+                    unchecked {
+                        coinReward += dailyBonus;
+                    }
+                }
+            }
         } else {
             uint24 prevLevel = uint24((prevData >> ETH_LAST_LEVEL_SHIFT) & MINT_MASK_24);
             uint24 total = uint24((prevData >> ETH_LEVEL_COUNT_SHIFT) & MINT_MASK_24);
             uint24 streak = uint24((prevData >> ETH_LEVEL_STREAK_SHIFT) & MINT_MASK_24);
+            uint24 prevAggStreak = uint24((prevData >> AGG_DAY_STREAK_SHIFT) & MINT_MASK_20);
+            uint24 prevEthDayStreak = uint24((prevData >> ETH_DAY_STREAK_SHIFT) & MINT_MASK_20);
 
             data = _applyMintDay(prevData, day, ETH_DAY_SHIFT, MINT_MASK_32, ETH_DAY_STREAK_SHIFT, MINT_MASK_20);
+
+            uint24 aggStreak = uint24((data >> AGG_DAY_STREAK_SHIFT) & MINT_MASK_20);
+            if (aggStreak > prevAggStreak) {
+                uint256 dailyBonus = _dailyStreakBonus(aggStreak);
+                if (dailyBonus != 0) {
+                    unchecked {
+                        coinReward += dailyBonus;
+                    }
+                }
+            }
+
+            uint24 ethDayStreak = uint24((data >> ETH_DAY_STREAK_SHIFT) & MINT_MASK_20);
+            if (ethDayStreak > prevEthDayStreak) {
+                uint256 ethDailyBonus = _dailyStreakBonus(ethDayStreak);
+                if (ethDailyBonus != 0) {
+                    unchecked {
+                        coinReward += ethDailyBonus;
+                    }
+                }
+            }
 
             if (prevLevel == lvl) {
                 if (data != prevData) {
                     mintPacked_[player] = data;
                 }
-                return (0, 0);
+                return (coinReward, luckboxReward);
             }
 
             if (total < type(uint24).max) {
@@ -974,6 +1006,13 @@ contract PurgeGame {
         return (data & ~(mask << shift)) | ((value & mask) << shift);
     }
 
+    function _dailyStreakBonus(uint256 streak) private pure returns (uint256) {
+        if (streak < 2) return 0;
+        uint256 bonus = 50 + (streak - 2) * 10;
+        if (bonus > 320) bonus = 320;
+        return bonus * COIN_BASE_UNIT;
+    }
+
 
 
     // --- Shared jackpot helpers ----------------------------------------------------------------------
@@ -1036,17 +1075,20 @@ contract PurgeGame {
         return true;
     }
 
-    /// @notice Track early‑purge jackpot thresholds as the prize pool grows during purchase phase.
-    /// @dev
-    /// - Compares current `prizePool` to `lastPrizePool` as a percentage and sets a 6‑bit mask for
-    ///   thresholds {10,20,30,40,50,75}%.
-    /// - Increments `jackpotCounter` by the number of newly crossed thresholds since the last call
-    ///   using a popcount trick on the delta mask.
-    function _updateEarlyPurgeJackpots(uint24 lvl) internal {
-        (bool ok, ) = jackpotModule.delegatecall(
-            abi.encodeWithSelector(IPurgeGameJackpotModule.updateEarlyPurgeJackpots.selector, lvl)
-        );
-        if (!ok) revert E();
+    /// @notice Refresh early‑purge percent snapshot for UI and daily jackpot rules.
+    function _refreshEarlyPurgeJackpots(uint24 lvl) private {
+        if (lvl == 99) return;
+
+        uint8 currentPercent = _currentEarlyPurgePercent();
+        earlyPurgePercent = currentPercent;
+    }
+
+    function _currentEarlyPurgePercent() private view returns (uint8) {
+        uint256 prevPoolWei = lastPrizePool;
+        if (prevPoolWei == 0) return 0;
+        uint256 pct = (prizePool * 100) / prevPoolWei;
+        if (pct > type(uint8).max) return type(uint8).max;
+        return uint8(pct);
     }
 
     // --- Flips, VRF, payments, rarity ----------------------------------------------------------------
@@ -1364,7 +1406,7 @@ contract PurgeGame {
 
 
     function _epUnlocked(uint24 lvl) private view returns (bool) {
-        return lvl < 10 || (earlyPurgeJackpotPaidMask & EP_THIRTY_MASK) != 0;
+        return lvl < 10 || earlyPurgePercent >= EARLY_PURGE_UNLOCK_PERCENT;
     }
 
 

@@ -52,7 +52,7 @@ contract PurgeGameEndgameModule {
     uint24 public level;
     uint8 public gameState;
     uint8 private jackpotCounter;
-    uint8 private earlyPurgeJackpotPaidMask;
+    uint8 private earlyPurgePercent;
     uint8 private phase;
     uint16 private lastExterminatedTrait;
 
