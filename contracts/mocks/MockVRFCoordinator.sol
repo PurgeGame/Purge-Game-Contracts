@@ -28,7 +28,9 @@ contract MockVRFCoordinator {
         IVRFConsumer(consumer).rawFulfillRandomWords(requestId, words);
     }
 
-    function getSubscription(uint256)
+    function getSubscription(
+        uint256
+    )
         external
         pure
         returns (uint96 balance, uint96 premium, uint64 reqCount, address owner, address[] memory consumers)

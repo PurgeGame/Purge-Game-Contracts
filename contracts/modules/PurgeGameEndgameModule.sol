@@ -184,14 +184,7 @@ contract PurgeGameEndgameModule {
             uint256 baseTimes20 = base * 20;
             uint256 affiliateTrophyShare = baseTimes20 + remainder;
             uint256 legacyAffiliateShare = base * 10;
-            uint256[6] memory affiliatePayouts = [
-                baseTimes20,
-                baseTimes20,
-                base * 10,
-                base * 8,
-                base * 7,
-                base * 5
-            ];
+            uint256[6] memory affiliatePayouts = [baseTimes20, baseTimes20, base * 10, base * 8, base * 7, base * 5];
 
             address affiliateTrophyRecipient = topAffiliate != address(0) ? topAffiliate : pend.exterminator;
             if (affiliateTrophyRecipient == address(0)) {
@@ -310,5 +303,4 @@ contract PurgeGameEndgameModule {
         }
         return (isFinished, returnedWei);
     }
-
 }

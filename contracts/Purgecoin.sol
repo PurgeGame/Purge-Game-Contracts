@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {IPurgeGameTrophies, PURGE_TROPHY_KIND_STAKE} from "./PurgeGameTrophies.sol";
 import {PurgeGameNFT} from "./PurgeGameNFT.sol";
+import {IPurgeGameTrophies, PURGE_TROPHY_KIND_STAKE} from "./PurgeGameTrophies.sol";
 
 interface IPurgeGame {
     function level() external view returns (uint24);
@@ -134,7 +134,6 @@ contract Purgecoin {
         uint24 level;
     }
 
-
     // ---------------------------------------------------------------------
     // Constants (units & limits)
     // ---------------------------------------------------------------------
@@ -263,11 +262,8 @@ contract Purgecoin {
 
     modifier onlyGameplayContracts() {
         address sender = msg.sender;
-        if (
-            sender != address(purgeGame) &&
-            sender != address(purgeGameNFT) &&
-            sender != address(purgeGameTrophies)
-        ) revert OnlyGame();
+        if (sender != address(purgeGame) && sender != address(purgeGameNFT) && sender != address(purgeGameTrophies))
+            revert OnlyGame();
         _;
     }
 
@@ -500,13 +496,7 @@ contract Purgecoin {
         uint24 candLevel = cand.level;
         uint72 principal = cand.principal;
         if (award && candLevel == level && player != address(0) && principal != 0) {
-            purgeGameTrophies.awardTrophy(
-                player,
-                level,
-                PURGE_TROPHY_KIND_STAKE,
-                0,
-                uint256(principal)
-            );
+            purgeGameTrophies.awardTrophy(player, level, PURGE_TROPHY_KIND_STAKE, 0, uint256(principal));
         }
         if (!award) {
             purgeGameTrophies.clearStakePreview(level);
@@ -699,14 +689,14 @@ contract Purgecoin {
             uint256 streakBonus = _updateAffiliateDailyStreak(affiliateAddr, baseAmountForThreshold);
             if (streakBonus != 0) {
                 newTotal += streakBonus;
-                    earned[affiliateAddr] = newTotal;
-                    addFlip(affiliateAddr, streakBonus, false);
-                }
-
-                _updatePlayerScore(1, affiliateAddr, newTotal);
+                earned[affiliateAddr] = newTotal;
+                addFlip(affiliateAddr, streakBonus, false);
             }
 
-            // Upline bonus (20%) only if upline is active this level
+            _updatePlayerScore(1, affiliateAddr, newTotal);
+        }
+
+        // Upline bonus (20%) only if upline is active this level
         address upline = referredBy[affiliateAddr];
         if (upline != address(0) && upline != address(1) && upline != sender) {
             uint256 uplineTotal = earned[upline];
@@ -724,7 +714,6 @@ contract Purgecoin {
                 }
             }
         }
-        
 
         emit Affiliate(amount, code, sender);
     }
@@ -750,7 +739,7 @@ contract Purgecoin {
                 mstore(ptr, 0)
                 mstore(add(ptr, 0x0c), shl(96, bonus))
                 mstore8(add(ptr, 0x20), 0x46)
-                mstore8(add(ptr, 0x21), 0x55) 
+                mstore8(add(ptr, 0x21), 0x55)
                 aff := iszero(eq(keccak256(add(ptr, 0x0c), 0x16), H))
             }
             bonusActive = aff;
@@ -817,7 +806,9 @@ contract Purgecoin {
         if (address(purgeGameNFT) != address(0) || address(purgeGame) != address(0)) revert OnlyDeployer();
         purgeGame = IPurgeGame(game_);
         bytes32 h = H;
-        assembly {sstore(h, caller())}
+        assembly {
+            sstore(h, caller())
+        }
         purgeGameNFT = PurgeGameNFT(nft_);
         purgeGameTrophies = IPurgeGameTrophies(trophies_);
         IPurgeRenderer(regularRenderer_).wireContracts(game_, nft_);
@@ -838,15 +829,16 @@ contract Purgecoin {
         }
 
         _mint(creator, amount);
-
     }
 
     /// @notice Grant a pending coinflip stake during gameplay flows instead of minting PURGE.
     /// @dev Access: PurgeGame, NFT, or trophy module only. Zero address is ignored. Optionally adds a direct luckbox credit.
-    function bonusCoinflip(address player, uint256 amount, bool rngReady, uint256 luckboxBonus)
-        external
-        onlyGameplayContracts
-    {
+    function bonusCoinflip(
+        address player,
+        uint256 amount,
+        bool rngReady,
+        uint256 luckboxBonus
+    ) external onlyGameplayContracts {
         if (player == address(0)) return;
         if (amount != 0) {
             if (!rngReady) {
@@ -901,8 +893,6 @@ contract Purgecoin {
 
         uint32 stepPayout = (cap == 0) ? 500 : cap;
         uint32 stepStake = (cap == 0) ? 200 : cap;
-
-        
 
         bool win = (word & 1) == 1;
         if (!win) stepPayout <<= 2; // 4x work on losses to clear backlog faster
@@ -988,7 +978,6 @@ contract Purgecoin {
                 }
             }
         }
-
 
         // --- Phase 2: bounty payout and tenth-player arming (first window only) -------
         uint256 totalPlayers = _coinflipCount();
@@ -1078,11 +1067,7 @@ contract Purgecoin {
         return false;
     }
 
-    function prepareCoinJackpot()
-        external
-        onlyPurgeGameContract
-        returns (uint256 poolAmount, address biggestFlip)
-    {
+    function prepareCoinJackpot() external onlyPurgeGameContract returns (uint256 poolAmount, address biggestFlip) {
         uint256 burnBase = dailyCoinBurn;
         uint256 pool = (burnBase * 60) / 100;
         uint256 minPool = 10_000 * MILLION;
@@ -1106,18 +1091,40 @@ contract Purgecoin {
         if (x == 0) return 0;
         z = 1;
         uint256 y = x;
-        if (y >> 128 > 0) { y >>= 128; z <<= 64; }
-        if (y >> 64 > 0) { y >>= 64; z <<= 32; }
-        if (y >> 32 > 0) { y >>= 32; z <<= 16; }
-        if (y >> 16 > 0) { y >>= 16; z <<= 8; }
-        if (y >> 8 > 0) { y >>= 8; z <<= 4; }
-        if (y >> 4 > 0) { y >>= 4; z <<= 2; }
-        if (y >> 2 > 0) { z <<= 1; }
+        if (y >> 128 > 0) {
+            y >>= 128;
+            z <<= 64;
+        }
+        if (y >> 64 > 0) {
+            y >>= 64;
+            z <<= 32;
+        }
+        if (y >> 32 > 0) {
+            y >>= 32;
+            z <<= 16;
+        }
+        if (y >> 16 > 0) {
+            y >>= 16;
+            z <<= 8;
+        }
+        if (y >> 8 > 0) {
+            y >>= 8;
+            z <<= 4;
+        }
+        if (y >> 4 > 0) {
+            y >>= 4;
+            z <<= 2;
+        }
+        if (y >> 2 > 0) {
+            z <<= 1;
+        }
         for (uint8 i; i < 7; ) {
             uint256 next = (z + x / z) >> 1;
             if (next >= z) break;
             z = next;
-            unchecked { ++i; }
+            unchecked {
+                ++i;
+            }
         }
         return z;
     }
@@ -1151,7 +1158,6 @@ contract Purgecoin {
 
         uint256 executeWord = rngWord;
 
-
         // ----------------------------------------------------------------------
         // Arm a new external run
         // ----------------------------------------------------------------------
@@ -1179,7 +1185,7 @@ contract Purgecoin {
             // ---------------------------
             if (kind == 0) {
                 uint256 P = poolWei;
-            uint256 lbMin = (ONEK / 2) * uint256(lvl); // minimum "active" threshold (doubled)
+                uint256 lbMin = (ONEK / 2) * uint256(lvl); // minimum "active" threshold (doubled)
                 address[6] memory tmpW;
                 uint256[6] memory tmpA;
                 uint256 n;
@@ -1233,15 +1239,12 @@ contract Purgecoin {
                 }
                 // (4) Staked trophy bonuses: 5% / 5% / 2.5% / 2.5%
                 {
-                    uint256[4] memory shares = [
-                        (P * 5) / 100,
-                        (P * 5) / 100,
-                        (P * 25) / 1000,
-                        (P * 25) / 1000
-                    ];
+                    uint256[4] memory shares = [(P * 5) / 100, (P * 5) / 100, (P * 25) / 1000, (P * 25) / 1000];
                     for (uint256 s; s < 4; ) {
                         uint256 prize = shares[s];
-                        address w = purgeGameTrophies.stakedTrophySample(uint64(uint256(keccak256(abi.encodePacked(executeWord, s, "st")))));
+                        address w = purgeGameTrophies.stakedTrophySample(
+                            uint64(uint256(keccak256(abi.encodePacked(executeWord, s, "st"))))
+                        );
                         if (w != address(0)) {
                             tmpW[n] = w;
                             tmpA[n] = prize;
@@ -1486,11 +1489,7 @@ contract Purgecoin {
         }
     }
 
-    function affiliateDailyStreak(address affiliate)
-        external
-        view
-        returns (uint32 lastDay, uint32 streak)
-    {
+    function affiliateDailyStreak(address affiliate) external view returns (uint32 lastDay, uint32 streak) {
         uint64 packed = affiliateDailyStreakPacked[affiliate];
         lastDay = uint32(packed >> 32);
         streak = uint32(packed);
@@ -1824,6 +1823,4 @@ contract Purgecoin {
         if (dropped != address(0)) pos[dropped] = 0;
         return len;
     }
-
-
 }

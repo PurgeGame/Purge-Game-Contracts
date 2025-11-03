@@ -1,11 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {
-    IPurgeCoinModule,
-    IPurgeGameNFTModule,
-    IPurgeGameTrophiesModule
-} from "./PurgeGameModuleInterfaces.sol";
+import {IPurgeCoinModule, IPurgeGameNFTModule, IPurgeGameTrophiesModule} from "./PurgeGameModuleInterfaces.sol";
 
 /**
  * @title PurgeGameJackpotModule
@@ -23,10 +19,7 @@ contract PurgeGameJackpotModule {
     uint8 private constant PURGE_TROPHY_KIND_MAP = 0;
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
     uint64 private constant MAP_JACKPOT_SHARES_PACKED =
-        (uint64(6000)) |
-        (uint64(1333) << 16) |
-        (uint64(1333) << 32) |
-        (uint64(1334) << 48);
+        (uint64(6000)) | (uint64(1333) << 16) | (uint64(1333) << 32) | (uint64(1334) << 48);
     uint64 private constant DAILY_JACKPOT_SHARES_PACKED = uint64(2000) * 0x0001000100010001;
     bytes32 private constant COIN_JACKPOT_TAG = keccak256("coin-jackpot");
     uint256 private constant TROPHY_FLAG_MAP = uint256(1) << 200;
@@ -169,15 +162,13 @@ contract PurgeGameJackpotModule {
             uint256 carryBal = carryoverForNextLevel;
             uint256 poolBps = 50; // default 0.5%
             bool initialTrigger = percentBefore == 0;
-            bool thresholdTrigger =
-                percentBefore < EARLY_PURGE_COIN_ONLY_THRESHOLD &&
+            bool thresholdTrigger = percentBefore < EARLY_PURGE_COIN_ONLY_THRESHOLD &&
                 percentAfter >= EARLY_PURGE_COIN_ONLY_THRESHOLD;
 
             if (percentBefore == 0) {
                 poolBps = 400;
             } else if (
-                percentBefore < EARLY_PURGE_COIN_ONLY_THRESHOLD &&
-                percentAfter >= EARLY_PURGE_COIN_ONLY_THRESHOLD
+                percentBefore < EARLY_PURGE_COIN_ONLY_THRESHOLD && percentAfter >= EARLY_PURGE_COIN_ONLY_THRESHOLD
             ) {
                 poolBps = 400;
             }
@@ -552,11 +543,12 @@ contract PurgeGameJackpotModule {
         }
     }
 
-    function _sliceJackpotShare(uint256 pool, uint16 shareBps, uint8 traitIdx, uint256 distributed)
-        private
-        pure
-        returns (uint256 slice)
-    {
+    function _sliceJackpotShare(
+        uint256 pool,
+        uint16 shareBps,
+        uint8 traitIdx,
+        uint256 distributed
+    ) private pure returns (uint256 slice) {
         if (pool == 0) return 0;
         if (traitIdx == 3) return pool - distributed;
         if (shareBps == 0) return 0;
@@ -614,7 +606,13 @@ contract PurgeGameJackpotModule {
                     uint256 deferred = perWinner - half;
                     if (deferred != 0 && address(trophiesContract) != address(0)) {
                         uint256 trophyData = (uint256(traitId) << 152) | (uint256(lvl) << 128) | TROPHY_FLAG_MAP;
-                        trophiesContract.awardTrophy{value: deferred}(w, lvl, PURGE_TROPHY_KIND_MAP, trophyData, deferred);
+                        trophiesContract.awardTrophy{value: deferred}(
+                            w,
+                            lvl,
+                            PURGE_TROPHY_KIND_MAP,
+                            trophyData,
+                            deferred
+                        );
                         ethDelta += deferred;
                     }
                 } else if (_creditJackpot(coinContract, payCoin, w, perWinner)) {

@@ -3,11 +3,7 @@ pragma solidity ^0.8.26;
 
 import {IPurgeGameNFT} from "./PurgeGameNFT.sol";
 import {IPurgeGameTrophies} from "./PurgeGameTrophies.sol";
-import {
-    IPurgeCoinModule,
-    IPurgeGameNFTModule,
-    IPurgeGameTrophiesModule
-} from "./modules/PurgeGameModuleInterfaces.sol";
+import {IPurgeCoinModule, IPurgeGameNFTModule, IPurgeGameTrophiesModule} from "./modules/PurgeGameModuleInterfaces.sol";
 
 /**
  * @title Purge Game — Core NFT game contract
@@ -88,7 +84,6 @@ interface IPurgeGameJackpotModule {
         uint256 rngWord,
         IPurgeCoinModule coinContract
     ) external returns (uint256 effectiveWei);
-
 }
 // ===========================================================================
 // Contract
@@ -121,7 +116,6 @@ contract PurgeGame {
     IPurgeGameTrophies private immutable trophies; // Dedicated trophy module
     address private immutable endgameModule; // Delegate module for endgame settlement
     address private immutable jackpotModule; // Delegate module for jackpot routines
-
 
     // -----------------------
     // Game Constants
@@ -252,7 +246,6 @@ contract PurgeGame {
 
     // --- View: lightweight game status -------------------------------------------------
 
-
     /// @notice Snapshot key game state for UI/indexers.
     /// @return gameState_       FSM state (0=idle,1=pregame,2=purchase/airdrop,3=purge)
     /// @return phase_           Airdrop sub-phase (0..7)
@@ -347,7 +340,9 @@ contract PurgeGame {
         return uint24((mintPacked_[player] >> AGG_DAY_STREAK_SHIFT) & MINT_MASK_20);
     }
 
-    function playerMintData(address player)
+    function playerMintData(
+        address player
+    )
         external
         view
         returns (
@@ -374,11 +369,12 @@ contract PurgeGame {
         overallDayStreak = uint24((packed >> AGG_DAY_STREAK_SHIFT) & MINT_MASK_20);
     }
 
-    function recordMint(address player, uint24 lvl, bool creditNext, bool coinMint)
-        external
-        payable
-        returns (uint256 coinReward, uint256 luckboxReward)
-    {
+    function recordMint(
+        address player,
+        uint24 lvl,
+        bool creditNext,
+        bool coinMint
+    ) external payable returns (uint256 coinReward, uint256 luckboxReward) {
         if (msg.sender != address(nft)) revert E();
         if (coinMint) {
             if (creditNext || msg.value != 0) revert E();
@@ -409,12 +405,12 @@ contract PurgeGame {
         uint8 modTwenty = uint8(lvl % 20);
         uint8 _gameState = gameState;
         uint8 _phase = phase;
-        bool rngReady  = true;
+        bool rngReady = true;
         uint48 day = uint48((ts - JACKPOT_RESET_TIME) / 1 days);
 
         do {
             // Luckbox rewards
-            if (cap == 0 && coinContract.playerLuckbox(msg.sender) < priceCoin * lvl * (lvl / 100 + 1) << 1)
+            if (cap == 0 && coinContract.playerLuckbox(msg.sender) < (priceCoin * lvl * (lvl / 100 + 1)) << 1)
                 revert LuckboxTooSmall();
             uint256 rngWord;
             rngWord = rngAndTimeGate(day);
@@ -470,7 +466,7 @@ contract PurgeGame {
                         phase = 4;
                         airdropIndex = 0;
                         airdropMapsProcessedCount = 0;
-                    }        
+                    }
                     break;
                 }
 
@@ -510,12 +506,12 @@ contract PurgeGame {
                     traitCountsSeedQueued = false;
                 }
 
-                    levelStartTime = ts;
-                    nft.finalizePurchasePhase(purchases);
-                    dailyIdx = day;                    
-                    traitRebuildCursor = 0;
-                    gameState = 3;
-                
+                levelStartTime = ts;
+                nft.finalizePurchasePhase(purchases);
+                dailyIdx = day;
+                traitRebuildCursor = 0;
+                gameState = 3;
+
                 break;
             }
 
@@ -525,7 +521,9 @@ contract PurgeGame {
                     uint24 coinflipLevel = uint24(lvl + (jackpotCounter >= 9 ? 1 : 0));
                     if (!coinContract.processCoinflipPayouts(coinflipLevel, cap, false, rngWord, day)) break;
 
-                    uint8 remaining = jackpotCounter >= JACKPOT_LEVEL_CAP ? 0 : uint8(JACKPOT_LEVEL_CAP - jackpotCounter);
+                    uint8 remaining = jackpotCounter >= JACKPOT_LEVEL_CAP
+                        ? 0
+                        : uint8(JACKPOT_LEVEL_CAP - jackpotCounter);
                     uint8 toPay = remaining > JACKPOTS_PER_DAY ? JACKPOTS_PER_DAY : remaining;
 
                     bool keepGoing = true;
@@ -562,7 +560,6 @@ contract PurgeGame {
         if (_gameState != 0 && cap == 0) coinContract.bonusCoinflip(msg.sender, priceCoin, rngReady, 0);
     }
 
-
     // --- Purchases: schedule NFT mints (traits precomputed) ----------------------------------------
 
     /// @notice Queue map mints owed after NFT-side processing.
@@ -570,7 +567,6 @@ contract PurgeGame {
     /// @param quantity Map entries purchased (1+).
     function enqueueMap(address buyer, uint32 quantity) external {
         if (msg.sender != address(nft)) revert E();
-
 
         if (playerMapMintsOwed[buyer] == 0) {
             pendingMapMints.push(buyer);
@@ -734,7 +730,6 @@ contract PurgeGame {
     function _endLevel(uint16 exterminated) private {
         PendingEndLevel storage pend = pendingEndLevel;
 
-
         address exterminator = msg.sender;
         uint24 levelSnapshot = level;
         pend.level = levelSnapshot;
@@ -752,9 +747,7 @@ contract PurgeGame {
 
             uint256 ninetyPercent = (pool * 90) / 100;
             uint256 mod10 = levelSnapshot % 10;
-            uint256 exterminatorShare = (mod10 == 4 && levelSnapshot != 4)
-                ? (pool * 40) / 100
-                : (pool * 20) / 100;
+            uint256 exterminatorShare = (mod10 == 4 && levelSnapshot != 4) ? (pool * 40) / 100 : (pool * 20) / 100;
             uint256 participantShare = ninetyPercent - exterminatorShare;
 
             uint256 ticketsLen = traitPurgeTicket[levelSnapshot][exTrait].length;
@@ -816,7 +809,6 @@ contract PurgeGame {
                 trophies
             )
         );
-
     }
 
     // --- Claiming winnings (ETH) --------------------------------------------------------------------
@@ -851,10 +843,11 @@ contract PurgeGame {
         emit PlayerCredited(beneficiary, weiAmount);
     }
 
-    function _recordMintData(address player, uint24 lvl, bool coinMint)
-        private
-        returns (uint256 coinReward, uint256 luckboxReward)
-    {
+    function _recordMintData(
+        address player,
+        uint24 lvl,
+        bool coinMint
+    ) private returns (uint256 coinReward, uint256 luckboxReward) {
         uint256 prevData = mintPacked_[player];
         uint32 day = _currentMintDay();
         uint256 data;
@@ -1017,12 +1010,7 @@ contract PurgeGame {
         return clearedStreak | (streak << streakShift);
     }
 
-    function _setPacked(
-        uint256 data,
-        uint256 shift,
-        uint256 mask,
-        uint256 value
-    ) private pure returns (uint256) {
+    function _setPacked(uint256 data, uint256 shift, uint256 mask, uint256 value) private pure returns (uint256) {
         return (data & ~(mask << shift)) | ((value & mask) << shift);
     }
 
@@ -1033,10 +1021,7 @@ contract PurgeGame {
         return bonus * COIN_BASE_UNIT;
     }
 
-
-
     // --- Shared jackpot helpers ----------------------------------------------------------------------
-
 
     // --- Map jackpot payout (end of purchase phase) -------------------------------------------------
 
@@ -1068,7 +1053,6 @@ contract PurgeGame {
         if (!ok) revert E();
         return abi.decode(data, (uint256));
     }
-
 
     // --- Daily & early‑purge jackpots ---------------------------------------------------------------
 
@@ -1143,7 +1127,7 @@ contract PurgeGame {
             }
         }
         if (throttleWrites) {
-            writesBudget -= writesBudget * 35 / 100; // 65% scaling
+            writesBudget -= (writesBudget * 35) / 100; // 65% scaling
         }
         uint32 used = 0;
         uint256 entropy = nft.currentRngWord();
@@ -1226,7 +1210,6 @@ contract PurgeGame {
     /// @return finished True when all tokens for the level have been incorporated.
     function _rebuildTraitCounts(uint32 tokenBudget) private returns (bool finished) {
         uint32 target = nft.purchaseCount();
-
 
         uint32 cursor = traitRebuildCursor;
         if (cursor >= target) return true;
@@ -1335,7 +1318,6 @@ contract PurgeGame {
                 unchecked {
                     s = s * MAP_LCG_MULT + 1;
 
-
                     uint8 quadrant = uint8(i & 3);
                     uint8 traitId = _getTrait(s) + (quadrant << 6);
 
@@ -1369,7 +1351,11 @@ contract PurgeGame {
 
                 mstore(0x00, elem)
                 let data := keccak256(0x00, 0x20)
-                for { let k := 0 } lt(k, occurrences) { k := add(k, 1) } {
+                for {
+                    let k := 0
+                } lt(k, occurrences) {
+                    k := add(k, 1)
+                } {
                     sstore(add(data, add(len, k)), player)
                 }
             }
@@ -1409,11 +1395,9 @@ contract PurgeGame {
         return lastExterminatedTrait;
     }
 
-    function getTraitRemainingQuad(uint8[4] calldata traitIds)
-        external
-        view
-        returns (uint16 lastExterminated, uint24 currentLevel, uint32[4] memory remaining)
-    {
+    function getTraitRemainingQuad(
+        uint8[4] calldata traitIds
+    ) external view returns (uint16 lastExterminated, uint24 currentLevel, uint32[4] memory remaining) {
         currentLevel = level;
         lastExterminated = lastExterminatedTrait;
         remaining[0] = traitRemaining[traitIds[0]];

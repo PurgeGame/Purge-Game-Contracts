@@ -24,7 +24,6 @@ uint8 constant PURGE_TROPHY_KIND_AFFILIATE = 2;
 uint8 constant PURGE_TROPHY_KIND_STAKE = 3;
 
 interface IPurgeGameTrophies {
-
     struct EndLevelRequest {
         address exterminator;
         uint16 traitId;
@@ -41,10 +40,9 @@ interface IPurgeGameTrophies {
 
     function awardTrophy(address to, uint24 level, uint8 kind, uint256 data, uint256 deferredWei) external payable;
 
-    function processEndLevel(EndLevelRequest calldata req)
-        external
-        payable
-        returns (address mapImmediateRecipient, address[6] memory affiliateRecipients);
+    function processEndLevel(
+        EndLevelRequest calldata req
+    ) external payable returns (address mapImmediateRecipient, address[6] memory affiliateRecipients);
 
     function claimTrophy(uint256 tokenId) external;
 
@@ -63,7 +61,6 @@ interface IPurgeGameTrophies {
     function mapStakeDiscount(address player) external view returns (uint8);
 
     function exterminatorStakeDiscount(address player) external view returns (uint8);
-
 
     function purgeTrophy(uint256 tokenId) external;
 
@@ -295,7 +292,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         return base - offset;
     }
 
-
     function _setTrophyData(uint256 tokenId, uint256 data) private {
         trophyData_[tokenId] = data;
     }
@@ -336,9 +332,9 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         uint256 info = trophyData_[tokenId];
         uint256 owed = (info & TROPHY_OWED_MASK) + amountWei;
         uint256 base = uint256((startLevel - 1) & 0xFFFFFF);
-        uint256 updated = (info & ~(TROPHY_OWED_MASK | (uint256(0xFFFFFF) << TROPHY_BASE_LEVEL_SHIFT)))
-            | (owed & TROPHY_OWED_MASK)
-            | (base << TROPHY_BASE_LEVEL_SHIFT);
+        uint256 updated = (info & ~(TROPHY_OWED_MASK | (uint256(0xFFFFFF) << TROPHY_BASE_LEVEL_SHIFT))) |
+            (owed & TROPHY_OWED_MASK) |
+            (base << TROPHY_BASE_LEVEL_SHIFT);
         trophyData_[tokenId] = updated;
     }
 
@@ -471,8 +467,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             uint256 levelBits = uint256(params.effectiveLevel & 0xFFFFFF);
             uint256 baseCleared = info & ~(uint256(0xFFFFFF) << TROPHY_BASE_LEVEL_SHIFT);
             uint256 lastCleared = baseCleared & ~TROPHY_LAST_CLAIM_MASK;
-            uint256 updatedInfo =
-                lastCleared |
+            uint256 updatedInfo = lastCleared |
                 (levelBits << TROPHY_BASE_LEVEL_SHIFT) |
                 (levelBits << TROPHY_LAST_CLAIM_SHIFT);
             trophyData_[params.tokenId] = updatedInfo;
@@ -662,9 +657,9 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             uint256 tokenId = tokenIds[i];
             _ensurePlayerOwnsStaked(player, tokenId);
             uint256 info = trophyData_[tokenId];
-            bool invalid = (info & TROPHY_FLAG_MAP) != 0
-                || (info & TROPHY_FLAG_AFFILIATE) != 0
-                || (info & TROPHY_FLAG_STAKE) != 0;
+            bool invalid = (info & TROPHY_FLAG_MAP) != 0 ||
+                (info & TROPHY_FLAG_AFFILIATE) != 0 ||
+                (info & TROPHY_FLAG_STAKE) != 0;
             if (invalid) revert StakeInvalid();
             uint24 base = uint24((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF);
             if (base > best) best = base;
@@ -747,13 +742,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     // ---------------------------------------------------------------------
     // Trophy awarding & end-level flows
     // ---------------------------------------------------------------------
-    function _awardTrophyInternal(
-        address to,
-        uint8 kind,
-        uint256 data,
-        uint256 deferredWei,
-        uint256 tokenId
-    ) private {
+    function _awardTrophyInternal(address to, uint8 kind, uint256 data, uint256 deferredWei, uint256 tokenId) private {
         address currentOwner = address(uint160(nft.packedOwnershipOf(tokenId)));
         if (currentOwner != to) {
             nft.transferTrophy(currentOwner, to, tokenId);
@@ -818,7 +807,9 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         _eraseTrophy(tokenId, PURGE_TROPHY_KIND_STAKE, false);
     }
 
-    function processEndLevel(EndLevelRequest calldata req)
+    function processEndLevel(
+        EndLevelRequest calldata req
+    )
         external
         payable
         override
@@ -1064,8 +1055,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         }
 
         if (!ctx.ethClaimed && !ctx.coinClaimed) revert ClaimNotReady();
-        uint256 newInfo =
-            (ctx.info & ~(TROPHY_OWED_MASK | TROPHY_LAST_CLAIM_MASK)) |
+        uint256 newInfo = (ctx.info & ~(TROPHY_OWED_MASK | TROPHY_LAST_CLAIM_MASK)) |
             (ctx.newOwed & TROPHY_OWED_MASK) |
             (uint256(ctx.updatedLast & 0xFFFFFF) << TROPHY_LAST_CLAIM_SHIFT);
         _setTrophyData(tokenId, newInfo);
@@ -1130,14 +1120,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
 
         nft.setTrophyPackedInfo(tokenId, storedKind, stake);
 
-        emit TrophyStakeChanged(
-            sender,
-            tokenId,
-            eventData.kind,
-            stake,
-            eventData.count,
-            eventData.discountBps
-        );
+        emit TrophyStakeChanged(sender, tokenId, eventData.kind, stake, eventData.count, eventData.discountBps);
     }
 
     function refreshStakeBonuses(
@@ -1151,12 +1134,10 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         _refreshStakeBonus(player, stakeTokenIds);
     }
 
-    function handleExterminatorTraitPurge(address player, uint16 traitId)
-        external
-        override
-        onlyGame
-        returns (uint8 newPercent)
-    {
+    function handleExterminatorTraitPurge(
+        address player,
+        uint16 traitId
+    ) external override onlyGame returns (uint8 newPercent) {
         if (exterminatorStakeTraitCount_[player][traitId] == 0) return 0;
         uint8 current = exterminatorStakeTraitPct_[player][traitId];
         if (current < EXTERMINATOR_STAKE_COIN_CAP) {
@@ -1239,11 +1220,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     // Internal randomness helpers
     // ---------------------------------------------------------------------
 
-    function _selectAffiliateRecipients(uint256 randomWord)
-        private
-        view
-        returns (address[6] memory recipients)
-    {
+    function _selectAffiliateRecipients(uint256 randomWord) private view returns (address[6] memory recipients) {
         address[] memory leaders = coin.getLeaderboardAddresses(1);
         uint256 len = leaders.length;
 
@@ -1286,7 +1263,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
                         ++slotSeed;
                         rand = randomWord | slotSeed;
                     }
-                    uint256 idx = 2 + (rand & mask) % span;
+                    uint256 idx = 2 + ((rand & mask) % span);
                     rand >>= 64;
                     if (idx >= len) idx = len - 1;
                     uint256 bit = uint256(1) << idx;
@@ -1312,7 +1289,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
                         ++slotSeed;
                         rand = randomWord | slotSeed;
                     }
-                    uint256 idx = 2 + (rand & mask) % span;
+                    uint256 idx = 2 + ((rand & mask) % span);
                     rand >>= 64;
                     if (idx >= len) idx = len - 1;
                     if (used[idx]) {
@@ -1354,5 +1331,4 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         game = IPurgeGameMinimal(game_);
         coin = IPurgecoinMinimal(coin_);
     }
-
 }

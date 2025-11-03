@@ -39,10 +39,9 @@ interface ITokenRenderer {
 }
 
 interface IPurgeGame {
-    function getTraitRemainingQuad(uint8[4] calldata traitIds)
-        external
-        view
-        returns (uint16 lastExterminated, uint24 currentLevel, uint32[4] memory remaining);
+    function getTraitRemainingQuad(
+        uint8[4] calldata traitIds
+    ) external view returns (uint16 lastExterminated, uint24 currentLevel, uint32[4] memory remaining);
 
     function level() external view returns (uint24);
 
@@ -58,7 +57,9 @@ interface IPurgeGame {
     function coinMintDayStreak(address player) external view returns (uint24);
     function mintLastDay(address player) external view returns (uint48);
     function mintDayStreak(address player) external view returns (uint24);
-    function playerMintData(address player)
+    function playerMintData(
+        address player
+    )
         external
         view
         returns (
@@ -73,10 +74,12 @@ interface IPurgeGame {
             uint24 overallDayStreak
         );
     function enqueueMap(address buyer, uint32 quantity) external;
-    function recordMint(address player, uint24 lvl, bool creditNext, bool coinMint)
-        external
-        payable
-        returns (uint256 coinReward, uint256 luckboxReward);
+    function recordMint(
+        address player,
+        uint24 lvl,
+        bool creditNext,
+        bool coinMint
+    ) external payable returns (uint256 coinReward, uint256 luckboxReward);
     function ethMintLastLevel(address player) external view returns (uint24);
 }
 
@@ -93,9 +96,7 @@ interface IPurgecoin {
 }
 
 interface IVRFCoordinator {
-    function requestRandomWords(
-        VRFRandomWordsRequest calldata request
-    ) external returns (uint256);
+    function requestRandomWords(VRFRandomWordsRequest calldata request) external returns (uint256);
 
     function getSubscription(
         uint256 subId
@@ -157,7 +158,7 @@ contract PurgeGameNFT {
     event Transfer(address indexed from, address indexed to, uint256 indexed tokenId);
     event Approval(address indexed owner, address indexed approved, uint256 indexed tokenId);
     event ApprovalForAll(address indexed owner, address indexed operator, bool approved);
-event TokenCreated(uint256 tokenId, uint32 tokenTraits);
+    event TokenCreated(uint256 tokenId, uint32 tokenTraits);
 
     struct EndLevelRequest {
         address exterminator;
@@ -326,7 +327,6 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
         return 4;
     }
 
-
     constructor(
         address regularRenderer_,
         address trophyRenderer_,
@@ -409,7 +409,9 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
         uint8 t3 = uint8(traitsPacked >> 24);
 
         uint8[4] memory traitIds = [t0, t1, t2, t3];
-        (uint16 lastExterminated, uint24 currentLevel, uint32[4] memory remaining) = game.getTraitRemainingQuad(traitIds);
+        (uint16 lastExterminated, uint24 currentLevel, uint32[4] memory remaining) = game.getTraitRemainingQuad(
+            traitIds
+        );
         uint256 metaPacked = (uint256(lastExterminated) << 56) | (uint256(currentLevel) << 32) | uint256(traitsPacked);
         return regularRenderer.tokenURI(tokenId, metaPacked, remaining);
     }
@@ -426,7 +428,6 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
         uint8 state = game.gameState();
         bool queueNext = state == 3;
         uint24 targetLevel = queueNext ? currentLevel + 1 : currentLevel;
-
 
         if ((targetLevel % 20) == 16) revert NotTimeYet();
         if (rngLockedFlag) revert RngNotReady();
@@ -481,8 +482,7 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
             uint8 traitC = _getTrait(uint64(rand >> 128)) | 128;
             uint8 traitD = _getTrait(uint64(rand >> 192)) | 192;
 
-            uint32 packedTraits =
-                uint32(traitA) |
+            uint32 packedTraits = uint32(traitA) |
                 (uint32(traitB) << 8) |
                 (uint32(traitC) << 16) |
                 (uint32(traitD) << 24);
@@ -567,9 +567,7 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
         uint256 expectedWei = (game.mintPrice() * scaledQty) / 100;
 
         if (mapPurchase) {
-            uint8 mapDiscount = address(trophyModule) == address(0)
-                ? 0
-                : trophyModule.mapStakeDiscount(payer);
+            uint8 mapDiscount = address(trophyModule) == address(0) ? 0 : trophyModule.mapStakeDiscount(payer);
             if (mapDiscount != 0) {
                 uint256 discountWei = (expectedWei * mapDiscount) / 100;
                 expectedWei -= discountWei;
@@ -586,8 +584,12 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
 
         if (msg.value != expectedWei) revert E();
 
-        (uint256 streakBonus, uint256 streakLuckbox) =
-            game.recordMint{value: expectedWei}(payer, lvl, creditNextPool, false);
+        (uint256 streakBonus, uint256 streakLuckbox) = game.recordMint{value: expectedWei}(
+            payer,
+            lvl,
+            creditNextPool,
+            false
+        );
 
         uint256 priceUnit = game.coinPriceUnit();
         uint256 affiliateAmount = (scaledQty * priceUnit) / 1000;
@@ -738,9 +740,9 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
             }
         }
 
-
-
-        if (tokenId < _currentBaseTokenId() && (address(trophyModule) == address(0) || !trophyModule.hasTrophy(tokenId))) {
+        if (
+            tokenId < _currentBaseTokenId() && (address(trophyModule) == address(0) || !trophyModule.hasTrophy(tokenId))
+        ) {
             revert InvalidToken();
         }
 
@@ -787,9 +789,7 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
                 }
             }
             if (packed == 0) return false;
-            return
-                (packed & _BITMASK_BURNED) == 0 &&
-                address(uint160(packed)) == address(game);
+            return (packed & _BITMASK_BURNED) == 0 && address(uint160(packed)) == address(game);
         }
 
         if (tokenId < _currentIndex) {
@@ -817,11 +817,7 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
         }
     }
 
-    function transferFrom(
-        address from,
-        address to,
-        uint256 tokenId
-    ) public payable {
+    function transferFrom(address from, address to, uint256 tokenId) public payable {
         if (rngLockedFlag) {
             address senderCheck = msg.sender;
             if (senderCheck != address(this) && senderCheck != address(game)) revert CoinPaused();
@@ -847,8 +843,7 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
             --_packedAddressData[from]; // Updates: `balance -= 1`.
             ++_packedAddressData[to]; // Updates: `balance += 1`.
 
-            uint256 preserved =
-                prevOwnershipPacked &
+            uint256 preserved = prevOwnershipPacked &
                 (_BITMASK_TROPHY_KIND | _BITMASK_TROPHY_STAKED | _BITMASK_TROPHY_ACTIVE);
             _packedOwnerships[tokenId] = _packOwnershipData(to, preserved | _BITMASK_NEXT_INITIALIZED);
 
@@ -884,20 +879,11 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
         }
     }
 
-    function safeTransferFrom(
-        address from,
-        address to,
-        uint256 tokenId
-    ) public payable {
-        safeTransferFrom(from, to, tokenId, '');
+    function safeTransferFrom(address from, address to, uint256 tokenId) public payable {
+        safeTransferFrom(from, to, tokenId, "");
     }
 
-    function safeTransferFrom(
-        address from,
-        address to,
-        uint256 tokenId,
-        bytes memory _data
-    ) public payable {
+    function safeTransferFrom(address from, address to, uint256 tokenId, bytes memory _data) public payable {
         transferFrom(from, to, tokenId);
         if (to.code.length != 0)
             if (!_checkContractOnERC721Received(from, to, tokenId, _data)) {
@@ -912,9 +898,7 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
         bytes memory _data
     ) private returns (bool) {
         address sender = msg.sender;
-        try IERC721Receiver(to).onERC721Received(sender, from, tokenId, _data) returns (
-            bytes4 retval
-        ) {
+        try IERC721Receiver(to).onERC721Received(sender, from, tokenId, _data) returns (bytes4 retval) {
             return retval == IERC721Receiver(to).onERC721Received.selector;
         } catch (bytes memory reason) {
             if (reason.length == 0) {
@@ -1081,7 +1065,6 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
         return address(coin);
     }
 
-
     // ---------------------------------------------------------------------
     // VRF / RNG
     // ---------------------------------------------------------------------
@@ -1142,12 +1125,13 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
         if (amount == 0) revert Zero();
         if (rngLockedFlag) revert CoinPaused();
 
-        try ILinkToken(linkToken).transferAndCall(address(vrfCoordinator), amount, abi.encode(vrfSubscriptionId)) returns (bool ok) {
+        try
+            ILinkToken(linkToken).transferAndCall(address(vrfCoordinator), amount, abi.encode(vrfSubscriptionId))
+        returns (bool ok) {
             if (!ok) revert E();
         } catch {
             revert E();
         }
-
         (uint96 bal, , , , ) = vrfCoordinator.getSubscription(vrfSubscriptionId);
         uint16 mult = _tierMultPermille(uint256(bal));
         if (mult == 0) return;
@@ -1163,7 +1147,6 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
     // Game operations
     // ---------------------------------------------------------------------
 
-
     function recordTokenTraits(uint256 startTokenId, uint32[] calldata packedTraits) external onlyGame {
         uint256 len = packedTraits.length;
         for (uint256 i; i < len; ) {
@@ -1173,7 +1156,6 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
             }
         }
     }
-
 
     function _setSeasonMintedSnapshot(uint256 minted) private {
         seasonMintedSnapshot = minted;
@@ -1241,9 +1223,7 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
                 (current << _BITPOS_TROPHY_BALANCE) |
                 (uint256(currentLevel) << _BITPOS_BALANCE_LEVEL);
         } else {
-            packedData =
-                (packedData & ~_BITMASK_BALANCE_LEVEL) |
-                (uint256(currentLevel) << _BITPOS_BALANCE_LEVEL);
+            packedData = (packedData & ~_BITMASK_BALANCE_LEVEL) | (uint256(currentLevel) << _BITPOS_BALANCE_LEVEL);
         }
         _packedAddressData[from] = packedData;
 
@@ -1261,8 +1241,7 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
 
     function _moduleTransfer(address from, address to, uint256 tokenId) private {
         uint256 prevOwnershipPacked = _packedOwnershipOf(tokenId);
-        uint256 preserved =
-            prevOwnershipPacked &
+        uint256 preserved = prevOwnershipPacked &
             (_BITMASK_TROPHY_KIND | _BITMASK_TROPHY_STAKED | _BITMASK_TROPHY_ACTIVE);
         _packedOwnerships[tokenId] = _packOwnershipData(to, preserved | _BITMASK_NEXT_INITIALIZED);
 
@@ -1280,14 +1259,7 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
         uint256 fromValue = uint256(uint160(from));
         uint256 toValue = uint256(uint160(to));
         assembly {
-            log4(
-                0,
-                0,
-                _TRANSFER_EVENT_SIGNATURE,
-                fromValue,
-                toValue,
-                tokenId
-            )
+            log4(0, 0, _TRANSFER_EVENT_SIGNATURE, fromValue, toValue, tokenId)
         }
     }
 
@@ -1302,7 +1274,6 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
         IPurgeGameTrophies module = trophyModule;
 
         isActive = module.hasTrophy(tokenId);
-        
 
         uint256 cleared = packed & ~(_BITMASK_TROPHY_KIND | _BITMASK_TROPHY_STAKED | _BITMASK_TROPHY_ACTIVE);
         uint256 updated = cleared | (uint256(kind) << _BITPOS_TROPHY_KIND);
@@ -1351,7 +1322,9 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
         _purchaseCount = 0;
     }
 
-    function getTrophyData(uint256 tokenId)
+    function getTrophyData(
+        uint256 tokenId
+    )
         external
         view
         returns (uint256 owedWei, uint24 baseLevel, uint24 lastClaimLevel, uint16 traitId, uint8 trophyKind)
@@ -1374,5 +1347,4 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
     // ---------------------------------------------------------------------
     // Internal helpers
     // ---------------------------------------------------------------------
-
 }

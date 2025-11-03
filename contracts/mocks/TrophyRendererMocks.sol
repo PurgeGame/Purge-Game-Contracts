@@ -45,11 +45,7 @@ contract MockRegistry {
         return true;
     }
 
-    function setTopAffiliateColor(
-        address user,
-        uint256 tokenId,
-        string calldata trophyHex
-    ) external returns (bool) {
+    function setTopAffiliateColor(address user, uint256 tokenId, string calldata trophyHex) external returns (bool) {
         _topAffiliateColor[tokenId] = trophyHex;
         user; // unused
         return true;

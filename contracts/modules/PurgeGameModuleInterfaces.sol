@@ -44,10 +44,9 @@ interface IPurgeGameTrophiesModule {
         uint256 pool;
     }
 
-    function processEndLevel(EndLevelRequest calldata req)
-        external
-        payable
-        returns (address mapImmediateRecipient, address[6] memory affiliateRecipients);
+    function processEndLevel(
+        EndLevelRequest calldata req
+    ) external payable returns (address mapImmediateRecipient, address[6] memory affiliateRecipients);
 
     function awardTrophy(address to, uint24 level, uint8 kind, uint256 data, uint256 deferredWei) external payable;
 
