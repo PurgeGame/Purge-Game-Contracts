@@ -30,6 +30,8 @@ contract PurgeGameJackpotModule {
     uint64 private constant DAILY_JACKPOT_SHARES_PACKED = uint64(2000) * 0x0001000100010001;
     bytes32 private constant COIN_JACKPOT_TAG = keccak256("coin-jackpot");
     uint256 private constant TROPHY_FLAG_MAP = uint256(1) << 200;
+    uint256 private constant MINT_MASK_24 = (uint256(1) << 24) - 1;
+    uint256 private constant ETH_LAST_LEVEL_SHIFT = 0;
 
     // -----------------------
     // Storage layout mirror
@@ -660,49 +662,6 @@ contract PurgeGameJackpotModule {
         return true;
     }
 
-    function _redistributeJackpotRemainder(
-        uint256 ethPool,
-        uint256 totalPaidEth,
-        uint8 eventKind,
-        uint24 lvl,
-        uint8[4] memory winningTraits,
-        uint256 entropyCursorEth,
-        bool trophyGiven,
-        uint16[4] memory bucketCounts,
-        IPurgeCoinModule coinContract,
-        IPurgeGameTrophiesModule trophiesContract
-    ) private returns (uint256 newTotalPaidEth, uint256 newEntropyCursor, bool trophyGivenOut) {
-        uint256 ethRemainder = ethPool - totalPaidEth;
-        if (ethRemainder == 0) {
-            return (totalPaidEth, entropyCursorEth, trophyGiven);
-        }
-
-        uint256 remainderEntropy = _entropyStep(
-            entropyCursorEth ^ (uint256(eventKind) << 192) ^ ethRemainder
-        );
-        uint8 extraIdx = uint8(remainderEntropy & 3);
-        uint256 nextEntropy;
-        uint256 extraPaid;
-        (nextEntropy, trophyGivenOut, extraPaid, ) = _runTraitJackpot(
-            coinContract,
-            trophiesContract,
-            false,
-            false,
-            lvl,
-            winningTraits[extraIdx],
-            extraIdx,
-            ethRemainder,
-            remainderEntropy,
-            trophyGiven,
-            bucketCounts[extraIdx]
-        );
-        newTotalPaidEth = totalPaidEth;
-        if (extraPaid != 0) {
-            newTotalPaidEth += extraPaid;
-        }
-        newEntropyCursor = nextEntropy;
-    }
-
     function _getRandomTraits(uint256 rw) private pure returns (uint8[4] memory w) {
         w[0] = uint8(rw & 0x3F);
         w[1] = 64 + uint8((rw >> 6) & 0x3F);
@@ -791,7 +750,10 @@ contract PurgeGameJackpotModule {
         return uint8(pct);
     }
 
-    function _eligibleJackpotWinner(address player, uint24 /*lvl*/) private pure returns (bool) {
-        return player != address(0);
+    function _eligibleJackpotWinner(address player, uint24 lvl) private view returns (bool) {
+        if (player == address(0)) return false;
+        uint256 packed = mintPacked_[player];
+        uint24 lastEthLevel = uint24((packed >> ETH_LAST_LEVEL_SHIFT) & MINT_MASK_24);
+        return (lastEthLevel + 2) >= lvl;
     }
 }
