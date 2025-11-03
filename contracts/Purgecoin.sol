@@ -155,12 +155,13 @@ contract Purgecoin {
     uint256 private constant STAKE_LANE_RISK_SHIFT = STAKE_LANE_PRINCIPAL_BITS;
     uint256 private constant STAKE_LANE_RISK_MASK = ((uint256(1) << STAKE_LANE_RISK_BITS) - 1) << STAKE_LANE_RISK_SHIFT;
     uint256 private constant STAKE_PRINCIPAL_FACTOR = MILLION;
-    uint256 private constant STAKE_MAX_PRINCIPAL = STAKE_LANE_PRINCIPAL_MASK * STAKE_PRINCIPAL_FACTOR;
-    uint256 private constant PRESALE_SUPPLY_TOKENS = 4_000_000;
-    uint256 private constant PRESALE_START_PRICE = 0.000012 ether;
-    uint256 private constant PRESALE_END_PRICE = 0.000018 ether;
-    uint256 private constant PRESALE_PRICE_SLOPE = (PRESALE_END_PRICE - PRESALE_START_PRICE) / PRESALE_SUPPLY_TOKENS;
-    uint256 private constant PRESALE_MAX_ETH_PER_TX = 0.25 ether;
+uint256 private constant STAKE_MAX_PRINCIPAL = STAKE_LANE_PRINCIPAL_MASK * STAKE_PRINCIPAL_FACTOR;
+uint256 private constant PRESALE_SUPPLY_TOKENS = 4_000_000;
+uint256 private constant PRESALE_START_PRICE = 0.000012 ether;
+uint256 private constant PRESALE_END_PRICE = 0.000018 ether;
+uint256 private constant PRESALE_PRICE_SLOPE = (PRESALE_END_PRICE - PRESALE_START_PRICE) / PRESALE_SUPPLY_TOKENS;
+uint256 private constant PRESALE_MAX_ETH_PER_TX = 0.25 ether;
+uint256 private constant AFFILIATE_STREAK_BASE_THRESHOLD = 15 * 1000 * MILLION;
 
     // Scan sentinels
     // ---------------------------------------------------------------------
@@ -225,6 +226,8 @@ contract Purgecoin {
     mapping(address => uint256) public playerLuckbox;
     PlayerScore[10] public luckboxLeaderboard;
     PlayerScore[8] public affiliateLeaderboard;
+    mapping(address => uint64) private affiliateDailyStreakPacked;
+    mapping(address => uint128) private affiliateDailyBasePacked;
 
     // Staking
     mapping(uint24 => address[]) private stakeAddr; // level => stakers
@@ -683,6 +686,7 @@ contract Purgecoin {
         }
 
         if (amount != 0) {
+            uint256 baseAmountForThreshold = amount;
             uint256 baseAmount = amount;
             if (lvl % 25 == 1) baseAmount <<= 1;
 
@@ -697,6 +701,14 @@ contract Purgecoin {
                 uint256 newTotal = earned[affiliateAddr] + payout;
                 earned[affiliateAddr] = newTotal;
                 addFlip(affiliateAddr, payout, false);
+
+                uint256 streakBonus = _updateAffiliateDailyStreak(affiliateAddr, baseAmountForThreshold);
+                if (streakBonus != 0) {
+                    newTotal += streakBonus;
+                    earned[affiliateAddr] = newTotal;
+                    addFlip(affiliateAddr, streakBonus, false);
+                }
+
                 _updatePlayerScore(1, affiliateAddr, newTotal);
             }
 
@@ -1525,6 +1537,16 @@ contract Purgecoin {
         }
     }
 
+    function affiliateDailyStreak(address affiliate)
+        external
+        view
+        returns (uint32 lastDay, uint32 streak)
+    {
+        uint64 packed = affiliateDailyStreakPacked[affiliate];
+        lastDay = uint32(packed >> 32);
+        streak = uint32(packed);
+    }
+
     function resetCoinflipLeaderboard() external onlyPurgeGameContract {
         uint8 len = topLen;
         for (uint8 k; k < len; ) {
@@ -1696,6 +1718,59 @@ contract Purgecoin {
         decBuckets[lvl][bucket].push(p);
         unchecked {
             decPlayersCount[lvl] = idx + 1;
+        }
+    }
+
+    /// @notice Track consecutive days a direct affiliate has been paid and return the daily streak bonus (if any).
+    function _updateAffiliateDailyStreak(address affiliate, uint256 baseAmount) private returns (uint256 bonus) {
+        if (affiliate == address(0) || affiliate == address(1)) return 0;
+
+        uint32 currentDay = uint32(block.timestamp / 1 days);
+
+        // Track raw base-amount accrual for the current day (before bonuses)
+        uint128 basePacked = affiliateDailyBasePacked[affiliate];
+        uint32 baseDay = uint32(basePacked >> 96);
+        uint96 baseTotal = uint96(basePacked);
+        if (baseDay != currentDay) {
+            baseDay = currentDay;
+            baseTotal = 0;
+        }
+        if (baseAmount != 0) {
+            uint256 updated = uint256(baseTotal) + baseAmount;
+            if (updated > type(uint96).max) updated = type(uint96).max;
+            baseTotal = uint96(updated);
+        }
+        affiliateDailyBasePacked[affiliate] = (uint128(baseDay) << 96) | uint128(baseTotal);
+
+        if (baseTotal < AFFILIATE_STREAK_BASE_THRESHOLD) {
+            return 0;
+        }
+
+        uint64 packed = affiliateDailyStreakPacked[affiliate];
+        uint32 lastDay = uint32(packed >> 32);
+        uint32 streak = uint32(packed);
+        if (lastDay == currentDay) {
+            return 0;
+        }
+
+        if (lastDay != 0 && currentDay == lastDay + 1) {
+            if (streak != type(uint32).max) {
+                unchecked {
+                    ++streak;
+                }
+            }
+        } else {
+            streak = 1;
+        }
+
+        affiliateDailyStreakPacked[affiliate] = (uint64(currentDay) << 32) | uint64(streak);
+
+        if (streak >= 2) {
+            uint256 bonusDays = streak - 1;
+            if (bonusDays > 40) bonusDays = 40;
+            bonus = bonusDays * 50 * MILLION;
+        } else {
+            bonus = 0;
         }
     }
 
