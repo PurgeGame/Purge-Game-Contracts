@@ -112,7 +112,7 @@ interface ILinkToken {
 interface IPurgeGameNFT {
     function wireContracts(address game_) external;
     function wireTrophies(address trophies_) external;
-    function gameMint(address to, uint256 quantity) external returns (uint256 startTokenId);
+    function gameMint(address to, uint256 quantity, uint24 lvl) external returns (uint256 startTokenId);
     function tokenTraitsPacked(uint256 tokenId) external view returns (uint32);
     function purchaseCount() external view returns (uint32);
     function resetPurchaseCount() external;
@@ -293,7 +293,7 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
     }
 
     function _setBalanceLevel(address owner, uint24 lvl) private {
-        if (owner == address(0)) return;
+
         uint256 packed = _packedAddressData[owner];
         _packedAddressData[owner] =
             (packed & ~_BITMASK_BALANCE_LEVEL) |
@@ -301,7 +301,7 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
     }
 
     function _incrementTrophyBalance(address owner, uint32 amount) private {
-        if (owner == address(0) || amount == 0) return;
+
         uint256 packed = _packedAddressData[owner];
         uint256 current = (packed & _BITMASK_TROPHY_BALANCE) >> _BITPOS_TROPHY_BALANCE;
         unchecked {
@@ -313,7 +313,7 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
     }
 
     function _decrementTrophyBalance(address owner, uint32 amount) private {
-        if (owner == address(0) || amount == 0) return;
+
         uint256 packed = _packedAddressData[owner];
         uint256 current = (packed & _BITMASK_TROPHY_BALANCE) >> _BITPOS_TROPHY_BALANCE;
         if (current == 0) return;
@@ -325,11 +325,13 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
         }
     }
 
-    function _syncBalanceLevel(address owner) private {
-        address gameAddress_ = address(game);
-        if (owner == address(0) || gameAddress_ == address(0)) return;
-        _setBalanceLevel(owner, game.level());
+    function _mapMinimumQuantity(uint24 lvl) private pure returns (uint32) {
+        uint24 mod = lvl % 100;
+        if (mod >= 60) return 1;
+        if (mod >= 40) return 2;
+        return 4;
     }
+
 
     constructor(
         address regularRenderer_,
@@ -372,15 +374,7 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
             return 0;
         }
 
-        address gameAddress_ = address(game);
-        if (gameAddress_ == address(0)) {
-            return balance;
-        }
-
         uint24 lastLevel = _packedBalanceLevel(packed);
-        if (lastLevel == 0) {
-            return balance;
-        }
 
         uint24 currentLevel = game.level();
         if (currentLevel > lastLevel) {
@@ -439,6 +433,7 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
         bool queueNext = state == 3;
         uint24 targetLevel = queueNext ? currentLevel + 1 : currentLevel;
 
+
         if ((targetLevel % 20) == 16) revert NotTimeYet();
         if (rngLockedFlag) revert RngNotReady();
 
@@ -451,6 +446,7 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
 
         if (payInCoin) {
             if (msg.value != 0) revert E();
+            if (!game.coinMintUnlock(currentLevel)) revert NotTimeYet();
             _coinReceive(buyer, quantity * priceCoinUnit, targetLevel, bonusCoinReward);
         } else {
             uint8 phase = game.currentPhase();
@@ -477,7 +473,6 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
         uint256 baseTokenId;
         if (queueNext) {
             baseTokenId = _nextBaseTokenIdHint;
-            if (baseTokenId == 0) revert NotTimeYet();
         } else {
             baseTokenId = _currentBaseTokenId();
         }
@@ -514,8 +509,6 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
     }
 
     function mintAndPurge(uint256 quantity, bool payInCoin, bytes32 affiliateCode) external payable {
-        if (quantity == 0) revert InvalidQuantity();
-
         address buyer = msg.sender;
         uint256 priceUnit = game.coinPriceUnit();
         uint8 phase = game.currentPhase();
@@ -526,6 +519,8 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
                 ++lvl;
             }
         }
+        uint32 minQuantity = _mapMinimumQuantity(lvl);
+        if (quantity < minQuantity) revert InvalidQuantity();
         if (rngLockedFlag) revert RngNotReady();
 
         _enforceCenturyLuckbox(buyer, lvl, priceUnit);
@@ -877,7 +872,7 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
             _decrementTrophyBalance(from, 1);
             _incrementTrophyBalance(to, 1);
         }
-        _syncBalanceLevel(to);
+        _setBalanceLevel(to, game.level());
 
         uint256 fromValue = uint256(uint160(from));
         uint256 toValue = uint256(uint160(to));
@@ -1168,11 +1163,6 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
     // Game operations
     // ---------------------------------------------------------------------
 
-    function gameMint(address to, uint256 quantity) external onlyGame returns (uint256 startTokenId) {
-        startTokenId = _currentIndex;
-        _mint(to, quantity);
-        _syncBalanceLevel(to);
-    }
 
     function recordTokenTraits(uint256 startTokenId, uint32[] calldata packedTraits) external onlyGame {
         uint256 len = packedTraits.length;
@@ -1283,7 +1273,7 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
             _decrementTrophyBalance(from, 1);
             _incrementTrophyBalance(to, 1);
         }
-        _syncBalanceLevel(to);
+        _setBalanceLevel(to, game.level());
 
         uint256 fromValue = uint256(uint160(from));
         uint256 toValue = uint256(uint160(to));

@@ -439,26 +439,28 @@ contract PurgeGame {
                     if (modTwenty == 16) {
                         levelGate = prizeReady;
                     }
+
+                    bool advanceToAirdrop;
                     if (_phase == 2 && levelGate) {
-                        bool coinflipAdvanceOk = true;
-                        if (modTwenty != 0) {
-                            coinflipAdvanceOk = coinContract.processCoinflipPayouts(lvl, cap, true, rngWord, day);
-                        }
-                        if (coinflipAdvanceOk) {
-                            phase = 3;
-                        }
-                        break;
+                        if (modTwenty != 0 && !coinContract.processCoinflipPayouts(lvl, cap, true, rngWord, day)) break;
+                        advanceToAirdrop = true;
+                    } else if (modTwenty != 0) {
+                        if (!coinContract.processCoinflipPayouts(lvl, cap, false, rngWord, day)) break;
                     }
-                    if (airdropIndex < pendingMapMints.length) {
-                        _processMapBatch(cap);
-                        break;
+
+                    bool batchesPending = airdropIndex < pendingMapMints.length;
+                    if (batchesPending) {
+                        bool batchesFinished = _processMapBatch(cap);
+                        if (!batchesFinished) break;
+                        batchesPending = false;
                     }
-                    if (modTwenty != 0 && !coinContract.processCoinflipPayouts(lvl, cap, false, rngWord, day)) break;
-                    payDailyJackpot(false, lvl, rngWord);
-                    dailyIdx = day;
-                    if (nft.rngLocked()) {
-                        nft.releaseRngLock();
+
+                    _closePurchaseDay(lvl, day, rngWord);
+
+                    if (advanceToAirdrop && !batchesPending) {
+                        phase = 3;
                     }
+
                     break;
                 }
 
@@ -1163,6 +1165,14 @@ contract PurgeGame {
             }
         }
         return airdropIndex >= total;
+    }
+
+    function _closePurchaseDay(uint24 lvl, uint48 day, uint256 rngWord) private {
+        payDailyJackpot(false, lvl, rngWord);
+        dailyIdx = day;
+        if (nft.rngLocked()) {
+            nft.releaseRngLock();
+        }
     }
 
     function _seedTraitCounts() private {
