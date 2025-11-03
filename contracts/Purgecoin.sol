@@ -139,7 +139,6 @@ contract Purgecoin {
     // Constants (units & limits)
     // ---------------------------------------------------------------------
     uint256 private constant MILLION = 1e6; // token has 6 decimals
-    uint16 private constant RANK_NOT_FOUND = 11;
     uint256 private constant MIN = 100 * MILLION; // min burn / min flip (100 PURGED)
     uint8 private constant MAX_RISK = 11; // staking risk 1..11
     uint128 private constant ONEK = 1_000_000_000; // 1,000 PURGED (6d)
@@ -186,7 +185,6 @@ contract Purgecoin {
     uint8 private extMode; // external jackpot mode (state machine)
 
     // Leaderboard lengths
-    uint8 private luckboxLen;
     uint8 private affiliateLen;
     uint8 private topLen;
 
@@ -212,14 +210,13 @@ contract Purgecoin {
     mapping(address => uint256) public coinflipAmount;
 
     // Tracks headline bettors for bonus logic.
-    PlayerScore[4] public topBettors;
+    PlayerScore[8] public topBettors;
 
     // Affiliates / luckbox
     mapping(bytes32 => address) private affiliateCode;
     mapping(uint24 => mapping(address => uint256)) public affiliateCoinEarned; // level => player => earned
     mapping(address => address) public referredBy;
     mapping(address => uint256) public playerLuckbox;
-    PlayerScore[10] public luckboxLeaderboard;
     PlayerScore[8] public affiliateLeaderboard;
     mapping(address => uint64) private affiliateDailyStreakPacked;
     mapping(address => uint128) private affiliateDailyBasePacked;
@@ -235,7 +232,6 @@ contract Purgecoin {
     StakeTrophyCandidate private stakeTrophyCandidate;
 
     // Leaderboard index maps (1-based positions)
-    mapping(address => uint8) private luckboxPos;
     mapping(address => uint8) private affiliatePos;
     mapping(address => uint8) private topPos;
     mapping(address => uint32) private luckyFlipStreak;
@@ -293,7 +289,7 @@ contract Purgecoin {
     /// - Reverts if betting is paused.
     /// - `amount` must be >= MIN; if `coinflipDeposit` > 0 it must be >= MIN and burn must be at least 2% of it.
     /// - Burns the sum (`amount + coinflipDeposit`), then (if provided) schedules the flip via `addFlip`.
-    /// - Credits luckbox with `amount + coinflipDeposit/50` and updates the luckbox leaderboard.
+    /// - Credits luckbox with `amount + coinflipDeposit/50`.
     /// - If the Decimator window is active, accumulates the caller's burn for the current level.
     function luckyCoinBurn(uint256 amount, uint256 coinflipDeposit) external {
         if (purgeGameNFT.rngLocked()) revert BettingPaused();
@@ -347,7 +343,6 @@ contract Purgecoin {
         }
 
         playerLuckbox[caller] = luck;
-        _updatePlayerScore(0, caller, luck);
 
         // If Decimator window is active, accumulate burn this level.
         (bool decOn, uint24 lvl) = _decWindow();
@@ -613,7 +608,6 @@ contract Purgecoin {
         uint256 fivePercent = burnAmt / 20;
         uint256 luck = playerLuckbox[sender] + fivePercent;
         playerLuckbox[sender] = luck;
-        _updatePlayerScore(0, sender, luck);
 
         // Compounded boost starting from 95% of burn (fivePercent * 19)
         uint256 boostedPrincipal = fivePercent * 19;
@@ -864,7 +858,6 @@ contract Purgecoin {
         if (luckboxBonus != 0) {
             uint256 newLuck = playerLuckbox[player] + luckboxBonus;
             playerLuckbox[player] = newLuck;
-            _updatePlayerScore(0, player, newLuck);
         }
     }
 
@@ -878,7 +871,6 @@ contract Purgecoin {
         uint256 credit = amount / 50; // 2%
         uint256 newLuck = playerLuckbox[target] + credit;
         playerLuckbox[target] = newLuck;
-        _updatePlayerScore(0, target, newLuck); // luckbox leaderboard
     }
 
     /// @notice Progress coinflip payouts for the current level in bounded slices.
@@ -954,7 +946,6 @@ contract Purgecoin {
                                     uint256 fivePct = principalRounded / 20;
                                     uint256 luck = playerLuckbox[player] + fivePct;
                                     playerLuckbox[player] = luck;
-                                    _updatePlayerScore(0, player, luck);
                                     addFlip(player, fivePct * 19, false);
                                 } else {
                                     uint24 nextL = level + 1;
@@ -1469,26 +1460,10 @@ contract Purgecoin {
         }
     }
 
-    /// @notice Return 1-based rank of `player` on the luckbox leaderboard, or `RANK_NOT_FOUND` (11) if absent.
-    /// @dev Defensive check ensures mapping hint matches current leaderboard slot.
-    function getPlayerRank(address player) external view returns (uint16) {
-        uint8 pos = luckboxPos[player]; // 1..luckboxLen or 0 (not present)
-        return (pos != 0 && pos <= luckboxLen && luckboxLeaderboard[pos - 1].player == player) ? pos : RANK_NOT_FOUND;
-    }
-
     /// @notice Return addresses from a leaderboard.
-    /// @param which 0 = luckbox (<=10), 1 = affiliate (<=8), 2 = top bettors (<=4).
+    /// @param which 1 = affiliate (<=8), 2 = top bettors (<=8).
     function getLeaderboardAddresses(uint8 which) external view returns (address[] memory out) {
-        if (which == 0) {
-            uint8 len = luckboxLen;
-            out = new address[](len);
-            for (uint8 i; i < len; ) {
-                out[i] = luckboxLeaderboard[i].player;
-                unchecked {
-                    ++i;
-                }
-            }
-        } else if (which == 1) {
+        if (which == 1) {
             uint8 len = affiliateLen;
             out = new address[](len);
             for (uint8 i; i < len; ) {
@@ -1772,7 +1747,7 @@ contract Purgecoin {
     }
 
     /// @notice Route a player score update to the appropriate leaderboard.
-    /// @param lid 0 = luckbox top10, 1 = affiliate top8, else = top bettor top4.
+    /// @param lid 1 = affiliate top8, else = top bettor top8.
     /// @param p   Player address.
     /// @param s   New score for that board.
     function _updatePlayerScore(uint8 lid, address p, uint256 s) internal {
@@ -1781,192 +1756,73 @@ contract Purgecoin {
             wholeTokens = type(uint96).max;
         }
         uint96 score = uint96(wholeTokens);
-        if (lid == 0) {
-            _updateBoard10(p, score);
-        } else if (lid == 1) {
-            _updateBoard8(p, score);
+        if (lid == 1) {
+            affiliateLen = _updateBoard8(affiliateLeaderboard, affiliatePos, affiliateLen, p, score);
         } else {
-            _updateBoard4(p, score);
+            topLen = _updateBoard8(topBettors, topPos, topLen, p, score);
         }
     }
-    /// @notice Insert/update `p` with score `s` on the luckbox top-10 board.
-    /// @dev Keeps a 1-based position map in `luckboxPos`. Returns true if the board changed.
-    function _updateBoard10(address p, uint96 s) internal returns (bool) {
-        PlayerScore[10] storage board = luckboxLeaderboard;
-        uint8 curLen = luckboxLen;
-        uint8 prevPos = luckboxPos[p]; // 1..curLen, or 0 if not present
-        uint8 idx;
-
-        // Case 1: already on board - bubble up if improved
-        if (prevPos != 0) {
-            idx = prevPos - 1;
-            if (s <= board[idx].score) return false; // no improvement
-            for (; idx > 0 && s > board[idx - 1].score; ) {
-                PlayerScore memory prev = board[idx - 1];
-                board[idx] = prev;
-                luckboxPos[prev.player] = idx + 1;
-                unchecked {
-                    --idx;
-                }
-            }
-            board[idx] = PlayerScore({player: p, score: s});
-            luckboxPos[p] = idx + 1;
-            return true;
-        }
-
-        // Case 2: space available - insert and grow
-        if (curLen < 10) {
-            idx = curLen;
-            for (; idx > 0 && s > board[idx - 1].score; ) {
-                PlayerScore memory prev = board[idx - 1];
-                board[idx] = prev;
-                luckboxPos[prev.player] = idx + 1;
-                unchecked {
-                    --idx;
-                }
-            }
-            board[idx] = PlayerScore({player: p, score: s});
-            luckboxPos[p] = idx + 1;
-            unchecked {
-                luckboxLen = curLen + 1;
-            }
-            return true;
-        }
-
-        // Case 3: full - must beat the tail to enter
-        if (s <= board[9].score) return false;
-        address dropped = board[9].player;
-        idx = 9;
-        for (; idx > 0 && s > board[idx - 1].score; ) {
-            PlayerScore memory prev = board[idx - 1];
-            board[idx] = prev;
-            luckboxPos[prev.player] = idx + 1;
-            unchecked {
-                --idx;
-            }
-        }
-        board[idx] = PlayerScore({player: p, score: s});
-        luckboxPos[p] = idx + 1;
-        if (dropped != address(0)) luckboxPos[dropped] = 0;
-        return true;
-    }
-
-    /// @notice Insert/update `p` with score `s` on the affiliate top-8 board.
-    /// @dev Keeps a 1-based position map in `affiliatePos`. Returns true if the board changed.
-    function _updateBoard8(address p, uint96 s) internal returns (bool) {
-        PlayerScore[8] storage board = affiliateLeaderboard;
-        uint8 curLen = affiliateLen;
-        uint8 prevPos = affiliatePos[p];
+    /// @notice Insert/update `p` with score `s` on a top-8 board.
+    /// @dev Keeps a 1-based position map in `pos`. Returns the new length for the board.
+    function _updateBoard8(
+        PlayerScore[8] storage board,
+        mapping(address => uint8) storage pos,
+        uint8 curLen,
+        address p,
+        uint96 s
+    ) internal returns (uint8) {
+        uint8 len = curLen;
+        uint8 prevPos = pos[p];
         uint8 idx;
 
         if (prevPos != 0) {
             idx = prevPos - 1;
-            if (s <= board[idx].score) return false;
+            if (s <= board[idx].score) return len;
             for (; idx > 0 && s > board[idx - 1].score; ) {
                 PlayerScore memory prev = board[idx - 1];
                 board[idx] = prev;
-                affiliatePos[prev.player] = idx + 1;
+                pos[prev.player] = idx + 1;
                 unchecked {
                     --idx;
                 }
             }
             board[idx] = PlayerScore({player: p, score: s});
-            affiliatePos[p] = idx + 1;
-            return true;
+            pos[p] = idx + 1;
+            return len;
         }
 
-        if (curLen < 8) {
-            idx = curLen;
+        if (len < 8) {
+            idx = len;
             for (; idx > 0 && s > board[idx - 1].score; ) {
                 PlayerScore memory prev = board[idx - 1];
                 board[idx] = prev;
-                affiliatePos[prev.player] = idx + 1;
+                pos[prev.player] = idx + 1;
                 unchecked {
                     --idx;
                 }
             }
             board[idx] = PlayerScore({player: p, score: s});
-            affiliatePos[p] = idx + 1;
+            pos[p] = idx + 1;
             unchecked {
-                affiliateLen = curLen + 1;
+                return len + 1;
             }
-            return true;
         }
 
-        if (s <= board[7].score) return false;
+        if (s <= board[7].score) return len;
         address dropped = board[7].player;
         idx = 7;
         for (; idx > 0 && s > board[idx - 1].score; ) {
             PlayerScore memory prev = board[idx - 1];
             board[idx] = prev;
-            affiliatePos[prev.player] = idx + 1;
+            pos[prev.player] = idx + 1;
             unchecked {
                 --idx;
             }
         }
         board[idx] = PlayerScore({player: p, score: s});
-        affiliatePos[p] = idx + 1;
-        if (dropped != address(0)) affiliatePos[dropped] = 0;
-        return true;
-    }
-
-    /// @notice Insert/update `p` with score `s` on the top-bettors top-4 board.
-    /// @dev Keeps a 1-based position map in `topPos`. Returns true if the board changed.
-    function _updateBoard4(address p, uint96 s) internal returns (bool) {
-        PlayerScore[4] storage board = topBettors;
-        uint8 curLen = topLen;
-        uint8 prevPos = topPos[p];
-        uint8 idx;
-
-        if (prevPos != 0) {
-            idx = prevPos - 1;
-            if (s <= board[idx].score) return false;
-            for (; idx > 0 && s > board[idx - 1].score; ) {
-                PlayerScore memory prev = board[idx - 1];
-                board[idx] = prev;
-                topPos[prev.player] = idx + 1;
-                unchecked {
-                    --idx;
-                }
-            }
-            board[idx] = PlayerScore({player: p, score: s});
-            topPos[p] = idx + 1;
-            return true;
-        }
-
-        if (curLen < 4) {
-            idx = curLen;
-            for (; idx > 0 && s > board[idx - 1].score; ) {
-                PlayerScore memory prev = board[idx - 1];
-                board[idx] = prev;
-                topPos[prev.player] = idx + 1;
-                unchecked {
-                    --idx;
-                }
-            }
-            board[idx] = PlayerScore({player: p, score: s});
-            topPos[p] = idx + 1;
-            unchecked {
-                topLen = curLen + 1;
-            }
-            return true;
-        }
-
-        if (s <= board[3].score) return false;
-        address dropped = board[3].player;
-        idx = 3;
-        for (; idx > 0 && s > board[idx - 1].score; ) {
-            PlayerScore memory prev = board[idx - 1];
-            board[idx] = prev;
-            topPos[prev.player] = idx + 1;
-            unchecked {
-                --idx;
-            }
-        }
-        board[idx] = PlayerScore({player: p, score: s});
-        topPos[p] = idx + 1;
-        if (dropped != address(0)) topPos[dropped] = 0;
-        return true;
+        pos[p] = idx + 1;
+        if (dropped != address(0)) pos[dropped] = 0;
+        return len;
     }
 
 
