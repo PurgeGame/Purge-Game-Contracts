@@ -771,7 +771,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         if (traitWin) {
             affiliateRecipients = _processTraitWin(req, nextLevel, levelTokenId, affiliateTokenId, randomWord);
         } else {
-            (mapImmediateRecipient, affiliateRecipients) = _processMapTimeout(
+            (mapImmediateRecipient, affiliateRecipients) = _processTimeout(
                 req,
                 nextLevel,
                 mapTokenId,
@@ -845,7 +845,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         }
     }
 
-    function _processMapTimeout(
+    function _processTimeout(
         EndLevelRequest calldata req,
         uint24 nextLevel,
         uint256 mapTokenId,

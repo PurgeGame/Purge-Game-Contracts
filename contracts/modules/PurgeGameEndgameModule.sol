@@ -126,9 +126,7 @@ contract PurgeGameEndgameModule {
     // -----------------------
     uint32[80] internal dailyPurgeCount;
     uint32[256] internal traitRemaining;
-    mapping(address => uint24) private ethMintLastLevel_;
-    mapping(address => uint24) private ethMintLevelCount_;
-    mapping(address => uint24) private ethMintStreakCount_;
+    mapping(address => uint256) private mintPacked_;
 
     constructor() {}
 

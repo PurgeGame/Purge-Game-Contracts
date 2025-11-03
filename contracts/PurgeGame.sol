@@ -117,6 +117,19 @@ contract PurgeGame {
         (uint64(2000) << 32) |
         (uint64(2000) << 48);
 
+    uint256 private constant MINT_MASK_24 = (uint256(1) << 24) - 1;
+    uint256 private constant MINT_MASK_20 = (uint256(1) << 20) - 1;
+    uint256 private constant MINT_MASK_32 = (uint256(1) << 32) - 1;
+    uint256 private constant ETH_LAST_LEVEL_SHIFT = 0;
+    uint256 private constant ETH_LEVEL_COUNT_SHIFT = 24;
+    uint256 private constant ETH_LEVEL_STREAK_SHIFT = 48;
+    uint256 private constant ETH_DAY_SHIFT = 72;
+    uint256 private constant ETH_DAY_STREAK_SHIFT = 104;
+    uint256 private constant COIN_DAY_SHIFT = 124;
+    uint256 private constant COIN_DAY_STREAK_SHIFT = 156;
+    uint256 private constant AGG_DAY_SHIFT = 176;
+    uint256 private constant AGG_DAY_STREAK_SHIFT = 208;
+
     // -----------------------
     // Price
     // -----------------------
@@ -182,9 +195,7 @@ contract PurgeGame {
     // -----------------------
     uint32[80] internal dailyPurgeCount; // Layout: 8 symbol, 8 color, 64 trait buckets
     uint32[256] internal traitRemaining; // Remaining supply per trait (0 means exhausted)
-    mapping(address => uint24) private ethMintLastLevel_;
-    mapping(address => uint24) private ethMintLevelCount_;
-    mapping(address => uint24) private ethMintStreakCount_;
+    mapping(address => uint256) private mintPacked_;
 
     // -----------------------
     // Constructor
@@ -273,29 +284,84 @@ contract PurgeGame {
     }
 
     function ethMintLastLevel(address player) external view returns (uint24) {
-        return ethMintLastLevel_[player];
+        return uint24((mintPacked_[player] >> ETH_LAST_LEVEL_SHIFT) & MINT_MASK_24);
     }
 
     function ethMintLevelCount(address player) external view returns (uint24) {
-        return ethMintLevelCount_[player];
+        return uint24((mintPacked_[player] >> ETH_LEVEL_COUNT_SHIFT) & MINT_MASK_24);
     }
 
     function ethMintStreakCount(address player) external view returns (uint24) {
-        return ethMintStreakCount_[player];
+        return uint24((mintPacked_[player] >> ETH_LEVEL_STREAK_SHIFT) & MINT_MASK_24);
     }
 
-    function creditPrizePool(address player, uint24 lvl, bool creditNext)
+    function ethMintLastDay(address player) external view returns (uint48) {
+        return uint48((mintPacked_[player] >> ETH_DAY_SHIFT) & MINT_MASK_32);
+    }
+
+    function ethMintDayStreak(address player) external view returns (uint24) {
+        return uint24((mintPacked_[player] >> ETH_DAY_STREAK_SHIFT) & MINT_MASK_20);
+    }
+
+    function coinMintLastDay(address player) external view returns (uint48) {
+        return uint48((mintPacked_[player] >> COIN_DAY_SHIFT) & MINT_MASK_32);
+    }
+
+    function coinMintDayStreak(address player) external view returns (uint24) {
+        return uint24((mintPacked_[player] >> COIN_DAY_STREAK_SHIFT) & MINT_MASK_20);
+    }
+
+    function mintLastDay(address player) external view returns (uint48) {
+        return uint48((mintPacked_[player] >> AGG_DAY_SHIFT) & MINT_MASK_32);
+    }
+
+    function mintDayStreak(address player) external view returns (uint24) {
+        return uint24((mintPacked_[player] >> AGG_DAY_STREAK_SHIFT) & MINT_MASK_20);
+    }
+
+    function playerMintData(address player)
+        external
+        view
+        returns (
+            uint24 ethLastLevel,
+            uint24 ethLevelCount,
+            uint24 ethLevelStreak,
+            uint48 ethLastDay,
+            uint24 ethDayStreak,
+            uint48 coinLastDay,
+            uint24 coinDayStreak,
+            uint48 overallLastDay,
+            uint24 overallDayStreak
+        )
+    {
+        uint256 packed = mintPacked_[player];
+        ethLastLevel = uint24((packed >> ETH_LAST_LEVEL_SHIFT) & MINT_MASK_24);
+        ethLevelCount = uint24((packed >> ETH_LEVEL_COUNT_SHIFT) & MINT_MASK_24);
+        ethLevelStreak = uint24((packed >> ETH_LEVEL_STREAK_SHIFT) & MINT_MASK_24);
+        ethLastDay = uint48((packed >> ETH_DAY_SHIFT) & MINT_MASK_32);
+        ethDayStreak = uint24((packed >> ETH_DAY_STREAK_SHIFT) & MINT_MASK_20);
+        coinLastDay = uint48((packed >> COIN_DAY_SHIFT) & MINT_MASK_32);
+        coinDayStreak = uint24((packed >> COIN_DAY_STREAK_SHIFT) & MINT_MASK_20);
+        overallLastDay = uint48((packed >> AGG_DAY_SHIFT) & MINT_MASK_32);
+        overallDayStreak = uint24((packed >> AGG_DAY_STREAK_SHIFT) & MINT_MASK_20);
+    }
+
+    function recordMint(address player, uint24 lvl, bool creditNext, bool coinMint)
         external
         payable
         returns (uint256 coinReward, uint256 luckboxReward)
     {
         if (msg.sender != address(nft)) revert E();
-        if (creditNext) {
-            nextPrizePool += msg.value;
+        if (coinMint) {
+            if (creditNext || msg.value != 0) revert E();
         } else {
-        prizePool += msg.value;
+            if (creditNext) {
+                nextPrizePool += msg.value;
+            } else {
+                prizePool += msg.value;
+            }
         }
-        return _recordEthMint(player, lvl);
+        return _recordMintData(player, lvl, coinMint);
     }
 
     /// @notice Advances the game state machine. Anyone can call, but certain steps
@@ -737,64 +803,146 @@ contract PurgeGame {
         emit PlayerCredited(beneficiary, weiAmount);
     }
 
-    function _recordEthMint(address player, uint24 lvl)
+    function _recordMintData(address player, uint24 lvl, bool coinMint)
         private
         returns (uint256 coinReward, uint256 luckboxReward)
     {
-        uint24 prevLevel = ethMintLastLevel_[player];
-        if (prevLevel == lvl) return (0, 0);
+        uint256 prevData = mintPacked_[player];
+        uint32 day = _currentMintDay();
+        uint256 data;
 
-        uint24 total = ethMintLevelCount_[player];
-        if (total < type(uint24).max) {
-            unchecked {
-                total = uint24(total + 1);
+        if (coinMint) {
+            data = _applyMintDay(prevData, day, COIN_DAY_SHIFT, MINT_MASK_32, COIN_DAY_STREAK_SHIFT, MINT_MASK_20);
+        } else {
+            uint24 prevLevel = uint24((prevData >> ETH_LAST_LEVEL_SHIFT) & MINT_MASK_24);
+            uint24 total = uint24((prevData >> ETH_LEVEL_COUNT_SHIFT) & MINT_MASK_24);
+            uint24 streak = uint24((prevData >> ETH_LEVEL_STREAK_SHIFT) & MINT_MASK_24);
+
+            data = _applyMintDay(prevData, day, ETH_DAY_SHIFT, MINT_MASK_32, ETH_DAY_STREAK_SHIFT, MINT_MASK_20);
+
+            if (prevLevel == lvl) {
+                if (data != prevData) {
+                    mintPacked_[player] = data;
+                }
+                return (0, 0);
             }
-            ethMintLevelCount_[player] = total;
+
+            if (total < type(uint24).max) {
+                unchecked {
+                    total = uint24(total + 1);
+                }
+            }
+
+            if (prevLevel != 0 && prevLevel + 1 == lvl) {
+                if (streak < type(uint24).max) {
+                    unchecked {
+                        streak = uint24(streak + 1);
+                    }
+                }
+            } else {
+                streak = 1;
+            }
+
+            data = _setPacked(data, ETH_LAST_LEVEL_SHIFT, MINT_MASK_24, lvl);
+            data = _setPacked(data, ETH_LEVEL_COUNT_SHIFT, MINT_MASK_24, total);
+            data = _setPacked(data, ETH_LEVEL_STREAK_SHIFT, MINT_MASK_24, streak);
+
+            uint256 streakReward;
+            if (streak >= 2) {
+                uint256 capped = streak >= 61 ? 60 : uint256(streak - 1);
+                streakReward = capped * 100 * COIN_BASE_UNIT;
+            }
+
+            uint256 totalReward;
+            if (total >= 2) {
+                uint256 cappedTotal = total >= 61 ? 60 : uint256(total - 1);
+                totalReward = (cappedTotal * 100 * COIN_BASE_UNIT * 30) / 100;
+            }
+
+            if (streakReward != 0 || totalReward != 0) {
+                unchecked {
+                    luckboxReward = streakReward + totalReward;
+                    coinReward = luckboxReward;
+                }
+            }
+
+            if (streak == lvl && lvl >= 20 && (lvl % 10 == 0)) {
+                uint256 milestoneBonus = (uint256(lvl) / 2) * 1000 * COIN_BASE_UNIT;
+                coinReward += milestoneBonus;
+            }
+
+            if (total >= 20 && (total % 10 == 0)) {
+                uint256 totalMilestone = (uint256(total) / 2) * 1000 * COIN_BASE_UNIT;
+                coinReward += (totalMilestone * 30) / 100;
+            }
         }
 
-        uint24 streak = ethMintStreakCount_[player];
-        if (prevLevel != 0 && prevLevel + 1 == lvl) {
-            if (streak < type(uint24).max) {
+        if (data != prevData) {
+            mintPacked_[player] = data;
+        }
+        return (coinReward, luckboxReward);
+    }
+
+    function _applyMintDay(
+        uint256 data,
+        uint32 day,
+        uint256 dayShift,
+        uint256 dayMask,
+        uint256 streakShift,
+        uint256 streakMask
+    ) private pure returns (uint256) {
+        data = _bumpMintDay(data, day, dayShift, dayMask, streakShift, streakMask);
+        if (dayShift != AGG_DAY_SHIFT) {
+            data = _bumpMintDay(data, day, AGG_DAY_SHIFT, MINT_MASK_32, AGG_DAY_STREAK_SHIFT, MINT_MASK_20);
+        }
+        return data;
+    }
+
+    function _currentMintDay() private view returns (uint32) {
+        uint48 day = dailyIdx;
+        if (day == 0) {
+            day = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
+        }
+        return uint32(day);
+    }
+
+    function _bumpMintDay(
+        uint256 data,
+        uint32 day,
+        uint256 dayShift,
+        uint256 dayMask,
+        uint256 streakShift,
+        uint256 streakMask
+    ) private pure returns (uint256) {
+        uint32 prevDay = uint32((data >> dayShift) & dayMask);
+        if (prevDay == day) {
+            return data;
+        }
+
+        uint256 streak = (data >> streakShift) & streakMask;
+        if (prevDay != 0 && day == prevDay + 1) {
+            if (streak < streakMask) {
                 unchecked {
-                    streak = uint24(streak + 1);
+                    streak += 1;
                 }
             }
         } else {
             streak = 1;
         }
-        ethMintStreakCount_[player] = streak;
-        ethMintLastLevel_[player] = lvl;
 
-        uint256 streakReward;
-        if (streak >= 2) {
-            uint256 capped = streak >= 61 ? 60 : uint256(streak - 1);
-            streakReward = capped * 100 * COIN_BASE_UNIT;
-        }
+        uint256 clearedDay = data & ~(dayMask << dayShift);
+        uint256 updated = clearedDay | (uint256(day) << dayShift);
+        uint256 clearedStreak = updated & ~(streakMask << streakShift);
+        return clearedStreak | (streak << streakShift);
+    }
 
-        uint256 totalReward;
-        if (total >= 2) {
-            uint256 cappedTotal = total >= 61 ? 60 : uint256(total - 1);
-            totalReward = (cappedTotal * 100 * COIN_BASE_UNIT * 30) / 100;
-        }
-
-        if (streakReward != 0 || totalReward != 0) {
-            unchecked {
-                luckboxReward = streakReward + totalReward;
-                coinReward = luckboxReward;
-            }
-        }
-
-        if (streak == lvl && lvl >= 20 && (lvl % 10 == 0)) {
-            uint256 milestoneBonus = (uint256(lvl) / 2) * 1000 * COIN_BASE_UNIT;
-            coinReward += milestoneBonus;
-        }
-
-        if (total >= 20 && (total % 10 == 0)) {
-            uint256 totalMilestone = (uint256(total) / 2) * 1000 * COIN_BASE_UNIT;
-            coinReward += (totalMilestone * 30) / 100;
-        }
-
-        return (coinReward, luckboxReward);
+    function _setPacked(
+        uint256 data,
+        uint256 shift,
+        uint256 mask,
+        uint256 value
+    ) private pure returns (uint256) {
+        return (data & ~(mask << shift)) | ((value & mask) << shift);
     }
 
 
@@ -1693,7 +1841,7 @@ contract PurgeGame {
     function _eligibleJackpotWinner(address player, uint24 lvl) private view returns (bool) {
         if (player == address(0)) return false;
         if (!_epUnlocked(lvl)) return true;
-        return ethMintLastLevel_[player] == lvl;
+        return uint24((mintPacked_[player] >> ETH_LAST_LEVEL_SHIFT) & MINT_MASK_24) == lvl;
     }
 
     function _getRandomTraits(uint256 rw) internal pure returns (uint8[4] memory w) {

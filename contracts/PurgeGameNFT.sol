@@ -52,8 +52,28 @@ interface IPurgeGame {
     function coinPriceUnit() external view returns (uint256);
     function getEarlyPurgeMask() external view returns (uint8);
     function epUnlocked(uint24 lvl) external view returns (bool);
+    function ethMintLastDay(address player) external view returns (uint48);
+    function ethMintDayStreak(address player) external view returns (uint24);
+    function coinMintLastDay(address player) external view returns (uint48);
+    function coinMintDayStreak(address player) external view returns (uint24);
+    function mintLastDay(address player) external view returns (uint48);
+    function mintDayStreak(address player) external view returns (uint24);
+    function playerMintData(address player)
+        external
+        view
+        returns (
+            uint24 ethLastLevel,
+            uint24 ethLevelCount,
+            uint24 ethLevelStreak,
+            uint48 ethLastDay,
+            uint24 ethDayStreak,
+            uint48 coinLastDay,
+            uint24 coinDayStreak,
+            uint48 overallLastDay,
+            uint24 overallDayStreak
+        );
     function enqueueMap(address buyer, uint32 quantity) external;
-    function creditPrizePool(address player, uint24 lvl, bool creditNext)
+    function recordMint(address player, uint24 lvl, bool creditNext, bool coinMint)
         external
         payable
         returns (uint256 coinReward, uint256 luckboxReward);
@@ -507,7 +527,7 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
         if (msg.value != expectedWei) revert E();
 
         (uint256 streakBonus, uint256 streakLuckbox) =
-            game.creditPrizePool{value: expectedWei}(payer, lvl, creditNextPool);
+            game.recordMint{value: expectedWei}(payer, lvl, creditNextPool, false);
 
         uint256 priceUnit = game.coinPriceUnit();
         uint256 affiliateAmount = (scaledQty * priceUnit) / 1000;
@@ -541,6 +561,7 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
         else if (stepMod == 18) amount = (amount * 9) / 10;
         if (discount != 0) amount -= discount;
         coin.burnCoin(payer, amount);
+        game.recordMint(payer, lvl, false, true);
     }
 
     function _recordPurchase(address buyer, uint32 quantity) private {
