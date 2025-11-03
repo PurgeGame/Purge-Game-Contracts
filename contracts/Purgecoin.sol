@@ -522,12 +522,9 @@ contract Purgecoin {
 
         uint8 stakeGameState = purgeGame.gameState();
 
-        uint24 effectiveLevel = currLevel;
-        if (stakeGameState != 3 && effectiveLevel != 0) {
-            unchecked {
-                effectiveLevel -= 1;
-            }
-        }
+        uint24 effectiveLevel = (stakeGameState == 3 && currLevel != type(uint24).max)
+            ? uint24(currLevel + 1)
+            : currLevel;
 
         if (targetLevel <= effectiveLevel) revert StakeInvalid();
 
@@ -608,7 +605,7 @@ contract Purgecoin {
             }
         }
 
-        if (effectiveLevel == 0) {
+        if (effectiveLevel <= 1) {
             boostedPrincipal = (boostedPrincipal * 3) / 2;
         }
 
