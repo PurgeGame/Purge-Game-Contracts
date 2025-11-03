@@ -292,37 +292,31 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
         return uint24((packed & _BITMASK_BALANCE_LEVEL) >> _BITPOS_BALANCE_LEVEL);
     }
 
-    function _setBalanceLevel(address owner, uint24 lvl) private {
+    function _updateTrophyBalance(address owner, int32 delta, uint24 lvl, bool setLevel) private {
+        if (owner == address(0)) return;
+        if (delta == 0 && !setLevel) return;
 
         uint256 packed = _packedAddressData[owner];
+        uint256 current = (packed & _BITMASK_TROPHY_BALANCE) >> _BITPOS_TROPHY_BALANCE;
+        uint256 updated = current;
+
+        if (delta > 0) {
+            unchecked {
+                updated = current + uint32(delta);
+            }
+        } else if (delta < 0) {
+            uint32 absDelta = uint32(-delta);
+            unchecked {
+                updated = current > absDelta ? current - absDelta : 0;
+            }
+        }
+
+        uint256 cleared = packed & ~(_BITMASK_TROPHY_BALANCE | _BITMASK_BALANCE_LEVEL);
+        uint24 levelValue = setLevel ? lvl : _packedBalanceLevel(packed);
         _packedAddressData[owner] =
-            (packed & ~_BITMASK_BALANCE_LEVEL) |
-            (uint256(lvl) << _BITPOS_BALANCE_LEVEL);
-    }
-
-    function _incrementTrophyBalance(address owner, uint32 amount) private {
-
-        uint256 packed = _packedAddressData[owner];
-        uint256 current = (packed & _BITMASK_TROPHY_BALANCE) >> _BITPOS_TROPHY_BALANCE;
-        unchecked {
-            uint256 updated = current + amount;
-            _packedAddressData[owner] =
-                (packed & ~_BITMASK_TROPHY_BALANCE) |
-                (updated << _BITPOS_TROPHY_BALANCE);
-        }
-    }
-
-    function _decrementTrophyBalance(address owner, uint32 amount) private {
-
-        uint256 packed = _packedAddressData[owner];
-        uint256 current = (packed & _BITMASK_TROPHY_BALANCE) >> _BITPOS_TROPHY_BALANCE;
-        if (current == 0) return;
-        unchecked {
-            uint256 updated = current > amount ? current - amount : 0;
-            _packedAddressData[owner] =
-                (packed & ~_BITMASK_TROPHY_BALANCE) |
-                (updated << _BITPOS_TROPHY_BALANCE);
-        }
+            cleared |
+            (updated << _BITPOS_TROPHY_BALANCE) |
+            (uint256(levelValue) << _BITPOS_BALANCE_LEVEL);
     }
 
     function _mapMinimumQuantity(uint24 lvl) private pure returns (uint32) {
@@ -668,7 +662,7 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
 
                 uint32 chunk = owed > room ? room : owed;
                 _mint(player, chunk);
-                _setBalanceLevel(player, currentLevel);
+                _updateTrophyBalance(player, 0, currentLevel, true);
 
                 minted += chunk;
                 owed -= chunk;
@@ -868,11 +862,13 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
             }
         }
 
+        uint24 currentLevel = game.level();
         if (isTrophy && from != to) {
-            _decrementTrophyBalance(from, 1);
-            _incrementTrophyBalance(to, 1);
+            _updateTrophyBalance(from, -1, currentLevel, true);
+            _updateTrophyBalance(to, 1, currentLevel, true);
+        } else {
+            _updateTrophyBalance(to, 0, currentLevel, true);
         }
-        _setBalanceLevel(to, game.level());
 
         uint256 fromValue = uint256(uint160(from));
         uint256 toValue = uint256(uint160(to));
@@ -1025,7 +1021,11 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
     function mintPlaceholders(uint256 quantity) external onlyTrophyModule returns (uint256 startTokenId) {
         if (quantity == 0) revert E();
         startTokenId = _currentIndex;
-        _mint(address(game), quantity);
+        address gameAddr = address(game);
+        _mint(gameAddr, quantity);
+        if (gameAddr != address(0)) {
+            _updateTrophyBalance(gameAddr, int32(uint32(quantity)), game.level(), true);
+        }
         return startTokenId;
     }
 
@@ -1193,6 +1193,7 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
         _mintQueueIndex = 0;
         uint256 queueLength = _pendingMintQueue.length;
         _mintQueueStartOffset = queueLength > 1 ? ((rngWord % (queueLength - 1)) + 1) : 0;
+        rngLockedFlag = false;
     }
 
     function purge(address owner, uint256[] calldata tokenIds) external onlyGame {
@@ -1221,21 +1222,38 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
         address from = address(uint160(prevOwnershipPacked));
         bool isTrophy = (prevOwnershipPacked & _BITMASK_TROPHY_ACTIVE) != 0;
 
+        uint24 currentLevel = game.level();
+
+        uint256 packedData;
         unchecked {
-            _packedAddressData[from] += (1 << _BITPOS_NUMBER_BURNED) - 1;
-
-            _packedOwnerships[tokenId] = _packOwnershipData(from, _BITMASK_BURNED | _BITMASK_NEXT_INITIALIZED);
-
-            if (prevOwnershipPacked & _BITMASK_NEXT_INITIALIZED == 0) {
-                uint256 nextId = tokenId + 1;
-                if (_packedOwnerships[nextId] == 0 && nextId != _currentIndex) {
-                    _packedOwnerships[nextId] = prevOwnershipPacked;
-                }
-            }
+            packedData = _packedAddressData[from] + ((1 << _BITPOS_NUMBER_BURNED) - 1);
         }
 
         if (isTrophy) {
-            _decrementTrophyBalance(from, 1);
+            uint256 current = (packedData & _BITMASK_TROPHY_BALANCE) >> _BITPOS_TROPHY_BALANCE;
+            if (current != 0) {
+                unchecked {
+                    --current;
+                }
+            }
+            packedData =
+                (packedData & ~(_BITMASK_TROPHY_BALANCE | _BITMASK_BALANCE_LEVEL)) |
+                (current << _BITPOS_TROPHY_BALANCE) |
+                (uint256(currentLevel) << _BITPOS_BALANCE_LEVEL);
+        } else {
+            packedData =
+                (packedData & ~_BITMASK_BALANCE_LEVEL) |
+                (uint256(currentLevel) << _BITPOS_BALANCE_LEVEL);
+        }
+        _packedAddressData[from] = packedData;
+
+        _packedOwnerships[tokenId] = _packOwnershipData(from, _BITMASK_BURNED | _BITMASK_NEXT_INITIALIZED);
+
+        if (prevOwnershipPacked & _BITMASK_NEXT_INITIALIZED == 0) {
+            uint256 nextId = tokenId + 1;
+            if (_packedOwnerships[nextId] == 0 && nextId != _currentIndex) {
+                _packedOwnerships[nextId] = prevOwnershipPacked;
+            }
         }
 
         emit Transfer(from, address(0), tokenId);
@@ -1243,37 +1261,21 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
 
     function _moduleTransfer(address from, address to, uint256 tokenId) private {
         uint256 prevOwnershipPacked = _packedOwnershipOf(tokenId);
-        if (address(uint160(prevOwnershipPacked)) != from) revert TransferFromIncorrectOwner();
-        if (_isTrophyStaked(tokenId)) revert TrophyStakeViolation(_STAKE_ERR_TRANSFER_BLOCKED);
-        if (to == address(0)) revert Zero();
-        bool isTrophy = (prevOwnershipPacked & _BITMASK_TROPHY_ACTIVE) != 0;
+        uint256 preserved =
+            prevOwnershipPacked &
+            (_BITMASK_TROPHY_KIND | _BITMASK_TROPHY_STAKED | _BITMASK_TROPHY_ACTIVE);
+        _packedOwnerships[tokenId] = _packOwnershipData(to, preserved | _BITMASK_NEXT_INITIALIZED);
 
-        if (_tokenApprovals[tokenId] != address(0)) {
-            delete _tokenApprovals[tokenId];
-        }
-
-        unchecked {
-            --_packedAddressData[from];
-            ++_packedAddressData[to];
-
-            uint256 preserved =
-                prevOwnershipPacked &
-                (_BITMASK_TROPHY_KIND | _BITMASK_TROPHY_STAKED | _BITMASK_TROPHY_ACTIVE);
-            _packedOwnerships[tokenId] = _packOwnershipData(to, preserved | _BITMASK_NEXT_INITIALIZED);
-
-            if (prevOwnershipPacked & _BITMASK_NEXT_INITIALIZED == 0) {
-                uint256 nextId = tokenId + 1;
-                if (_packedOwnerships[nextId] == 0 && nextId != _currentIndex) {
-                    _packedOwnerships[nextId] = prevOwnershipPacked;
-                }
+        if (prevOwnershipPacked & _BITMASK_NEXT_INITIALIZED == 0) {
+            uint256 nextId = tokenId + 1;
+            if (_packedOwnerships[nextId] == 0 && nextId != _currentIndex) {
+                _packedOwnerships[nextId] = prevOwnershipPacked;
             }
         }
 
-        if (isTrophy && from != to) {
-            _decrementTrophyBalance(from, 1);
-            _incrementTrophyBalance(to, 1);
-        }
-        _setBalanceLevel(to, game.level());
+        uint24 currentLevel = game.level();
+        _updateTrophyBalance(from, -1, currentLevel, true);
+        _updateTrophyBalance(to, 1, currentLevel, true);
 
         uint256 fromValue = uint256(uint160(from));
         uint256 toValue = uint256(uint160(to));
@@ -1298,9 +1300,9 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
         bool wasActive = (packed & _BITMASK_TROPHY_ACTIVE) != 0;
         bool isActive;
         IPurgeGameTrophies module = trophyModule;
-        if (address(module) != address(0)) {
-            isActive = module.hasTrophy(tokenId);
-        }
+
+        isActive = module.hasTrophy(tokenId);
+        
 
         uint256 cleared = packed & ~(_BITMASK_TROPHY_KIND | _BITMASK_TROPHY_STAKED | _BITMASK_TROPHY_ACTIVE);
         uint256 updated = cleared | (uint256(kind) << _BITPOS_TROPHY_KIND);
@@ -1313,11 +1315,7 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
         _packedOwnerships[tokenId] = updated;
 
         if (owner != address(0) && wasActive != isActive) {
-            if (isActive) {
-                _incrementTrophyBalance(owner, 1);
-            } else {
-                _decrementTrophyBalance(owner, 1);
-            }
+            _updateTrophyBalance(owner, isActive ? int32(1) : int32(-1), game.level(), true);
         }
     }
 
@@ -1356,7 +1354,7 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
     function getTrophyData(uint256 tokenId)
         external
         view
-        returns (uint256 owedWei, uint24 baseLevel, uint24 lastClaimLevel, uint16 traitId, bool isMap)
+        returns (uint256 owedWei, uint24 baseLevel, uint24 lastClaimLevel, uint16 traitId, uint8 trophyKind)
     {
         uint256 raw = address(trophyModule) == address(0) ? 0 : trophyModule.trophyData(tokenId);
         owedWei = raw & TROPHY_OWED_MASK;
@@ -1364,7 +1362,13 @@ event TokenCreated(uint256 tokenId, uint32 tokenTraits);
         baseLevel = uint24(shiftedBase);
         lastClaimLevel = uint24((raw >> TROPHY_LAST_CLAIM_SHIFT));
         traitId = uint16(raw >> 152);
-        isMap = (raw & TROPHY_FLAG_MAP) != 0;
+
+        if (raw & TROPHY_FLAG_MAP != 0) trophyKind = uint8(TrophyKind.Map);
+        else if (raw & TROPHY_FLAG_AFFILIATE != 0) trophyKind = uint8(TrophyKind.Affiliate);
+        else if (raw & TROPHY_FLAG_STAKE != 0) trophyKind = uint8(TrophyKind.Stake);
+        else if (raw & TROPHY_FLAG_BAF != 0) trophyKind = uint8(TrophyKind.Baf);
+        else if (raw & TROPHY_FLAG_DECIMATOR != 0) trophyKind = uint8(TrophyKind.Decimator);
+        else trophyKind = uint8(TrophyKind.Level);
     }
 
     // ---------------------------------------------------------------------

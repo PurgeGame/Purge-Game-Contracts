@@ -151,10 +151,6 @@ contract PurgeGameJackpotModule {
                 carryoverForNextLevel = dailyPaidEth > carryAfter ? 0 : carryAfter - dailyPaidEth;
             }
 
-            uint48 dayIndex = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
-            dailyIdx = dayIndex;
-            nftContract.releaseRngLock();
-
             unchecked {
                 ++jackpotCounter;
             }

@@ -74,6 +74,8 @@ interface IPurgeGameTrophies {
     function trophyData(uint256 tokenId) external view returns (uint256 rawData);
 
     function burnieTrophies() external;
+
+    function handleLevelTraitPurge(address player, uint16 traitId) external returns (uint8 newPercent);
 }
 
 interface IPurgeGameMinimal {
@@ -202,6 +204,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     uint8 private constant LEVEL_STAKE_MAX = 20;
     uint8 private constant AFFILIATE_STAKE_MAX = 20;
     uint8 private constant STAKE_TROPHY_MAX = 20;
+    uint8 private constant LEVEL_STAKE_COIN_CAP = 25;
 
     uint16 private constant STAKE_TRAIT_SENTINEL = 0xFFFD;
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
@@ -226,6 +229,10 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     mapping(address => uint24) private affiliateStakeBaseLevel_;
     mapping(address => uint8) private levelStakeCount_;
     mapping(address => uint8) private levelStakeBonusPct_;
+    mapping(address => mapping(uint16 => uint8)) private levelStakeTraitCount_;
+    mapping(address => mapping(uint16 => uint8)) private levelStakeTraitPct_;
+    mapping(address => uint16[]) private levelStakeTraits_;
+    mapping(address => mapping(uint16 => uint256)) private levelStakeTraitIndex_;
     mapping(address => uint8) private stakeStakeCount_;
     mapping(address => uint8) private stakeStakeBonusPct_;
 
@@ -353,6 +360,64 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         delete stakedTrophyIndex[tokenId];
     }
 
+    function _addLevelStakeTrait(address player, uint16 traitId) private {
+        uint8 count = levelStakeTraitCount_[player][traitId];
+        unchecked {
+            count += 1;
+        }
+        levelStakeTraitCount_[player][traitId] = count;
+        if (count == 1) {
+            levelStakeTraitIndex_[player][traitId] = levelStakeTraits_[player].length + 1;
+            levelStakeTraits_[player].push(traitId);
+        }
+        if (levelStakeTraitPct_[player][traitId] > LEVEL_STAKE_COIN_CAP) {
+            levelStakeTraitPct_[player][traitId] = LEVEL_STAKE_COIN_CAP;
+        }
+        _recomputeLevelStakeBonus(player);
+    }
+
+    function _removeLevelStakeTrait(address player, uint16 traitId) private {
+        uint8 count = levelStakeTraitCount_[player][traitId];
+        if (count == 0) return;
+        unchecked {
+            levelStakeTraitCount_[player][traitId] = count - 1;
+        }
+        if (count == 1) {
+            uint256 index = levelStakeTraitIndex_[player][traitId];
+            if (index != 0) {
+                uint16[] storage list = levelStakeTraits_[player];
+                uint256 lastIndex = list.length;
+                if (index != lastIndex) {
+                    uint16 lastTrait = list[lastIndex - 1];
+                    list[index - 1] = lastTrait;
+                    levelStakeTraitIndex_[player][lastTrait] = index;
+                }
+                list.pop();
+                delete levelStakeTraitIndex_[player][traitId];
+            }
+            levelStakeTraitPct_[player][traitId] = 0;
+        }
+        _recomputeLevelStakeBonus(player);
+    }
+
+    function _recomputeLevelStakeBonus(address player) private {
+        uint16[] storage traits = levelStakeTraits_[player];
+        uint8 best;
+        for (uint256 i; i < traits.length; ) {
+            uint16 traitId = traits[i];
+            if (levelStakeTraitCount_[player][traitId] != 0) {
+                uint8 pct = levelStakeTraitPct_[player][traitId];
+                if (pct > best) {
+                    best = pct;
+                }
+            }
+            unchecked {
+                ++i;
+            }
+        }
+        levelStakeBonusPct_[player] = best;
+    }
+
     function _mapDiscountCap(uint8 count) private pure returns (uint8) {
         if (count == 0) return 0;
         if (count == 1) return 7;
@@ -460,6 +525,8 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
                     levelStakeBonusPct_[params.player] = candidate;
                 }
             }
+            uint16 traitId = uint16((trophyData_[params.tokenId] >> 152) & 0xFFFF);
+            _addLevelStakeTrait(params.player, traitId);
             discountPct = levelStakeBonusPct_[params.player];
             data.kind = 3;
             data.count = levelStakeCount_[params.player];
@@ -529,6 +596,8 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             } else if (levelStakeBonusPct_[params.player] > _levelDiscountCap(current)) {
                 levelStakeBonusPct_[params.player] = _levelDiscountCap(current);
             }
+            uint16 traitId = uint16((trophyData_[params.tokenId] >> 152) & 0xFFFF);
+            _removeLevelStakeTrait(params.player, traitId);
             data.kind = 3;
             data.count = current;
         } else {
@@ -1094,6 +1163,27 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         _refreshMapBonus(player, mapTokenIds);
         _refreshLevelBonus(player, levelTokenIds);
         _refreshStakeBonus(player, stakeTokenIds);
+    }
+
+    function handleLevelTraitPurge(address player, uint16 traitId)
+        external
+        override
+        onlyGame
+        returns (uint8 newPercent)
+    {
+        if (levelStakeTraitCount_[player][traitId] == 0) return 0;
+        uint8 current = levelStakeTraitPct_[player][traitId];
+        if (current < LEVEL_STAKE_COIN_CAP) {
+            unchecked {
+                current += 1;
+            }
+            if (current > LEVEL_STAKE_COIN_CAP) {
+                current = LEVEL_STAKE_COIN_CAP;
+            }
+            levelStakeTraitPct_[player][traitId] = current;
+            _recomputeLevelStakeBonus(player);
+        }
+        return current;
     }
 
     function affiliateStakeBonus(address player) external view override returns (uint8) {
