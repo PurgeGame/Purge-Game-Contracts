@@ -526,42 +526,33 @@ contract PurgeGame {
 
             // --- State 3 - Purge ---
             if (_gameState == 3) {
-                if (_phase == 6) {
-                    uint24 coinflipLevel = uint24(lvl + (jackpotCounter >= 9 ? 1 : 0));
-                    if (coinContract.coinflipWorkPending(coinflipLevel)) {
-                        coinContract.processCoinflipPayouts(coinflipLevel, cap, false, rngWord, day);
+                // Purge begins only after phase 6 is latched during purchase finalization.
+
+                uint24 coinflipLevel = uint24(lvl + (jackpotCounter >= 9 ? 1 : 0));
+                if (coinContract.coinflipWorkPending(coinflipLevel)) {
+                    coinContract.processCoinflipPayouts(coinflipLevel, cap, false, rngWord, day);
+                    break;
+                }
+
+                uint8 remaining = jackpotCounter >= JACKPOT_LEVEL_CAP
+                    ? 0
+                    : uint8(JACKPOT_LEVEL_CAP - jackpotCounter);
+                uint8 toPay = remaining > JACKPOTS_PER_DAY ? JACKPOTS_PER_DAY : remaining;
+
+                bool keepGoing = true;
+                for (uint8 i; i < toPay; ) {
+                    payDailyJackpot(true, lvl, rngWord);
+                    if (!_handleJackpotLevelCap() || gameState != 3) {
+                        keepGoing = false;
                         break;
                     }
-
-                    uint8 remaining = jackpotCounter >= JACKPOT_LEVEL_CAP
-                        ? 0
-                        : uint8(JACKPOT_LEVEL_CAP - jackpotCounter);
-                    uint8 toPay = remaining > JACKPOTS_PER_DAY ? JACKPOTS_PER_DAY : remaining;
-
-                    bool keepGoing = true;
-                    for (uint8 i; i < toPay; ) {
-                        payDailyJackpot(true, lvl, rngWord);
-                        if (!_handleJackpotLevelCap() || gameState != 3) {
-                            keepGoing = false;
-                            break;
-                        }
-                        unchecked {
-                            ++i;
-                        }
+                    unchecked {
+                        ++i;
                     }
-                    if (!keepGoing || gameState != 3) break;
-                    dailyIdx = day;
-                    nft.releaseRngLock();
-                    break;
                 }
-
-                if (coinContract.coinflipWorkPending(lvl)) {
-                    if (coinContract.processCoinflipPayouts(lvl, cap, false, rngWord, day)) {
-                        phase = 6;
-                    }
-                    break;
-                }
-                phase = 6;
+                if (!keepGoing || gameState != 3) break;
+                dailyIdx = day;
+                nft.releaseRngLock();
                 break;
             }
 
