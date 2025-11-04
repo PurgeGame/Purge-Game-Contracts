@@ -396,8 +396,16 @@ contract PurgeGameNFT {
     function tokenURI(uint256 tokenId) external view returns (string memory) {
         uint256 info = address(trophyModule) == address(0) ? 0 : trophyModule.trophyData(tokenId);
         if (info != 0) {
-            uint32[4] memory empty;
-            return trophyRenderer.tokenURI(tokenId, info, empty);
+            uint32[4] memory extras;
+            uint32 flags;
+            if (trophyModule.isTrophyStaked(tokenId)) {
+                flags |= 1;
+            }
+            if ((info & TROPHY_OWED_MASK) != 0) {
+                flags |= 2;
+            }
+            extras[0] = flags;
+            return trophyRenderer.tokenURI(tokenId, info, extras);
         } else if (tokenId < _currentBaseTokenId()) {
             revert InvalidToken();
         }

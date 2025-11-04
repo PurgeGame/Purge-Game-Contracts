@@ -70,6 +70,8 @@ interface IPurgeGameTrophies {
 
     function trophyData(uint256 tokenId) external view returns (uint256 rawData);
 
+    function isTrophyStaked(uint256 tokenId) external view returns (bool);
+
     function burnieTrophies() external;
 
     function handleExterminatorTraitPurge(address player, uint16 traitId) external returns (uint8 newPercent);
@@ -1205,6 +1207,10 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         return stakeStakeBonusPct_[player];
     }
 
+    function exterminatorStakeDiscount(address player) external view override returns (uint8) {
+        return exterminatorStakeBonusPct_[player];
+    }
+
     function mapStakeDiscount(address player) external view override returns (uint8) {
         return mapStakeBonusPct_[player];
     }
@@ -1241,6 +1247,10 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
 
     function hasTrophy(uint256 tokenId) external view override returns (bool) {
         return trophyData_[tokenId] != 0;
+    }
+
+    function isTrophyStaked(uint256 tokenId) external view override returns (bool) {
+        return trophyStaked[tokenId];
     }
 
     function trophyData(uint256 tokenId) external view override returns (uint256 rawData) {
