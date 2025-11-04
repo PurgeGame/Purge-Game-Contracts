@@ -125,14 +125,13 @@ contract PurgeGameEndgameModule {
                 phase = 0;
                 return;
             }
-            bool coinflipFinalizeOk = true;
-            if (_phase >= 3 || (lvl % 20) != 0) {
-                coinflipFinalizeOk = coinContract.processCoinflipPayouts(lvl, cap, false, rngWord, day);
-            }
-            if (coinflipFinalizeOk) {
-                phase = 0;
+            bool gateCoinflip = _phase >= 3 || (lvl % 20) != 0;
+            if (gateCoinflip && coinContract.coinflipWorkPending(lvl)) {
+                coinContract.processCoinflipPayouts(lvl, cap, false, rngWord, day);
                 return;
             }
+            phase = 0;
+            return;
         } else {
             bool decWindow = prevLevel >= 25 && prevMod10 == 5 && prevMod100 != 95;
             if (prevLevel != 0 && (prevLevel % 20) == 0) {

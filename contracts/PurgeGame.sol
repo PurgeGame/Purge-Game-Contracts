@@ -29,6 +29,7 @@ interface IPurgeCoin {
         uint256 rngWord,
         uint48 epoch
     ) external returns (bool);
+    function coinflipWorkPending(uint24 level) external view returns (bool);
     function prepareCoinJackpot() external returns (uint256 poolAmount, address biggestFlip);
     function addToBounty(uint256 amount) external;
     function lastBiggestFlip() external view returns (address);
@@ -442,10 +443,16 @@ contract PurgeGame {
 
                     bool advanceToAirdrop;
                     if (_phase == 2 && levelGate) {
-                        if (modTwenty != 0 && !coinContract.processCoinflipPayouts(lvl, cap, true, rngWord, day)) break;
+                        if (modTwenty != 0 && coinContract.coinflipWorkPending(lvl)) {
+                            coinContract.processCoinflipPayouts(lvl, cap, true, rngWord, day);
+                            break;
+                        }
                         advanceToAirdrop = true;
                     } else if (modTwenty != 0) {
-                        if (!coinContract.processCoinflipPayouts(lvl, cap, false, rngWord, day)) break;
+                        if (coinContract.coinflipWorkPending(lvl)) {
+                            coinContract.processCoinflipPayouts(lvl, cap, false, rngWord, day);
+                            break;
+                        }
                     }
 
                     bool batchesPending = airdropIndex < pendingMapMints.length;
@@ -474,11 +481,10 @@ contract PurgeGame {
                 }
 
                 if (_phase == 4) {
-                    bool coinflipMapOk = true;
-                    if (modTwenty != 0) {
-                        coinflipMapOk = coinContract.processCoinflipPayouts(lvl, cap, false, rngWord, day);
+                    if (modTwenty != 0 && coinContract.coinflipWorkPending(lvl)) {
+                        coinContract.processCoinflipPayouts(lvl, cap, false, rngWord, day);
+                        break;
                     }
-                    if (!coinflipMapOk) break;
                     uint256 mapEffectiveWei = _calcPrizePoolForJackpot(lvl, rngWord);
                     if (payMapJackpot(lvl, rngWord, mapEffectiveWei)) {
                         phase = 5;
@@ -522,7 +528,10 @@ contract PurgeGame {
             if (_gameState == 3) {
                 if (_phase == 6) {
                     uint24 coinflipLevel = uint24(lvl + (jackpotCounter >= 9 ? 1 : 0));
-                    if (!coinContract.processCoinflipPayouts(coinflipLevel, cap, false, rngWord, day)) break;
+                    if (coinContract.coinflipWorkPending(coinflipLevel)) {
+                        coinContract.processCoinflipPayouts(coinflipLevel, cap, false, rngWord, day);
+                        break;
+                    }
 
                     uint8 remaining = jackpotCounter >= JACKPOT_LEVEL_CAP
                         ? 0
@@ -546,15 +555,22 @@ contract PurgeGame {
                     break;
                 }
 
-                if (coinContract.processCoinflipPayouts(lvl, cap, false, rngWord, day)) {
-                    phase = 6;
+                if (coinContract.coinflipWorkPending(lvl)) {
+                    if (coinContract.processCoinflipPayouts(lvl, cap, false, rngWord, day)) {
+                        phase = 6;
+                    }
+                    break;
                 }
+                phase = 6;
                 break;
             }
 
             // --- State 0 ---
             if (_gameState == 0) {
-                coinContract.processCoinflipPayouts(lvl, cap, false, rngWord, day);
+                if (coinContract.coinflipWorkPending(lvl)) {
+                    coinContract.processCoinflipPayouts(lvl, cap, false, rngWord, day);
+                    break;
+                }
             }
         } while (false);
 

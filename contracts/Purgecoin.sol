@@ -1081,6 +1081,16 @@ contract Purgecoin {
         return false;
     }
 
+    function coinflipWorkPending(uint24 level) external view onlyPurgeGameContract returns (bool) {
+        if ((level % 20) == 0) {
+            return stakeLevelComplete < level;
+        }
+        if (payoutIndex != 0) return true;
+        if (stakeLevelComplete < level) return true;
+        if (_coinflipCount() != 0) return true;
+        return false;
+    }
+
     function prepareCoinJackpot() external onlyPurgeGameContract returns (uint256 poolAmount, address biggestFlip) {
         uint256 burnBase = dailyCoinBurn;
         uint256 pool = (burnBase * 60) / 100;
