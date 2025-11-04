@@ -245,9 +245,6 @@ contract PurgeGameJackpotModule {
         dailyIdx = currentDay;
         nftContract.releaseRngLock();
 
-        unchecked {
-            --jackpotCounter;
-        }
         uint256 carry = carryoverForNextLevel;
         carryoverForNextLevel = paidWei > carry ? 0 : carry - paidWei;
     }
