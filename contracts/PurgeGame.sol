@@ -527,7 +527,6 @@ contract PurgeGame {
             // --- State 3 - Purge ---
             if (_gameState == 3) {
                 // Purge begins only after phase 6 is latched during purchase finalization.
-
                 uint24 coinflipLevel = uint24(lvl + (jackpotCounter >= 9 ? 1 : 0));
                 if (coinContract.coinflipWorkPending(coinflipLevel)) {
                     coinContract.processCoinflipPayouts(coinflipLevel, cap, false, rngWord, day);

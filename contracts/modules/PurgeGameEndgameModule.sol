@@ -125,7 +125,8 @@ contract PurgeGameEndgameModule {
                 phase = 0;
                 return;
             }
-            bool gateCoinflip = _phase >= 3 || (lvl % 20) != 0;
+            bool bafPending = prevLevel != 0 && (prevLevel % 20) == 0;
+            bool gateCoinflip = !bafPending && (_phase >= 3 || (lvl % 20) != 0);
             if (gateCoinflip && coinContract.coinflipWorkPending(lvl)) {
                 coinContract.processCoinflipPayouts(lvl, cap, false, rngWord, day);
                 return;
