@@ -154,6 +154,8 @@ contract Purgecoin {
     uint256 private constant STAKE_LANE_RISK_MASK = ((uint256(1) << STAKE_LANE_RISK_BITS) - 1) << STAKE_LANE_RISK_SHIFT;
     uint256 private constant STAKE_PRINCIPAL_FACTOR = MILLION;
     uint256 private constant STAKE_MAX_PRINCIPAL = STAKE_LANE_PRINCIPAL_MASK * STAKE_PRINCIPAL_FACTOR;
+    uint256 private constant TROPHY_BASE_LEVEL_SHIFT = 128;
+    uint256 private constant TROPHY_FLAG_STAKE = uint256(1) << 202;
     uint256 private constant PRESALE_SUPPLY_TOKENS = 4_000_000;
     uint256 private constant PRESALE_START_PRICE = 0.000012 ether;
     uint256 private constant PRESALE_END_PRICE = 0.000018 ether;
@@ -496,7 +498,12 @@ contract Purgecoin {
         uint24 candLevel = cand.level;
         uint72 principal = cand.principal;
         if (award && candLevel == level && player != address(0) && principal != 0) {
-            purgeGameTrophies.awardTrophy(player, level, PURGE_TROPHY_KIND_STAKE, 0, uint256(principal));
+            uint24 stakeBase = level == 0 ? 0 : uint24(level - 1);
+            uint256 dataWord =
+                (uint256(0xFFFF) << 152) |
+                (uint256(stakeBase) << TROPHY_BASE_LEVEL_SHIFT) |
+                TROPHY_FLAG_STAKE;
+            purgeGameTrophies.awardTrophy(player, level, PURGE_TROPHY_KIND_STAKE, dataWord, uint256(principal));
         }
         if (!award) {
             purgeGameTrophies.clearStakePreview(level);
