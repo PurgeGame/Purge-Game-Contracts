@@ -393,6 +393,7 @@ contract PurgeGame {
     /// @param cap Emergency unstuck function, in case a necessary transaction is too large for a block.
     ///            Using cap removes Purgecoin payment.
     function advanceGame(uint32 cap) external {
+        address caller = msg.sender;
         uint48 ts = uint48(block.timestamp);
         IPurgeCoin coinContract = coin;
         // Liveness drain
@@ -402,6 +403,7 @@ contract PurgeGame {
             if (bal > 0) coinContract.burnie{value: bal}(0);
         }
         uint24 lvl = level;
+        uint256 priceCoinLocal = priceCoin;
         uint8 modTwenty = uint8(lvl % 20);
         uint8 _gameState = gameState;
         uint8 _phase = phase;
@@ -410,10 +412,11 @@ contract PurgeGame {
 
         do {
             // Luckbox rewards
-            if (cap == 0 && coinContract.playerLuckbox(msg.sender) < (priceCoin * lvl * (lvl / 100 + 1)) << 1)
+            uint256 lvlMultiplier = (uint256(lvl) / 100) + 1;
+            uint256 requiredLuckbox = (priceCoinLocal * uint256(lvl) * lvlMultiplier) << 1;
+            if (cap == 0 && coinContract.playerLuckbox(caller) < requiredLuckbox)
                 revert LuckboxTooSmall();
-            uint256 rngWord;
-            rngWord = rngAndTimeGate(day);
+            uint256 rngWord = rngAndTimeGate(day);
             if (rngWord == 1) {
                 rngReady = false;
                 break;
@@ -557,7 +560,7 @@ contract PurgeGame {
 
         emit Advance(_gameState, _phase);
 
-        if (_gameState != 0 && cap == 0) coinContract.bonusCoinflip(msg.sender, priceCoin, rngReady, 0);
+        if (_gameState != 0 && cap == 0) coinContract.bonusCoinflip(caller, priceCoin, rngReady, 0);
     }
 
     // --- Purchases: schedule NFT mints (traits precomputed) ----------------------------------------
@@ -589,10 +592,12 @@ contract PurgeGame {
         nft.purge(caller, tokenIds);
 
         uint24 lvl = level;
-        bool isSeventhStep = (lvl % 10 == 7);
-        bool isDoubleCountStep = (lvl % 10 == 2);
+        uint8 mod10 = uint8(lvl % 10);
+        bool isSeventhStep = mod10 == 7;
+        bool isDoubleCountStep = mod10 == 2;
         bool levelNinety = (lvl == 90);
         uint32 endLevelFlag = isSeventhStep ? 1 : 0;
+        uint256 priceCoinLocal = priceCoin;
 
         uint16 prevExterminated = lastExterminatedTrait;
         uint256 bonusTenths;
@@ -640,25 +645,25 @@ contract PurgeGame {
                 uint8 levelPercent = trophiesContract.handleExterminatorTraitPurge(caller, uint16(trait0));
                 if (levelPercent != 0) {
                     unchecked {
-                        stakeBonusCoin += (priceCoin * uint256(levelPercent)) / 100;
+                        stakeBonusCoin += (priceCoinLocal * uint256(levelPercent)) / 100;
                     }
                 }
                 levelPercent = trophiesContract.handleExterminatorTraitPurge(caller, uint16(trait1));
                 if (levelPercent != 0) {
                     unchecked {
-                        stakeBonusCoin += (priceCoin * uint256(levelPercent)) / 100;
+                        stakeBonusCoin += (priceCoinLocal * uint256(levelPercent)) / 100;
                     }
                 }
                 levelPercent = trophiesContract.handleExterminatorTraitPurge(caller, uint16(trait2));
                 if (levelPercent != 0) {
                     unchecked {
-                        stakeBonusCoin += (priceCoin * uint256(levelPercent)) / 100;
+                        stakeBonusCoin += (priceCoinLocal * uint256(levelPercent)) / 100;
                     }
                 }
                 levelPercent = trophiesContract.handleExterminatorTraitPurge(caller, uint16(trait3));
                 if (levelPercent != 0) {
                     unchecked {
-                        stakeBonusCoin += (priceCoin * uint256(levelPercent)) / 100;
+                        stakeBonusCoin += (priceCoinLocal * uint256(levelPercent)) / 100;
                     }
                 }
             }
@@ -693,12 +698,12 @@ contract PurgeGame {
         }
 
         if (isDoubleCountStep) count <<= 1;
-        uint256 priceUnit = priceCoin / 10;
+        uint256 priceUnit = priceCoinLocal / 10;
         if (stakeBonusCoin != 0) {
             coin.bonusCoinflip(caller, stakeBonusCoin, false, 0);
         }
         coin.bonusCoinflip(caller, (count + bonusTenths) * priceUnit, true, 0);
-        emit Purge(msg.sender, tokenIds);
+        emit Purge(caller, tokenIds);
 
         if (winningTrait != TRAIT_ID_TIMEOUT) {
             _endLevel(winningTrait);
@@ -774,8 +779,7 @@ contract PurgeGame {
             lastExterminatedTrait = TRAIT_ID_TIMEOUT;
         }
 
-        uint24 nextLevel = levelSnapshot + 1;
-        trophies.prepareNextLevel(nextLevel);
+        trophies.prepareNextLevel(levelSnapshot + 1);
 
         unchecked {
             levelSnapshot++;
@@ -1169,14 +1173,18 @@ contract PurgeGame {
                 writesThis += 1;
             }
 
+            uint32 remainingOwed;
             unchecked {
-                playerMapMintsOwed[player] = owed - take;
+                remainingOwed = owed - take;
+                playerMapMintsOwed[player] = remainingOwed;
                 airdropMapsProcessedCount += take;
                 used += writesThis;
-                if (playerMapMintsOwed[player] == 0) {
+            }
+            if (remainingOwed == 0) {
+                unchecked {
                     ++airdropIndex;
-                    airdropMapsProcessedCount = 0;
                 }
+                airdropMapsProcessedCount = 0;
             }
         }
         return airdropIndex >= total;
@@ -1330,7 +1338,7 @@ contract PurgeGame {
             }
         }
 
-        uint24 lvl = level; // NEW: write into the current level’s buckets
+        uint24 lvl = uint24(baseKey >> 224); // level is encoded into the base key
 
         uint256 levelSlot;
         assembly {
