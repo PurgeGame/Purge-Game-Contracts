@@ -29,11 +29,16 @@ async function main() {
   const coin = await CoinFactory.deploy();
   await coin.waitForDeployment();
 
+  const AssetsFactory = await hre.ethers.getContractFactory("TrophySvgAssets");
+  const assets = await AssetsFactory.deploy();
+  await assets.waitForDeployment();
+
   const TrophyFactory = await hre.ethers.getContractFactory("IconRendererTrophy32");
   const trophyRenderer = await TrophyFactory.deploy(
     await coin.getAddress(),
     await icons.getAddress(),
-    await registry.getAddress()
+    await registry.getAddress(),
+    await assets.getAddress()
   );
   await trophyRenderer.waitForDeployment();
 
