@@ -216,7 +216,6 @@ contract PurgeGameNFT {
     address private immutable linkToken;
 
     uint256 private basePointers; // high 128 bits = previous base token id, low 128 bits = current base token id
-    mapping(uint256 => uint32) private _tokenTraits; // Packed trait words per base token
 
     uint256 private totalTrophySupply;
 
@@ -410,7 +409,7 @@ contract PurgeGameNFT {
             revert InvalidToken();
         }
 
-        uint32 traitsPacked = _tokenTraits[tokenId];
+        uint32 traitsPacked = _packedTraitsForToken(tokenId);
         uint8 t0 = uint8(traitsPacked);
         uint8 t1 = uint8(traitsPacked >> 8);
         uint8 t2 = uint8(traitsPacked >> 16);
@@ -484,18 +483,7 @@ contract PurgeGameNFT {
 
         for (uint32 i; i < qty32; ) {
             uint256 tokenId = tokenIdStart + uint256(i);
-            uint256 rand = uint256(keccak256(abi.encodePacked(tokenId, targetLevel)));
-            uint8 traitA = _getTrait(uint64(rand));
-            uint8 traitB = _getTrait(uint64(rand >> 64)) | 64;
-            uint8 traitC = _getTrait(uint64(rand >> 128)) | 128;
-            uint8 traitD = _getTrait(uint64(rand >> 192)) | 192;
-
-            uint32 packedTraits = uint32(traitA) |
-                (uint32(traitB) << 8) |
-                (uint32(traitC) << 16) |
-                (uint32(traitD) << 24);
-
-            _tokenTraits[tokenId] = packedTraits;
+            uint32 packedTraits = _packedTraitsForToken(tokenId);
             emit TokenCreated(tokenId, packedTraits);
 
             unchecked {
@@ -728,6 +716,22 @@ contract PurgeGameNFT {
         uint8 category = _w8(uint32(rnd));
         uint8 sub = _w8(uint32(rnd >> 32));
         return (category << 3) | sub;
+    }
+
+    function _packedTraitsFromSeed(uint256 rand) private pure returns (uint32) {
+        uint8 traitA = _getTrait(uint64(rand));
+        uint8 traitB = _getTrait(uint64(rand >> 64)) | 64;
+        uint8 traitC = _getTrait(uint64(rand >> 128)) | 128;
+        uint8 traitD = _getTrait(uint64(rand >> 192)) | 192;
+
+        return uint32(traitA) |
+            (uint32(traitB) << 8) |
+            (uint32(traitC) << 16) |
+            (uint32(traitD) << 24);
+    }
+
+    function _packedTraitsForToken(uint256 tokenId) private pure returns (uint32) {
+        return _packedTraitsFromSeed(uint256(keccak256(abi.encodePacked(tokenId))));
     }
 
     function ownerOf(uint256 tokenId) external view returns (address) {
@@ -1151,20 +1155,6 @@ contract PurgeGameNFT {
         }
     }
 
-    // ---------------------------------------------------------------------
-    // Game operations
-    // ---------------------------------------------------------------------
-
-    function recordTokenTraits(uint256 startTokenId, uint32[] calldata packedTraits) external onlyGame {
-        uint256 len = packedTraits.length;
-        for (uint256 i; i < len; ) {
-            _tokenTraits[startTokenId + i] = packedTraits[i];
-            unchecked {
-                ++i;
-            }
-        }
-    }
-
     function _setSeasonMintedSnapshot(uint256 minted) private {
         seasonMintedSnapshot = minted;
         seasonPurgedCount = 0;
@@ -1314,8 +1304,8 @@ contract PurgeGameNFT {
         return _currentBaseTokenId();
     }
 
-    function tokenTraitsPacked(uint256 tokenId) external view returns (uint32) {
-        return _tokenTraits[tokenId];
+    function tokenTraitsPacked(uint256 tokenId) external pure returns (uint32) {
+        return _packedTraitsForToken(tokenId);
     }
 
     function purchaseCount() external view returns (uint32) {
