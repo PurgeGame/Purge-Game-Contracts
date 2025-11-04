@@ -1,0 +1,12 @@
+[workspace]
+members = [
+  "programs/purge_game",
+  "programs/purge_coin",
+  "programs/purge_trophies",
+]
+resolver = "2"
+
+[workspace.dependencies]
+anchor-lang = "0.29.0"
+anchor-spl = "0.29.0"
+solana-program = "1.18.18"
