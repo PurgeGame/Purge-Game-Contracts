@@ -182,6 +182,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     uint256 private constant TROPHY_FLAG_MAP = uint256(1) << 200;
     uint256 private constant TROPHY_FLAG_AFFILIATE = uint256(1) << 201;
     uint256 private constant TROPHY_FLAG_STAKE = uint256(1) << 202;
+    uint256 private constant TROPHY_FLAG_DECIMATOR = uint256(1) << 204;
     uint256 private constant TROPHY_OWED_MASK = (uint256(1) << 128) - 1;
     uint256 private constant TROPHY_BASE_LEVEL_SHIFT = 128;
     uint256 private constant TROPHY_LAST_CLAIM_SHIFT = 168;
@@ -204,6 +205,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     uint8 private constant EXTERMINATOR_STAKE_COIN_CAP = 25;
 
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
+    uint16 private constant DECIMATOR_TRAIT_SENTINEL = 0xFFFB;
 
     // ---------------------------------------------------------------------
     // Storage
@@ -513,7 +515,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             }
             uint16 traitId = uint16((trophyData_[params.tokenId] >> 152) & 0xFFFF);
             _addExterminatorStakeTrait(params.player, traitId);
-            discountPct = exterminatorStakeBonusPct_[params.player];
+            discountPct = 0;
             data.kind = 3;
             data.count = exterminatorStakeCount_[params.player];
         } else {
@@ -827,6 +829,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
 
         uint256 tokenId = _placeholderTokenId(level, kind);
 
+
         _awardTrophyInternal(to, kind, data, deferredWei, tokenId);
     }
 
@@ -852,7 +855,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         if (mapTokenId == 0 || levelTokenId == 0 || affiliateTokenId == 0) {
             return (address(0), affiliateRecipients);
         }
-
         bool traitWin = req.traitId != TRAIT_ID_TIMEOUT;
         uint256 randomWord = nft.currentRngWord();
 
@@ -882,6 +884,9 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         TraitWinContext memory ctx;
         ctx.levelBits = uint256(req.level) << TROPHY_BASE_LEVEL_SHIFT;
         ctx.traitData = (uint256(req.traitId) << 152) | ctx.levelBits;
+        if (req.traitId == DECIMATOR_TRAIT_SENTINEL) {
+            ctx.traitData |= TROPHY_FLAG_DECIMATOR;
+        }
         ctx.sharedPool = req.pool / 20;
         ctx.base = ctx.sharedPool / 100;
         ctx.stakerRewardPool = ctx.base * 10;
@@ -996,7 +1001,8 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         }
     }
 
-    function _processMapClaim(ClaimContext memory ctx) private view {
+    function _processDecimatorClaim(ClaimContext memory ctx) private view {
+        if (!ctx.isStaked) revert ClaimNotReady();
         uint32 start = uint32((ctx.info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF) + COIN_DRIP_STEPS + 1;
         uint32 floor = start - 1;
         uint32 last = ctx.lastClaim;
@@ -1025,6 +1031,12 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
 
     function _isTrophyStaked(uint256 tokenId) private view returns (bool) {
         return trophyStaked[tokenId];
+    }
+
+    function _isDecimatorTrophy(uint256 info) private pure returns (bool) {
+        if (info & TROPHY_FLAG_DECIMATOR != 0) return true;
+        uint16 traitId = uint16((info >> 152) & 0xFFFF);
+        return traitId == DECIMATOR_TRAIT_SENTINEL;
     }
 
     function _effectiveStakeLevel() private view returns (uint24) {
@@ -1081,8 +1093,8 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             }
         }
 
-        if ((ctx.info & TROPHY_FLAG_MAP) != 0) {
-            _processMapClaim(ctx);
+        if (_isDecimatorTrophy(ctx.info)) {
+            _processDecimatorClaim(ctx);
         }
 
         if (!ctx.ethClaimed && !ctx.coinClaimed) revert ClaimNotReady();
@@ -1197,9 +1209,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         return mapStakeBonusPct_[player];
     }
 
-    function exterminatorStakeDiscount(address player) external view override returns (uint8) {
-        return exterminatorStakeBonusPct_[player];
-    }
 
     function purgeTrophy(uint256 tokenId) external override {
         if (_isTrophyStaked(tokenId)) revert TrophyStakeViolation(_STAKE_ERR_TRANSFER_BLOCKED);

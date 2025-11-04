@@ -533,6 +533,8 @@ contract Purgecoin {
         uint24 effectiveLevel;
         if (stakeGameState == 3) {
             effectiveLevel = currLevel;
+        } else if (currLevel == 0) {
+            effectiveLevel = 0;
         } else {
             unchecked {
                 effectiveLevel = uint24(currLevel - 1);
@@ -618,8 +620,10 @@ contract Purgecoin {
             }
         }
 
-        if (effectiveLevel <= 1) {
-            boostedPrincipal = (boostedPrincipal * 3) / 2;
+        if (currLevel == 1 && stakeGameState == 1) {
+            boostedPrincipal = distance >= 10
+                ? (boostedPrincipal * 3) / 2
+                : (boostedPrincipal * 6) / 5;
         }
 
         uint8 stakeTrophyBoost = purgeGameTrophies.stakeTrophyBonus(sender);

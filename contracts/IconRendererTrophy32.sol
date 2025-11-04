@@ -65,6 +65,9 @@ contract IconRendererTrophy32 {
         "M14.3675 2.15671C14.7781 2.01987 15.2219 2.01987 15.6325 2.15671L20.6325 3.82338C21.4491 4.09561 22 4.85988 22 5.72074V19.6126C22 20.9777 20.6626 21.9416 19.3675 21.5099L15 20.0541L9.63246 21.8433C9.22192 21.9801 8.77808 21.9801 8.36754 21.8433L3.36754 20.1766C2.55086 19.9044 2 19.1401 2 18.2792V4.38741C2 3.0223 3.33739 2.05836 4.63246 2.49004L9 3.94589L14.3675 2.15671ZM15 4.05408L9.63246 5.84326C9.22192 5.9801 8.77808 5.9801 8.36754 5.84326L4 4.38741V18.2792L9 19.9459L14.3675 18.1567C14.7781 18.0199 15.2219 18.0199 15.6325 18.1567L20 19.6126V5.72074L15 4.05408ZM13.2929 8.29288C13.6834 7.90235 14.3166 7.90235 14.7071 8.29288L15.5 9.08577L16.2929 8.29288C16.6834 7.90235 17.3166 7.90235 17.7071 8.29288C18.0976 8.6834 18.0976 9.31657 17.7071 9.70709L16.9142 10.5L17.7071 11.2929C18.0976 11.6834 18.0976 12.3166 17.7071 12.7071C17.3166 13.0976 16.6834 13.0976 16.2929 12.7071L15.5 11.9142L14.7071 12.7071C14.3166 13.0976 13.6834 13.0976 13.2929 12.7071C12.9024 12.3166 12.9024 11.6834 13.2929 11.2929L14.0858 10.5L13.2929 9.70709C12.9024 9.31657 12.9024 8.6834 13.2929 8.29288ZM6 16C6.55228 16 7 15.5523 7 15C7 14.4477 6.55228 14 6 14C5.44772 14 5 14.4477 5 15C5 15.5523 5.44772 16 6 16ZM9 12C9 12.5523 8.55228 13 8 13C7.44772 13 7 12.5523 7 12C7 11.4477 7.44772 11 8 11C8.55228 11 9 11.4477 9 12ZM11 12C11.5523 12 12 11.5523 12 11C12 10.4477 11.5523 9.99998 11 9.99998C10.4477 9.99998 10 10.4477 10 11C10 11.5523 10.4477 12 11 12Z";
     string private constant AFFILIATE_BADGE_PATH =
         "M12 2A10 10 0 1 1 2 12 10 10 0 0 1 12 2Zm0 2.4a.8.8 0 0 0-.73.48l-1.38 3.07-3.33.47a.8.8 0 0 0-.44 1.37l2.4 2.33-.57 3.29a.8.8 0 0 0 1.16.84L12 14.9l2.89 1.43a.8.8 0 0 0 1.16-.84l-.57-3.29 2.4-2.33a.8.8 0 0 0-.44-1.37l-3.33-.47-1.38-3.07A.8.8 0 0 0 12 4.4Z";
+    string private constant DECIMATOR_SYMBOL_PATH =
+        "<g id=\"ico\"><path d=\"M458.599,0H53.397c-4.958,0-8.976,4.018-8.976,8.976v46.365c0,4.958,4.018,8.976,8.976,8.976h8.999v438.705c0,4.958,4.018,8.976,8.976,8.976h37.522c0.09,0,0.178-0.011,0.268-0.013c0.09,0.002,0.177,0.013,0.268,0.013h289.009c0.212,0,0.42-0.017,0.628-0.031c0.208,0.014,0.417,0.031,0.628,0.031h37.523c4.958,0,8.976-4.018,8.976-8.976V277.143c0-4.958-4.018-8.976-8.976-8.976s-8.976,4.018-8.976,8.976v216.903h-19.571V65.289h19.571v82.6c0,4.958,4.018,8.976,8.976,8.976s8.976-4.018,8.976-8.976V64.318h12.406c4.958,0,8.976-4.018,8.976-8.976V8.976C467.575,4.018,463.557,0,458.599,0z M99.917,494.048h-19.57V65.289h19.57V494.048z M389.461,494.048H118.404v-83.021h79.274c4.098,27.37,27.761,48.426,56.255,48.426c28.492,0,52.156-21.057,56.253-48.426h79.274V494.048z M215.003,400.832c0.274-21.235,17.631-38.425,38.931-38.425c21.303,0,38.663,17.198,38.931,38.44c-0.018,0.154-0.031,0.31-0.041,0.466c-0.013,0.187-0.024,0.389-0.028,0.608c-0.006,0.389,0.023,0.773,0.067,1.155c-0.274,21.235-17.631,38.425-38.93,38.425c-21.303,0-38.664-17.198-38.932-38.44c0.017-0.156,0.031-0.31,0.041-0.467c0.014-0.187,0.024-0.389,0.028-0.607C215.076,401.598,215.048,401.214,215.003,400.832z M389.461,392.882h-79.274c-4.098-27.371-27.761-48.426-56.253-48.426c-28.494,0-52.157,21.057-56.255,48.426h-79.274v-83.021h271.056V392.882z M390.717,291.907H117.869V100.264l120.903-0.054v21.728h-76.286v-0.001c-4.958,0-8.976,4.018-8.976,8.976v114.368c0,2.918,1.418,5.653,3.801,7.334c1.534,1.082,3.346,1.642,5.176,1.642c1.011,0,2.027-0.171,3.006-0.519l173.87-61.82c3.578-1.272,5.968-4.659,5.968-8.457v-52.547c0-4.958-4.018-8.976-8.976-8.976h-79.633V100.2l133.995-0.06V291.907z M327.38,139.888v0.001v37.236l-155.918,55.436v-92.674H327.38z M390.717,82.188l-272.848,0.123V64.318h272.848V82.188z M449.623,46.365H62.373V17.952h387.25V46.365z\"/><path d=\"M437.217,183.593c-4.958,0-8.976,4.018-8.976,8.976v11.968c0,4.958,4.018,8.976,8.976,8.976s8.976-4.018,8.976-8.976v-11.968C446.193,187.611,442.174,183.593,437.217,183.593z\"/></g>";
+    uint16 private constant DECIMATOR_SYMBOL_VB = 512;
     uint24[8] private BASE_COLOR = [0xf409cd, 0x7c2bff, 0x30d100, 0xed0e11, 0x1317f7, 0xf7931a, 0x5e5e5e, 0xab8d3f];
 
     int16[8] private BASE_VARIANT_BIAS = [
@@ -312,7 +315,8 @@ contract IconRendererTrophy32 {
             );
 
             string memory centerGlyph = _centerGlyph(isMap, isAffiliate, placeholderFlameColor, diamondPath);
-            string memory cornerGlyph = _cornerGlyph(isMap, isAffiliate, placeholderFlameColor, diamondPath);
+            bool showCornerFlame = !isMap && !isAffiliate && !isStake && !isBaf && !isDec;
+            string memory cornerGlyph = _cornerGlyph(isMap, showCornerFlame, placeholderFlameColor, diamondPath);
 
             return string(abi.encodePacked(head, rings, clip, centerGlyph, cornerGlyph, _svgFooter()));
         }
@@ -358,16 +362,27 @@ contract IconRendererTrophy32 {
         uint32 rMid2 = uint32((uint256(rOut2) * RATIO_MID_1e6) / 1_000_000);
         uint32 rIn2 = uint32((uint256(rOut2) * RATIO_IN_1e6) / 1_000_000);
 
-        uint256 iconIndex = isTopAffiliate ? 32 : (uint256(dataQ) * 8 + uint256(symIdx));
-        string memory iconPath = icons.data(iconIndex);
-        uint16 w = icons.vbW(iconIndex);
-        uint16 h = icons.vbH(iconIndex);
+        string memory iconPath;
+        uint16 w;
+        uint16 h;
+        if (isDecAward) {
+            iconPath = DECIMATOR_SYMBOL_PATH;
+            w = DECIMATOR_SYMBOL_VB;
+            h = DECIMATOR_SYMBOL_VB;
+        } else {
+            uint256 iconIndex = isTopAffiliate ? 32 : (uint256(dataQ) * 8 + uint256(symIdx));
+            iconPath = icons.data(iconIndex);
+            w = icons.vbW(iconIndex);
+            h = icons.vbH(iconIndex);
+        }
         uint16 m = w > h ? w : h;
         if (m == 0) m = 1;
 
         uint32 fitSym1e6;
         if (isTopAffiliate) {
             fitSym1e6 = 760_000;
+        } else if (isDecAward) {
+            fitSym1e6 = 738_000;
         } else if (dataQ == 0 && (symIdx == 3 || symIdx == 7)) {
             fitSym1e6 = 1_030_000;
         } else if (dataQ == 1 && symIdx == 6) {
@@ -410,7 +425,7 @@ contract IconRendererTrophy32 {
                 abi.encodePacked(
                     _svgHeader(border, squareFill),
                     ringsAndSymbol,
-                    _cornerGlyph(isMap, isAffiliate, flameColor, diamondPath),
+                    _cornerGlyph(isMap, !isAffiliate && !isMap && !isStake && !isBaf && !isDec, flameColor, diamondPath),
                     _svgFooter()
                 )
             );
@@ -489,7 +504,7 @@ contract IconRendererTrophy32 {
 
     function _cornerGlyph(
         bool isMap,
-        bool isAffiliate,
+        bool showFlame,
         string memory flameFill,
         string memory flamePath
     ) private pure returns (string memory) {
@@ -508,33 +523,22 @@ contract IconRendererTrophy32 {
                 );
         }
 
-        if (isAffiliate) {
+        if (showFlame) {
             return
                 string(
                     abi.encodePacked(
-                        '<g transform="translate(41 35)" opacity="0.95">',
+                        '<g transform="translate(43 42)" opacity="0.95">',
                         '<path fill="',
                         flameFill,
-                        '" transform="matrix(0.09 0 0 0.09 -21.6 -21.6)" d="',
-                        AFFILIATE_BADGE_PATH,
+                        '" transform="matrix(0.021 0 0 0.021 -10.8 -8.10945)" d="',
+                        flamePath,
                         '"/>',
                         "</g>"
                     )
                 );
         }
 
-        return
-            string(
-                abi.encodePacked(
-                    '<g transform="translate(43 42)" opacity="0.95">',
-                    '<path fill="',
-                    flameFill,
-                    '" transform="matrix(0.021 0 0 0.021 -10.8 -8.10945)" d="',
-                    flamePath,
-                    '"/>',
-                    "</g>"
-                )
-            );
+        return "";
     }
 
     function _svgFooter() private pure returns (string memory) {
