@@ -491,32 +491,37 @@ contract PurgeGame {
                     }
                     break;
                 }
-
+                uint32 purchaseCount = nft.purchaseCount();
                 if (_phase == 5) {
-                    if (nft.processPendingMints(cap)) {
-                        traitCountsSeedQueued = true;
-                        traitRebuildCursor = 0;
-                        delete pendingMapMints;
-                        airdropIndex = 0;
-                        airdropMapsProcessedCount = 0;
-                        earlyPurgePercent = 0;
-                        phase = 6;
+                    if (!traitCountsSeedQueued) {
+                        if (!nft.processPendingMints(cap)) {
+                            break;
+                        }
+                        if (purchaseCount != 0) {
+                            traitCountsSeedQueued = true;
+                            traitRebuildCursor = 0;
+                        }
                     }
+
+                    if (traitCountsSeedQueued) {
+                        if (traitRebuildCursor < purchaseCount) {
+                            _rebuildTraitCounts(cap);
+                            break;
+                        }
+                        _seedTraitCounts();
+                        traitCountsSeedQueued = false;
+                    }
+
+                    delete pendingMapMints;
+                    airdropIndex = 0;
+                    airdropMapsProcessedCount = 0;
+                    earlyPurgePercent = 0;
+                    phase = 6;
                     break;
                 }
 
-                uint32 purchases = nft.purchaseCount();
-                if (traitCountsSeedQueued) {
-                    if (purchases != 0 && traitRebuildCursor < purchases) {
-                        _rebuildTraitCounts(cap);
-                        break;
-                    }
-                    _seedTraitCounts();
-                    traitCountsSeedQueued = false;
-                }
-
                 levelStartTime = ts;
-                nft.finalizePurchasePhase(purchases);
+                nft.finalizePurchasePhase(purchaseCount);
                 dailyIdx = day;
                 traitRebuildCursor = 0;
                 gameState = 3;

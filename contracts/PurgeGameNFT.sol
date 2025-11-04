@@ -428,7 +428,7 @@ contract PurgeGameNFT {
     // ---------------------------------------------------------------------
 
     function purchase(uint256 quantity, bool payInCoin, bytes32 affiliateCode) external payable {
-        if (quantity == 0 || quantity > 400) revert InvalidQuantity();
+        if (quantity == 0 || quantity > 5000) revert InvalidQuantity();
 
         address buyer = msg.sender;
         uint24 currentLevel = game.level();
@@ -510,7 +510,7 @@ contract PurgeGameNFT {
             }
         }
         uint32 minQuantity = _mapMinimumQuantity(lvl);
-        if (quantity < minQuantity) revert InvalidQuantity();
+        if (quantity < minQuantity || quantity > 10000) revert InvalidQuantity();
         if (rngLockedFlag) revert RngNotReady();
 
         _enforceCenturyLuckbox(buyer, lvl, priceUnit);
