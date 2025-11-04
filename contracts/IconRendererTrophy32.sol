@@ -315,7 +315,7 @@ contract IconRendererTrophy32 {
             );
 
             string memory centerGlyph = _centerGlyph(isMap, isAffiliate, placeholderFlameColor, diamondPath);
-            bool showCornerFlame = !isMap && !isAffiliate && !isStake && !isBaf && !isDec;
+            bool showCornerFlame = isDec;
             string memory cornerGlyph = _cornerGlyph(isMap, showCornerFlame, placeholderFlameColor, diamondPath);
 
             return string(abi.encodePacked(head, rings, clip, centerGlyph, cornerGlyph, _svgFooter()));
@@ -401,11 +401,9 @@ contract IconRendererTrophy32 {
                 '<defs><clipPath id="ct2"><circle cx="0" cy="0" r="',
                 uint256(rIn2).toString(),
                 '"/></clipPath></defs>',
-                '<g clip-path="url(#ct2)">',
-                '<g transform="',
+                '<g clip-path="url(#ct2)"><g transform="',
                 _mat6(sSym1e6, txm, tyn),
-                '">',
-                '<g fill="',
+                '"><g fill="',
                 symbolColor,
                 '" stroke="',
                 symbolColor,
@@ -425,7 +423,7 @@ contract IconRendererTrophy32 {
                 abi.encodePacked(
                     _svgHeader(border, squareFill),
                     ringsAndSymbol,
-                    _cornerGlyph(isMap, !isAffiliate && !isMap && !isStake && !isBaf && !isDec, flameColor, diamondPath),
+                    _cornerGlyph(isMap, isDec, flameColor, diamondPath),
                     _svgFooter()
                 )
             );
