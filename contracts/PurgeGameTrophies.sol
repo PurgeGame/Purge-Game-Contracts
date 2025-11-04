@@ -722,7 +722,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             _ensurePlayerOwnsStaked(player, tokenId);
             uint256 info = trophyData_[tokenId];
             if ((info & TROPHY_FLAG_STAKE) == 0) revert StakeInvalid();
-            uint24 value = uint24((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF) + 1;
+            uint24 value = uint24((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF);
             if (value > best) {
                 best = value;
                 found = true;
@@ -762,8 +762,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         unchecked {
             ++nextId;
         }
-        uint24 stakeBase = level == 0 ? 0 : uint24(level - 1);
-        uint256 stakeData = (uint256(0xFFFF) << 152) | (uint256(stakeBase) << TROPHY_BASE_LEVEL_SHIFT) | TROPHY_FLAG_STAKE;
+        uint256 stakeData = (uint256(0xFFFF) << 152) | (uint256(level) << TROPHY_BASE_LEVEL_SHIFT) | TROPHY_FLAG_STAKE;
         _setTrophyData(stakeTokenId, stakeData);
         nft.setTrophyPackedInfo(stakeTokenId, PURGE_TROPHY_KIND_STAKE, false);
 
@@ -827,32 +826,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         }
 
         uint256 tokenId = _placeholderTokenId(level, kind);
-        if (tokenId == 0) {
-            _returnValue(caller, deferredWei);
-            return;
-        }
-
-        if (data == 0) {
-            data = trophyData_[tokenId];
-        }
-
-        if (kind == PURGE_TROPHY_KIND_STAKE) {
-            if (!fromCoin) {
-                _returnValue(caller, deferredWei);
-                return;
-            }
-            uint256 stakePrincipal = deferredWei;
-            _awardTrophyInternal(to, kind, data, 0, tokenId);
-            if (stakePrincipal != 0) {
-                emit StakeTrophyAwarded(to, tokenId, level, stakePrincipal);
-            }
-            return;
-        }
-
-        if (!fromGame || kind > PURGE_TROPHY_KIND_AFFILIATE) {
-            _returnValue(caller, deferredWei);
-            return;
-        }
 
         _awardTrophyInternal(to, kind, data, deferredWei, tokenId);
     }
@@ -1056,15 +1029,16 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
 
     function _effectiveStakeLevel() private view returns (uint24) {
         uint24 lvl = game.level();
-        if (game.gameState() == 3) {
-            if (lvl == type(uint24).max) {
-                return lvl;
-            }
-            unchecked {
-                return uint24(lvl + 1);
-            }
+        uint8 state = game.gameState();
+        if (state == 3) {
+            return lvl;
         }
-        return lvl;
+        if (lvl == 0) {
+            return 0;
+        }
+        unchecked {
+            return uint24(lvl - 1);
+        }
     }
 
     function _kindFromInfo(uint256 info) private pure returns (uint8 kind) {
@@ -1158,7 +1132,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         if (stake && sender.code.length != 0) revert StakeInvalid();
 
         params.trophyBaseLevel = uint24((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF);
-        params.trophyLevelValue = params.targetStake ? params.trophyBaseLevel + 1 : params.trophyBaseLevel;
+        params.trophyLevelValue = params.trophyBaseLevel;
         params.pureExterminatorTrophy = storedKind == PURGE_TROPHY_KIND_LEVEL;
         params.effectiveLevel = effectiveLevel;
 

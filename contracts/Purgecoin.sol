@@ -497,14 +497,15 @@ contract Purgecoin {
         address player = cand.player;
         uint24 candLevel = cand.level;
         uint72 principal = cand.principal;
+
         if (award && candLevel == level && player != address(0) && principal != 0) {
-            uint24 stakeBase = level == 0 ? 0 : uint24(level - 1);
             uint256 dataWord =
                 (uint256(0xFFFF) << 152) |
-                (uint256(stakeBase) << TROPHY_BASE_LEVEL_SHIFT) |
+                (uint256(level) << TROPHY_BASE_LEVEL_SHIFT) |
                 TROPHY_FLAG_STAKE;
-            purgeGameTrophies.awardTrophy(player, level, PURGE_TROPHY_KIND_STAKE, dataWord, uint256(principal));
+            purgeGameTrophies.awardTrophy(player, level, PURGE_TROPHY_KIND_STAKE, dataWord, 0);
         }
+
         if (!award) {
             purgeGameTrophies.clearStakePreview(level);
         }
@@ -529,9 +530,14 @@ contract Purgecoin {
 
         uint8 stakeGameState = purgeGame.gameState();
 
-        uint24 effectiveLevel = (stakeGameState == 3 && currLevel != type(uint24).max)
-            ? uint24(currLevel + 1)
-            : currLevel;
+        uint24 effectiveLevel;
+        if (stakeGameState == 3) {
+            effectiveLevel = currLevel;
+        } else {
+            unchecked {
+                effectiveLevel = uint24(currLevel - 1);
+            }
+        }
 
         if (targetLevel <= effectiveLevel) revert StakeInvalid();
 
