@@ -62,6 +62,8 @@ interface IPurgeGameTrophies {
 
     function exterminatorStakeDiscount(address player) external view returns (uint8);
 
+    function hasExterminatorStake(address player) external view returns (bool);
+
     function purgeTrophy(uint256 tokenId) external;
 
     function stakedTrophySample(uint64 salt) external view returns (address owner);
@@ -1209,6 +1211,10 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
 
     function exterminatorStakeDiscount(address player) external view override returns (uint8) {
         return exterminatorStakeBonusPct_[player];
+    }
+
+    function hasExterminatorStake(address player) external view override returns (bool) {
+        return exterminatorStakeTraits_[player].length != 0;
     }
 
     function mapStakeDiscount(address player) external view override returns (uint8) {

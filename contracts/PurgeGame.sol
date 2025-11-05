@@ -117,7 +117,7 @@ contract PurgeGame {
     // Custom Errors
     // -----------------------
     error E(); // Generic guard (reverts in multiple paths)
-    error LuckboxTooSmall(); // Caller does not meet luckbox threshold for the action
+    error MustMintToday(); // Caller must have completed an ETH mint for the current day before advancing
     error NotTimeYet(); // Called in a phase where the action is not permitted
     error RngNotReady(); // VRF request still pending
     error InvalidQuantity(); // Invalid quantity or token count for the action
@@ -455,8 +455,8 @@ contract PurgeGame {
         return _recordMintData(player, lvl, coinMint);
     }
 
-    /// @notice Advances the game state machine. Anyone can call, but certain steps
-    ///         require the caller to meet a luckbox threshold (payment for work/luckbox bonus).
+    /// @notice Advances the game state machine. Anyone can call, but standard flows
+    ///         require the caller to have completed an ETH mint for the current day.
     /// @param cap Emergency unstuck function, in case a necessary transaction is too large for a block.
     ///            Using cap removes Purgecoin payment.
     function advanceGame(uint32 cap) external {
@@ -470,19 +470,21 @@ contract PurgeGame {
             if (bal > 0) coinContract.burnie{value: bal}(0);
         }
         uint24 lvl = level;
-        uint256 priceCoinLocal = priceCoin;
         uint8 modTwenty = uint8(lvl % 20);
         uint8 _gameState = gameState;
         uint8 _phase = phase;
         bool rngReady = true;
         uint48 day = uint48((ts - JACKPOT_RESET_TIME) / 1 days);
+        uint48 gateIdx = dailyIdx;
+        uint32 currentDay = uint32(day);
+        uint32 minAllowedDay = gateIdx == 0 ? currentDay : uint32(gateIdx);
 
         do {
-            // Luckbox rewards
-            uint256 lvlMultiplier = (uint256(lvl) / 100) + 1;
-            uint256 requiredLuckbox = (priceCoinLocal * uint256(lvl) * lvlMultiplier) << 1;
-            if (cap == 0 && coinContract.playerLuckbox(caller) < requiredLuckbox)
-                revert LuckboxTooSmall();
+            if (cap == 0) {
+                uint256 mintData = mintPacked_[caller];
+                uint32 lastEthDay = uint32((mintData >> ETH_DAY_SHIFT) & MINT_MASK_32);
+                if (lastEthDay < minAllowedDay || lastEthDay > currentDay) revert MustMintToday();
+            }
             uint256 rngWord = rngAndTimeGate(day);
             if (rngWord == 1) {
                 rngReady = false;
@@ -686,16 +688,17 @@ contract PurgeGame {
 
         address[][256] storage tickets = traitPurgeTicket[lvl];
         IPurgeGameTrophies trophiesContract = trophies;
+        bool hasExterminatorStake = trophiesContract.hasExterminatorStake(caller);
 
         uint16 winningTrait = TRAIT_ID_TIMEOUT;
         for (uint256 i; i < count; ) {
             uint256 tokenId = tokenIds[i];
 
-            uint32 traits = nft.tokenTraitsPacked(tokenId);
-            uint8 trait0 = uint8(traits);
-            uint8 trait1 = uint8(traits >> 8);
-            uint8 trait2 = uint8(traits >> 16);
-            uint8 trait3 = uint8(traits >> 24);
+            uint32 traitPack = _traitsForToken(tokenId);
+            uint8 trait0 = uint8(traitPack);
+            uint8 trait1 = uint8(traitPack >> 8);
+            uint8 trait2 = uint8(traitPack >> 16);
+            uint8 trait3 = uint8(traitPack >> 24);
 
             uint8 color0 = trait0 >> 3;
             uint8 color1 = (trait1 & 0x3F) >> 3;
@@ -722,7 +725,7 @@ contract PurgeGame {
                 }
             }
 
-            {
+            if (hasExterminatorStake) {
                 uint8 levelPercent = trophiesContract.handleExterminatorTraitPurge(caller, uint16(trait0));
                 if (levelPercent != 0) {
                     unchecked {
@@ -1338,6 +1341,38 @@ contract PurgeGame {
         return 0;
     }
 
+    function _traitWeight(uint32 rnd) private pure returns (uint8) {
+        unchecked {
+            uint32 scaled = uint32((uint64(rnd) * 75) >> 32);
+            if (scaled < 10) return 0;
+            if (scaled < 20) return 1;
+            if (scaled < 30) return 2;
+            if (scaled < 40) return 3;
+            if (scaled < 49) return 4;
+            if (scaled < 58) return 5;
+            if (scaled < 67) return 6;
+            return 7;
+        }
+    }
+
+    function _deriveTrait(uint64 rnd) private pure returns (uint8) {
+        uint8 category = _traitWeight(uint32(rnd));
+        uint8 sub = _traitWeight(uint32(rnd >> 32));
+        return (category << 3) | sub;
+    }
+
+    function _traitsForToken(uint256 tokenId) private pure returns (uint32 packed) {
+        uint256 rand = uint256(keccak256(abi.encodePacked(tokenId)));
+        uint8 trait0 = _deriveTrait(uint64(rand));
+        uint8 trait1 = _deriveTrait(uint64(rand >> 64)) | 64;
+        uint8 trait2 = _deriveTrait(uint64(rand >> 128)) | 128;
+        uint8 trait3 = _deriveTrait(uint64(rand >> 192)) | 192;
+        packed = uint32(trait0) |
+            (uint32(trait1) << 8) |
+            (uint32(trait2) << 16) |
+            (uint32(trait3) << 24);
+    }
+
     function _seedTraitCounts() private {
         uint32[256] memory snapshot;
         uint32[256] storage remaining = traitRemaining;
@@ -1374,11 +1409,11 @@ contract PurgeGame {
 
         for (uint32 i; i < batch; ) {
             uint32 tokenOffset = cursor + i;
-            uint32 traitsPacked = nft.tokenTraitsPacked(baseTokenId + tokenOffset);
-            uint8 t0 = uint8(traitsPacked);
-            uint8 t1 = uint8(traitsPacked >> 8);
-            uint8 t2 = uint8(traitsPacked >> 16);
-            uint8 t3 = uint8(traitsPacked >> 24);
+            uint32 traitPack = _traitsForToken(baseTokenId + tokenOffset);
+            uint8 t0 = uint8(traitPack);
+            uint8 t1 = uint8(traitPack >> 8);
+            uint8 t2 = uint8(traitPack >> 16);
+            uint8 t3 = uint8(traitPack >> 24);
 
             unchecked {
                 ++localCounts[t0];
