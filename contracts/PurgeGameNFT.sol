@@ -81,6 +81,7 @@ interface IPurgeGame {
         bool coinMint
     ) external payable returns (uint256 coinReward, uint256 luckboxReward);
     function ethMintLastLevel(address player) external view returns (uint24);
+    function purchaseMultiplier() external view returns (uint32);
 }
 
 interface IPurgecoin {
@@ -642,6 +643,10 @@ contract PurgeGameNFT {
 
             uint32 minted;
             uint24 currentLevel = game.level();
+            uint32 multiplier = game.purchaseMultiplier();
+            if (multiplier == 0) {
+                multiplier = 1;
+            }
             while (index < end) {
                 uint256 rawIdx = (index + _mintQueueStartOffset) % total;
                 address player = _pendingMintQueue[rawIdx];
@@ -658,12 +663,23 @@ contract PurgeGameNFT {
                     break;
                 }
 
-                uint32 chunk = owed > room ? room : owed;
-                _mint(player, chunk);
+                uint256 outstandingTokens = uint256(owed) * uint256(multiplier);
+                uint32 mintAmount = outstandingTokens > room ? room : uint32(outstandingTokens);
+                mintAmount = (mintAmount / multiplier) * multiplier;
+                if (mintAmount == 0) {
+                    break;
+                }
+
+                _mint(player, mintAmount);
                 _updateTrophyBalance(player, 0, currentLevel, true);
 
-                minted += chunk;
-                owed -= chunk;
+                minted += mintAmount;
+
+                uint32 completedUnits = mintAmount / multiplier;
+                if (completedUnits > owed) {
+                    completedUnits = owed;
+                }
+                owed -= completedUnits;
                 _tokensOwed[player] = owed;
 
                 if (owed == 0) {

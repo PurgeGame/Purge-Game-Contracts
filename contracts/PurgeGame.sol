@@ -187,6 +187,7 @@ contract PurgeGame {
     uint32 private airdropMapsProcessedCount; // Progress inside current map-mint player's queue
     uint32 private airdropIndex; // Progress across players in pending arrays
     uint32 private traitRebuildCursor; // Tokens processed during trait rebuild
+    uint32 private airdropMultiplier = 1; // Multiplier applied to purchased tokens during the airdrop
     bool private traitCountsSeedQueued; // Trait seeding pending after pending mints finish
     bool private traitCountsShouldOverwrite; // On next rebuild slice, overwrite instead of accumulate
 
@@ -299,6 +300,11 @@ contract PurgeGame {
 
     function getEarlyPurgePercent() external view returns (uint8) {
         return earlyPurgePercent;
+    }
+
+    function purchaseMultiplier() external view returns (uint32) {
+        uint32 multiplier = airdropMultiplier;
+        return multiplier == 0 ? 1 : multiplier;
     }
 
     function coinMintUnlock(uint24 lvl) external view returns (bool) {
@@ -436,7 +442,7 @@ contract PurgeGame {
             if (_gameState == 2) {
                 if (_phase <= 2) {
                     bool prizeReady = prizePool >= lastPrizePool;
-                    bool levelGate = (nft.purchaseCount() >= PURCHASE_MINIMUM && prizeReady);
+                    bool levelGate = prizeReady;
                     if (modTwenty == 16) {
                         levelGate = prizeReady;
                     }
@@ -465,6 +471,7 @@ contract PurgeGame {
                     endDayJackpot(lvl, day, rngWord);
 
                     if (advanceToAirdrop && !batchesPending) {
+                        airdropMultiplier = _calculateAirdropMultiplier(nft.purchaseCount());
                         phase = 3;
                     }
 
@@ -491,20 +498,21 @@ contract PurgeGame {
                     }
                     break;
                 }
-                uint32 purchaseCount = nft.purchaseCount();
+                uint32 purchaseCountRaw = nft.purchaseCount();
                 if (_phase == 5) {
                     if (!traitCountsSeedQueued) {
                         if (!nft.processPendingMints(cap)) {
                             break;
                         }
-                        if (purchaseCount != 0) {
+                        if (purchaseCountRaw != 0) {
                             traitCountsSeedQueued = true;
                             traitRebuildCursor = 0;
                         }
                     }
 
                     if (traitCountsSeedQueued) {
-                        if (traitRebuildCursor < purchaseCount) {
+                        uint32 targetCount = _purchaseTargetCountFromRaw(purchaseCountRaw);
+                        if (traitRebuildCursor < targetCount) {
                             _rebuildTraitCounts(cap);
                             break;
                         }
@@ -521,9 +529,11 @@ contract PurgeGame {
                 }
 
                 levelStartTime = ts;
-                nft.finalizePurchasePhase(purchaseCount);
+                uint32 mintedCount = _purchaseTargetCountFromRaw(nft.purchaseCount());
+                nft.finalizePurchasePhase(mintedCount);
                 dailyIdx = day;
                 traitRebuildCursor = 0;
+                airdropMultiplier = 1;
                 gameState = 3;
 
                 break;
@@ -1228,7 +1238,7 @@ contract PurgeGame {
     /// @param tokenBudget Max tokens to process this call (0 => default 4,096).
     /// @return finished True when all tokens for the level have been incorporated.
     function _rebuildTraitCounts(uint32 tokenBudget) private returns (bool finished) {
-        uint32 target = nft.purchaseCount();
+        uint32 target = _purchaseTargetCountFromRaw(nft.purchaseCount());
 
         uint32 cursor = traitRebuildCursor;
         if (cursor >= target) return true;
@@ -1283,6 +1293,28 @@ contract PurgeGame {
             // After the first slice we always accumulate, leveraging that all traits were hit once.
             traitCountsShouldOverwrite = false;
         }
+    }
+
+    function _calculateAirdropMultiplier(uint32 purchaseCount) private pure returns (uint32) {
+        if (purchaseCount == 0) {
+            return 1;
+        }
+        if (purchaseCount >= 5000) {
+            return 1;
+        }
+        uint256 numerator = 5000 + uint256(purchaseCount) - 1;
+        uint32 multiplier = uint32(numerator / purchaseCount);
+        return multiplier == 0 ? 1 : multiplier;
+    }
+
+    function _purchaseTargetCountFromRaw(uint32 rawCount) private view returns (uint32) {
+        if (rawCount == 0) {
+            return 0;
+        }
+        uint32 multiplier = airdropMultiplier == 0 ? 1 : airdropMultiplier;
+        uint256 scaled = uint256(rawCount) * uint256(multiplier);
+        if (scaled > type(uint32).max) revert E();
+        return uint32(scaled);
     }
 
     function _consumeTrait(uint8 traitId, uint32 endLevel) private returns (bool reachedZero) {
