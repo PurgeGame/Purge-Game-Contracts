@@ -3,15 +3,6 @@ pragma solidity ^0.8.26;
 
 import {IPurgeGameTrophies} from "./PurgeGameTrophies.sol";
 
-struct VRFRandomWordsRequest {
-    bytes32 keyHash;
-    uint256 subId;
-    uint16 requestConfirmations;
-    uint32 callbackGasLimit;
-    uint32 numWords;
-    bytes extraArgs;
-}
-
 enum TrophyKind {
     Map,
     Level,
@@ -82,6 +73,10 @@ interface IPurgeGame {
     ) external payable returns (uint256 coinReward, uint256 luckboxReward);
     function ethMintLastLevel(address player) external view returns (uint24);
     function purchaseMultiplier() external view returns (uint32);
+    function rngLocked() external view returns (bool);
+    function currentRngWord() external view returns (uint256);
+    function isRngFulfilled() external view returns (bool);
+    function releaseRngLock() external;
 }
 
 interface IPurgecoin {
@@ -96,21 +91,6 @@ interface IPurgecoin {
     function playerLuckbox(address player) external view returns (uint256);
 }
 
-interface IVRFCoordinator {
-    function requestRandomWords(VRFRandomWordsRequest calldata request) external returns (uint256);
-
-    function getSubscription(
-        uint256 subId
-    )
-        external
-        view
-        returns (uint96 balance, uint96 premium, uint64 reqCount, address owner, address[] memory consumers);
-}
-
-interface ILinkToken {
-    function transferAndCall(address to, uint256 value, bytes calldata data) external returns (bool);
-}
-
 interface IPurgeGameNFT {
     function wireContracts(address game_) external;
     function wireTrophies(address trophies_) external;
@@ -122,10 +102,8 @@ interface IPurgeGameNFT {
     function purge(address owner, uint256[] calldata tokenIds) external;
     function currentBaseTokenId() external view returns (uint256);
     function recordSeasonMinted(uint256 minted) external;
-    function requestRng() external;
     function currentRngWord() external view returns (uint256);
     function rngLocked() external view returns (bool);
-    function releaseRngLock() external;
     function isRngFulfilled() external view returns (bool);
     function processPendingMints(uint32 playersToProcess) external returns (bool finished);
     function tokensOwed(address player) external view returns (uint32);
@@ -142,12 +120,11 @@ contract PurgeGameNFT {
     error Zero();
     error E();
     error ClaimNotReady();
-    error CoinPaused();
+
     error OnlyCoin();
     error InvalidToken();
     error TrophyStakeViolation(uint8 reason);
     error StakeInvalid();
-    error OnlyCoordinatorCanFulfill(address have, address want);
     error LuckboxTooSmall();
     error NotTimeYet();
     error RngNotReady();
@@ -211,10 +188,6 @@ contract PurgeGameNFT {
     ITokenRenderer private immutable trophyRenderer;
     IPurgecoin private immutable coin;
     IPurgeGameTrophies private trophyModule;
-    IVRFCoordinator private immutable vrfCoordinator;
-    bytes32 private immutable vrfKeyHash;
-    uint256 private immutable vrfSubscriptionId;
-    address private immutable linkToken;
 
     uint256 private basePointers; // high 128 bits = previous base token id, low 128 bits = current base token id
 
@@ -232,16 +205,10 @@ contract PurgeGameNFT {
     uint32 private constant MINT_AIRDROP_PLAYER_BATCH_SIZE = 210; // Max unique recipients per airdrop batch
     uint32 private constant MINT_AIRDROP_TOKEN_CAP = 3_000; // Max tokens distributed per airdrop batch
 
-    bool private rngFulfilled;
-    bool private rngLockedFlag;
-    uint256 private rngRequestId;
-    uint256 private rngWord;
-
     uint32 private constant COIN_DRIP_STEPS = 10; // Base vesting window before coin drip starts
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
     uint256 private constant COIN_BASE_UNIT = 1_000_000; // 1 PURGED (6 decimals)
     uint256 private constant COIN_EMISSION_UNIT = 1_000 * COIN_BASE_UNIT; // 1000 PURGED (6 decimals)
-    uint256 private constant LUCK_PER_LINK = 220 * COIN_BASE_UNIT; // Base credit per 1 LINK (pre-multiplier)
     uint256 private constant TROPHY_FLAG_MAP = uint256(1) << 200;
     uint256 private constant TROPHY_FLAG_AFFILIATE = uint256(1) << 201;
     uint256 private constant TROPHY_FLAG_STAKE = uint256(1) << 202;
@@ -268,8 +235,6 @@ contract PurgeGameNFT {
     uint16 private constant BAF_TRAIT_SENTINEL = 0xFFFA;
     uint16 private constant DECIMATOR_TRAIT_SENTINEL = 0xFFFB;
     uint16 private constant STAKE_TRAIT_SENTINEL = 0xFFFD;
-    uint32 private constant VRF_CALLBACK_GAS_LIMIT = 200_000;
-    uint16 private constant VRF_REQUEST_CONFIRMATIONS = 10;
     uint24 private constant STAKE_PREVIEW_START_LEVEL = 12;
     uint256 private constant LUCKBOX_BYPASS_THRESHOLD = 100_000 * 1_000_000;
 
@@ -327,23 +292,10 @@ contract PurgeGameNFT {
         return 4;
     }
 
-    constructor(
-        address regularRenderer_,
-        address trophyRenderer_,
-        address coin_,
-        address vrfCoordinator_,
-        bytes32 keyHash_,
-        uint256 subId_,
-        address linkToken_
-    ) {
+    constructor(address regularRenderer_, address trophyRenderer_, address coin_) {
         regularRenderer = ITokenRenderer(regularRenderer_);
         trophyRenderer = ITokenRenderer(trophyRenderer_);
         coin = IPurgecoin(coin_);
-        vrfCoordinator = IVRFCoordinator(vrfCoordinator_);
-        vrfKeyHash = keyHash_;
-        vrfSubscriptionId = subId_;
-        linkToken = linkToken_;
-        rngFulfilled = true;
         _currentIndex = 97;
     }
 
@@ -438,7 +390,7 @@ contract PurgeGameNFT {
         uint24 targetLevel = queueNext ? currentLevel + 1 : currentLevel;
 
         if ((targetLevel % 20) == 16) revert NotTimeYet();
-        if (rngLockedFlag) revert RngNotReady();
+        if (game.rngLocked()) revert RngNotReady();
 
         uint256 priceCoinUnit = game.coinPriceUnit();
         _enforceCenturyLuckbox(buyer, targetLevel, priceCoinUnit);
@@ -512,7 +464,7 @@ contract PurgeGameNFT {
         }
         uint32 minQuantity = _mapMinimumQuantity(lvl);
         if (quantity < minQuantity || quantity > 10000) revert InvalidQuantity();
-        if (rngLockedFlag) revert RngNotReady();
+        if (game.rngLocked()) revert RngNotReady();
 
         _enforceCenturyLuckbox(buyer, lvl, priceUnit);
 
@@ -846,10 +798,6 @@ contract PurgeGameNFT {
     }
 
     function transferFrom(address from, address to, uint256 tokenId) public payable {
-        if (rngLockedFlag) {
-            address senderCheck = msg.sender;
-            if (senderCheck != address(this) && senderCheck != address(game)) revert CoinPaused();
-        }
         uint256 prevOwnershipPacked = _packedOwnershipOf(tokenId);
         bool isTrophy = (prevOwnershipPacked & _BITMASK_TROPHY_ACTIVE) != 0;
 
@@ -1097,78 +1045,16 @@ contract PurgeGameNFT {
     // VRF / RNG
     // ---------------------------------------------------------------------
 
-    function requestRng() external onlyGame {
-        uint256 id = vrfCoordinator.requestRandomWords(
-            VRFRandomWordsRequest({
-                keyHash: vrfKeyHash,
-                subId: vrfSubscriptionId,
-                requestConfirmations: VRF_REQUEST_CONFIRMATIONS,
-                callbackGasLimit: VRF_CALLBACK_GAS_LIMIT,
-                numWords: 1,
-                extraArgs: bytes("")
-            })
-        );
-        rngRequestId = id;
-        rngFulfilled = false;
-        rngWord = 0;
-        rngLockedFlag = true;
-    }
-
-    function rawFulfillRandomWords(uint256 requestId, uint256[] calldata randomWords) external {
-        address coordinator = address(vrfCoordinator);
-        if (msg.sender != coordinator) revert OnlyCoordinatorCanFulfill(msg.sender, coordinator);
-        if (requestId != rngRequestId || rngFulfilled) return;
-        rngFulfilled = true;
-        rngWord = randomWords[0];
-    }
-
-    function releaseRngLock() external onlyGame {
-        rngLockedFlag = false;
-        rngRequestId = 0;
-    }
-
     function rngLocked() external view returns (bool) {
-        return rngLockedFlag;
+        return game.rngLocked();
     }
 
     function currentRngWord() external view returns (uint256) {
-        return rngFulfilled ? rngWord : 0;
+        return game.currentRngWord();
     }
 
     function isRngFulfilled() external view returns (bool) {
-        return rngFulfilled;
-    }
-
-    function _tierMultPermille(uint256 subBal) private pure returns (uint16) {
-        if (subBal < 200 ether) return 2000;
-        if (subBal < 300 ether) return 1500;
-        if (subBal < 600 ether) return 1000;
-        if (subBal < 1000 ether) return 500;
-        if (subBal < 2000 ether) return 100;
-        return 0;
-    }
-
-    function onTokenTransfer(address from, uint256 amount, bytes calldata) external {
-        if (msg.sender != linkToken) revert E();
-        if (amount == 0) revert Zero();
-        if (rngLockedFlag) revert CoinPaused();
-
-        try
-            ILinkToken(linkToken).transferAndCall(address(vrfCoordinator), amount, abi.encode(vrfSubscriptionId))
-        returns (bool ok) {
-            if (!ok) revert E();
-        } catch {
-            revert E();
-        }
-        (uint96 bal, , , , ) = vrfCoordinator.getSubscription(vrfSubscriptionId);
-        uint16 mult = _tierMultPermille(uint256(bal));
-        if (mult == 0) return;
-
-        uint256 base = (amount * LUCK_PER_LINK) / 1 ether;
-        uint256 credit = (base * mult) / 1000;
-        if (credit != 0) {
-            coin.bonusCoinflip(from, 0, true, credit);
-        }
+        return game.isRngFulfilled();
     }
 
     function _setSeasonMintedSnapshot(uint256 minted) private {
@@ -1188,8 +1074,13 @@ contract PurgeGameNFT {
         _purchaseCount = 0;
         _mintQueueIndex = 0;
         uint256 queueLength = _pendingMintQueue.length;
-        _mintQueueStartOffset = queueLength > 1 ? ((rngWord % (queueLength - 1)) + 1) : 0;
-        rngLockedFlag = false;
+        if (queueLength > 1) {
+            uint256 entropy = game.currentRngWord();
+            _mintQueueStartOffset = ((entropy % (queueLength - 1)) + 1);
+        } else {
+            _mintQueueStartOffset = 0;
+        }
+        game.releaseRngLock();
     }
 
     function purge(address owner, uint256[] calldata tokenIds) external onlyGame {

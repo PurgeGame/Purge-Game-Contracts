@@ -3,7 +3,7 @@ pragma solidity ^0.8.26;
 
 import {IPurgeGameNFT} from "./PurgeGameNFT.sol";
 import {IPurgeGameTrophies} from "./PurgeGameTrophies.sol";
-import {IPurgeCoinModule, IPurgeGameNFTModule, IPurgeGameTrophiesModule} from "./modules/PurgeGameModuleInterfaces.sol";
+import {IPurgeCoinModule, IPurgeGameTrophiesModule} from "./modules/PurgeGameModuleInterfaces.sol";
 
 /**
  * @title Purge Game — Core NFT game contract
@@ -67,7 +67,6 @@ interface IPurgeGameJackpotModule {
         uint24 lvl,
         uint256 randWord,
         IPurgeCoinModule coinContract,
-        IPurgeGameNFTModule nftContract,
         IPurgeGameTrophiesModule trophiesContract
     ) external;
 
@@ -76,7 +75,6 @@ interface IPurgeGameJackpotModule {
         uint256 rngWord,
         uint256 effectiveWei,
         IPurgeCoinModule coinContract,
-        IPurgeGameNFTModule nftContract,
         IPurgeGameTrophiesModule trophiesContract
     ) external returns (bool finished);
 
@@ -85,6 +83,30 @@ interface IPurgeGameJackpotModule {
         uint256 rngWord,
         IPurgeCoinModule coinContract
     ) external returns (uint256 effectiveWei);
+}
+
+struct VRFRandomWordsRequest {
+    bytes32 keyHash;
+    uint256 subId;
+    uint16 requestConfirmations;
+    uint32 callbackGasLimit;
+    uint32 numWords;
+    bytes extraArgs;
+}
+
+interface IVRFCoordinator {
+    function requestRandomWords(VRFRandomWordsRequest calldata request) external returns (uint256);
+
+    function getSubscription(
+        uint256 subId
+    )
+        external
+        view
+        returns (uint96 balance, uint96 premium, uint64 reqCount, address owner, address[] memory consumers);
+}
+
+interface ILinkToken {
+    function transferAndCall(address to, uint256 value, bytes calldata data) external returns (bool);
 }
 // ===========================================================================
 // Contract
@@ -99,6 +121,7 @@ contract PurgeGame {
     error NotTimeYet(); // Called in a phase where the action is not permitted
     error RngNotReady(); // VRF request still pending
     error InvalidQuantity(); // Invalid quantity or token count for the action
+    error CoinPaused(); // LINK top-ups unavailable while RNG is locked
 
     // -----------------------
     // Events
@@ -117,6 +140,10 @@ contract PurgeGame {
     IPurgeGameTrophies private immutable trophies; // Dedicated trophy module
     address private immutable endgameModule; // Delegate module for endgame settlement
     address private immutable jackpotModule; // Delegate module for jackpot routines
+    IVRFCoordinator private immutable vrfCoordinator; // Chainlink VRF coordinator
+    bytes32 private immutable vrfKeyHash; // VRF key hash
+    uint256 private immutable vrfSubscriptionId; // VRF subscription identifier
+    address private immutable linkToken; // LINK token contract for top-ups
 
     // -----------------------
     // Game Constants
@@ -132,6 +159,9 @@ contract PurgeGame {
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
     uint8 private constant EARLY_PURGE_UNLOCK_PERCENT = 30; // 30% early-purge threshold gate
     uint256 private constant COIN_BASE_UNIT = 1_000_000; // 1 PURGED (6 decimals)
+    uint256 private constant LUCK_PER_LINK = 220 * COIN_BASE_UNIT; // Base credit per 1 LINK (pre-multiplier)
+    uint32 private constant VRF_CALLBACK_GAS_LIMIT = 200_000;
+    uint16 private constant VRF_REQUEST_CONFIRMATIONS = 10;
 
     uint256 private constant MINT_MASK_24 = (uint256(1) << 24) - 1;
     uint256 private constant MINT_MASK_20 = (uint256(1) << 20) - 1;
@@ -180,6 +210,10 @@ contract PurgeGame {
     // -----------------------
     // RNG Liveness Flags
     // -----------------------
+    bool private rngLockedFlag;
+    bool private rngFulfilled = true;
+    uint256 private rngWordCurrent;
+    uint256 private vrfRequestId;
 
     // -----------------------
     // Minting / Airdrops
@@ -234,7 +268,11 @@ contract PurgeGame {
         address nftContract,
         address trophiesContract,
         address endgameModule_,
-        address jackpotModule_
+        address jackpotModule_,
+        address vrfCoordinator_,
+        bytes32 vrfKeyHash_,
+        uint256 vrfSubscriptionId_,
+        address linkToken_
     ) {
         coin = IPurgeCoin(purgeCoinContract);
         renderer = IPurgeRendererLike(renderer_);
@@ -244,6 +282,11 @@ contract PurgeGame {
         endgameModule = endgameModule_;
         if (jackpotModule_ == address(0)) revert E();
         jackpotModule = jackpotModule_;
+        if (vrfCoordinator_ == address(0) || linkToken_ == address(0)) revert E();
+        vrfCoordinator = IVRFCoordinator(vrfCoordinator_);
+        vrfKeyHash = vrfKeyHash_;
+        vrfSubscriptionId = vrfSubscriptionId_;
+        linkToken = linkToken_;
     }
 
     // --- View: lightweight game status -------------------------------------------------
@@ -305,6 +348,23 @@ contract PurgeGame {
     function purchaseMultiplier() external view returns (uint32) {
         uint32 multiplier = airdropMultiplier;
         return multiplier == 0 ? 1 : multiplier;
+    }
+
+    function rngLocked() public view returns (bool) {
+        return rngLockedFlag;
+    }
+
+    function currentRngWord() public view returns (uint256) {
+        return rngFulfilled ? rngWordCurrent : 0;
+    }
+
+    function isRngFulfilled() external view returns (bool) {
+        return rngFulfilled;
+    }
+
+    function releaseRngLock() external {
+        if (msg.sender != address(nft)) revert E();
+        _unlockRng();
     }
 
     function coinMintUnlock(uint24 lvl) external view returns (bool) {
@@ -431,9 +491,9 @@ contract PurgeGame {
             // --- State 1 - Pregame ---
             if (_gameState == 1) {
                 _runEndgameModule(lvl, cap, day, rngWord); // handles payouts, wipes, endgame dist, and jackpots
-                if (gameState == 2 && pendingEndLevel.level == 0 && nft.rngLocked()) {
+                if (gameState == 2 && pendingEndLevel.level == 0 && rngLockedFlag) {
                     dailyIdx = day;
-                    nft.releaseRngLock();
+                    _unlockRng();
                 }
                 break;
             }
@@ -566,7 +626,7 @@ contract PurgeGame {
                 }
                 if (!keepGoing || gameState != 3) break;
                 dailyIdx = day;
-                nft.releaseRngLock();
+                _unlockRng();
                 break;
             }
 
@@ -604,7 +664,7 @@ contract PurgeGame {
     // --- Purging NFTs into tickets & potentially ending the level -----------------------------------
 
     function purge(uint256[] calldata tokenIds) external {
-        if (nft.rngLocked()) revert RngNotReady();
+        if (rngLockedFlag) revert RngNotReady();
         if (gameState != 3) revert NotTimeYet();
 
         uint256 count = tokenIds.length;
@@ -1058,7 +1118,6 @@ contract PurgeGame {
                 rngWord,
                 effectiveWei,
                 IPurgeCoinModule(address(coin)),
-                IPurgeGameNFTModule(address(nft)),
                 IPurgeGameTrophiesModule(address(trophies))
             )
         );
@@ -1089,7 +1148,6 @@ contract PurgeGame {
                 lvl,
                 randWord,
                 IPurgeCoinModule(address(coin)),
-                IPurgeGameNFTModule(address(nft)),
                 IPurgeGameTrophiesModule(address(trophies))
             )
         );
@@ -1109,18 +1167,17 @@ contract PurgeGame {
     function rngAndTimeGate(uint48 day) internal returns (uint256 word) {
         if (day == dailyIdx) revert NotTimeYet();
 
-        bool locked = nft.rngLocked();
-        uint256 currentWord = nft.currentRngWord();
+        uint256 currentWord = currentRngWord();
 
         if (currentWord == 0) {
-            if (locked) revert RngNotReady();
-            nft.requestRng();
+            if (rngLockedFlag) revert RngNotReady();
+            _requestRng();
             return 1;
         }
 
-        if (!locked) {
+        if (!rngLockedFlag) {
             // Stale entropy from previous cycle; request a fresh word.
-            nft.requestRng();
+            _requestRng();
             return 1;
         }
 
@@ -1155,7 +1212,7 @@ contract PurgeGame {
             writesBudget -= (writesBudget * 35) / 100; // 65% scaling
         }
         uint32 used = 0;
-        uint256 entropy = nft.currentRngWord();
+        uint256 entropy = currentRngWord();
 
         while (airdropIndex < total && used < writesBudget) {
             address player = pendingMapMints[airdropIndex];
@@ -1214,9 +1271,71 @@ contract PurgeGame {
     function endDayJackpot(uint24 lvl, uint48 day, uint256 rngWord) private {
         payDailyJackpot(false, lvl, rngWord);
         dailyIdx = day;
-        if (nft.rngLocked()) {
-            nft.releaseRngLock();
+        if (rngLockedFlag) {
+            _unlockRng();
         }
+    }
+
+    function _requestRng() private {
+        uint256 id = vrfCoordinator.requestRandomWords(
+            VRFRandomWordsRequest({
+                keyHash: vrfKeyHash,
+                subId: vrfSubscriptionId,
+                requestConfirmations: VRF_REQUEST_CONFIRMATIONS,
+                callbackGasLimit: VRF_CALLBACK_GAS_LIMIT,
+                numWords: 1,
+                extraArgs: bytes("")
+            })
+        );
+        vrfRequestId = id;
+        rngFulfilled = false;
+        rngWordCurrent = 0;
+        rngLockedFlag = true;
+    }
+
+    function _unlockRng() private {
+        rngLockedFlag = false;
+        vrfRequestId = 0;
+    }
+
+    function rawFulfillRandomWords(uint256 requestId, uint256[] calldata randomWords) external {
+        if (msg.sender != address(vrfCoordinator)) revert E();
+        if (requestId != vrfRequestId || rngFulfilled) return;
+        rngFulfilled = true;
+        rngWordCurrent = randomWords[0];
+    }
+
+    function onTokenTransfer(address from, uint256 amount, bytes calldata) external {
+        if (msg.sender != linkToken) revert E();
+        if (amount == 0) revert E();
+        if (rngLockedFlag) revert CoinPaused();
+
+        try
+            ILinkToken(linkToken).transferAndCall(address(vrfCoordinator), amount, abi.encode(vrfSubscriptionId))
+        returns (bool ok) {
+            if (!ok) revert E();
+        } catch {
+            revert E();
+        }
+
+        (uint96 bal, , , , ) = vrfCoordinator.getSubscription(vrfSubscriptionId);
+        uint16 mult = _tierMultPermille(uint256(bal));
+        if (mult == 0) return;
+
+        uint256 base = (amount * LUCK_PER_LINK) / 1 ether;
+        uint256 credit = (base * mult) / 1000;
+        if (credit != 0) {
+            coin.bonusCoinflip(from, 0, true, credit);
+        }
+    }
+
+    function _tierMultPermille(uint256 subBal) private pure returns (uint16) {
+        if (subBal < 200 ether) return 2000;
+        if (subBal < 300 ether) return 1500;
+        if (subBal < 600 ether) return 1000;
+        if (subBal < 1000 ether) return 500;
+        if (subBal < 2000 ether) return 100;
+        return 0;
     }
 
     function _seedTraitCounts() private {

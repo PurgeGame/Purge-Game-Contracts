@@ -31,12 +31,6 @@ interface IPurgeCoinModule {
     function affiliateDailyStreak(address affiliate) external view returns (uint32 lastDay, uint32 streak);
 }
 
-interface IPurgeGameNFTModule {
-    function rngLocked() external view returns (bool);
-    function releaseRngLock() external;
-    function currentRngWord() external view returns (uint256);
-}
-
 interface IPurgeGameTrophiesModule {
     struct EndLevelRequest {
         address exterminator;

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {IPurgeCoinModule, IPurgeGameNFTModule, IPurgeGameTrophiesModule} from "./PurgeGameModuleInterfaces.sol";
+import {IPurgeCoinModule, IPurgeGameTrophiesModule} from "./PurgeGameModuleInterfaces.sol";
 
 /**
  * @title PurgeGameJackpotModule
@@ -76,7 +76,6 @@ contract PurgeGameJackpotModule {
         uint24 lvl,
         uint256 randWord,
         IPurgeCoinModule coinContract,
-        IPurgeGameNFTModule nftContract,
         IPurgeGameTrophiesModule trophiesContract
     ) external {
         uint8 percentBefore = earlyPurgePercent;
@@ -243,7 +242,6 @@ contract PurgeGameJackpotModule {
 
         uint48 currentDay = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
         dailyIdx = currentDay;
-        nftContract.releaseRngLock();
 
         uint256 carry = carryoverForNextLevel;
         carryoverForNextLevel = paidWei > carry ? 0 : carry - paidWei;
@@ -254,7 +252,6 @@ contract PurgeGameJackpotModule {
         uint256 rngWord,
         uint256 effectiveWei,
         IPurgeCoinModule coinContract,
-        IPurgeGameNFTModule /*nftContract*/,
         IPurgeGameTrophiesModule trophiesContract
     ) external returns (bool finished) {
         uint8[4] memory winningTraits = _getRandomTraits(rngWord);
