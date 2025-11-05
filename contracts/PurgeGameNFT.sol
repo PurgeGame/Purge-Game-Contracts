@@ -589,7 +589,7 @@ contract PurgeGameNFT {
         );
 
         uint256 priceUnit = game.coinPriceUnit();
-        uint256 affiliateAmount = (scaledQty * priceUnit) / 1000;
+        uint256 affiliateAmount = (scaledQty * priceUnit * 15) / 100;
 
         uint8 percentReached = game.getEarlyPurgePercent();
         uint256 pct = percentReached >= 50 ? 25 : 0;

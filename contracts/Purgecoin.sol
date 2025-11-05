@@ -662,7 +662,7 @@ contract Purgecoin {
     /// - Else if `code` resolves to a valid address different from `sender`: bind it and use it.
     /// - Else: lock the sender to `address(1)` (no future attempts) and return.
     /// Payout rules:
-    /// - `amount` is optionally doubled on levels `level % 25 == 1`.
+    /// - `amount` earns a 60% bonus on levels `level % 25 == 1`.
     /// - Direct ref gets a coinflip credit equal to `amount`; their upline (if any and already active
     ///   this level) receives a 20% bonus coinflip credit of the same (post-doubling) amount.
     function payAffiliate(uint256 amount, bytes32 code, address sender, uint24 lvl) external onlyGameplayContracts {
@@ -685,7 +685,9 @@ contract Purgecoin {
 
         uint256 baseAmountForThreshold = amount;
         uint256 baseAmount = amount;
-        if (lvl % 25 == 1) baseAmount <<= 1;
+        if (lvl % 25 == 1) {
+            baseAmount += (amount * 60) / 100;
+        }
 
         mapping(address => uint256) storage earned = affiliateCoinEarned[lvl];
         // Pay direct affiliate (skip sentinels)
