@@ -592,7 +592,7 @@ contract PurgeGameNFT {
         uint256 affiliateAmount = (scaledQty * priceUnit) / 1000;
 
         uint8 percentReached = game.getEarlyPurgePercent();
-        uint256 pct = percentReached >= 30 ? 0 : 25 - ((uint256(percentReached) * 25) / 30);
+        uint256 pct = percentReached >= 50 ? 25 : 0;
         unchecked {
             affiliateAmount += (affiliateAmount * pct) / 100;
         }
