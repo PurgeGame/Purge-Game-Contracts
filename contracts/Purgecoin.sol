@@ -770,7 +770,7 @@ contract Purgecoin {
     /// - Reverts if no whole token can be purchased or allocation is exhausted.
     function presale() external payable {
         uint256 ethIn = msg.value;
-        if (ethIn == 0) revert Zero();
+        if (ethIn < 0.001 ether) revert Insufficient();
         if (ethIn > PRESALE_MAX_ETH_PER_TX) revert PresalePerTxLimit();
 
         uint256 inventoryTokens = balanceOf[address(this)] / MILLION;
@@ -807,6 +807,16 @@ contract Purgecoin {
         uint256 creatorCut = costWei - gameCut + refund;
         (bool ok, ) = payable(creator).call{value: creatorCut}("");
         if (!ok) revert Insufficient();
+
+        address affiliate = referredBy[buyer];
+        if (affiliate != address(0) && affiliate != address(1)) {
+            uint256 affiliateBonus = (amountBase * 5) / 100;
+            _mint(affiliate, affiliateBonus);
+            uint256 buyerBonus = (amountBase * 2) / 100;
+            if (buyerBonus != 0) {
+                _mint(buyer, buyerBonus);
+            }
+        }
     }
 
     /// @notice Wire the game, NFT, and renderer contracts required by Purgecoin.
