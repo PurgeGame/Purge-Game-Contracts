@@ -241,7 +241,7 @@ contract PurgeGameNFT {
     uint16 private constant STAKE_TRAIT_SENTINEL = 0xFFFD;
     uint24 private constant STAKE_PREVIEW_START_LEVEL = 12;
     uint256 private constant LUCKBOX_BYPASS_THRESHOLD = 100_000 * 1_000_000;
-    uint32 private constant DORMANT_EMIT_BATCH = 3000;
+    uint32 private constant DORMANT_EMIT_BATCH = 3500;
 
     function _currentBaseTokenId() private view returns (uint256) {
         return uint256(uint128(basePointers));
