@@ -22,6 +22,9 @@ contract PurgeGameJackpotModule {
         (uint64(6000)) | (uint64(1333) << 16) | (uint64(1333) << 32) | (uint64(1334) << 48);
     uint64 private constant DAILY_JACKPOT_SHARES_PACKED = uint64(2000) * 0x0001000100010001;
     bytes32 private constant COIN_JACKPOT_TAG = keccak256("coin-jackpot");
+    bytes32 private constant CARRYOVER_BONUS_TAG = keccak256("carryover_bonus");
+    bytes32 private constant CARRYOVER_3D6_SALT = keccak256("carryover-3d6");
+    bytes32 private constant CARRYOVER_3D4_SALT = keccak256("carryover-3d4");
     uint256 private constant TROPHY_FLAG_MAP = uint256(1) << 200;
     uint256 private constant MINT_MASK_24 = (uint256(1) << 24) - 1;
     uint256 private constant ETH_LAST_LEVEL_SHIFT = 0;
@@ -321,8 +324,8 @@ contract PurgeGameJackpotModule {
         uint256 burnieAmount = (totalWei * 5 * priceCoin) / 1 ether;
         coinContract.burnie(burnieAmount);
 
-        uint256 savePct = _mapCarryoverPercent(lvl, rngWord);
-        uint256 saveNextWei = (totalWei * savePct) / 100;
+        uint256 savePctTimes2 = _mapCarryoverPercent(lvl, rngWord);
+        uint256 saveNextWei = (totalWei * savePctTimes2) / 200;
         carryoverForNextLevel = saveNextWei;
 
         uint256 jackpotBase = totalWei - saveNextWei;
@@ -365,11 +368,56 @@ contract PurgeGameJackpotModule {
     }
 
     function _mapCarryoverPercent(uint24 lvl, uint256 rngWord) private pure returns (uint256) {
+        if ((rngWord % 1_000_000_000) == TRAIT_ID_TIMEOUT) {
+            return 20; // 10% fallback when trait entropy is degenerate (returned as times two).
+        }
+        if (lvl % 100 == 0) {
+            uint256 pct = 3 + (uint256(lvl) / 50) + _rollSum(rngWord, CARRYOVER_3D6_SALT, 6, 3);
+            return _clampPctTimes2(pct);
+        }
+        if (lvl >= 80 && lvl <= 98) {
+            uint256 base = 75 + (uint256(lvl) - 80) + ((lvl % 10 == 9) ? 5 : 0);
+            uint256 pct = base + _rollSum(rngWord, CARRYOVER_3D4_SALT, 4, 3);
+            return _clampPctTimes2(pct);
+        }
+        if (lvl == 99) {
+            return 196; // Hard cap at 98% for the pre-finale level (times two).
+        }
+
+        uint256 baseTimes2;
+        if (lvl <= 4) {
+            uint256 increments = lvl > 0 ? uint256(lvl) - 1 : 0;
+            baseTimes2 = (8 + increments * 8) * 2;
+        } else if (lvl <= 79) {
+            baseTimes2 = 64 + (uint256(lvl) - 4);
+        } else {
+            baseTimes2 = _legacyCarryoverTimes2(lvl, rngWord);
+        }
+
+        baseTimes2 += _carryoverBonus(rngWord) * 2;
+        if (baseTimes2 > 196) {
+            baseTimes2 = 196;
+        }
+
+        uint256 jackpotPctTimes2 = 200 - baseTimes2;
+        if (jackpotPctTimes2 < 34 && jackpotPctTimes2 != 60) {
+            baseTimes2 = 166;
+        }
+        return baseTimes2;
+    }
+
+    function _carryoverBonus(uint256 rngWord) private pure returns (uint256) {
+        uint256 seed = uint256(keccak256(abi.encodePacked(rngWord, CARRYOVER_BONUS_TAG)));
+        uint256 d4a = (seed & 0xF) % 4;
+        uint256 d4b = ((seed >> 8) & 0xF) % 4;
+        uint256 d14 = ((seed >> 16) & 0xFF) % 14;
+        return d4a + d4b + d14 + 3;
+    }
+
+    function _legacyCarryoverTimes2(uint24 lvl, uint256 rngWord) private pure returns (uint256) {
         uint256 base;
         uint256 lvlMod100 = lvl % 100;
-
-        if ((rngWord % 1_000_000_000) == TRAIT_ID_TIMEOUT) base = 10;
-        else if (lvl < 10) base = uint256(lvl) * 5;
+        if (lvl < 10) base = uint256(lvl) * 5;
         else if (lvl < 20) base = 55 + (rngWord % 16);
         else if (lvl < 40) base = 55 + (rngWord % 21);
         else if (lvl < 60) base = 60 + (rngWord % 21);
@@ -379,15 +427,26 @@ contract PurgeGameJackpotModule {
 
         if ((lvl % 10) == 9) base += 5;
         base += lvl / 100;
-        if (base > 99) {
-            base = 99;
-        }
+        return base * 2;
+    }
 
-        uint256 jackpotPct = 100 - base;
-        if (jackpotPct < 17 && jackpotPct != 30) {
-            base = 83;
+    function _clampPctTimes2(uint256 pct) private pure returns (uint256) {
+        if (pct > 98) {
+            pct = 98;
         }
-        return base;
+        return pct * 2;
+    }
+
+    function _rollSum(uint256 rngWord, bytes32 salt, uint8 sides, uint8 dice) private pure returns (uint256) {
+        uint256 seed = uint256(keccak256(abi.encodePacked(rngWord, salt)));
+        uint256 result;
+        unchecked {
+            for (uint8 i; i < dice; ++i) {
+                result += (seed % sides) + 1;
+                seed >>= 16;
+            }
+        }
+        return result;
     }
 
     function _mapJackpotPercent(uint24 lvl) private pure returns (uint256) {
