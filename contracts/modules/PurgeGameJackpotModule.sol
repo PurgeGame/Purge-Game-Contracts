@@ -50,10 +50,15 @@ contract PurgeGameJackpotModule {
     uint8 private earlyPurgePercent;
     uint8 private phase;
     uint16 private lastExterminatedTrait = TRAIT_ID_TIMEOUT;
+    bool private rngLockedFlag;
+    bool private rngFulfilled = true;
+    uint256 private rngWordCurrent;
+    uint256 private vrfRequestId;
 
     uint32 private airdropMapsProcessedCount;
     uint32 private airdropIndex;
     uint32 private traitRebuildCursor;
+    uint32 private airdropMultiplier;
     bool private traitCountsSeedQueued;
     bool private traitCountsShouldOverwrite;
 
