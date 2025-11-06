@@ -36,6 +36,7 @@ contract Purgecoin {
     event CoinJackpotPaid(uint16 trait, address winner, uint256 amount);
     event BountyOwed(address indexed to, uint256 bountyAmount, uint256 newRecordFlip);
     event BountyPaid(address indexed to, uint256 amount);
+    event FlipNuked(address indexed player, uint32 streak, uint256 amount);
 
     // ---------------------------------------------------------------------
     // Errors
@@ -46,7 +47,6 @@ contract Purgecoin {
     error Zero();
     error Insufficient();
     error AmountLTMin();
-    error InvalidRake();
     error E();
     error InvalidLeaderboard();
     error PresaleExceedsRemaining();
@@ -246,7 +246,8 @@ contract Purgecoin {
     uint128 public biggestFlipEver = ONEK;
     address private bountyOwedTo;
     uint96 public totalPresaleSold; // total presale output in base units (6 decimals)
-    uint16 public coinflipRakeBps; // basis points rake applied to coinflip deposits (0-10000)
+
+    uint256 private nukeStream;
 
     // BAF / Decimator execution state
     BAFState private bafState;
@@ -285,14 +286,7 @@ contract Purgecoin {
         _mint(creator, presaleAmount);
     }
 
-    /// @notice Configure the rake applied to coinflip deposits (basis points, max 10000).
-    /// @dev Access restricted to the PurgeGame contract.
-    function setCoinflipRake(uint16 newRakeBps) external onlyPurgeGameContract {
-        if (newRakeBps > 10_000) revert InvalidRake();
-        coinflipRakeBps = newRakeBps;
-    }
-
-    /// @notice Burn PURGE to increase the caller’s coinflip stake, applying the configured rake.
+    /// @notice Burn PURGE to increase the caller’s coinflip stake, applying streak bonuses when eligible.
     /// @param amount Amount (6 decimals) to burn; must satisfy the global minimum.
     function depositCoinflip(uint256 amount) external {
         if (purgeGameNFT.rngLocked()) revert BettingPaused();
@@ -303,9 +297,7 @@ contract Purgecoin {
 
         _burn(caller, amount);
 
-        uint256 rake = (amount * uint256(coinflipRakeBps)) / 10_000;
-        if (rake > amount) rake = amount;
-        uint256 stakeCredit = amount - rake;
+        uint256 stakeCredit = amount;
         if (stakeCredit == 0) revert Insufficient();
 
         if (prevStake == 0) {
@@ -334,15 +326,11 @@ contract Purgecoin {
             playerLuckbox[caller] = stakeCredit;
         }
 
-        if (rake != 0) {
-            _addToBounty(rake);
-        }
-
         unchecked {
             dailyCoinBurn += amount;
         }
 
-        emit CoinflipDeposit(caller, amount, rake, stakeCredit);
+        emit CoinflipDeposit(caller, amount, 0, stakeCredit);
     }
 
     /// @notice Burn PURGE during an active Decimator window to accrue weighted participation.
@@ -916,6 +904,7 @@ contract Purgecoin {
             uint48 currentEpoch = epoch;
             if (currentEpoch == 0) currentEpoch = 1;
             streakEpoch = currentEpoch;
+            nukeStream = word;
             if (bonusActive && ((word & 1) == 0)) {unchecked { ++word;}}
         }
         // --- Step sizing (bounded work) ----------------------------------------------------
@@ -1066,8 +1055,21 @@ contract Purgecoin {
                 coinflipAmount[p] = 0;
                 if (win) {
                     if (bonusFlip) amt = (amt * 11) / 10; // keep current rounding semantics
-                    unchecked {
-                        credit += amt * 2;
+                    uint256 payout = amt * 2;
+                    uint32 streak = luckyFlipStreak[p];
+                    uint16 nukeRate = _nukeRateBps(streak);
+                    bool nuked;
+                    if (nukeRate != 0) {
+                        uint256 sample = uint256(_nextNukeSample());
+                        uint256 threshold = (uint256(nukeRate) * 65536) / 10_000;
+                        nuked = sample < threshold;
+                    }
+                    if (!nuked) {
+                        unchecked {
+                            credit += payout;
+                        }
+                    } else {
+                        emit FlipNuked(p, streak, payout);
                     }
                 }
             }
@@ -1090,6 +1092,7 @@ contract Purgecoin {
             payoutIndex = 0;
 
             scanCursor = SS_IDLE;
+            nukeStream = 0;
             emit CoinflipFinished(win);
             return true;
         }
@@ -1646,6 +1649,27 @@ contract Purgecoin {
         unchecked {
             currentBounty += uint128(amount);
         }
+    }
+
+    function _nextNukeSample() private returns (uint16) {
+        uint256 state = nukeStream;
+        unchecked {
+            state = (state ^ (state << 13) ^ (state >> 7) ^ (state << 17)) ^ uint256(H);
+        }
+        if (state == 0) state = uint256(H);
+        nukeStream = state;
+        return uint16(state);
+    }
+
+    function _nukeRateBps(uint32 streak) private pure returns (uint16) {
+        if (streak == 0) return 0;
+        if (streak == 1) return 500;
+        if (streak == 2) return 400;
+        uint256 base = 350;
+        uint256 reduction = uint256(streak - 3) * 10;
+        uint256 rate = base > reduction ? base - reduction : 0;
+        if (rate < 100) rate = 100;
+        return uint16(rate);
     }
 
     function _streakExtra(uint32 streak) private pure returns (uint256) {
