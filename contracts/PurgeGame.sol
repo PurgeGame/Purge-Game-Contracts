@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+import {PurgeTraitUtils} from "./PurgeTraitUtils.sol";
 import {IPurgeGameNFT} from "./PurgeGameNFT.sol";
 import {IPurgeGameTrophies} from "./PurgeGameTrophies.sol";
 import {IPurgeCoinModule, IPurgeGameTrophiesModule} from "./modules/PurgeGameModuleInterfaces.sol";
@@ -480,6 +481,12 @@ contract PurgeGame {
         uint32 minAllowedDay = gateIdx == 0 ? currentDay : uint32(gateIdx);
 
         do {
+            if (_gameState == 1) {
+                (, bool dormantWorked) = nft.processDormant(cap);
+                if (dormantWorked) {
+                    break;
+                }
+            }
             if (cap == 0) {
                 uint256 mintData = mintPacked_[caller];
                 uint32 lastEthDay = uint32((mintData >> ETH_DAY_SHIFT) & MINT_MASK_32);
@@ -1484,7 +1491,7 @@ contract PurgeGame {
     /// @notice Generate `count` random “map symbols” for `player`, record tickets & contributions.
     /// @dev
     /// - Uses a xorshift* PRNG seeded per 16‑symbol group from `(baseKey + group, entropyWord)`.
-    /// - Each symbol maps to one of 256 trait buckets (0..63 | 64..127 | 128..191 | 192..255) via `_getTrait`.
+    /// - Each symbol maps to one of 256 trait buckets (0..63 | 64..127 | 128..191 | 192..255) via `PurgeTraitUtils.traitFromWord`.
     /// - After counting occurrences per trait in memory, appends `player` into the purge ticket list
     ///   for each touched trait exactly `occurrences` times and increases contribution counters.
     /// @param player      Recipient whose tickets/contributions are updated.
@@ -1524,7 +1531,7 @@ contract PurgeGame {
                     s = s * MAP_LCG_MULT + 1;
 
                     uint8 quadrant = uint8(i & 3);
-                    uint8 traitId = _getTrait(s) + (quadrant << 6);
+                    uint8 traitId = PurgeTraitUtils.traitFromWord(s) + (quadrant << 6);
 
                     if (counts[traitId]++ == 0) {
                         touchedTraits[touchedLen++] = traitId;
@@ -1568,32 +1575,6 @@ contract PurgeGame {
                 ++u;
             }
         }
-    }
-
-    // --- Trait weighting / helpers -------------------------------------------------------------------
-
-    /// @notice Map a 32-bit random input to an 0..7 bucket with a fixed piecewise distribution.
-    /// @dev Distribution over 75 slots: [10,10,10,10,9,9,9,8] -> buckets 0..7 respectively.
-    function _w8(uint32 rnd) private pure returns (uint8) {
-        unchecked {
-            uint32 scaled = uint32((uint64(rnd) * 75) >> 32);
-            if (scaled < 10) return 0;
-            if (scaled < 20) return 1;
-            if (scaled < 30) return 2;
-            if (scaled < 40) return 3;
-            if (scaled < 49) return 4;
-            if (scaled < 58) return 5;
-            if (scaled < 67) return 6;
-            return 7;
-        }
-    }
-
-    /// @notice Produce a 6-bit trait id from a 64-bit random value.
-    /// @dev High‑level: two weighted 3‑bit values (category, sub) -> pack to a single 6‑bit trait.
-    function _getTrait(uint64 rnd) private pure returns (uint8) {
-        uint8 category = _w8(uint32(rnd));
-        uint8 sub = _w8(uint32(rnd >> 32));
-        return (category << 3) | sub;
     }
 
     function getLastExterminatedTrait() external view returns (uint16) {

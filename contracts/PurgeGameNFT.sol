@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+import {PurgeTraitUtils} from "./PurgeTraitUtils.sol";
 import {IPurgeGameTrophies} from "./PurgeGameTrophies.sol";
 
 enum TrophyKind {
@@ -107,6 +108,7 @@ interface IPurgeGameNFT {
     function isRngFulfilled() external view returns (bool);
     function processPendingMints(uint32 playersToProcess) external returns (bool finished);
     function tokensOwed(address player) external view returns (uint32);
+    function processDormant(uint32 maxCount) external returns (bool finished, bool worked);
 }
 
 contract PurgeGameNFT {
@@ -136,8 +138,6 @@ contract PurgeGameNFT {
     event Transfer(address indexed from, address indexed to, uint256 indexed tokenId);
     event Approval(address indexed owner, address indexed approved, uint256 indexed tokenId);
     event ApprovalForAll(address indexed owner, address indexed operator, bool approved);
-    event TokenCreated(uint256 tokenId, uint32 tokenTraits);
-
     struct EndLevelRequest {
         address exterminator;
         uint16 traitId;
@@ -202,6 +202,10 @@ contract PurgeGameNFT {
     uint256 private _mintQueueIndex; // Tracks # of queue entries fully processed during airdrop rotation
     uint256 private _mintQueueStartOffset;
 
+    uint256[] private _dormantCursor; // processing cursor for each dormant range
+    uint256[] private _dormantEnd; // exclusive end token id per dormant range
+    uint256 private _dormantHead;
+
     uint32 private constant MINT_AIRDROP_PLAYER_BATCH_SIZE = 210; // Max unique recipients per airdrop batch
     uint32 private constant MINT_AIRDROP_TOKEN_CAP = 3_000; // Max tokens distributed per airdrop batch
 
@@ -237,6 +241,7 @@ contract PurgeGameNFT {
     uint16 private constant STAKE_TRAIT_SENTINEL = 0xFFFD;
     uint24 private constant STAKE_PREVIEW_START_LEVEL = 12;
     uint256 private constant LUCKBOX_BYPASS_THRESHOLD = 100_000 * 1_000_000;
+    uint32 private constant DORMANT_EMIT_BATCH = 3000;
 
     function _currentBaseTokenId() private view returns (uint256) {
         return uint256(uint128(basePointers));
@@ -362,7 +367,7 @@ contract PurgeGameNFT {
             revert InvalidToken();
         }
 
-        uint32 traitsPacked = _packedTraitsForToken(tokenId);
+        uint32 traitsPacked = PurgeTraitUtils.packedTraitsForToken(tokenId);
         uint8 t0 = uint8(traitsPacked);
         uint8 t1 = uint8(traitsPacked >> 8);
         uint8 t2 = uint8(traitsPacked >> 16);
@@ -425,25 +430,7 @@ contract PurgeGameNFT {
             coin.bonusCoinflip(buyer, bonus, true, luckboxBonus);
         }
 
-        uint256 baseTokenId;
-        if (queueNext) {
-            baseTokenId = _nextBaseTokenIdHint;
-        } else {
-            baseTokenId = _currentBaseTokenId();
-        }
-        uint256 tokenIdStart = baseTokenId + uint256(_purchaseCount);
         uint32 qty32 = uint32(quantity);
-
-        for (uint32 i; i < qty32; ) {
-            uint256 tokenId = tokenIdStart + uint256(i);
-            uint32 packedTraits = _packedTraitsForToken(tokenId);
-            emit TokenCreated(tokenId, packedTraits);
-
-            unchecked {
-                ++i;
-            }
-        }
-
         unchecked {
             _purchaseCount += qty32;
         }
@@ -664,42 +651,6 @@ contract PurgeGameNFT {
                 if (uint256(lastLevel) + 1 != uint256(lvl)) revert LuckboxTooSmall();
             }
         }
-    }
-
-    function _w8(uint32 rnd) private pure returns (uint8) {
-        unchecked {
-            uint32 scaled = uint32((uint64(rnd) * 75) >> 32);
-            if (scaled < 10) return 0;
-            if (scaled < 20) return 1;
-            if (scaled < 30) return 2;
-            if (scaled < 40) return 3;
-            if (scaled < 49) return 4;
-            if (scaled < 58) return 5;
-            if (scaled < 67) return 6;
-            return 7;
-        }
-    }
-
-    function _getTrait(uint64 rnd) private pure returns (uint8) {
-        uint8 category = _w8(uint32(rnd));
-        uint8 sub = _w8(uint32(rnd >> 32));
-        return (category << 3) | sub;
-    }
-
-    function _packedTraitsFromSeed(uint256 rand) private pure returns (uint32) {
-        uint8 traitA = _getTrait(uint64(rand));
-        uint8 traitB = _getTrait(uint64(rand >> 64)) | 64;
-        uint8 traitC = _getTrait(uint64(rand >> 128)) | 128;
-        uint8 traitD = _getTrait(uint64(rand >> 192)) | 192;
-
-        return uint32(traitA) |
-            (uint32(traitB) << 8) |
-            (uint32(traitC) << 16) |
-            (uint32(traitD) << 24);
-    }
-
-    function _packedTraitsForToken(uint256 tokenId) private pure returns (uint32) {
-        return _packedTraitsFromSeed(uint256(keccak256(abi.encodePacked(tokenId))));
     }
 
     function ownerOf(uint256 tokenId) external view returns (address) {
@@ -1069,6 +1020,12 @@ contract PurgeGameNFT {
     function finalizePurchasePhase(uint32 minted) external onlyGame {
         _setSeasonMintedSnapshot(minted);
         uint256 baseTokenId = _currentBaseTokenId();
+        if (minted != 0) {
+            uint256 endTokenId = baseTokenId + uint256(minted);
+            _dormantCursor.push(baseTokenId);
+            _dormantEnd.push(endTokenId);
+            _processDormant(0);
+        }
         uint256 startId = baseTokenId + uint256(minted);
         _nextBaseTokenIdHint = ((startId + 99) / 100) * 100 + 1;
         _purchaseCount = 0;
@@ -1144,6 +1101,103 @@ contract PurgeGameNFT {
         emit Transfer(from, address(0), tokenId);
     }
 
+    function processDormant(uint32 limit) external returns (bool finished, bool worked) {
+        return _processDormant(limit);
+    }
+
+    function _processDormant(uint32 limit) private returns (bool finished, bool worked) {
+        uint256 head = _dormantHead;
+        uint256 len = _dormantCursor.length;
+        if (head >= len) {
+            return (true, false);
+        }
+
+        uint256 tokensRemaining = limit == 0 ? uint256(DORMANT_EMIT_BATCH) : uint256(limit);
+        if (tokensRemaining == 0) tokensRemaining = uint256(DORMANT_EMIT_BATCH);
+
+        while (tokensRemaining != 0 && head < len) {
+            uint256 endTokenId = _dormantEnd[head];
+            uint256 cursor = _dormantCursor[head];
+
+            if (cursor >= endTokenId) {
+                unchecked {
+                    ++head;
+                }
+                continue;
+            }
+
+            uint256 currentIndex = _currentIndex;
+            if (cursor >= currentIndex) {
+                cursor = endTokenId;
+            } else {
+                uint256 available = endTokenId - cursor;
+                uint256 batch = tokensRemaining;
+                if (batch > available) {
+                    batch = available;
+                }
+
+                uint256 limitToken = cursor + batch;
+                if (limitToken > endTokenId) {
+                    limitToken = endTokenId;
+                }
+                if (limitToken > currentIndex) {
+                    limitToken = currentIndex;
+                }
+
+                uint256 startCursor = cursor;
+
+                while (cursor < limitToken) {
+                    uint256 packed = _packedOwnerships[cursor];
+                    if (packed == 0) {
+                        uint256 seek = cursor;
+                        unchecked {
+                            while (seek != 0) {
+                                packed = _packedOwnerships[--seek];
+                                if (packed != 0) break;
+                            }
+                        }
+                    }
+                    if (packed != 0 && (packed & _BITMASK_BURNED) == 0) {
+                        address from = address(uint160(packed));
+                        if (from != address(0)) {
+                            emit Transfer(from, address(0), cursor);
+                        }
+                    }
+                    unchecked {
+                        ++cursor;
+                    }
+                }
+
+                uint256 advanced = cursor - startCursor;
+                if (advanced == 0) {
+                    break;
+                }
+                tokensRemaining -= advanced;
+                worked = true;
+            }
+
+            if (cursor >= endTokenId) {
+                unchecked {
+                    ++head;
+                }
+            } else {
+                _dormantCursor[head] = cursor;
+            }
+        }
+
+        _dormantHead = head;
+        if (head >= len) {
+            if (len != 0) {
+                delete _dormantCursor;
+                delete _dormantEnd;
+            }
+            _dormantHead = 0;
+            return (true, worked);
+        }
+
+        return (false, worked);
+    }
+
     function _moduleTransfer(address from, address to, uint256 tokenId) private {
         uint256 prevOwnershipPacked = _packedOwnershipOf(tokenId);
         uint256 preserved = prevOwnershipPacked &
@@ -1212,7 +1266,7 @@ contract PurgeGameNFT {
     }
 
     function tokenTraitsPacked(uint256 tokenId) external pure returns (uint32) {
-        return _packedTraitsForToken(tokenId);
+        return PurgeTraitUtils.packedTraitsForToken(tokenId);
     }
 
     function purchaseCount() external view returns (uint32) {
@@ -1248,8 +1302,4 @@ contract PurgeGameNFT {
         else if (raw & TROPHY_FLAG_DECIMATOR != 0) trophyKind = uint8(TrophyKind.Decimator);
         else trophyKind = uint8(TrophyKind.Level);
     }
-
-    // ---------------------------------------------------------------------
-    // Internal helpers
-    // ---------------------------------------------------------------------
 }
