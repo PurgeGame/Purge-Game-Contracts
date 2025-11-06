@@ -9,6 +9,7 @@ interface IPurgeGame {
     function gameState() external view returns (uint8);
     function ethMintLevelCount(address player) external view returns (uint24);
     function ethMintStreakCount(address player) external view returns (uint24);
+    function ethMintLastLevel(address player) external view returns (uint24);
     function getJackpotWinners(
         uint256 randomWord,
         uint8 trait,
@@ -282,12 +283,12 @@ contract Purgecoin {
         _mint(creator, presaleAmount);
     }
 
-    /// @notice Burn PURGED to grow luckbox and (optionally) place a coinflip deposit in the same tx.
+    /// @notice Burn PURGED and optionally place a coinflip deposit in the same tx.
     /// @dev
     /// - Reverts if betting is paused.
     /// - `amount` must be >= MIN; if `coinflipDeposit` > 0 it must be >= MIN and burn must be at least 2% of it.
     /// - Burns the sum (`amount + coinflipDeposit`), then (if provided) schedules the flip via `addFlip`.
-    /// - Credits luckbox with `amount + coinflipDeposit/50`.
+    /// - When a deposit is provided, the caller's luckbox is set to the deposit amount plus any streak bonus.
     /// - If the Decimator window is active, accumulates the caller's burn for the current level.
     function luckyCoinBurn(uint256 amount, uint256 coinflipDeposit) external {
         if (purgeGameNFT.rngLocked()) revert BettingPaused();
@@ -298,7 +299,6 @@ contract Purgecoin {
         uint256 depositWithBonus = coinflipDeposit;
         uint256 prevStakeBefore = coinflipAmount[caller];
         uint256 bal = balanceOf[msg.sender];
-        uint256 luck = playerLuckbox[caller];
         if (burnTotal == bal) burnTotal -= 1; // leave 1 unit to avoid zero balance
 
         if (coinflipDeposit != 0) {
@@ -308,6 +308,8 @@ contract Purgecoin {
         }
 
         _burn(caller, burnTotal);
+
+        bool allowLuckbox = !_isBafActive();
 
         if (coinflipDeposit != 0) {
             if (prevStakeBefore == 0) {
@@ -327,20 +329,19 @@ contract Purgecoin {
                     lastLuckyStreakEpoch[caller] = epoch;
                     uint256 bonusTotal = _streakExtra(streak);
                     depositWithBonus += bonusTotal;
-                    luck += bonusTotal;
                 }
             }
             // Internal flip accounting; assumed non-reentrant / no external calls.
             addFlip(caller, depositWithBonus, true);
+            if (allowLuckbox) {
+                playerLuckbox[caller] = depositWithBonus;
+            }
         }
 
         unchecked {
-            // Track aggregate burn and grow caller luckbox (adds +2% of deposit).
+            // Track aggregate burn
             dailyCoinBurn += amount;
-            luck += amount + depositWithBonus / 50;
         }
-
-        playerLuckbox[caller] = luck;
 
         // If Decimator window is active, accumulate burn this level.
         (bool decOn, uint24 lvl) = _decWindow();
@@ -606,13 +607,8 @@ contract Purgecoin {
         uint256 riskBps = 25 * uint256(risk - 1);
         uint256 stepBps = levelBps + riskBps; // per-level growth in bps
 
-        // Luckbox: +5% of burn
-        uint256 fivePercent = burnAmt / 20;
-        uint256 luck = playerLuckbox[sender] + fivePercent;
-        playerLuckbox[sender] = luck;
-
-        // Compounded boost starting from 95% of burn (fivePercent * 19)
-        uint256 boostedPrincipal = fivePercent * 19;
+        // Compounded growth applied to the full burned amount
+        uint256 boostedPrincipal = burnAmt;
         for (uint24 i = distance; i != 0; ) {
             boostedPrincipal = (boostedPrincipal * (10_000 + stepBps)) / 10_000;
             unchecked {
@@ -858,7 +854,7 @@ contract Purgecoin {
     }
 
     /// @notice Grant a pending coinflip stake during gameplay flows instead of minting PURGE.
-    /// @dev Access: PurgeGame, NFT, or trophy module only. Zero address is ignored. Optionally adds a direct luckbox credit.
+    /// @dev Access: PurgeGame, NFT, or trophy module only. Zero address is ignored. Optional luckbox bonus credited directly.
     function bonusCoinflip(
         address player,
         uint256 amount,
@@ -873,22 +869,16 @@ contract Purgecoin {
                 addFlip(player, amount, false);
             }
         }
-        if (luckboxBonus != 0) {
+        if (luckboxBonus != 0 && !_isBafActive()) {
             uint256 newLuck = playerLuckbox[player] + luckboxBonus;
             playerLuckbox[player] = newLuck;
         }
     }
 
-    /// @notice Burn PURGE from `target` during gameplay flows (purchases, fees),
-    ///         and credit 2% of the burned amount to their luckbox.
+    /// @notice Burn PURGE from `target` during gameplay flows (purchases, fees).
     /// @dev Access: PurgeGame, NFT, or trophy module only. OZ ERC20 `_burn` reverts on zero address or insufficient balance.
-    ///      Leaderboard is refreshed only when a non-zero credit is applied.
     function burnCoin(address target, uint256 amount) external onlyGameplayContracts {
         _burn(target, amount);
-        // 2% luckbox credit; integer division can produce zero for very small burns.
-        uint256 credit = amount / 50; // 2%
-        uint256 newLuck = playerLuckbox[target] + credit;
-        playerLuckbox[target] = newLuck;
     }
 
     /// @notice Progress coinflip payouts for the current level in bounded slices.
@@ -959,10 +949,11 @@ contract Purgecoin {
 
                                 if (riskFactor <= 1) {
                                     _recordStakeTrophyCandidate(level, player, principalRounded);
-                                    uint256 fivePct = principalRounded / 20;
-                                    uint256 luck = playerLuckbox[player] + fivePct;
-                                    playerLuckbox[player] = luck;
-                                    addFlip(player, fivePct * 19, false);
+                                    if (principalRounded != 0) {
+                                        uint256 luck = playerLuckbox[player] + principalRounded;
+                                        playerLuckbox[player] = luck;
+                                        addFlip(player, principalRounded, false);
+                                    }
                                 } else {
                                     uint24 nextL = level + 1;
                                     uint8 newRf = riskFactor - 1;
@@ -1221,7 +1212,6 @@ contract Purgecoin {
             // ---------------------------
             if (kind == 0) {
                 uint256 P = poolWei;
-                uint256 lbMin = (ONEK / 2) * uint256(lvl); // minimum "active" threshold (doubled)
                 address[6] memory tmpW;
                 uint256[6] memory tmpA;
                 uint256 n;
@@ -1232,7 +1222,7 @@ contract Purgecoin {
                 {
                     uint256 prize = (P * 20) / 100;
                     address w = topBettors[0].player;
-                    if (_eligible(w, lbMin)) {
+                    if (_eligible(w)) {
                         tmpW[n] = w;
                         tmpA[n] = prize;
                         unchecked {
@@ -1247,7 +1237,7 @@ contract Purgecoin {
                 {
                     uint256 prize = (P * 10) / 100;
                     address w = topBettors[2 + (uint256(keccak256(abi.encodePacked(executeWord, "p34"))) & 1)].player;
-                    if (_eligible(w, lbMin)) {
+                    if (_eligible(w)) {
                         tmpW[n] = w;
                         tmpA[n] = prize;
                         unchecked {
@@ -1261,7 +1251,7 @@ contract Purgecoin {
                 // (3) Random eligible: 10%
                 {
                     uint256 prize = (P * 10) / 100;
-                    address w = _randomEligible(uint256(keccak256(abi.encodePacked(executeWord, "re"))), lbMin);
+                    address w = _randomEligible(uint256(keccak256(abi.encodePacked(executeWord, "re"))));
                     if (w != address(0)) {
                         tmpW[n] = w;
                         tmpA[n] = prize;
@@ -1358,12 +1348,11 @@ contract Purgecoin {
             uint256[] memory tmpAmounts = new uint256[](tmpCap);
             uint256 n2;
             uint256 per = uint256(bs.per);
-            uint256 lbMin = (ONEK / 2) * uint256(lvl);
-            uint256 retWei = uint256(bafState.returnAmountWei);
+                uint256 retWei = uint256(bafState.returnAmountWei);
 
             for (uint32 i = scanCursor; i < end; ) {
                 address p = _playerAt(i);
-                if (_eligible(p, lbMin)) {
+                if (_eligible(p)) {
                     tmpWinners[n2] = p;
                     tmpAmounts[n2] = per;
                     unchecked {
@@ -1546,17 +1535,15 @@ contract Purgecoin {
         topLen = 0;
     }
 
-    /// @notice Eligibility gate requiring both luckbox balance and active coinflip stake >= `min`.
-    function _eligible(address player, uint256 min) internal view returns (bool) {
-        uint256 coinflipReq = _coinflipRequirement(player);
-        uint256 requiredStake = coinflipReq > min ? coinflipReq : min;
-        if (coinflipAmount[player] < requiredStake) return false;
-        return playerLuckbox[player] >= _luckboxRequirement(player);
+    /// @notice Eligibility gate requiring a minimum coinflip stake and a 3-level ETH mint streak.
+    function _eligible(address player) internal view returns (bool) {
+        if (coinflipAmount[player] < 5_000 * MILLION) return false;
+        return purgeGame.ethMintStreakCount(player) >= 6;
     }
 
     /// @notice Pick the first eligible player when scanning up to 300 candidates from a pseudo-random start.
     /// @dev Uses stride 2 for odd N to cover the ring without repeats; stride 1 for even N (contiguous window).
-    function _randomEligible(uint256 seed, uint256 min) internal view returns (address) {
+    function _randomEligible(uint256 seed) internal view returns (address) {
         uint256 total = _coinflipCount();
         if (total == 0) return address(0);
 
@@ -1566,7 +1553,7 @@ contract Purgecoin {
 
         for (uint256 tries; tries < maxChecks; ) {
             address p = _playerAt(idx);
-            if (_eligible(p, min)) return p;
+            if (_eligible(p)) return p;
             unchecked {
                 idx += stride;
                 if (idx >= total) idx -= total;
@@ -1574,28 +1561,6 @@ contract Purgecoin {
             }
         }
         return address(0);
-    }
-    function _luckboxRequirement(address player) internal view returns (uint256) {
-        // Base requirement starts at 25,000 PURGE and decreases by 1,250 PURGE per ETH mint level.
-        uint256 base = 25_000 * MILLION;
-        uint256 levels = purgeGame.ethMintLevelCount(player);
-        uint256 reduction = levels * 1_250 * MILLION;
-        uint256 requirement = reduction >= base ? 0 : base - reduction;
-        if (levels > 20) {
-            uint256 segments = (levels - 20) / 20; // completed 20-level blocks beyond level 20
-            for (uint256 i; i < segments; ) {
-                requirement = (requirement * 3) / 2;
-                unchecked {
-                    ++i;
-                }
-            }
-        }
-        return requirement;
-    }
-
-    function _coinflipRequirement(address player) internal view returns (uint256) {
-        uint256 levels = purgeGame.ethMintLevelCount(player);
-        return levels * 1_000 * MILLION;
     }
     function _coinflipCount() internal view returns (uint256) {
         return uint256(uint128(cfTail) - uint128(cfHead));
@@ -1706,6 +1671,12 @@ contract Purgecoin {
                 ++i;
             }
         }
+    }
+
+    function _isBafActive() internal view returns (bool) {
+        if (bafState.inProgress) return true;
+        uint24 lvl = purgeGame.level();
+        return lvl != 0 && (lvl % 20) == 0;
     }
 
     /// @notice Check whether the Decimator window is active for the current level.

@@ -66,12 +66,7 @@ interface IPurgeGame {
             uint24 overallDayStreak
         );
     function enqueueMap(address buyer, uint32 quantity) external;
-    function recordMint(
-        address player,
-        uint24 lvl,
-        bool creditNext,
-        bool coinMint
-    ) external payable returns (uint256 coinReward, uint256 luckboxReward);
+    function recordMint(address player, uint24 lvl, bool creditNext, bool coinMint) external payable returns (uint256 coinReward);
     function ethMintLastLevel(address player) external view returns (uint24);
     function purchaseMultiplier() external view returns (uint32);
     function rngLocked() external view returns (bool);
@@ -402,7 +397,6 @@ contract PurgeGameNFT {
 
         uint256 bonusCoinReward = (quantity / 10) * priceCoinUnit;
         uint256 bonus;
-        uint256 luckboxBonus;
 
         if (payInCoin) {
             if (msg.value != 0) revert E();
@@ -411,7 +405,7 @@ contract PurgeGameNFT {
         } else {
             uint8 phase = game.currentPhase();
             bool creditNext = (state == 3 || state == 1);
-            (bonus, luckboxBonus) = _processEthPurchase(
+            bonus = _processEthPurchase(
                 buyer,
                 quantity * 100,
                 affiliateCode,
@@ -426,8 +420,8 @@ contract PurgeGameNFT {
         }
 
         bonus += bonusCoinReward;
-        if (bonus != 0 || luckboxBonus != 0) {
-            coin.bonusCoinflip(buyer, bonus, true, luckboxBonus);
+        if (bonus != 0) {
+            coin.bonusCoinflip(buyer, bonus, true, 0);
         }
 
         uint32 qty32 = uint32(quantity);
@@ -461,7 +455,6 @@ contract PurgeGameNFT {
         uint256 mapBonus = (quantity / 40) * priceUnit;
 
         uint256 bonus;
-        uint256 luckboxBonus;
 
         if (payInCoin) {
             if (msg.value != 0) revert E();
@@ -469,7 +462,7 @@ contract PurgeGameNFT {
             _coinReceive(buyer, coinCost - mapRebate, lvl, mapBonus);
         } else {
             bool creditNext = (state == 3 || state == 1);
-            (bonus, luckboxBonus) = _processEthPurchase(
+            bonus = _processEthPurchase(
                 buyer,
                 scaledQty,
                 affiliateCode,
@@ -484,8 +477,8 @@ contract PurgeGameNFT {
         }
 
         uint256 rebateMint = bonus + mapRebate + mapBonus;
-        if (rebateMint != 0 || luckboxBonus != 0) {
-            coin.bonusCoinflip(buyer, rebateMint, true, luckboxBonus);
+        if (rebateMint != 0) {
+            coin.bonusCoinflip(buyer, rebateMint, true, 0);
         }
 
         game.enqueueMap(buyer, uint32(quantity));
@@ -499,7 +492,7 @@ contract PurgeGameNFT {
         uint24 lvl,
         bool mapPurchase,
         bool creditNextPool
-    ) private returns (uint256 bonusMint, uint256 luckboxBonus) {
+    ) private returns (uint256 bonusMint) {
         uint256 expectedWei = (game.mintPrice() * scaledQty) / 100;
 
         if (mapPurchase) {
@@ -520,7 +513,7 @@ contract PurgeGameNFT {
 
         if (msg.value != expectedWei) revert E();
 
-        (uint256 streakBonus, uint256 streakLuckbox) = game.recordMint{value: expectedWei}(
+        uint256 streakBonus = game.recordMint{value: expectedWei}(
             payer,
             lvl,
             creditNextPool,
@@ -544,7 +537,6 @@ contract PurgeGameNFT {
                 bonusMint += streakBonus;
             }
         }
-        luckboxBonus = streakLuckbox;
     }
 
     function _coinReceive(address payer, uint256 amount, uint24 lvl, uint256 discount) private {

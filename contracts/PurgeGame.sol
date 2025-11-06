@@ -437,12 +437,7 @@ contract PurgeGame {
         overallDayStreak = uint24((packed >> AGG_DAY_STREAK_SHIFT) & MINT_MASK_20);
     }
 
-    function recordMint(
-        address player,
-        uint24 lvl,
-        bool creditNext,
-        bool coinMint
-    ) external payable returns (uint256 coinReward, uint256 luckboxReward) {
+    function recordMint(address player, uint24 lvl, bool creditNext, bool coinMint) external payable returns (uint256 coinReward) {
         if (msg.sender != address(nft)) revert E();
         if (coinMint) {
             if (creditNext || msg.value != 0) revert E();
@@ -938,11 +933,7 @@ contract PurgeGame {
         emit PlayerCredited(beneficiary, weiAmount);
     }
 
-    function _recordMintData(
-        address player,
-        uint24 lvl,
-        bool coinMint
-    ) private returns (uint256 coinReward, uint256 luckboxReward) {
+    function _recordMintData(address player, uint24 lvl, bool coinMint) private returns (uint256 coinReward) {
         uint256 prevData = mintPacked_[player];
         uint32 day = _currentMintDay();
         uint256 data;
@@ -993,7 +984,7 @@ contract PurgeGame {
                 if (data != prevData) {
                     mintPacked_[player] = data;
                 }
-                return (coinReward, luckboxReward);
+                return coinReward;
             }
 
             if (total < type(uint24).max) {
@@ -1030,8 +1021,7 @@ contract PurgeGame {
 
             if (streakReward != 0 || totalReward != 0) {
                 unchecked {
-                    luckboxReward = streakReward + totalReward;
-                    coinReward = luckboxReward;
+                    coinReward += streakReward + totalReward;
                 }
             }
 
@@ -1049,7 +1039,7 @@ contract PurgeGame {
         if (data != prevData) {
             mintPacked_[player] = data;
         }
-        return (coinReward, luckboxReward);
+        return coinReward;
     }
 
     function _applyMintDay(
