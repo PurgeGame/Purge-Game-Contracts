@@ -1244,8 +1244,13 @@ contract PurgeGameNFT {
         }
         _packedOwnerships[tokenId] = updated;
 
-        if (owner != address(0) && wasActive != isActive) {
-            _updateTrophyBalance(owner, isActive ? int32(1) : int32(-1), game.level(), true);
+        if (owner != address(0)) {
+            if (wasActive != isActive) {
+                _updateTrophyBalance(owner, isActive ? int32(1) : int32(-1), game.level(), true);
+            }
+            if (wasActive && !isActive) {
+                emit Transfer(owner, address(0), tokenId);
+            }
         }
     }
 
