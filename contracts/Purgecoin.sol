@@ -29,7 +29,8 @@ contract Purgecoin {
     event Transfer(address indexed from, address indexed to, uint256 amount);
     event Approval(address indexed owner, address indexed spender, uint256 amount);
     event StakeCreated(address indexed player, uint24 targetLevel, uint8 risk, uint256 principal);
-    event LuckyCoinBurned(address indexed player, uint256 amount, uint256 coinflipDeposit);
+    event CoinflipDeposit(address indexed player, uint256 amountBurned, uint256 rakeAmount, uint256 creditedStake);
+    event DecimatorBurn(address indexed player, uint256 amountBurned, uint256 weightedContribution);
     event Affiliate(uint256 amount, bytes32 indexed code, address sender);
     event CoinflipFinished(bool result);
     event CoinJackpotPaid(uint16 trait, address winner, uint256 amount);
@@ -45,8 +46,7 @@ contract Purgecoin {
     error Zero();
     error Insufficient();
     error AmountLTMin();
-    error FlipLTMin();
-    error BurnLT2pct();
+    error InvalidRake();
     error E();
     error InvalidLeaderboard();
     error PresaleExceedsRemaining();
@@ -54,6 +54,7 @@ contract Purgecoin {
     error InvalidKind();
     error StakeInvalid();
     error ZeroAddress();
+    error NotDecimatorWindow();
 
     // ---------------------------------------------------------------------
     // ERC20 state
@@ -245,6 +246,7 @@ contract Purgecoin {
     uint128 public biggestFlipEver = ONEK;
     address private bountyOwedTo;
     uint96 public totalPresaleSold; // total presale output in base units (6 decimals)
+    uint16 public coinflipRakeBps; // basis points rake applied to coinflip deposits (0-10000)
 
     // BAF / Decimator execution state
     BAFState private bafState;
@@ -283,93 +285,104 @@ contract Purgecoin {
         _mint(creator, presaleAmount);
     }
 
-    /// @notice Burn PURGED and optionally place a coinflip deposit in the same tx.
-    /// @dev
-    /// - Reverts if betting is paused.
-    /// - `amount` must be >= MIN; if `coinflipDeposit` > 0 it must be >= MIN and burn must be at least 2% of it.
-    /// - Burns the sum (`amount + coinflipDeposit`), then (if provided) schedules the flip via `addFlip`.
-    /// - When a deposit is provided, the caller's luckbox is set to the deposit amount plus any streak bonus.
-    /// - If the Decimator window is active, accumulates the caller's burn for the current level.
-    function luckyCoinBurn(uint256 amount, uint256 coinflipDeposit) external {
+    /// @notice Configure the rake applied to coinflip deposits (basis points, max 10000).
+    /// @dev Access restricted to the PurgeGame contract.
+    function setCoinflipRake(uint16 newRakeBps) external onlyPurgeGameContract {
+        if (newRakeBps > 10_000) revert InvalidRake();
+        coinflipRakeBps = newRakeBps;
+    }
+
+    /// @notice Burn PURGE to increase the caller’s coinflip stake, applying the configured rake.
+    /// @param amount Amount (6 decimals) to burn; must satisfy the global minimum.
+    function depositCoinflip(uint256 amount) external {
         if (purgeGameNFT.rngLocked()) revert BettingPaused();
         if (amount < MIN) revert AmountLTMin();
 
         address caller = msg.sender;
-        uint256 burnTotal = amount + coinflipDeposit;
-        uint256 depositWithBonus = coinflipDeposit;
-        uint256 prevStakeBefore = coinflipAmount[caller];
-        uint256 bal = balanceOf[msg.sender];
-        if (burnTotal == bal) burnTotal -= 1; // leave 1 unit to avoid zero balance
+        uint256 prevStake = coinflipAmount[caller];
 
-        if (coinflipDeposit != 0) {
-            if (coinflipDeposit < MIN) revert FlipLTMin();
-            // Require burn to be at least 2% of the coinflip deposit.
-            if (amount * 50 < coinflipDeposit) revert BurnLT2pct();
+        _burn(caller, amount);
+
+        uint256 rake = (amount * uint256(coinflipRakeBps)) / 10_000;
+        if (rake > amount) rake = amount;
+        uint256 stakeCredit = amount - rake;
+        if (stakeCredit == 0) revert Insufficient();
+
+        if (prevStake == 0) {
+            uint48 epoch = streakEpoch;
+            if (epoch == 0) epoch = 1;
+            uint48 lastEpoch = lastLuckyStreakEpoch[caller];
+            if (lastEpoch != epoch) {
+                uint32 streak = luckyFlipStreak[caller];
+                if (lastEpoch != 0 && epoch == lastEpoch + 1) {
+                    unchecked {
+                        streak += 1;
+                    }
+                } else {
+                    streak = 1;
+                }
+                luckyFlipStreak[caller] = streak;
+                lastLuckyStreakEpoch[caller] = epoch;
+                uint256 bonusTotal = _streakExtra(streak);
+                stakeCredit += bonusTotal;
+            }
         }
 
-        _burn(caller, burnTotal);
+        addFlip(caller, stakeCredit, true);
 
-        bool allowLuckbox = !_isBafActive();
+        if (!_isBafActive()) {
+            playerLuckbox[caller] = stakeCredit;
+        }
 
-        if (coinflipDeposit != 0) {
-            if (prevStakeBefore == 0) {
-                uint48 epoch = streakEpoch;
-                if (epoch == 0) epoch = 1;
-                uint48 lastEpoch = lastLuckyStreakEpoch[caller];
-                if (lastEpoch != epoch) {
-                    uint32 streak = luckyFlipStreak[caller];
-                    if (lastEpoch != 0 && epoch == lastEpoch + 1) {
-                        unchecked {
-                            streak += 1;
-                        }
-                    } else {
-                        streak = 1;
-                    }
-                    luckyFlipStreak[caller] = streak;
-                    lastLuckyStreakEpoch[caller] = epoch;
-                    uint256 bonusTotal = _streakExtra(streak);
-                    depositWithBonus += bonusTotal;
-                }
-            }
-            // Internal flip accounting; assumed non-reentrant / no external calls.
-            addFlip(caller, depositWithBonus, true);
-            if (allowLuckbox) {
-                playerLuckbox[caller] = depositWithBonus;
-            }
+        if (rake != 0) {
+            _addToBounty(rake);
         }
 
         unchecked {
-            // Track aggregate burn
             dailyCoinBurn += amount;
         }
 
-        // If Decimator window is active, accumulate burn this level.
+        emit CoinflipDeposit(caller, amount, rake, stakeCredit);
+    }
+
+    /// @notice Burn PURGE during an active Decimator window to accrue weighted participation.
+    /// @param amount Amount (6 decimals) to burn; must satisfy the global minimum.
+    function decimatorBurn(uint256 amount) external {
         (bool decOn, uint24 lvl) = _decWindow();
-        if (decOn) {
-            DecEntry storage e = decBurn[caller];
-            uint256 streak = purgeGame.ethMintStreakCount(caller);
-            uint256 total = purgeGame.ethMintLevelCount(caller);
-            uint256 scale = 1;
-            if (streak != 0 && total != 0) {
-                uint256 product = uint256(streak) * uint256(total);
-                uint256 root = _sqrt(product);
-                if (root > 1) scale = root;
-            }
-            if (scale > 60) scale = 60;
-            uint256 weighted = uint256(amount) * scale;
-            if (weighted > type(uint232).max) weighted = type(uint232).max;
-            if (e.level != lvl) {
-                e.level = lvl;
-                e.burn = uint232(weighted);
-                _decPush(lvl, caller);
-            } else {
-                uint256 newBurn = uint256(e.burn) + weighted;
-                if (newBurn > type(uint232).max) newBurn = type(uint232).max;
-                e.burn = uint232(newBurn);
-            }
+        if (!decOn) revert NotDecimatorWindow();
+        if (amount < MIN) revert AmountLTMin();
+
+        address caller = msg.sender;
+        _burn(caller, amount);
+
+        unchecked {
+            dailyCoinBurn += amount;
         }
 
-        emit LuckyCoinBurned(caller, amount, coinflipDeposit);
+        DecEntry storage e = decBurn[caller];
+        uint256 streak = purgeGame.ethMintStreakCount(caller);
+        uint256 total = purgeGame.ethMintLevelCount(caller);
+        uint256 scale = 1;
+        if (streak != 0 && total != 0) {
+            uint256 product = uint256(streak) * uint256(total);
+            uint256 root = _sqrt(product);
+            if (root > 1) scale = root;
+        }
+        if (scale > 60) scale = 60;
+        uint256 weighted = uint256(amount) * scale;
+        if (weighted > type(uint232).max) weighted = type(uint232).max;
+
+        if (e.level != lvl) {
+            e.level = lvl;
+            e.burn = uint232(weighted);
+            _decPush(lvl, caller);
+        } else {
+            uint256 acc = uint256(e.burn) + weighted;
+            if (acc > type(uint232).max) acc = type(uint232).max;
+            e.burn = uint232(acc);
+        }
+
+        emit DecimatorBurn(caller, amount, weighted);
     }
 
     // Affiliate code management
@@ -1535,7 +1548,7 @@ contract Purgecoin {
         topLen = 0;
     }
 
-    /// @notice Eligibility gate requiring a minimum coinflip stake and a 3-level ETH mint streak.
+    /// @notice Eligibility gate requiring a minimum coinflip stake and a 6-level ETH mint streak.
     function _eligible(address player) internal view returns (bool) {
         if (coinflipAmount[player] < 5_000 * MILLION) return false;
         return purgeGame.ethMintStreakCount(player) >= 6;
