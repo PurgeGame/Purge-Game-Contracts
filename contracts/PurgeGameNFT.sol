@@ -80,7 +80,7 @@ interface IPurgecoin {
 
     function getLeaderboardAddresses(uint8 which) external view returns (address[] memory);
 
-    function payAffiliate(uint256 amount, bytes32 code, address sender, uint24 lvl) external;
+    function payAffiliate(uint256 amount, bytes32 code, address sender, uint24 lvl) external returns (uint256);
 
     function burnCoin(address target, uint256 amount) external;
 
@@ -529,9 +529,14 @@ contract PurgeGameNFT {
             affiliateAmount += (affiliateAmount * pct) / 100;
         }
 
-        coin.payAffiliate(affiliateAmount, affiliateCode, payer, lvl);
+        uint256 rakebackMint = coin.payAffiliate(affiliateAmount, affiliateCode, payer, lvl);
 
         bonusMint = (bonusUnits * priceUnit * pct) / 100;
+        if (rakebackMint != 0) {
+            unchecked {
+                bonusMint += rakebackMint;
+            }
+        }
         if (streakBonus != 0) {
             unchecked {
                 bonusMint += streakBonus;

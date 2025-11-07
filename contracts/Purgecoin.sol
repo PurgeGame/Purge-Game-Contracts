@@ -55,6 +55,8 @@ contract Purgecoin {
     error StakeInvalid();
     error ZeroAddress();
     error NotDecimatorWindow();
+    error DecimatorStreak();
+    error InvalidRakeback();
 
     // ---------------------------------------------------------------------
     // ERC20 state
@@ -136,6 +138,11 @@ contract Purgecoin {
         uint24 level;
     }
 
+    struct AffiliateCodeInfo {
+        address owner;
+        uint8 rakeback; // percentage (0-25)
+    }
+
     // ---------------------------------------------------------------------
     // Constants (units & limits)
     // ---------------------------------------------------------------------
@@ -164,6 +171,9 @@ contract Purgecoin {
     uint256 private constant PRESALE_PRICE_SLOPE = (PRESALE_END_PRICE - PRESALE_START_PRICE) / PRESALE_SUPPLY_TOKENS;
     uint256 private constant PRESALE_MAX_ETH_PER_TX = 0.25 ether;
     uint256 private constant AFFILIATE_STREAK_BASE_THRESHOLD = 15 * 1000 * MILLION;
+    bytes32 private constant REF_CODE_LOCKED = bytes32(uint256(1));
+    uint24 private constant DEC_INITIAL_STREAK_REQ = 5;
+    uint24 private constant DEC_STREAK_REQ = 10;
 
     // Scan sentinels
     // ---------------------------------------------------------------------
@@ -216,9 +226,9 @@ contract Purgecoin {
     PlayerScore[8] public topBettors;
 
     // Affiliates / luckbox
-    mapping(bytes32 => address) private affiliateCode;
+    mapping(bytes32 => AffiliateCodeInfo) private affiliateCode;
     mapping(uint24 => mapping(address => uint256)) public affiliateCoinEarned; // level => player => earned
-    mapping(address => address) public referredBy;
+    mapping(address => bytes32) private playerReferralCode;
     mapping(address => uint256) public playerLuckbox;
     PlayerScore[8] public affiliateLeaderboard;
     mapping(address => uint64) private affiliateDailyStreakPacked;
@@ -341,6 +351,10 @@ contract Purgecoin {
         if (amount < MIN) revert AmountLTMin();
 
         address caller = msg.sender;
+        uint256 streak = purgeGame.ethMintStreakCount(caller);
+        uint24 minStreak = (lvl <= 25) ? DEC_INITIAL_STREAK_REQ : DEC_STREAK_REQ;
+        if (minStreak != 0 && streak < uint256(minStreak)) revert DecimatorStreak();
+
         _burn(caller, amount);
 
         unchecked {
@@ -348,7 +362,6 @@ contract Purgecoin {
         }
 
         DecEntry storage e = decBurn[caller];
-        uint256 streak = purgeGame.ethMintStreakCount(caller);
         uint256 total = purgeGame.ethMintLevelCount(caller);
         uint256 scale = 1;
         if (streak != 0 && total != 0) {
@@ -375,24 +388,42 @@ contract Purgecoin {
 
     // Affiliate code management
     /// @notice Create a new affiliate code mapping to the caller.
-    /// @dev Reverts if `code_` is zero or already taken.
-    function createAffiliateCode(bytes32 code_) external {
-        if (code_ == bytes32(0)) revert Zero();
-        if (affiliateCode[code_] != address(0)) revert Insufficient();
-        affiliateCode[code_] = msg.sender;
+    /// @dev Reverts if `code_` is zero, reserved, or already taken.
+    function createAffiliateCode(bytes32 code_, uint8 rakebackPct) external {
+        if (code_ == bytes32(0) || code_ == REF_CODE_LOCKED) revert Zero();
+        if (rakebackPct > 25) revert InvalidRakeback();
+        AffiliateCodeInfo storage info = affiliateCode[code_];
+        if (info.owner != address(0)) revert Insufficient();
+        affiliateCode[code_] = AffiliateCodeInfo({owner: msg.sender, rakeback: rakebackPct});
         emit Affiliate(1, code_, msg.sender); // 1 = code created
     }
 
     /// @notice Set the caller's referrer once using a valid affiliate code.
     /// @dev Reverts if code is unknown, self-referral, or caller already has a referrer.
     function referPlayer(bytes32 code_) external {
-        address referrer = affiliateCode[code_];
-        if (referrer == address(0) || referrer == msg.sender || referredBy[msg.sender] != address(0)) {
-            revert Insufficient();
-        }
-        referredBy[msg.sender] = referrer;
+        AffiliateCodeInfo storage info = affiliateCode[code_];
+        address referrer = info.owner;
+        if (referrer == address(0) || referrer == msg.sender) revert Insufficient();
+        bytes32 existing = playerReferralCode[msg.sender];
+        if (existing != bytes32(0)) revert Insufficient();
+        playerReferralCode[msg.sender] = code_;
         emit Affiliate(0, code_, msg.sender); // 0 = player referred
     }
+
+    function _referralCode(address player) private view returns (bytes32 code) {
+        code = playerReferralCode[player];
+        if (code == bytes32(0) || code == REF_CODE_LOCKED) return bytes32(0);
+        if (affiliateCode[code].owner == address(0)) return bytes32(0);
+        return code;
+    }
+
+    function _referrerAddress(address player) private view returns (address) {
+        bytes32 code = _referralCode(player);
+        if (code == bytes32(0)) return address(0);
+        return affiliateCode[code].owner;
+    }
+
+
     // Stake with encoded risk window
     function _encodeStakeLane(uint256 principalRounded, uint8 risk) private pure returns (uint256) {
         if (risk == 0 || risk > MAX_RISK) revert StakeInvalid();
@@ -649,36 +680,53 @@ contract Purgecoin {
 
     /// @notice Return the recorded referrer for `player` (zero address if none).
     function getReferrer(address player) external view returns (address) {
-        return referredBy[player];
+        return _referrerAddress(player);
     }
     /// @notice Credit affiliate rewards for a purchase (invoked by trusted gameplay contracts).
     /// @dev
     /// Referral rules:
-    /// - If `referredBy[sender] == address(1)`: sender is "locked" and we no-op.
-    /// - Else if a referrer already exists: pay that address (`affiliateAddr = referrer`).
-    /// - Else if `code` resolves to a valid address different from `sender`: bind it and use it.
-    /// - Else: lock the sender to `address(1)` (no future attempts) and return.
+    /// - If `playerReferralCode[sender]` is the locked sentinel, we no-op.
+    /// - Else if a referrer code already exists: use that code’s owner.
+    /// - Else if `code` resolves to a valid owner different from `sender`: bind it and use it.
+    /// - Else: lock the sender to disallow future attempts.
     /// Payout rules:
     /// - `amount` earns a 60% bonus on levels `level % 25 == 1`.
-    /// - Direct ref gets a coinflip credit equal to `amount`; their upline (if any and already active
-    ///   this level) receives a 20% bonus coinflip credit of the same (post-doubling) amount.
-    function payAffiliate(uint256 amount, bytes32 code, address sender, uint24 lvl) external onlyGameplayContracts {
-        address affiliateAddr = affiliateCode[code];
-        address referrer = referredBy[sender];
+    /// - Direct ref gets a coinflip credit equal to `amount` (plus stake bonus), but the configured rakeback%
+    ///   is diverted to the buyer as flip credit.
+    /// - Their upline (if any and already active this level) receives a 20% bonus coinflip credit of the same
+    ///   (post-doubling) amount.
+    function payAffiliate(uint256 amount, bytes32 code, address sender, uint24 lvl)
+        external
+        onlyGameplayContracts
+        returns (uint256 playerRakeback)
+    {
+        bytes32 storedCode = playerReferralCode[sender];
+        if (storedCode == REF_CODE_LOCKED) return 0;
 
-        // Locked sender: ignore
-        if (referrer == address(1)) return;
-
-        // Resolve the effective affiliate
-        if (referrer != address(0)) {
-            affiliateAddr = referrer;
-        } else if (affiliateAddr != address(0) && affiliateAddr != sender) {
-            referredBy[sender] = affiliateAddr;
+        AffiliateCodeInfo storage info;
+        if (storedCode == bytes32(0)) {
+            AffiliateCodeInfo storage candidate = affiliateCode[code];
+            if (candidate.owner == address(0) || candidate.owner == sender) {
+                playerReferralCode[sender] = REF_CODE_LOCKED;
+                return 0;
+            }
+            playerReferralCode[sender] = code;
+            info = candidate;
+            storedCode = code;
         } else {
-            // Permanently lock sender from further referral attempts
-            referredBy[sender] = address(1);
-            return;
+            info = affiliateCode[storedCode];
+            if (info.owner == address(0)) {
+                playerReferralCode[sender] = REF_CODE_LOCKED;
+                return 0;
+            }
         }
+
+        address affiliateAddr = info.owner;
+        if (affiliateAddr == address(0) || affiliateAddr == sender) {
+            playerReferralCode[sender] = REF_CODE_LOCKED;
+            return 0;
+        }
+        uint8 rakebackPct = info.rakeback;
 
         uint256 baseAmountForThreshold = amount;
         uint256 baseAmount = amount;
@@ -688,30 +736,37 @@ contract Purgecoin {
 
         mapping(address => uint256) storage earned = affiliateCoinEarned[lvl];
         // Pay direct affiliate (skip sentinels)
-        if (affiliateAddr != address(0) && affiliateAddr != address(1)) {
+        if (affiliateAddr != address(0)) {
             uint256 payout = baseAmount;
             uint8 stakeBonus = purgeGameTrophies.affiliateStakeBonus(affiliateAddr);
             if (stakeBonus != 0) {
                 payout += (payout * stakeBonus) / 100;
             }
-            uint256 newTotal = earned[affiliateAddr];
-            newTotal += payout;
-            earned[affiliateAddr] = newTotal;
-            addFlip(affiliateAddr, payout, false);
 
-            uint256 streakBonus = _updateAffiliateDailyStreak(affiliateAddr, baseAmountForThreshold);
-            if (streakBonus != 0) {
-                newTotal += streakBonus;
+            uint256 rakebackShare = (payout * uint256(rakebackPct)) / 100;
+            uint256 affiliateShare = payout - rakebackShare;
+
+            if (affiliateShare != 0) {
+                uint256 newTotal = earned[affiliateAddr] + affiliateShare;
+                uint256 totalFlipAward = affiliateShare;
+                uint256 streakBase = (baseAmountForThreshold * uint256(100 - rakebackPct)) / 100;
+                uint256 streakBonus = _updateAffiliateDailyStreak(affiliateAddr, streakBase);
+                if (streakBonus != 0) {
+                    newTotal += streakBonus;
+                    totalFlipAward += streakBonus;
+                }
                 earned[affiliateAddr] = newTotal;
-                addFlip(affiliateAddr, streakBonus, false);
+                addFlip(affiliateAddr, totalFlipAward, false);
+
+                _updatePlayerScore(1, affiliateAddr, newTotal);
             }
 
-            _updatePlayerScore(1, affiliateAddr, newTotal);
+            playerRakeback = rakebackShare;
         }
 
         // Upline bonus (20%) only if upline is active this level
-        address upline = referredBy[affiliateAddr];
-        if (upline != address(0) && upline != address(1) && upline != sender) {
+        address upline = _referrerAddress(affiliateAddr);
+        if (upline != address(0) && upline != sender) {
             uint256 uplineTotal = earned[upline];
             if (uplineTotal != 0) {
                 uint256 bonus = baseAmount / 5;
@@ -729,6 +784,7 @@ contract Purgecoin {
         }
 
         emit Affiliate(amount, code, sender);
+        return playerRakeback;
     }
 
     /// @notice Clear the affiliate leaderboard and index for the next cycle (invoked by the game).
@@ -805,13 +861,19 @@ contract Purgecoin {
         (bool ok, ) = payable(creator).call{value: creatorCut}("");
         if (!ok) revert Insufficient();
 
-        address affiliate = referredBy[buyer];
-        if (affiliate != address(0) && affiliate != address(1)) {
-            uint256 affiliateBonus = (amountBase * 5) / 100;
-            _mint(affiliate, affiliateBonus);
-            uint256 buyerBonus = (amountBase * 2) / 100;
-            if (buyerBonus != 0) {
-                _mint(buyer, buyerBonus);
+        bytes32 buyerCode = _referralCode(buyer);
+        if (buyerCode != bytes32(0)) {
+            AffiliateCodeInfo storage info = affiliateCode[buyerCode];
+            address affiliate = info.owner;
+            if (affiliate != address(0) && affiliate != buyer) {
+                uint256 affiliateBonus = (amountBase * 5) / 100;
+                uint256 buyerBonus = (amountBase * 2) / 100;
+                if (affiliateBonus != 0) {
+                    _mint(affiliate, affiliateBonus);
+                }
+                if (buyerBonus != 0) {
+                    _mint(buyer, buyerBonus);
+                }
             }
         }
     }

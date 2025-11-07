@@ -127,6 +127,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         bool targetAffiliate;
         bool targetExterminator;
         bool targetStake;
+        bool targetBaf;
         bool pureExterminatorTrophy;
         uint24 trophyBaseLevel;
         uint24 trophyLevelValue;
@@ -177,6 +178,14 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         bool isStaked;
     }
 
+    struct BafStakeInfo {
+        uint24 lastLevel;
+        uint32 lastDay;
+        uint32 claimedToday;
+        uint8 count;
+        uint256 pending;
+    }
+
     // ---------------------------------------------------------------------
     // Trophy constants
     // ---------------------------------------------------------------------
@@ -186,6 +195,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     uint256 private constant TROPHY_FLAG_MAP = uint256(1) << 200;
     uint256 private constant TROPHY_FLAG_AFFILIATE = uint256(1) << 201;
     uint256 private constant TROPHY_FLAG_STAKE = uint256(1) << 202;
+    uint256 private constant TROPHY_FLAG_BAF = uint256(1) << 203;
     uint256 private constant TROPHY_FLAG_DECIMATOR = uint256(1) << 204;
     uint256 private constant TROPHY_OWED_MASK = (uint256(1) << 128) - 1;
     uint256 private constant TROPHY_BASE_LEVEL_SHIFT = 128;
@@ -207,6 +217,8 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     uint8 private constant AFFILIATE_STAKE_MAX = 20;
     uint8 private constant STAKE_TROPHY_MAX = 20;
     uint8 private constant EXTERMINATOR_STAKE_COIN_CAP = 25;
+    uint256 private constant BAF_LEVEL_REWARD = 100 * COIN_BASE_UNIT;
+    uint256 private constant BAF_DAILY_CAP = 2_000 * COIN_BASE_UNIT;
 
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
     uint16 private constant DECIMATOR_TRAIT_SENTINEL = 0xFFFB;
@@ -237,6 +249,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     mapping(address => mapping(uint16 => uint256)) private exterminatorStakeTraitIndex_;
     mapping(address => uint8) private stakeStakeCount_;
     mapping(address => uint8) private stakeStakeBonusPct_;
+    mapping(address => BafStakeInfo) private bafStakeInfo;
 
     // ---------------------------------------------------------------------
     // Constructor
@@ -522,6 +535,21 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             discountPct = 0;
             data.kind = 3;
             data.count = exterminatorStakeCount_[params.player];
+        } else if (params.targetBaf) {
+            BafStakeInfo storage state = bafStakeInfo[params.player];
+            _syncBafStake(params.player, state);
+            uint8 current = state.count;
+            if (current == type(uint8).max) revert StakeInvalid();
+            unchecked {
+                current += 1;
+            }
+            state.count = current;
+            if (state.lastDay == 0) {
+                state.lastDay = uint32(block.timestamp / 1 days);
+            }
+            discountPct = 0;
+            data.kind = 5;
+            data.count = current;
         } else {
             uint8 current = stakeStakeCount_[params.player];
             if (current >= STAKE_TROPHY_MAX) revert StakeInvalid();
@@ -604,6 +632,17 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             uint16 traitId = uint16((info >> 152) & 0xFFFF);
             _removeExterminatorStakeTrait(params.player, traitId);
             data.kind = 3;
+            data.count = current;
+        } else if (params.targetBaf) {
+            BafStakeInfo storage state = bafStakeInfo[params.player];
+            _syncBafStake(params.player, state);
+            uint8 current = state.count;
+            if (current == 0) revert StakeInvalid();
+            unchecked {
+                current -= 1;
+            }
+            state.count = current;
+            data.kind = 5;
             data.count = current;
         } else {
             uint8 current = stakeStakeCount_[params.player];
@@ -689,7 +728,8 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             uint256 info = trophyData_[tokenId];
             bool invalid = (info & TROPHY_FLAG_MAP) != 0 ||
                 (info & TROPHY_FLAG_AFFILIATE) != 0 ||
-                (info & TROPHY_FLAG_STAKE) != 0;
+                (info & TROPHY_FLAG_STAKE) != 0 ||
+                (info & TROPHY_FLAG_BAF) != 0;
             if (invalid) revert StakeInvalid();
             uint24 base = uint24((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF);
             if (base > best) {
@@ -1033,6 +1073,35 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         }
     }
 
+    function _processBafClaim(address player, ClaimContext memory ctx) private {
+        if (!ctx.isStaked) revert ClaimNotReady();
+        BafStakeInfo storage state = bafStakeInfo[player];
+        _syncBafStake(player, state);
+
+        uint32 currentDay = uint32(block.timestamp / 1 days);
+        if (state.lastDay != currentDay) {
+            state.lastDay = currentDay;
+            state.claimedToday = 0;
+        }
+
+        uint256 pending = state.pending;
+        if (pending == 0) revert ClaimNotReady();
+
+        uint256 dailyRemaining = BAF_DAILY_CAP - uint256(state.claimedToday);
+        if (dailyRemaining == 0) revert ClaimNotReady();
+
+        uint256 payout = pending;
+        if (payout > dailyRemaining) {
+            payout = dailyRemaining;
+        }
+
+        state.pending = pending - payout;
+        state.claimedToday += uint32(payout);
+
+        ctx.coinAmount = payout;
+        ctx.coinClaimed = true;
+    }
+
     function _isTrophyStaked(uint256 tokenId) private view returns (bool) {
         return trophyStaked[tokenId];
     }
@@ -1041,6 +1110,56 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         if (info & TROPHY_FLAG_DECIMATOR != 0) return true;
         uint16 traitId = uint16((info >> 152) & 0xFFFF);
         return traitId == DECIMATOR_TRAIT_SENTINEL;
+    }
+
+    function _isBafTrophy(uint256 info) private pure returns (bool) {
+        return (info & TROPHY_FLAG_BAF) != 0;
+    }
+
+    function _bootstrapBafStake(address player, BafStakeInfo storage state) private {
+        if (state.count != 0) return;
+        uint8 count;
+        uint256 len = stakedTrophyIds.length;
+        for (uint256 i; i < len; ) {
+            uint256 tokenId = stakedTrophyIds[i];
+            if (trophyStaked[tokenId] && _isBafTrophy(trophyData_[tokenId])) {
+                address owner = address(uint160(nft.packedOwnershipOf(tokenId)));
+                if (owner == player) {
+                    unchecked {
+                        count += 1;
+                    }
+                }
+            }
+            unchecked {
+                ++i;
+            }
+        }
+        if (count != 0) {
+            state.count = count;
+            if (state.lastDay == 0) {
+                state.lastDay = uint32(block.timestamp / 1 days);
+            }
+            if (state.lastLevel == 0) {
+                state.lastLevel = game.level();
+            }
+        }
+    }
+
+    function _syncBafStake(address player, BafStakeInfo storage state) private {
+        _bootstrapBafStake(player, state);
+        uint24 currentLevel = game.level();
+        if (state.lastLevel == 0) {
+            state.lastLevel = currentLevel;
+            if (state.lastDay == 0) {
+                state.lastDay = uint32(block.timestamp / 1 days);
+            }
+            return;
+        }
+        if (state.count != 0 && currentLevel > state.lastLevel) {
+            uint256 delta = uint256(currentLevel - state.lastLevel) * uint256(state.count);
+            state.pending += delta * BAF_LEVEL_REWARD;
+        }
+        state.lastLevel = currentLevel;
     }
 
     function _effectiveStakeLevel() private view returns (uint24) {
@@ -1099,6 +1218,8 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
 
         if (_isDecimatorTrophy(ctx.info)) {
             _processDecimatorClaim(ctx);
+        } else if (_isBafTrophy(ctx.info)) {
+            _processBafClaim(msg.sender, ctx);
         }
 
         if (!ctx.ethClaimed && !ctx.coinClaimed) revert ClaimNotReady();
@@ -1136,6 +1257,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         if (info == 0) revert StakeInvalid();
 
         uint8 storedKind = _kindFromInfo(info);
+        bool isBafTrophy = (info & TROPHY_FLAG_BAF) != 0;
 
         StakeParams memory params;
         params.player = sender;
@@ -1143,13 +1265,14 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         params.targetMap = storedKind == PURGE_TROPHY_KIND_MAP;
         params.targetStake = storedKind == PURGE_TROPHY_KIND_STAKE;
         params.targetAffiliate = storedKind == PURGE_TROPHY_KIND_AFFILIATE;
-        params.targetExterminator = storedKind == PURGE_TROPHY_KIND_LEVEL;
+        params.targetBaf = isBafTrophy;
+        params.targetExterminator = storedKind == PURGE_TROPHY_KIND_LEVEL && !isBafTrophy;
 
         if (stake && sender.code.length != 0) revert StakeInvalid();
 
         params.trophyBaseLevel = uint24((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF);
         params.trophyLevelValue = params.trophyBaseLevel;
-        params.pureExterminatorTrophy = storedKind == PURGE_TROPHY_KIND_LEVEL;
+        params.pureExterminatorTrophy = params.targetExterminator;
         params.effectiveLevel = effectiveLevel;
 
         StakeEventData memory eventData;

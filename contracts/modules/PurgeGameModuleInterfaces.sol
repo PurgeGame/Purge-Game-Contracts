@@ -5,7 +5,7 @@ interface IPurgeCoinModule {
     function bonusCoinflip(address player, uint256 amount, bool rngReady, uint256 luckboxBonus) external;
     function burnie(uint256 amount) external payable;
     function burnCoin(address target, uint256 amount) external;
-    function payAffiliate(uint256 amount, bytes32 code, address sender, uint24 lvl) external;
+    function payAffiliate(uint256 amount, bytes32 code, address sender, uint24 lvl) external returns (uint256);
     function processCoinflipPayouts(
         uint24 level,
         uint32 cap,
