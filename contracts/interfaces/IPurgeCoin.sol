@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+import {QuestInfo} from "./IPurgeQuestModule.sol";
+
 interface IPurgeCoin {
     function bonusCoinflip(address player, uint256 amount, bool rngReady, uint256 luckboxBonus) external;
 
@@ -51,8 +53,20 @@ interface IPurgeCoin {
         view
         returns (uint48 day, uint8 questType, bool highDifficulty, uint8 stakeMask, uint8 stakeRisk);
 
+    function getActiveQuests() external view returns (QuestInfo[2] memory quests);
+
     function playerQuestState(address player)
         external
         view
         returns (uint32 streak, uint32 lastCompletedDay, uint128 progress, bool completedToday);
+
+    function playerQuestStates(address player)
+        external
+        view
+        returns (
+            uint32 streak,
+            uint32 lastCompletedDay,
+            uint128[2] memory progress,
+            bool[2] memory completed
+        );
 }

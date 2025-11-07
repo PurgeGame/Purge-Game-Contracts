@@ -5,7 +5,7 @@ import {PurgeGameNFT} from "./PurgeGameNFT.sol";
 import {IPurgeGameTrophies, PURGE_TROPHY_KIND_STAKE} from "./PurgeGameTrophies.sol";
 import {IPurgeGame} from "./interfaces/IPurgeGame.sol";
 import {IPurgeRenderer} from "./interfaces/IPurgeRenderer.sol";
-import {IPurgeQuestModule} from "./interfaces/IPurgeQuestModule.sol";
+import {IPurgeQuestModule, QuestInfo} from "./interfaces/IPurgeQuestModule.sol";
 
 contract Purgecoin {
     // ---------------------------------------------------------------------
@@ -951,12 +951,18 @@ contract Purgecoin {
     function rollDailyQuest(uint48 day, uint256 entropy) external onlyPurgeGameContract {
         IPurgeQuestModule module = questModule;
         if (address(module) == address(0)) return;
-        (bool rolled, uint8 questType, bool highDifficulty, uint8 stakeMask, uint8 stakeRisk) = module.rollDailyQuest(
-            day,
-            entropy
-        );
+        (bool rolled, , , , ) = module.rollDailyQuest(day, entropy);
         if (rolled) {
-            emit DailyQuestRolled(day, questType, highDifficulty, stakeMask, stakeRisk);
+            QuestInfo[2] memory quests = module.getActiveQuests();
+            for (uint256 i; i < 2; ) {
+                QuestInfo memory info = quests[i];
+                if (info.day == day) {
+                    emit DailyQuestRolled(day, info.questType, info.highDifficulty, info.stakeMask, info.stakeRisk);
+                }
+                unchecked {
+                    ++i;
+                }
+            }
         }
     }
 
@@ -983,6 +989,14 @@ contract Purgecoin {
         return module.getActiveQuest();
     }
 
+    function getActiveQuests() external view returns (QuestInfo[2] memory quests) {
+        IPurgeQuestModule module = questModule;
+        if (address(module) == address(0)) {
+            return quests;
+        }
+        return module.getActiveQuests();
+    }
+
     function playerQuestState(address player)
         external
         view
@@ -993,6 +1007,23 @@ contract Purgecoin {
             return (0, 0, 0, false);
         }
         return module.playerQuestState(player);
+    }
+
+    function playerQuestStates(address player)
+        external
+        view
+        returns (
+            uint32 streak,
+            uint32 lastCompletedDay,
+            uint128[2] memory progress,
+            bool[2] memory completed
+        )
+    {
+        IPurgeQuestModule module = questModule;
+        if (address(module) == address(0)) {
+            return (0, 0, progress, completed);
+        }
+        return module.playerQuestStates(player);
     }
 
 
@@ -1888,8 +1919,10 @@ contract Purgecoin {
         uint32 streak,
         bool completed
     ) private {
-        if (!completed || reward == 0 || player == address(0)) return;
-        _mint(player, reward);
+        if (!completed || player == address(0)) return;
+        if (reward != 0) {
+            _mint(player, reward);
+        }
         emit QuestCompleted(player, questType, streak, reward, hardMode);
     }
 

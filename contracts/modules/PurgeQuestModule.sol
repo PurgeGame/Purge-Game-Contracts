@@ -8,6 +8,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
     error InvalidQuestDay();
 
     uint256 private constant MILLION = 1e6;
+    uint8 private constant QUEST_SLOT_COUNT = 2;
     uint8 private constant QUEST_TYPE_MINT_ANY = 0;
     uint8 private constant QUEST_TYPE_MINT_ETH = 1;
     uint8 private constant QUEST_TYPE_FLIP = 2;
@@ -15,11 +16,13 @@ contract PurgeQuestModule is IPurgeQuestModule {
     uint8 private constant QUEST_TYPE_AFFILIATE = 4;
     uint8 private constant QUEST_TYPE_COUNT = 5;
     uint8 private constant QUEST_FLAG_HIGH_DIFFICULTY = 1 << 0;
-    uint8 private constant QUEST_STATE_COMPLETED = 1 << 0;
     uint8 private constant QUEST_STAKE_REQUIRE_PRINCIPAL = 1 << 0;
     uint8 private constant QUEST_STAKE_REQUIRE_DISTANCE = 1 << 1;
     uint8 private constant QUEST_STAKE_REQUIRE_RISK = 1 << 2;
     uint8 private constant QUEST_TIER_MAX_INDEX = 10;
+    uint8 private constant QUEST_STATE_COMPLETED_SLOT0 = 1 << 0;
+    uint8 private constant QUEST_STATE_COMPLETED_SLOTS_MASK = (uint8(1) << QUEST_SLOT_COUNT) - 1;
+    uint8 private constant QUEST_STATE_STREAK_CREDITED = 1 << 7;
     uint16 private constant QUEST_MIN_TOKEN = 250;
     uint16 private constant QUEST_MIN_MINT = 1;
 
@@ -35,15 +38,20 @@ contract PurgeQuestModule is IPurgeQuestModule {
     }
 
     struct PlayerQuestState {
-        uint32 lastProgressDay;
         uint32 lastCompletedDay;
         uint32 streak;
-        uint128 progress;
-        uint8 flags;
+        uint32 baseStreak;
+        uint32 lastSyncDay;
+        uint32[QUEST_SLOT_COUNT] lastProgressDay;
+        uint128[QUEST_SLOT_COUNT] progress;
+        uint32 forcedProgressDay;
+        uint128 forcedProgress;
+        uint8 completionMask;
     }
 
-    DailyQuest private activeQuest;
+    DailyQuest[QUEST_SLOT_COUNT] private activeQuests;
     mapping(address => PlayerQuestState) private questPlayerState;
+    mapping(address => bool) private hasEthMint;
 
     uint16[11] private questMintAnyMax = [
         uint16(2),
@@ -152,14 +160,462 @@ contract PurgeQuestModule is IPurgeQuestModule {
         returns (bool rolled, uint8 questType, bool highDifficulty, uint8 stakeMask, uint8 stakeRisk)
     {
         if (day == 0) revert InvalidQuestDay();
-        DailyQuest storage quest = activeQuest;
-        if (quest.day == day) {
-            return (false, quest.questType, (quest.flags & QUEST_FLAG_HIGH_DIFFICULTY) != 0, quest.stakeMask, quest.stakeRisk);
+        DailyQuest[QUEST_SLOT_COUNT] storage quests = activeQuests;
+        if (_questsCurrent(quests, day)) {
+            DailyQuest storage current = quests[0];
+            bool hard = (current.flags & QUEST_FLAG_HIGH_DIFFICULTY) != 0;
+            return (false, current.questType, hard, current.stakeMask, current.stakeRisk);
         }
         if (entropy == 0) {
             entropy = uint256(keccak256(abi.encodePacked(block.timestamp, block.prevrandao, day, coin)));
         }
+        for (uint8 slot; slot < QUEST_SLOT_COUNT; ) {
+            uint8 exclude = slot == 0 ? type(uint8).max : quests[0].questType;
+            uint256 slotEntropy = uint256(keccak256(abi.encode(entropy, slot)));
+            _seedQuest(quests[slot], day, slotEntropy, exclude);
+            unchecked {
+                ++slot;
+            }
+        }
+        DailyQuest storage primary = quests[0];
+        bool hardMode = (primary.flags & QUEST_FLAG_HIGH_DIFFICULTY) != 0;
+        return (true, primary.questType, hardMode, primary.stakeMask, primary.stakeRisk);
+    }
+
+    function handleMint(address player, uint32 quantity, bool paidWithEth)
+        external
+        onlyCoin
+        returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed)
+    {
+        DailyQuest[QUEST_SLOT_COUNT] memory quests = activeQuests;
+        uint48 currentDay = _currentQuestDay(quests);
+        PlayerQuestState storage state = questPlayerState[player];
+        bool hadEthMint = hasEthMint[player];
+        if (paidWithEth && !hadEthMint) {
+            hasEthMint[player] = true;
+        }
+        if (player == address(0) || quantity == 0 || currentDay == 0) {
+            return (0, false, quests[0].questType, state.streak, false);
+        }
+
+        _questSyncState(state, currentDay);
+
+        if (!hadEthMint) {
+            if (!paidWithEth) {
+                return (0, false, QUEST_TYPE_MINT_ETH, state.streak, false);
+            }
+            _syncForcedProgress(state, currentDay);
+            uint256 updatedForced = uint256(state.forcedProgress) + quantity;
+            if (updatedForced > type(uint128).max) updatedForced = type(uint128).max;
+            state.forcedProgress = uint128(updatedForced);
+            uint256 entropySource = quests[0].day == currentDay ? quests[0].entropy : quests[1].entropy;
+            uint32 forcedTarget = _questMintEthTarget(state.baseStreak, entropySource);
+            if (state.forcedProgress >= forcedTarget) {
+                return _questCompleteForced(state, currentDay);
+            }
+            return (0, false, QUEST_TYPE_MINT_ETH, state.streak, false);
+        }
+
+        bool matched;
+        uint8 fallbackType = quests[0].questType;
+        for (uint8 slot; slot < QUEST_SLOT_COUNT; ) {
+            DailyQuest memory quest = quests[slot];
+            if (quest.day != currentDay) {
+                unchecked {
+                    ++slot;
+                }
+                continue;
+            }
+            if (quest.questType == QUEST_TYPE_MINT_ANY || (paidWithEth && quest.questType == QUEST_TYPE_MINT_ETH)) {
+                matched = true;
+                fallbackType = quest.questType;
+                (reward, hardMode, questType, streak, completed) = _questHandleMintSlot(state, quest, slot, quantity);
+                if (completed) {
+                    return (reward, hardMode, questType, streak, completed);
+                }
+            }
+            unchecked {
+                ++slot;
+            }
+        }
+        return (0, false, matched ? fallbackType : QUEST_TYPE_MINT_ANY, state.streak, false);
+    }
+
+    function handleFlip(address player, uint256 stakeCredit)
+        external
+        onlyCoin
+        returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed)
+    {
+        DailyQuest[QUEST_SLOT_COUNT] memory quests = activeQuests;
+        uint48 currentDay = _currentQuestDay(quests);
+        PlayerQuestState storage state = questPlayerState[player];
+        if (player == address(0) || stakeCredit == 0 || currentDay == 0) {
+            return (0, false, quests[0].questType, state.streak, false);
+        }
+        _questSyncState(state, currentDay);
+
+        bool matched;
+        uint8 fallbackType = quests[0].questType;
+        for (uint8 slot; slot < QUEST_SLOT_COUNT; ) {
+            DailyQuest memory quest = quests[slot];
+            if (quest.day != currentDay || quest.questType != QUEST_TYPE_FLIP) {
+                unchecked {
+                    ++slot;
+                }
+                continue;
+            }
+            matched = true;
+            fallbackType = quest.questType;
+            _questSyncProgress(state, slot, currentDay);
+            uint256 clamped = stakeCredit;
+            if (clamped > type(uint128).max) clamped = type(uint128).max;
+            if (clamped > state.progress[slot]) {
+                state.progress[slot] = uint128(clamped);
+            }
+            uint256 target = uint256(_questFlipTargetTokens(state.baseStreak, quest.entropy)) * MILLION;
+            if (state.progress[slot] >= target) {
+                return _questComplete(state, slot, quest);
+            }
+            unchecked {
+                ++slot;
+            }
+        }
+        return (0, false, matched ? fallbackType : QUEST_TYPE_FLIP, state.streak, false);
+    }
+
+    function handleStake(address player, uint256 principal, uint24 distance, uint8 risk)
+        external
+        onlyCoin
+        returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed)
+    {
+        DailyQuest[QUEST_SLOT_COUNT] memory quests = activeQuests;
+        uint48 currentDay = _currentQuestDay(quests);
+        if (player == address(0) || currentDay == 0) {
+            return (0, false, quests[0].questType, questPlayerState[player].streak, false);
+        }
+        PlayerQuestState storage state = questPlayerState[player];
+        _questSyncState(state, currentDay);
+
+        bool matched;
+        uint8 fallbackType = quests[0].questType;
+        for (uint8 slot; slot < QUEST_SLOT_COUNT; ) {
+            DailyQuest memory quest = quests[slot];
+            if (quest.day != currentDay || quest.questType != QUEST_TYPE_STAKE) {
+                unchecked {
+                    ++slot;
+                }
+                continue;
+            }
+            matched = true;
+            fallbackType = quest.questType;
+            bool meets = true;
+            uint8 tier = _questTier(state.baseStreak);
+            if ((quest.stakeMask & QUEST_STAKE_REQUIRE_PRINCIPAL) != 0) {
+                uint256 requiredPrincipal = uint256(_questStakePrincipalTarget(tier, quest.entropy)) * MILLION;
+                meets = principal >= requiredPrincipal;
+            }
+            if (meets && (quest.stakeMask & QUEST_STAKE_REQUIRE_DISTANCE) != 0) {
+                uint16 requiredDistance = _questStakeDistanceTarget(tier, quest.entropy);
+                meets = distance >= requiredDistance;
+            }
+            if (meets && (quest.stakeMask & QUEST_STAKE_REQUIRE_RISK) != 0) {
+                meets = risk >= quest.stakeRisk;
+            }
+            if (meets) {
+                return _questComplete(state, slot, quest);
+            }
+            unchecked {
+                ++slot;
+            }
+        }
+        return (0, false, matched ? fallbackType : QUEST_TYPE_STAKE, state.streak, false);
+    }
+
+    function handleAffiliate(address player, uint256 amount)
+        external
+        onlyCoin
+        returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed)
+    {
+        DailyQuest[QUEST_SLOT_COUNT] memory quests = activeQuests;
+        uint48 currentDay = _currentQuestDay(quests);
+        PlayerQuestState storage state = questPlayerState[player];
+        if (player == address(0) || amount == 0 || currentDay == 0) {
+            return (0, false, quests[0].questType, state.streak, false);
+        }
+        _questSyncState(state, currentDay);
+
+        bool matched;
+        uint8 fallbackType = quests[0].questType;
+        for (uint8 slot; slot < QUEST_SLOT_COUNT; ) {
+            DailyQuest memory quest = quests[slot];
+            if (quest.day != currentDay || quest.questType != QUEST_TYPE_AFFILIATE) {
+                unchecked {
+                    ++slot;
+                }
+                continue;
+            }
+            matched = true;
+            fallbackType = quest.questType;
+            _questSyncProgress(state, slot, currentDay);
+            uint256 updated = uint256(state.progress[slot]) + amount;
+            if (updated > type(uint128).max) updated = type(uint128).max;
+            state.progress[slot] = uint128(updated);
+            uint256 target = uint256(_questAffiliateTargetTokens(state.baseStreak, quest.entropy)) * MILLION;
+            if (state.progress[slot] >= target) {
+                return _questComplete(state, slot, quest);
+            }
+            unchecked {
+                ++slot;
+            }
+        }
+        return (0, false, matched ? fallbackType : QUEST_TYPE_AFFILIATE, state.streak, false);
+    }
+
+    function getActiveQuest()
+        external
+        view
+        override
+        returns (uint48 day, uint8 questType, bool highDifficulty, uint8 stakeMask, uint8 stakeRisk)
+    {
+        DailyQuest memory quest = activeQuests[0];
+        return (quest.day, quest.questType, (quest.flags & QUEST_FLAG_HIGH_DIFFICULTY) != 0, quest.stakeMask, quest.stakeRisk);
+    }
+
+    function getActiveQuests() external view override returns (QuestInfo[2] memory quests) {
+        for (uint8 slot; slot < QUEST_SLOT_COUNT; ) {
+            DailyQuest memory quest = activeQuests[slot];
+            quests[slot] = QuestInfo({
+                day: quest.day,
+                questType: quest.questType,
+                highDifficulty: (quest.flags & QUEST_FLAG_HIGH_DIFFICULTY) != 0,
+                stakeMask: quest.stakeMask,
+                stakeRisk: quest.stakeRisk
+            });
+            unchecked {
+                ++slot;
+            }
+        }
+    }
+
+    function playerQuestState(address player)
+        external
+        view
+        override
+        returns (uint32 streak, uint32 lastCompletedDay, uint128 progress, bool completedToday)
+    {
+        PlayerQuestState memory state = questPlayerState[player];
+        streak = state.streak;
+        lastCompletedDay = state.lastCompletedDay;
+        DailyQuest memory quest = activeQuests[0];
+        if (quest.day != 0 && state.lastProgressDay[0] == quest.day) {
+            progress = state.progress[0];
+            completedToday = state.lastSyncDay == quest.day && (state.completionMask & QUEST_STATE_COMPLETED_SLOT0) != 0;
+        }
+    }
+
+    function playerQuestStates(address player)
+        external
+        view
+        override
+        returns (
+            uint32 streak,
+            uint32 lastCompletedDay,
+            uint128[2] memory progress,
+            bool[2] memory completed
+        )
+    {
+        PlayerQuestState memory state = questPlayerState[player];
+        streak = state.streak;
+        lastCompletedDay = state.lastCompletedDay;
+        for (uint8 slot; slot < QUEST_SLOT_COUNT; ) {
+            DailyQuest memory quest = activeQuests[slot];
+            if (quest.day != 0 && state.lastProgressDay[slot] == quest.day) {
+                progress[slot] = state.progress[slot];
+                completed[slot] = state.lastSyncDay == quest.day && (state.completionMask & uint8(1 << slot)) != 0;
+            } else {
+                progress[slot] = 0;
+                completed[slot] = false;
+            }
+            unchecked {
+                ++slot;
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // Internal helpers
+    // ---------------------------------------------------------------------
+
+    function _questHandleMintSlot(
+        PlayerQuestState storage state,
+        DailyQuest memory quest,
+        uint8 slot,
+        uint32 quantity
+    ) private returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) {
+        _questSyncProgress(state, slot, quest.day);
+        uint256 updated = uint256(state.progress[slot]) + quantity;
+        if (updated > type(uint128).max) updated = type(uint128).max;
+        state.progress[slot] = uint128(updated);
+        uint32 target = quest.questType == QUEST_TYPE_MINT_ANY
+            ? _questMintAnyTarget(state.baseStreak, quest.entropy)
+            : _questMintEthTarget(state.baseStreak, quest.entropy);
+        if (state.progress[slot] >= target) {
+            return _questComplete(state, slot, quest);
+        }
+        return (0, false, quest.questType, state.streak, false);
+    }
+
+    function _questSyncState(PlayerQuestState storage state, uint48 currentDay) private {
+        if (state.lastCompletedDay != 0 && currentDay > uint48(state.lastCompletedDay + 1)) {
+            state.streak = 0;
+        }
+        if (state.lastSyncDay != currentDay) {
+            state.lastSyncDay = uint32(currentDay);
+            state.completionMask = 0;
+            state.baseStreak = state.streak;
+        }
+    }
+
+    function _questSyncProgress(PlayerQuestState storage state, uint8 slot, uint48 currentDay) private {
+        if (state.lastProgressDay[slot] != currentDay) {
+            state.lastProgressDay[slot] = uint32(currentDay);
+            state.progress[slot] = 0;
+        }
+    }
+
+    function _syncForcedProgress(PlayerQuestState storage state, uint48 currentDay) private {
+        if (state.forcedProgressDay != currentDay) {
+            state.forcedProgressDay = uint32(currentDay);
+            state.forcedProgress = 0;
+        }
+    }
+
+    function _questTier(uint32 streak) private pure returns (uint8) {
+        uint32 tier = streak / 5;
+        if (tier > QUEST_TIER_MAX_INDEX) {
+            tier = QUEST_TIER_MAX_INDEX;
+        }
+        return uint8(tier);
+    }
+
+    function _questMintAnyTarget(uint32 streak, uint256 entropy) private view returns (uint32) {
+        uint8 tier = _questTier(streak);
+        uint16 maxVal = questMintAnyMax[tier];
+        if (maxVal <= QUEST_MIN_MINT) {
+            return QUEST_MIN_MINT;
+        }
+        uint256 rand = _questRand(entropy, QUEST_TYPE_MINT_ANY, tier, 0);
+        return uint32(rand % maxVal) + QUEST_MIN_MINT;
+    }
+
+    function _questMintEthTarget(uint32 streak, uint256 entropy) private view returns (uint32) {
+        uint8 tier = _questTier(streak);
+        uint16 maxVal = questMintEthMax[tier];
+        if (maxVal <= QUEST_MIN_MINT) {
+            return QUEST_MIN_MINT;
+        }
+        uint256 rand = _questRand(entropy, QUEST_TYPE_MINT_ETH, tier, 0);
+        return uint32(rand % maxVal) + QUEST_MIN_MINT;
+    }
+
+    function _questFlipTargetTokens(uint32 streak, uint256 entropy) private view returns (uint32) {
+        uint8 tier = _questTier(streak);
+        uint16 maxVal = questFlipMax[tier];
+        uint256 range = uint256(maxVal) - QUEST_MIN_TOKEN + 1;
+        uint256 rand = _questRand(entropy, QUEST_TYPE_FLIP, tier, 0);
+        return uint32(uint256(QUEST_MIN_TOKEN) + (rand % range));
+    }
+
+    function _questStakePrincipalTarget(uint8 tier, uint256 entropy) private view returns (uint32) {
+        uint16 maxVal = questStakePrincipalMax[tier];
+        uint256 range = uint256(maxVal) - QUEST_MIN_TOKEN + 1;
+        uint256 rand = _questRand(entropy, QUEST_TYPE_STAKE, tier, 1);
+        return uint32(uint256(QUEST_MIN_TOKEN) + (rand % range));
+    }
+
+    function _questStakeDistanceTarget(uint8 tier, uint256 entropy) private view returns (uint16) {
+        uint16 minVal = questStakeDistanceMin[tier];
+        uint16 maxVal = questStakeDistanceMax[tier];
+        uint256 range = uint256(maxVal) - minVal + 1;
+        uint256 rand = _questRand(entropy, QUEST_TYPE_STAKE, tier, 2);
+        return uint16(uint256(minVal) + (rand % range));
+    }
+
+    function _questAffiliateTargetTokens(uint32 streak, uint256 entropy) private view returns (uint32) {
+        uint8 tier = _questTier(streak);
+        uint16 maxVal = questAffiliateMax[tier];
+        uint256 range = uint256(maxVal) - QUEST_MIN_TOKEN + 1;
+        uint256 rand = _questRand(entropy, QUEST_TYPE_AFFILIATE, tier, 0);
+        return uint32(uint256(QUEST_MIN_TOKEN) + (rand % range));
+    }
+
+    function _questRand(uint256 entropy, uint8 questType, uint8 tier, uint8 salt) private pure returns (uint256) {
+        if (entropy == 0) return 0;
+        return uint256(keccak256(abi.encode(entropy, questType, tier, salt)));
+    }
+
+    function _questCompleteForced(PlayerQuestState storage state, uint48 currentDay)
+        private
+        returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed)
+    {
+        if ((state.completionMask & QUEST_STATE_STREAK_CREDITED) == 0) {
+            state.completionMask |= QUEST_STATE_STREAK_CREDITED;
+            uint32 newStreak = state.streak + 1;
+            state.streak = newStreak;
+            state.lastCompletedDay = uint32(currentDay);
+        }
+        uint256 totalReward = _questTotalReward(state.streak, 0);
+        return (totalReward, false, QUEST_TYPE_MINT_ETH, state.streak, true);
+    }
+
+    function _questComplete(
+        PlayerQuestState storage state,
+        uint8 slot,
+        DailyQuest memory quest
+    ) private returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) {
+        uint8 slotMask = uint8(1 << slot);
+        if ((state.completionMask & slotMask) != 0) {
+            return (0, false, quest.questType, state.streak, false);
+        }
+        state.completionMask |= slotMask;
+        uint32 newStreak = state.streak;
+        if ((state.completionMask & QUEST_STATE_STREAK_CREDITED) == 0) {
+            uint8 completedSlots = state.completionMask & QUEST_STATE_COMPLETED_SLOTS_MASK;
+            if (completedSlots == QUEST_STATE_COMPLETED_SLOTS_MASK) {
+                state.completionMask |= QUEST_STATE_STREAK_CREDITED;
+                newStreak = state.streak + 1;
+                state.streak = newStreak;
+                state.lastCompletedDay = uint32(quest.day);
+            }
+        }
+        bool isHard = (quest.flags & QUEST_FLAG_HIGH_DIFFICULTY) != 0;
+        uint256 totalReward = _questTotalReward(newStreak, quest.flags);
+        uint256 rewardShare = totalReward / QUEST_SLOT_COUNT;
+        return (rewardShare, isHard, quest.questType, newStreak, true);
+    }
+
+    function _questTotalReward(uint32 streak, uint8 questFlags) private pure returns (uint256 totalReward) {
+        totalReward = 200 * MILLION;
+        if (streak >= 5 && (streak == 5 || (streak % 10) == 0)) {
+            uint256 bonus = uint256(streak) * 100;
+            if (bonus > 5000) bonus = 5000;
+            totalReward += bonus * MILLION;
+        }
+        if ((questFlags & QUEST_FLAG_HIGH_DIFFICULTY) != 0) {
+            totalReward += 100 * MILLION;
+        }
+    }
+
+    function _seedQuest(
+        DailyQuest storage quest,
+        uint48 day,
+        uint256 entropy,
+        uint8 excludeType
+    ) private {
         uint8 qType = uint8(entropy % QUEST_TYPE_COUNT);
+        if (excludeType != type(uint8).max && qType == excludeType) {
+            qType = uint8((qType + 1 + uint8(entropy % (QUEST_TYPE_COUNT - 1))) % QUEST_TYPE_COUNT);
+        }
         uint8 flags = (uint16(entropy & 0x3FF) >= 900) ? QUEST_FLAG_HIGH_DIFFICULTY : 0;
         uint8 mask;
         uint8 risk;
@@ -180,248 +636,16 @@ contract PurgeQuestModule is IPurgeQuestModule {
         quest.stakeRisk = risk;
         quest.flags = flags;
         quest.entropy = entropy;
-        return (true, qType, (flags & QUEST_FLAG_HIGH_DIFFICULTY) != 0, mask, risk);
     }
 
-    function handleMint(address player, uint32 quantity, bool paidWithEth)
-        external
-        onlyCoin
-        returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed)
-    {
-        if (player == address(0) || quantity == 0) {
-            return (0, false, activeQuest.questType, questPlayerState[player].streak, false);
-        }
-        return _questHandleMint(player, quantity, paidWithEth);
+    function _questsCurrent(DailyQuest[QUEST_SLOT_COUNT] storage quests, uint48 day) private view returns (bool) {
+        if (day == 0) return false;
+        return quests[0].day == day && quests[1].day == day;
     }
 
-    function handleFlip(address player, uint256 stakeCredit)
-        external
-        onlyCoin
-        returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed)
-    {
-        if (player == address(0) || stakeCredit == 0 || activeQuest.day == 0 || activeQuest.questType != QUEST_TYPE_FLIP) {
-            return (0, false, activeQuest.questType, questPlayerState[player].streak, false);
-        }
-        PlayerQuestState storage state = questPlayerState[player];
-        _questSyncState(state, activeQuest.day);
-        if (stakeCredit > state.progress) {
-            uint256 clamped = stakeCredit;
-            if (clamped > type(uint128).max) clamped = type(uint128).max;
-            state.progress = uint128(clamped);
-        }
-        uint256 target = uint256(_questFlipTargetTokens(state.streak)) * MILLION;
-        if (state.progress >= target) {
-            return _questComplete(state);
-        }
-        return (0, false, activeQuest.questType, state.streak, false);
-    }
-
-    function handleStake(address player, uint256 principal, uint24 distance, uint8 risk)
-        external
-        onlyCoin
-        returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed)
-    {
-        DailyQuest memory quest = activeQuest;
-        if (player == address(0) || quest.day == 0 || quest.questType != QUEST_TYPE_STAKE) {
-            return (0, false, quest.questType, questPlayerState[player].streak, false);
-        }
-        PlayerQuestState storage state = questPlayerState[player];
-        _questSyncState(state, quest.day);
-        bool meets = true;
-        uint8 tier = _questTier(state.streak);
-        if ((quest.stakeMask & QUEST_STAKE_REQUIRE_PRINCIPAL) != 0) {
-            uint256 requiredPrincipal = uint256(_questStakePrincipalTarget(tier)) * MILLION;
-            meets = principal >= requiredPrincipal;
-        }
-        if (meets && (quest.stakeMask & QUEST_STAKE_REQUIRE_DISTANCE) != 0) {
-            uint16 requiredDistance = _questStakeDistanceTarget(tier);
-            meets = distance >= requiredDistance;
-        }
-        if (meets && (quest.stakeMask & QUEST_STAKE_REQUIRE_RISK) != 0) {
-            meets = risk >= quest.stakeRisk;
-        }
-        if (meets) {
-            return _questComplete(state);
-        }
-        return (0, false, quest.questType, state.streak, false);
-    }
-
-    function handleAffiliate(address player, uint256 amount)
-        external
-        onlyCoin
-        returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed)
-    {
-        if (player == address(0) || amount == 0 || activeQuest.day == 0 || activeQuest.questType != QUEST_TYPE_AFFILIATE) {
-            return (0, false, activeQuest.questType, questPlayerState[player].streak, false);
-        }
-        PlayerQuestState storage state = questPlayerState[player];
-        _questSyncState(state, activeQuest.day);
-        uint256 updated = uint256(state.progress) + amount;
-        if (updated > type(uint128).max) updated = type(uint128).max;
-        state.progress = uint128(updated);
-        uint256 target = uint256(_questAffiliateTargetTokens(state.streak)) * MILLION;
-        if (state.progress >= target) {
-            return _questComplete(state);
-        }
-        return (0, false, activeQuest.questType, state.streak, false);
-    }
-
-    function getActiveQuest()
-        external
-        view
-        override
-        returns (uint48 day, uint8 questType, bool highDifficulty, uint8 stakeMask, uint8 stakeRisk)
-    {
-        DailyQuest memory quest = activeQuest;
-        return (quest.day, quest.questType, (quest.flags & QUEST_FLAG_HIGH_DIFFICULTY) != 0, quest.stakeMask, quest.stakeRisk);
-    }
-
-    function playerQuestState(address player)
-        external
-        view
-        override
-        returns (uint32 streak, uint32 lastCompletedDay, uint128 progress, bool completedToday)
-    {
-        PlayerQuestState memory state = questPlayerState[player];
-        streak = state.streak;
-        lastCompletedDay = state.lastCompletedDay;
-        if (state.lastProgressDay == activeQuest.day) {
-            progress = state.progress;
-            completedToday = (state.flags & QUEST_STATE_COMPLETED) != 0;
-        } else {
-            progress = 0;
-            completedToday = false;
-        }
-    }
-
-    // ---------------------------------------------------------------------
-    // Internal helpers
-    // ---------------------------------------------------------------------
-
-    function _questHandleMint(address player, uint32 quantity, bool paidWithEth)
-        private
-        returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed)
-    {
-        DailyQuest memory quest = activeQuest;
-        if (quest.day == 0) {
-            PlayerQuestState storage emptyState = questPlayerState[player];
-            return (0, false, quest.questType, emptyState.streak, false);
-        }
-        PlayerQuestState storage state = questPlayerState[player];
-        _questSyncState(state, quest.day);
-        if (quest.questType == QUEST_TYPE_MINT_ANY || (paidWithEth && quest.questType == QUEST_TYPE_MINT_ETH)) {
-            uint256 updated = uint256(state.progress) + quantity;
-            if (updated > type(uint128).max) updated = type(uint128).max;
-            state.progress = uint128(updated);
-            uint32 target = quest.questType == QUEST_TYPE_MINT_ANY
-                ? _questMintAnyTarget(state.streak)
-                : _questMintEthTarget(state.streak);
-            if (state.progress >= target) {
-                return _questComplete(state);
-            }
-        }
-        return (0, false, quest.questType, state.streak, false);
-    }
-
-    function _questSyncState(PlayerQuestState storage state, uint48 currentDay) private {
-        if (state.lastCompletedDay != 0 && currentDay > uint48(state.lastCompletedDay + 1)) {
-            state.streak = 0;
-        }
-        if (state.lastProgressDay != currentDay) {
-            state.lastProgressDay = uint32(currentDay);
-            state.progress = 0;
-            state.flags = 0;
-        }
-    }
-
-    function _questTier(uint32 streak) private pure returns (uint8) {
-        uint32 tier = streak / 5;
-        if (tier > QUEST_TIER_MAX_INDEX) {
-            tier = QUEST_TIER_MAX_INDEX;
-        }
-        return uint8(tier);
-    }
-
-    function _questMintAnyTarget(uint32 streak) private view returns (uint32) {
-        uint8 tier = _questTier(streak);
-        uint16 maxVal = questMintAnyMax[tier];
-        if (maxVal <= QUEST_MIN_MINT) {
-            return QUEST_MIN_MINT;
-        }
-        uint256 rand = _questRand(QUEST_TYPE_MINT_ANY, tier, 0);
-        return uint32(rand % maxVal) + QUEST_MIN_MINT;
-    }
-
-    function _questMintEthTarget(uint32 streak) private view returns (uint32) {
-        uint8 tier = _questTier(streak);
-        uint16 maxVal = questMintEthMax[tier];
-        if (maxVal <= QUEST_MIN_MINT) {
-            return QUEST_MIN_MINT;
-        }
-        uint256 rand = _questRand(QUEST_TYPE_MINT_ETH, tier, 0);
-        return uint32(rand % maxVal) + QUEST_MIN_MINT;
-    }
-
-    function _questFlipTargetTokens(uint32 streak) private view returns (uint32) {
-        uint8 tier = _questTier(streak);
-        uint16 maxVal = questFlipMax[tier];
-        uint256 range = uint256(maxVal) - QUEST_MIN_TOKEN + 1;
-        uint256 rand = _questRand(QUEST_TYPE_FLIP, tier, 0);
-        return uint32(uint256(QUEST_MIN_TOKEN) + (rand % range));
-    }
-
-    function _questStakePrincipalTarget(uint8 tier) private view returns (uint32) {
-        uint16 maxVal = questStakePrincipalMax[tier];
-        uint256 range = uint256(maxVal) - QUEST_MIN_TOKEN + 1;
-        uint256 rand = _questRand(QUEST_TYPE_STAKE, tier, 1);
-        return uint32(uint256(QUEST_MIN_TOKEN) + (rand % range));
-    }
-
-    function _questStakeDistanceTarget(uint8 tier) private view returns (uint16) {
-        uint16 minVal = questStakeDistanceMin[tier];
-        uint16 maxVal = questStakeDistanceMax[tier];
-        uint256 range = uint256(maxVal) - minVal + 1;
-        uint256 rand = _questRand(QUEST_TYPE_STAKE, tier, 2);
-        return uint16(uint256(minVal) + (rand % range));
-    }
-
-    function _questAffiliateTargetTokens(uint32 streak) private view returns (uint32) {
-        uint8 tier = _questTier(streak);
-        uint16 maxVal = questAffiliateMax[tier];
-        uint256 range = uint256(maxVal) - QUEST_MIN_TOKEN + 1;
-        uint256 rand = _questRand(QUEST_TYPE_AFFILIATE, tier, 0);
-        return uint32(uint256(QUEST_MIN_TOKEN) + (rand % range));
-    }
-
-    function _questRand(uint8 questType, uint8 tier, uint8 salt) private view returns (uint256) {
-        uint256 entropy = activeQuest.entropy;
-        if (entropy == 0) return 0;
-        return uint256(keccak256(abi.encode(entropy, questType, tier, salt)));
-    }
-
-    function _questComplete(PlayerQuestState storage state)
-        private
-        returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed)
-    {
-        if ((state.flags & QUEST_STATE_COMPLETED) != 0) {
-            return (0, false, activeQuest.questType, state.streak, false);
-        }
-        state.flags |= QUEST_STATE_COMPLETED;
-        uint32 newStreak = state.streak + 1;
-        state.streak = newStreak;
-        state.lastCompletedDay = uint32(activeQuest.day);
-
-        uint256 totalReward = 200 * MILLION;
-        if (newStreak >= 5 && (newStreak == 5 || (newStreak % 10) == 0)) {
-            uint256 bonus = uint256(newStreak) * 100;
-            if (bonus > 5000) bonus = 5000;
-            totalReward += bonus * MILLION;
-        }
-        bool isHard = (activeQuest.flags & QUEST_FLAG_HIGH_DIFFICULTY) != 0;
-        if (isHard) {
-            totalReward += 100 * MILLION;
-        }
-        return (totalReward, isHard, activeQuest.questType, newStreak, true);
+    function _currentQuestDay(DailyQuest[QUEST_SLOT_COUNT] memory quests) private pure returns (uint48) {
+        uint48 day0 = quests[0].day;
+        if (day0 != 0) return day0;
+        return quests[1].day;
     }
 }
-
