@@ -83,7 +83,6 @@ contract PurgeGame {
     // -----------------------
     uint48 private constant JACKPOT_RESET_TIME = 82620; // Offset anchor for "daily" windows
     uint32 private constant DEFAULT_PAYOUTS_PER_TX = 420; // Keeps participant payouts safely under ~15M gas
-    uint32 private constant PURCHASE_MINIMUM = 1_500; // Minimum purchases to unlock game start
     uint32 private constant WRITES_BUDGET_SAFE = 800; // Keeps map batching within the ~15M gas budget
     uint32 private constant TRAIT_REBUILD_TOKENS_PER_TX = 4_096; // Max tokens processed per trait rebuild slice
     uint64 private constant MAP_LCG_MULT = 0x5851F42D4C957F2D; // LCG multiplier for map RNG slices
@@ -234,7 +233,6 @@ contract PurgeGame {
     /// @return carry_           Carryover earmarked for next level (wei)
     /// @return prizePoolTarget  Last level's prize pool snapshot (wei)
     /// @return prizePoolCurrent Active prize pool (levelPrizePool when purging)
-    /// @return enoughPurchases  True if purchaseCount >= 1,500
     /// @return earlyPurgePercent_ Ratio of current prize pool vs. prior level prize pool (percent, capped at 255)
     function gameInfo()
         external
@@ -247,7 +245,6 @@ contract PurgeGame {
             uint256 carry_,
             uint256 prizePoolTarget,
             uint256 prizePoolCurrent,
-            bool enoughPurchases,
             uint8 earlyPurgePercent_
         )
     {
@@ -258,7 +255,6 @@ contract PurgeGame {
         carry_ = carryOver;
         prizePoolTarget = lastPrizePool;
         prizePoolCurrent = prizePool;
-        enoughPurchases = nft.purchaseCount() >= PURCHASE_MINIMUM;
         earlyPurgePercent_ = earlyPurgePercent;
     }
 
