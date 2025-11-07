@@ -3,24 +3,8 @@ pragma solidity ^0.8.26;
 
 import {PurgeGameNFT} from "./PurgeGameNFT.sol";
 import {IPurgeGameTrophies, PURGE_TROPHY_KIND_STAKE} from "./PurgeGameTrophies.sol";
-
-interface IPurgeGame {
-    function level() external view returns (uint24);
-    function gameState() external view returns (uint8);
-    function ethMintLevelCount(address player) external view returns (uint24);
-    function ethMintStreakCount(address player) external view returns (uint24);
-    function ethMintLastLevel(address player) external view returns (uint24);
-    function getJackpotWinners(
-        uint256 randomWord,
-        uint8 trait,
-        uint8 numWinners,
-        uint8 salt
-    ) external view returns (address[] memory);
-}
-
-interface IPurgeRenderer {
-    function wireContracts(address game_, address nft_) external;
-}
+import {IPurgeGame} from "./interfaces/IPurgeGame.sol";
+import {IPurgeRenderer} from "./interfaces/IPurgeRenderer.sol";
 
 contract Purgecoin {
     // ---------------------------------------------------------------------

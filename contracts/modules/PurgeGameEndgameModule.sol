@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+import {IPurgeGameTrophies} from "../PurgeGameTrophies.sol";
 import {IPurgeCoinModule, IPurgeGameTrophiesModule} from "./PurgeGameModuleInterfaces.sol";
 
 /**
@@ -199,7 +200,7 @@ contract PurgeGameEndgameModule {
             (, address[6] memory affiliateRecipients) = trophiesContract.processEndLevel{
                 value: deferredWei + affiliateTrophyShare + legacyAffiliateShare
             }(
-                IPurgeGameTrophiesModule.EndLevelRequest({
+                IPurgeGameTrophies.EndLevelRequest({
                     exterminator: pend.exterminator,
                     traitId: lastExterminatedTrait,
                     level: prevLevelPending,
@@ -226,7 +227,7 @@ contract PurgeGameEndgameModule {
             uint256 mapPayoutValue = mapUnit * 4 + affiliateAward;
 
             (address mapRecipient, ) = trophiesContract.processEndLevel{value: mapPayoutValue}(
-                IPurgeGameTrophiesModule.EndLevelRequest({
+                IPurgeGameTrophies.EndLevelRequest({
                     exterminator: topAffiliate,
                     traitId: TRAIT_ID_TIMEOUT,
                     level: prevLevelPending,

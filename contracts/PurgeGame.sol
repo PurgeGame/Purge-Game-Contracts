@@ -5,6 +5,9 @@ import {PurgeTraitUtils} from "./PurgeTraitUtils.sol";
 import {IPurgeGameNFT} from "./PurgeGameNFT.sol";
 import {IPurgeGameTrophies} from "./PurgeGameTrophies.sol";
 import {IPurgeCoinModule, IPurgeGameTrophiesModule} from "./modules/PurgeGameModuleInterfaces.sol";
+import {IPurgeCoin} from "./interfaces/IPurgeCoin.sol";
+import {IPurgeRendererLike} from "./interfaces/IPurgeRendererLike.sol";
+import {IPurgeGameEndgameModule, IPurgeGameJackpotModule} from "./interfaces/IPurgeGameModules.sol";
 
 /**
  * @title Purge Game — Core NFT game contract
@@ -14,77 +17,6 @@ import {IPurgeCoinModule, IPurgeGameTrophiesModule} from "./modules/PurgeGameMod
 // ===========================================================================
 // External Interfaces
 // ===========================================================================
-
-/**
- * @dev Interface to the delegate module handling slow-path endgame settlement.
- */
-interface IPurgeCoin {
-    function bonusCoinflip(address player, uint256 amount, bool rngReady, uint256 luckboxBonus) external;
-    function burnie(uint256 amount) external payable;
-    function burnCoin(address target, uint256 amount) external;
-    function payAffiliate(uint256 amount, bytes32 code, address sender, uint24 lvl) external returns (uint256);
-    function processCoinflipPayouts(
-        uint24 level,
-        uint32 cap,
-        bool bonusFlip,
-        uint256 rngWord,
-        uint48 epoch
-    ) external returns (bool);
-    function coinflipWorkPending(uint24 level) external view returns (bool);
-    function prepareCoinJackpot() external returns (uint256 poolAmount, address biggestFlip);
-    function addToBounty(uint256 amount) external;
-    function lastBiggestFlip() external view returns (address);
-    function runExternalJackpot(
-        uint8 kind,
-        uint256 poolWei,
-        uint32 cap,
-        uint24 lvl,
-        uint256 rngWord
-    ) external returns (bool finished, address[] memory winners, uint256[] memory amounts, uint256 returnAmountWei);
-    function resetAffiliateLeaderboard(uint24 lvl) external;
-    function resetCoinflipLeaderboard() external;
-    function getLeaderboardAddresses(uint8 which) external view returns (address[] memory);
-    function playerLuckbox(address player) external view returns (uint256);
-}
-
-interface IPurgeRendererLike {
-    function setStartingTraitRemaining(uint32[256] calldata values) external;
-}
-
-interface IPurgeGameEndgameModule {
-    function finalizeEndgame(
-        uint24 lvl,
-        uint32 cap,
-        uint48 day,
-        uint256 rngWord,
-        IPurgeCoin coinContract,
-        IPurgeGameTrophies trophiesContract
-    ) external;
-}
-
-interface IPurgeGameJackpotModule {
-    function payDailyJackpot(
-        bool isDaily,
-        uint24 lvl,
-        uint256 randWord,
-        IPurgeCoinModule coinContract,
-        IPurgeGameTrophiesModule trophiesContract
-    ) external;
-
-    function payMapJackpot(
-        uint24 lvl,
-        uint256 rngWord,
-        uint256 effectiveWei,
-        IPurgeCoinModule coinContract,
-        IPurgeGameTrophiesModule trophiesContract
-    ) external returns (bool finished);
-
-    function calcPrizePoolForJackpot(
-        uint24 lvl,
-        uint256 rngWord,
-        IPurgeCoinModule coinContract
-    ) external returns (uint256 effectiveWei);
-}
 
 struct VRFRandomWordsRequest {
     bytes32 keyHash;

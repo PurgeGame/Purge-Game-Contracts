@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-interface IWireContracts {
-    function wireContracts(address game_, address nft_) external;
-}
+import "../interfaces/IPurgeRenderer.sol";
 
 contract MockRegistry {
     mapping(address => mapping(uint8 => string)) private _addressColors;
@@ -93,6 +91,6 @@ contract MockCoin {
     }
 
     function callWire(address renderer, address game, address nft) external {
-        IWireContracts(renderer).wireContracts(game, nft);
+        IPurgeRenderer(renderer).wireContracts(game, nft);
     }
 }

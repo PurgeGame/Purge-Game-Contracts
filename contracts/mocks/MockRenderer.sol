@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-contract MockRenderer {
+import "../interfaces/IPurgeRenderer.sol";
+
+contract MockRenderer is IPurgeRenderer {
     address public game;
     address public nft;
 

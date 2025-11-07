@@ -3,6 +3,8 @@ pragma solidity ^0.8.26;
 
 import {PurgeTraitUtils} from "./PurgeTraitUtils.sol";
 import {IPurgeGameTrophies} from "./PurgeGameTrophies.sol";
+import {IPurgeGame} from "./interfaces/IPurgeGame.sol";
+import {IPurgeCoin} from "./interfaces/IPurgeCoin.sol";
 
 enum TrophyKind {
     Map,
@@ -28,63 +30,6 @@ interface ITokenRenderer {
         uint256 data,
         uint32[4] calldata remaining
     ) external view returns (string memory);
-}
-
-interface IPurgeGame {
-    function getTraitRemainingQuad(
-        uint8[4] calldata traitIds
-    ) external view returns (uint16 lastExterminated, uint24 currentLevel, uint32[4] memory remaining);
-
-    function level() external view returns (uint24);
-
-    function gameState() external view returns (uint8);
-    function currentPhase() external view returns (uint8);
-    function mintPrice() external view returns (uint256);
-    function coinPriceUnit() external view returns (uint256);
-    function getEarlyPurgePercent() external view returns (uint8);
-    function coinMintUnlock(uint24 lvl) external view returns (bool);
-    function ethMintLastDay(address player) external view returns (uint48);
-    function ethMintDayStreak(address player) external view returns (uint24);
-    function coinMintLastDay(address player) external view returns (uint48);
-    function coinMintDayStreak(address player) external view returns (uint24);
-    function mintLastDay(address player) external view returns (uint48);
-    function mintDayStreak(address player) external view returns (uint24);
-    function playerMintData(
-        address player
-    )
-        external
-        view
-        returns (
-            uint24 ethLastLevel,
-            uint24 ethLevelCount,
-            uint24 ethLevelStreak,
-            uint48 ethLastDay,
-            uint24 ethDayStreak,
-            uint48 coinLastDay,
-            uint24 coinDayStreak,
-            uint48 overallLastDay,
-            uint24 overallDayStreak
-        );
-    function enqueueMap(address buyer, uint32 quantity) external;
-    function recordMint(address player, uint24 lvl, bool creditNext, bool coinMint) external payable returns (uint256 coinReward);
-    function ethMintLastLevel(address player) external view returns (uint24);
-    function purchaseMultiplier() external view returns (uint32);
-    function rngLocked() external view returns (bool);
-    function currentRngWord() external view returns (uint256);
-    function isRngFulfilled() external view returns (bool);
-    function releaseRngLock() external;
-}
-
-interface IPurgecoin {
-    function bonusCoinflip(address player, uint256 amount, bool rngReady, uint256 luckboxBonus) external;
-
-    function getLeaderboardAddresses(uint8 which) external view returns (address[] memory);
-
-    function payAffiliate(uint256 amount, bytes32 code, address sender, uint24 lvl) external returns (uint256);
-
-    function burnCoin(address target, uint256 amount) external;
-
-    function playerLuckbox(address player) external view returns (uint256);
 }
 
 interface IPurgeGameNFT {
@@ -133,12 +78,6 @@ contract PurgeGameNFT {
     event Transfer(address indexed from, address indexed to, uint256 indexed tokenId);
     event Approval(address indexed owner, address indexed approved, uint256 indexed tokenId);
     event ApprovalForAll(address indexed owner, address indexed operator, bool approved);
-    struct EndLevelRequest {
-        address exterminator;
-        uint16 traitId;
-        uint24 level;
-        uint256 pool;
-    }
 
     // ---------------------------------------------------------------------
     // ERC721 storage
@@ -181,7 +120,7 @@ contract PurgeGameNFT {
     IPurgeGame private game;
     ITokenRenderer private immutable regularRenderer;
     ITokenRenderer private immutable trophyRenderer;
-    IPurgecoin private immutable coin;
+    IPurgeCoin private immutable coin;
     IPurgeGameTrophies private trophyModule;
 
     uint256 private basePointers; // high 128 bits = previous base token id, low 128 bits = current base token id
@@ -295,7 +234,7 @@ contract PurgeGameNFT {
     constructor(address regularRenderer_, address trophyRenderer_, address coin_) {
         regularRenderer = ITokenRenderer(regularRenderer_);
         trophyRenderer = ITokenRenderer(trophyRenderer_);
-        coin = IPurgecoin(coin_);
+        coin = IPurgeCoin(coin_);
         _currentIndex = 97;
     }
 
