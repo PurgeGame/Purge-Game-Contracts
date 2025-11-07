@@ -18,7 +18,7 @@ interface IPurgeQuestModule {
         external
         returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed);
 
-    function handleFlip(address player, uint256 stakeCredit)
+    function handleFlip(address player, uint256 flipCredit)
         external
         returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed);
 

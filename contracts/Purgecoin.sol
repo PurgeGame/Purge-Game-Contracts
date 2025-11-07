@@ -6,6 +6,7 @@ import {IPurgeGameTrophies, PURGE_TROPHY_KIND_STAKE} from "./PurgeGameTrophies.s
 import {IPurgeGame} from "./interfaces/IPurgeGame.sol";
 import {IPurgeRenderer} from "./interfaces/IPurgeRenderer.sol";
 import {IPurgeQuestModule, QuestInfo} from "./interfaces/IPurgeQuestModule.sol";
+import {IPurgeCoinExternalJackpotModule} from "./interfaces/IPurgeCoinExternalJackpotModule.sol";
 
 contract Purgecoin {
     // ---------------------------------------------------------------------
@@ -14,7 +15,7 @@ contract Purgecoin {
     event Transfer(address indexed from, address indexed to, uint256 amount);
     event Approval(address indexed owner, address indexed spender, uint256 amount);
     event StakeCreated(address indexed player, uint24 targetLevel, uint8 risk, uint256 principal);
-    event CoinflipDeposit(address indexed player, uint256 amountBurned, uint256 rakeAmount, uint256 creditedStake);
+    event CoinflipDeposit(address indexed player, uint256 amountBurned, uint256 rakeAmount, uint256 creditedFlip);
     event DecimatorBurn(address indexed player, uint256 amountBurned, uint256 weightedContribution);
     event Affiliate(uint256 amount, bytes32 indexed code, address sender);
     event CoinflipFinished(bool result);
@@ -178,6 +179,7 @@ contract Purgecoin {
     PurgeGameNFT private purgeGameNFT; // Authorized contract for base NFT operations
     IPurgeGameTrophies private purgeGameTrophies; // Trophy module handle
     IPurgeQuestModule private questModule; // Dedicated quest logic module
+    address private externalJackpotModule; // Delegate module for BAF/Decimator logic
 
     // Session flags
     bool private tbActive; // "tenth player" bonus active
@@ -292,8 +294,8 @@ contract Purgecoin {
 
         _burn(caller, amount);
 
-        uint256 stakeCredit = amount;
-        if (stakeCredit == 0) revert Insufficient();
+        uint256 flipCredit = amount;
+        if (flipCredit == 0) revert Insufficient();
 
         if (prevStake == 0) {
             uint48 epoch = streakEpoch;
@@ -311,25 +313,25 @@ contract Purgecoin {
                 luckyFlipStreak[caller] = streak;
                 lastLuckyStreakEpoch[caller] = epoch;
                 uint256 bonusTotal = _streakExtra(streak);
-                stakeCredit += bonusTotal;
+                flipCredit += bonusTotal;
             }
         }
 
-        addFlip(caller, stakeCredit, true);
+        addFlip(caller, flipCredit, true);
 
         if (!_isBafActive()) {
-            playerLuckbox[caller] = stakeCredit;
+            playerLuckbox[caller] = flipCredit;
         }
 
         if (address(questModule) != address(0)) {
             (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = questModule.handleFlip(
                 caller,
-                stakeCredit
+                flipCredit
             );
             _questApplyReward(caller, reward, hardMode, questType, streak, completed);
         }
 
-        emit CoinflipDeposit(caller, amount, 0, stakeCredit);
+        emit CoinflipDeposit(caller, amount, 0, flipCredit);
     }
 
     /// @notice Burn PURGE during an active Decimator window to accrue weighted participation.
@@ -908,6 +910,14 @@ contract Purgecoin {
         questModule = IPurgeQuestModule(module);
     }
 
+    /// @notice Configure the delegate module that hosts the external jackpot logic.
+    /// @dev Creator only; must be a deployed contract containing the extracted runtime.
+    function setExternalJackpotModule(address module) external {
+        if (msg.sender != creator) revert OnlyDeployer();
+        if (module == address(0)) revert ZeroAddress();
+        externalJackpotModule = module;
+    }
+
     /// @notice Credit the creator's share of gameplay proceeds.
     /// @dev Access: PurgeGame only. Zero amounts are ignored.
     function burnie(uint256 amount) external payable onlyPurgeGameContract {
@@ -1350,341 +1360,25 @@ contract Purgecoin {
         onlyPurgeGameContract
         returns (bool finished, address[] memory winners, uint256[] memory amounts, uint256 returnAmountWei)
     {
-        uint32 batch = (cap == 0) ? BAF_BATCH : cap;
+        address module = externalJackpotModule;
+        if (module == address(0)) revert ZeroAddress();
 
-        uint256 executeWord = rngWord;
-
-        // ----------------------------------------------------------------------
-        // Arm a new external run
-        // ----------------------------------------------------------------------
-        if (!bafState.inProgress) {
-            if (kind > 1) revert InvalidKind();
-
-            bafState.inProgress = true;
-
-            uint32 limit = (kind == 0) ? uint32(_coinflipCount()) : uint32(decPlayersCount[lvl]);
-
-            // Randomize the stride modulo for the 10-way sharded buckets
-            bs.offset = uint8(executeWord % 10);
-            bs.limit = limit;
-            scanCursor = bs.offset;
-
-            // Pool/accounting snapshots
-            bafState.totalPrizePoolWei = uint128(poolWei);
-            bafState.returnAmountWei = 0;
-
-            extVar = 0;
-            extMode = (kind == 0) ? uint8(1) : uint8(2);
-
-            if (kind == 1) {
-                _seedDecBucketState(rngWord);
+        (bool ok, bytes memory ret) = module.delegatecall(
+            abi.encodeWithSelector(
+                IPurgeCoinExternalJackpotModule.runExternalJackpot.selector,
+                kind,
+                poolWei,
+                cap,
+                lvl,
+                rngWord
+            )
+        );
+        if (!ok) {
+            assembly {
+                revert(add(ret, 0x20), mload(ret))
             }
-
-            // ---------------------------
-            // kind == 0 : BAF headline + setup scatter
-            // ---------------------------
-            if (kind == 0) {
-                uint256 P = poolWei;
-                address[6] memory tmpW;
-                uint256[6] memory tmpA;
-                uint256 n;
-                uint256 credited;
-                uint256 toReturn;
-
-                // (1) Largest bettor: 20%
-                {
-                    uint256 prize = (P * 20) / 100;
-                    address w = topBettors[0].player;
-                    if (_eligible(w)) {
-                        tmpW[n] = w;
-                        tmpA[n] = prize;
-                        unchecked {
-                            ++n;
-                        }
-                        credited += prize;
-                    } else {
-                        toReturn += prize;
-                    }
-                }
-                // (2) Random among #3/#4: 10%
-                {
-                    uint256 prize = (P * 10) / 100;
-                    address w = topBettors[2 + (uint256(keccak256(abi.encodePacked(executeWord, "p34"))) & 1)].player;
-                    if (_eligible(w)) {
-                        tmpW[n] = w;
-                        tmpA[n] = prize;
-                        unchecked {
-                            ++n;
-                        }
-                        credited += prize;
-                    } else {
-                        toReturn += prize;
-                    }
-                }
-                // (3) Random eligible: 10%
-                {
-                    uint256 prize = (P * 10) / 100;
-                    address w = _randomEligible(uint256(keccak256(abi.encodePacked(executeWord, "re"))));
-                    if (w != address(0)) {
-                        tmpW[n] = w;
-                        tmpA[n] = prize;
-                        unchecked {
-                            ++n;
-                        }
-                        credited += prize;
-                    } else {
-                        toReturn += prize;
-                    }
-                }
-                // (4) Staked trophy bonuses: 5% / 5% / 2.5% / 2.5%
-                {
-                    uint256[4] memory shares = [(P * 5) / 100, (P * 5) / 100, (P * 25) / 1000, (P * 25) / 1000];
-                    for (uint256 s; s < 4; ) {
-                        uint256 prize = shares[s];
-                        address w = purgeGameTrophies.stakedTrophySample(
-                            uint64(uint256(keccak256(abi.encodePacked(executeWord, s, "st"))))
-                        );
-                        if (w != address(0)) {
-                            tmpW[n] = w;
-                            tmpA[n] = prize;
-                            unchecked {
-                                ++n;
-                            }
-                            credited += prize;
-                        } else {
-                            toReturn += prize;
-                        }
-                        unchecked {
-                            ++s;
-                        }
-                    }
-                }
-
-                // Scatter the remainder equally across shard-stride participants
-                uint256 scatter = (P * 40) / 100;
-                uint256 unallocated = P - credited - toReturn - scatter;
-                if (unallocated != 0) {
-                    toReturn += unallocated;
-                }
-                if (limit >= 10 && bs.offset < limit) {
-                    uint256 occurrences = 1 + (uint256(limit) - 1 - bs.offset) / 10; // count of indices visited
-                    uint256 perWei = scatter / occurrences;
-                    bs.per = uint120(perWei);
-
-                    // Accumulate "toReturn" plus any scatter dust
-                    uint256 rem = toReturn + (scatter - perWei * occurrences);
-                    bafState.returnAmountWei = uint120(rem);
-                } else {
-                    bs.per = 0;
-                    bafState.returnAmountWei = uint120(toReturn + scatter);
-                }
-
-                // Emit headline winners for this step
-                winners = new address[](n);
-                amounts = new uint256[](n);
-                for (uint256 i; i < n; ) {
-                    winners[i] = tmpW[i];
-                    amounts[i] = tmpA[i];
-                    unchecked {
-                        ++i;
-                    }
-                }
-
-                // If nothing to scatter (or empty population), finish immediately
-                if (bs.per == 0 || limit < 10 || bs.offset >= limit) {
-                    uint256 ret = uint256(bafState.returnAmountWei);
-                    delete bafState;
-                    delete bs;
-                    extMode = 0;
-                    extVar = 0;
-                    scanCursor = SS_IDLE;
-                    return (true, winners, amounts, ret);
-                }
-                return (false, winners, amounts, 0);
-            }
-
-            // ---------------------------
-            // kind == 1 : Decimator armed; denom pass first
-            // ---------------------------
-            return (false, new address[](0), new uint256[](0), 0);
         }
-
-        // ----------------------------------------------------------------------
-        // BAF scatter pass (extMode == 1)
-        // ----------------------------------------------------------------------
-        if (extMode == 1) {
-            uint32 end = scanCursor + batch;
-            if (end > bs.limit) end = bs.limit;
-
-            uint256 tmpCap = uint256(batch) / 10 + 2; // rough upper bound on step winners
-            address[] memory tmpWinners = new address[](tmpCap);
-            uint256[] memory tmpAmounts = new uint256[](tmpCap);
-            uint256 n2;
-            uint256 per = uint256(bs.per);
-            uint256 retWei = uint256(bafState.returnAmountWei);
-
-            for (uint32 i = scanCursor; i < end; ) {
-                address p = _playerAt(i);
-                if (_eligible(p)) {
-                    tmpWinners[n2] = p;
-                    tmpAmounts[n2] = per;
-                    unchecked {
-                        ++n2;
-                    }
-                } else {
-                    retWei += per;
-                }
-                unchecked {
-                    i += 10;
-                }
-            }
-            scanCursor = end;
-            bafState.returnAmountWei = uint120(retWei);
-
-            winners = new address[](n2);
-            amounts = new uint256[](n2);
-            for (uint256 k; k < n2; ) {
-                winners[k] = tmpWinners[k];
-                amounts[k] = tmpAmounts[k];
-                unchecked {
-                    ++k;
-                }
-            }
-
-            if (end == bs.limit) {
-                uint256 ret = uint256(bafState.returnAmountWei);
-                delete bafState;
-                delete bs;
-                extMode = 0;
-                extVar = 0;
-                scanCursor = SS_IDLE;
-                return (true, winners, amounts, ret);
-            }
-            return (false, winners, amounts, 0);
-        }
-
-        // ----------------------------------------------------------------------
-        // Decimator denom accumulation (extMode == 2)
-        // ----------------------------------------------------------------------
-        if (extMode == 2) {
-            uint32 end = scanCursor + batch;
-            if (end > bs.limit) end = bs.limit;
-
-            for (uint32 i = scanCursor; i < end; ) {
-                address p = _srcPlayer(1, lvl, i);
-                DecEntry storage e = decBurn[p];
-                if (e.level == lvl && e.burn != 0) {
-                    uint8 bucket = e.bucket;
-                    if (bucket < 2) bucket = 2;
-                    uint32 acc = decBucketAccumulator[bucket];
-                    unchecked {
-                        acc += 1;
-                    }
-                    if (acc >= bucket) {
-                        acc -= bucket;
-                        if (!e.winner) {
-                            e.winner = true;
-                            extVar += e.burn;
-                        }
-                    }
-                    decBucketAccumulator[bucket] = acc;
-                }
-                unchecked {
-                    i += 10;
-                }
-            }
-            scanCursor = end;
-
-            if (end < bs.limit) return (false, new address[](0), new uint256[](0), 0);
-
-            // Nothing eligible -> refund entire pool
-            if (extVar == 0) {
-                uint256 refund = uint256(bafState.totalPrizePoolWei);
-                delete bafState;
-                delete bs;
-                extMode = 0;
-                extVar = 0;
-                scanCursor = SS_IDLE;
-                _resetDecBucketState();
-                return (true, new address[](0), new uint256[](0), refund);
-            }
-
-            // Proceed to payouts
-            extMode = 3;
-            scanCursor = bs.offset;
-            return (false, new address[](0), new uint256[](0), 0);
-        }
-
-        // ----------------------------------------------------------------------
-        // Decimator payouts (extMode == 3)
-        // ----------------------------------------------------------------------
-        {
-            uint32 end = scanCursor + batch;
-            if (end > bs.limit) end = bs.limit;
-
-            uint256 tmpCap = uint256(batch) / 10 + 2;
-            address[] memory tmpWinners = new address[](tmpCap);
-            uint256[] memory tmpAmounts = new uint256[](tmpCap);
-            uint256 n2;
-
-            uint256 pool = uint256(bafState.totalPrizePoolWei);
-            uint256 denom = extVar;
-            uint256 paid = uint256(bafState.returnAmountWei);
-            if (denom == 0) {
-                uint256 refundAll = pool;
-                delete bafState;
-                delete bs;
-                extMode = 0;
-                extVar = 0;
-                scanCursor = SS_IDLE;
-                _resetDecBucketState();
-                return (true, new address[](0), new uint256[](0), refundAll);
-            }
-
-            for (uint32 i = scanCursor; i < end; ) {
-                address p = _srcPlayer(1, lvl, i);
-                DecEntry storage e = decBurn[p];
-                if (e.level == lvl && e.burn != 0 && e.winner) {
-                    uint256 amt = (pool * e.burn) / denom;
-                    if (amt != 0) {
-                        tmpWinners[n2] = p;
-                        tmpAmounts[n2] = amt;
-                        unchecked {
-                            ++n2;
-                            paid += amt;
-                        }
-                    }
-                    e.winner = false;
-                }
-                unchecked {
-                    i += 10;
-                }
-            }
-            scanCursor = end;
-            bafState.returnAmountWei = uint120(paid);
-
-            winners = new address[](n2);
-            amounts = new uint256[](n2);
-            for (uint256 k; k < n2; ) {
-                winners[k] = tmpWinners[k];
-                amounts[k] = tmpAmounts[k];
-                unchecked {
-                    ++k;
-                }
-            }
-
-            if (end == bs.limit) {
-                uint256 ret = pool > paid ? (pool - paid) : 0;
-                delete bafState;
-                delete bs;
-                extMode = 0;
-                extVar = 0;
-                scanCursor = SS_IDLE;
-                _resetDecBucketState();
-                return (true, winners, amounts, ret);
-            }
-            return (false, winners, amounts, 0);
-        }
+        return abi.decode(ret, (bool, address[], uint256[], uint256));
     }
 
     /// @notice Return addresses from a leaderboard.
@@ -1728,33 +1422,6 @@ contract Purgecoin {
         topLen = 0;
     }
 
-    /// @notice Eligibility gate requiring a minimum coinflip stake and a 6-level ETH mint streak.
-    function _eligible(address player) internal view returns (bool) {
-        if (coinflipAmount[player] < 5_000 * MILLION) return false;
-        return purgeGame.ethMintStreakCount(player) >= 6;
-    }
-
-    /// @notice Pick the first eligible player when scanning up to 300 candidates from a pseudo-random start.
-    /// @dev Uses stride 2 for odd N to cover the ring without repeats; stride 1 for even N (contiguous window).
-    function _randomEligible(uint256 seed) internal view returns (address) {
-        uint256 total = _coinflipCount();
-        if (total == 0) return address(0);
-
-        uint256 idx = seed % total;
-        uint256 stride = (total & 1) == 1 ? 2 : 1; // ensures full coverage when total is odd
-        uint256 maxChecks = total < 300 ? total : 300; // cap work
-
-        for (uint256 tries; tries < maxChecks; ) {
-            address p = _playerAt(idx);
-            if (_eligible(p)) return p;
-            unchecked {
-                idx += stride;
-                if (idx >= total) idx -= total;
-                ++tries;
-            }
-        }
-        return address(0);
-    }
     function _coinflipCount() internal view returns (uint256) {
         return uint256(uint128(cfTail) - uint128(cfHead));
     }
@@ -1766,18 +1433,6 @@ contract Purgecoin {
         return cfPlayers[cfHead + idx];
     }
 
-    /// @notice Source player address for a given index in either coinflip or decimator lists.
-    /// @param kind 0 = coinflip roster, 1 = decimator roster for `lvl`.
-    /// @param lvl  Level to read when `kind == 1`.
-    /// @param idx  Global flattened index (0..N-1).
-    function _srcPlayer(uint8 kind, uint24 lvl, uint256 idx) internal view returns (address) {
-        if (kind == 0) {
-            return cfPlayers[cfHead + idx];
-        }
-        uint256 bucketIdx = idx / BUCKET_SIZE;
-        uint256 offsetInBucket = idx - bucketIdx * BUCKET_SIZE;
-        return decBuckets[lvl][uint24(bucketIdx)][offsetInBucket];
-    }
 
     // Append to the queue, reusing storage slots while advancing the ring tail.
     function _pushPlayer(address p) internal {
@@ -1893,23 +1548,6 @@ contract Purgecoin {
         return lvl != 0 && (lvl % 20) == 0;
     }
 
-    function _seedDecBucketState(uint256 entropy) internal {
-        for (uint8 denom = 2; denom <= 20; ) {
-            decBucketAccumulator[denom] = uint32(uint256(keccak256(abi.encodePacked(entropy, denom))) % denom);
-            unchecked {
-                ++denom;
-            }
-        }
-    }
-
-    function _resetDecBucketState() internal {
-        for (uint8 denom = 2; denom <= 20; ) {
-            decBucketAccumulator[denom] = 0;
-            unchecked {
-                ++denom;
-            }
-        }
-    }
 
     function _questApplyReward(
         address player,

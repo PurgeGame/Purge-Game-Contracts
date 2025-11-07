@@ -20,6 +20,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
     uint8 private constant QUEST_STAKE_REQUIRE_DISTANCE = 1 << 1;
     uint8 private constant QUEST_STAKE_REQUIRE_RISK = 1 << 2;
     uint8 private constant QUEST_TIER_MAX_INDEX = 10;
+    uint32 private constant QUEST_TIER_STREAK_SPAN = 7;
     uint8 private constant QUEST_STATE_COMPLETED_SLOT0 = 1 << 0;
     uint8 private constant QUEST_STATE_COMPLETED_SLOTS_MASK = (uint8(1) << QUEST_SLOT_COUNT) - 1;
     uint8 private constant QUEST_STATE_STREAK_CREDITED = 1 << 7;
@@ -241,7 +242,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         return (0, false, matched ? fallbackType : QUEST_TYPE_MINT_ANY, state.streak, false);
     }
 
-    function handleFlip(address player, uint256 stakeCredit)
+    function handleFlip(address player, uint256 flipCredit)
         external
         onlyCoin
         returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed)
@@ -249,7 +250,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         DailyQuest[QUEST_SLOT_COUNT] memory quests = activeQuests;
         uint48 currentDay = _currentQuestDay(quests);
         PlayerQuestState storage state = questPlayerState[player];
-        if (player == address(0) || stakeCredit == 0 || currentDay == 0) {
+        if (player == address(0) || flipCredit == 0 || currentDay == 0) {
             return (0, false, quests[0].questType, state.streak, false);
         }
         _questSyncState(state, currentDay);
@@ -267,7 +268,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
             matched = true;
             fallbackType = quest.questType;
             _questSyncProgress(state, slot, currentDay);
-            uint256 clamped = stakeCredit;
+            uint256 clamped = flipCredit;
             if (clamped > type(uint128).max) clamped = type(uint128).max;
             if (clamped > state.progress[slot]) {
                 state.progress[slot] = uint128(clamped);
@@ -491,7 +492,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
     }
 
     function _questTier(uint32 streak) private pure returns (uint8) {
-        uint32 tier = streak / 5;
+        uint32 tier = streak / QUEST_TIER_STREAK_SPAN;
         if (tier > QUEST_TIER_MAX_INDEX) {
             tier = QUEST_TIER_MAX_INDEX;
         }
@@ -510,6 +511,9 @@ contract PurgeQuestModule is IPurgeQuestModule {
 
     function _questMintEthTarget(uint32 streak, uint256 entropy) private view returns (uint32) {
         uint8 tier = _questTier(streak);
+        if (tier == 0) {
+            return QUEST_MIN_MINT;
+        }
         uint16 maxVal = questMintEthMax[tier];
         if (maxVal <= QUEST_MIN_MINT) {
             return QUEST_MIN_MINT;
@@ -564,8 +568,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
             state.streak = newStreak;
             state.lastCompletedDay = uint32(currentDay);
         }
-        uint256 totalReward = _questTotalReward(state.streak, 0);
-        return (totalReward, false, QUEST_TYPE_MINT_ETH, state.streak, true);
+        return (0, false, QUEST_TYPE_MINT_ETH, state.streak, true);
     }
 
     function _questComplete(
@@ -598,7 +601,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         totalReward = 200 * MILLION;
         if (streak >= 5 && (streak == 5 || (streak % 10) == 0)) {
             uint256 bonus = uint256(streak) * 100;
-            if (bonus > 5000) bonus = 5000;
+            if (bonus > 3000) bonus = 3000;
             totalReward += bonus * MILLION;
         }
         if ((questFlags & QUEST_FLAG_HIGH_DIFFICULTY) != 0) {
@@ -620,12 +623,13 @@ contract PurgeQuestModule is IPurgeQuestModule {
         uint8 mask;
         uint8 risk;
         if (qType == QUEST_TYPE_STAKE) {
-            uint8 first = uint8((entropy >> 16) % 3);
-            uint8 second = uint8((entropy >> 24) % 3);
-            if (second == first) {
-                second = uint8((second + 1) % 3);
+            mask = QUEST_STAKE_REQUIRE_DISTANCE;
+            bool requirePrincipal = ((entropy >> 16) & 1) == 0;
+            if (requirePrincipal) {
+                mask |= QUEST_STAKE_REQUIRE_PRINCIPAL;
+            } else {
+                mask |= QUEST_STAKE_REQUIRE_RISK;
             }
-            mask = (uint8(1) << first) | (uint8(1) << second);
             if ((mask & QUEST_STAKE_REQUIRE_RISK) != 0) {
                 risk = uint8(2 + uint8((entropy >> 40) % 10));
             }
