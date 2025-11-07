@@ -39,7 +39,6 @@ contract Purgecoin {
     error StakeInvalid();
     error ZeroAddress();
     error NotDecimatorWindow();
-    error DecimatorStreak();
     error InvalidRakeback();
 
     // ---------------------------------------------------------------------
@@ -118,8 +117,10 @@ contract Purgecoin {
 
     /// @dev Decimator per-player burn snapshot for a given level
     struct DecEntry {
-        uint232 burn;
+        uint192 burn;
         uint24 level;
+        uint8 bucket;
+        bool winner;
     }
 
     struct AffiliateCodeInfo {
@@ -156,8 +157,6 @@ contract Purgecoin {
     uint256 private constant PRESALE_MAX_ETH_PER_TX = 0.25 ether;
     uint256 private constant AFFILIATE_STREAK_BASE_THRESHOLD = 15 * 1000 * MILLION;
     bytes32 private constant REF_CODE_LOCKED = bytes32(uint256(1));
-    uint24 private constant DEC_INITIAL_STREAK_REQ = 5;
-    uint24 private constant DEC_STREAK_REQ = 10;
 
     // Scan sentinels
     // ---------------------------------------------------------------------
@@ -252,6 +251,7 @@ contract Purgecoin {
     mapping(address => DecEntry) private decBurn;
     mapping(uint24 => mapping(uint24 => address[])) private decBuckets; // level => bucketIdx => players
     mapping(uint24 => uint32) private decPlayersCount;
+    uint32[16] private decBucketAccumulator; // indexed by denominator (2..15)
     // ---------------------------------------------------------------------
     // Modifiers
     // ---------------------------------------------------------------------
@@ -335,39 +335,30 @@ contract Purgecoin {
         if (amount < MIN) revert AmountLTMin();
 
         address caller = msg.sender;
-        uint256 streak = purgeGame.ethMintStreakCount(caller);
-        uint24 minStreak = (lvl <= 25) ? DEC_INITIAL_STREAK_REQ : DEC_STREAK_REQ;
-        if (minStreak != 0 && streak < uint256(minStreak)) revert DecimatorStreak();
-
         _burn(caller, amount);
 
         unchecked {
             dailyCoinBurn += amount;
         }
 
+        uint8 bucket = _decBucketDenominator(purgeGame.ethMintStreakCount(caller));
         DecEntry storage e = decBurn[caller];
-        uint256 total = purgeGame.ethMintLevelCount(caller);
-        uint256 scale = 1;
-        if (streak != 0 && total != 0) {
-            uint256 product = uint256(streak) * uint256(total);
-            uint256 root = _sqrt(product);
-            if (root > 1) scale = root;
-        }
-        if (scale > 60) scale = 60;
-        uint256 weighted = uint256(amount) * scale;
-        if (weighted > type(uint232).max) weighted = type(uint232).max;
 
         if (e.level != lvl) {
             e.level = lvl;
-            e.burn = uint232(weighted);
+            e.burn = 0;
+            e.bucket = bucket;
+            e.winner = false;
             _decPush(lvl, caller);
-        } else {
-            uint256 acc = uint256(e.burn) + weighted;
-            if (acc > type(uint232).max) acc = type(uint232).max;
-            e.burn = uint232(acc);
+        } else if (bucket < e.bucket || e.bucket == 0) {
+            e.bucket = bucket;
         }
 
-        emit DecimatorBurn(caller, amount, weighted);
+        uint256 updated = uint256(e.burn) + amount;
+        if (updated > type(uint192).max) updated = type(uint192).max;
+        e.burn = uint192(updated);
+
+        emit DecimatorBurn(caller, amount, amount);
     }
 
     // Affiliate code management
@@ -1269,6 +1260,10 @@ contract Purgecoin {
             extVar = 0;
             extMode = (kind == 0) ? uint8(1) : uint8(2);
 
+            if (kind == 1) {
+                _seedDecBucketState(rngWord);
+            }
+
             // ---------------------------
             // kind == 0 : BAF headline + setup scatter
             // ---------------------------
@@ -1463,7 +1458,20 @@ contract Purgecoin {
                 address p = _srcPlayer(1, lvl, i);
                 DecEntry storage e = decBurn[p];
                 if (e.level == lvl && e.burn != 0) {
-                    extVar += e.burn;
+                    uint8 bucket = e.bucket;
+                    if (bucket < 2) bucket = 2;
+                    uint32 acc = decBucketAccumulator[bucket];
+                    unchecked {
+                        acc += 1;
+                    }
+                    if (acc >= bucket) {
+                        acc -= bucket;
+                        if (!e.winner) {
+                            e.winner = true;
+                            extVar += e.burn;
+                        }
+                    }
+                    decBucketAccumulator[bucket] = acc;
                 }
                 unchecked {
                     i += 10;
@@ -1481,6 +1489,7 @@ contract Purgecoin {
                 extMode = 0;
                 extVar = 0;
                 scanCursor = SS_IDLE;
+                _resetDecBucketState();
                 return (true, new address[](0), new uint256[](0), refund);
             }
 
@@ -1505,11 +1514,21 @@ contract Purgecoin {
             uint256 pool = uint256(bafState.totalPrizePoolWei);
             uint256 denom = extVar;
             uint256 paid = uint256(bafState.returnAmountWei);
+            if (denom == 0) {
+                uint256 refundAll = pool;
+                delete bafState;
+                delete bs;
+                extMode = 0;
+                extVar = 0;
+                scanCursor = SS_IDLE;
+                _resetDecBucketState();
+                return (true, new address[](0), new uint256[](0), refundAll);
+            }
 
             for (uint32 i = scanCursor; i < end; ) {
                 address p = _srcPlayer(1, lvl, i);
                 DecEntry storage e = decBurn[p];
-                if (e.level == lvl && e.burn != 0) {
+                if (e.level == lvl && e.burn != 0 && e.winner) {
                     uint256 amt = (pool * e.burn) / denom;
                     if (amt != 0) {
                         tmpWinners[n2] = p;
@@ -1519,6 +1538,7 @@ contract Purgecoin {
                             paid += amt;
                         }
                     }
+                    e.winner = false;
                 }
                 unchecked {
                     i += 10;
@@ -1544,6 +1564,7 @@ contract Purgecoin {
                 extMode = 0;
                 extVar = 0;
                 scanCursor = SS_IDLE;
+                _resetDecBucketState();
                 return (true, winners, amounts, ret);
             }
             return (false, winners, amounts, 0);
@@ -1760,6 +1781,45 @@ contract Purgecoin {
         if (bafState.inProgress) return true;
         uint24 lvl = purgeGame.level();
         return lvl != 0 && (lvl % 20) == 0;
+    }
+
+    function _seedDecBucketState(uint256 entropy) internal {
+        for (uint8 denom = 2; denom <= 15; ) {
+            decBucketAccumulator[denom] = uint32(uint256(keccak256(abi.encodePacked(entropy, denom))) % denom);
+            unchecked {
+                ++denom;
+            }
+        }
+    }
+
+    function _resetDecBucketState() internal {
+        for (uint8 denom = 2; denom <= 15; ) {
+            decBucketAccumulator[denom] = 0;
+            unchecked {
+                ++denom;
+            }
+        }
+    }
+
+    function _decBucketDenominator(uint256 streak) internal pure returns (uint8) {
+        if (streak <= 5) {
+            uint256 denom = 15 - streak;
+            if (denom < 2) denom = 2;
+            return uint8(denom);
+        }
+
+        if (streak <= 15) {
+            uint256 offset = streak - 6; // maps 6 -> 0
+            uint256 denom = 9;
+            denom -= offset / 2;
+            if (denom < 2) denom = 2;
+            return uint8(denom);
+        }
+
+        if (streak <= 25) return 5;
+        if (streak <= 35) return 4;
+        if (streak <= 45) return 3;
+        return 2;
     }
 
     /// @notice Check whether the Decimator window is active for the current level.
