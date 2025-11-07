@@ -5,6 +5,7 @@ import {PurgeGameNFT} from "./PurgeGameNFT.sol";
 import {IPurgeGameTrophies, PURGE_TROPHY_KIND_STAKE} from "./PurgeGameTrophies.sol";
 import {IPurgeGame} from "./interfaces/IPurgeGame.sol";
 import {IPurgeRenderer} from "./interfaces/IPurgeRenderer.sol";
+import {IPurgeQuestModule} from "./interfaces/IPurgeQuestModule.sol";
 
 contract Purgecoin {
     // ---------------------------------------------------------------------
@@ -21,6 +22,8 @@ contract Purgecoin {
     event BountyOwed(address indexed to, uint256 bountyAmount, uint256 newRecordFlip);
     event BountyPaid(address indexed to, uint256 amount);
     event FlipNuked(address indexed player, uint32 streak, uint256 amount);
+    event DailyQuestRolled(uint48 indexed day, uint8 questType, bool highDifficulty, uint8 stakeMask, uint8 stakeRisk);
+    event QuestCompleted(address indexed player, uint8 questType, uint32 streak, uint256 reward, bool hardMode);
 
     // ---------------------------------------------------------------------
     // Errors
@@ -155,7 +158,6 @@ contract Purgecoin {
     uint256 private constant PRESALE_END_PRICE = 0.000018 ether;
     uint256 private constant PRESALE_PRICE_SLOPE = (PRESALE_END_PRICE - PRESALE_START_PRICE) / PRESALE_SUPPLY_TOKENS;
     uint256 private constant PRESALE_MAX_ETH_PER_TX = 0.25 ether;
-    uint256 private constant AFFILIATE_STREAK_BASE_THRESHOLD = 15 * 1000 * MILLION;
     bytes32 private constant REF_CODE_LOCKED = bytes32(uint256(1));
     uint24 private constant DECIMATOR_SPECIAL_LEVEL = 100;
 
@@ -175,6 +177,7 @@ contract Purgecoin {
     IPurgeGame private purgeGame; // PurgeGame contract handle (set once)
     PurgeGameNFT private purgeGameNFT; // Authorized contract for base NFT operations
     IPurgeGameTrophies private purgeGameTrophies; // Trophy module handle
+    IPurgeQuestModule private questModule; // Dedicated quest logic module
 
     // Session flags
     bool private tbActive; // "tenth player" bonus active
@@ -214,8 +217,6 @@ contract Purgecoin {
     mapping(address => bytes32) private playerReferralCode;
     mapping(address => uint256) public playerLuckbox;
     PlayerScore[8] public affiliateLeaderboard;
-    mapping(address => uint64) private affiliateDailyStreakPacked;
-    mapping(address => uint128) private affiliateDailyBasePacked;
 
     // Staking
     mapping(uint24 => address[]) private stakeAddr; // level => stakers
@@ -318,6 +319,14 @@ contract Purgecoin {
 
         if (!_isBafActive()) {
             playerLuckbox[caller] = stakeCredit;
+        }
+
+        if (address(questModule) != address(0)) {
+            (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = questModule.handleFlip(
+                caller,
+                stakeCredit
+            );
+            _questApplyReward(caller, reward, hardMode, questType, streak, completed);
         }
 
         emit CoinflipDeposit(caller, amount, 0, stakeCredit);
@@ -642,6 +651,16 @@ contract Purgecoin {
         }
 
         emit StakeCreated(sender, targetLevel, risk, principalRounded);
+
+        if (address(questModule) != address(0)) {
+            (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = questModule.handleStake(
+                sender,
+                principalRounded,
+                distance,
+                risk
+            );
+            _questApplyReward(sender, reward, hardMode, questType, streak, completed);
+        }
     }
 
     /// @notice Return the recorded referrer for `player` (zero address if none).
@@ -695,7 +714,6 @@ contract Purgecoin {
         }
         uint8 rakebackPct = info.rakeback;
 
-        uint256 baseAmountForThreshold = amount;
         uint256 baseAmount = amount;
         if (lvl % 25 == 1) {
             baseAmount += (amount * 60) / 100;
@@ -716,14 +734,18 @@ contract Purgecoin {
             if (affiliateShare != 0) {
                 uint256 newTotal = earned[affiliateAddr] + affiliateShare;
                 uint256 totalFlipAward = affiliateShare;
-                uint256 streakBase = (baseAmountForThreshold * uint256(100 - rakebackPct)) / 100;
-                uint256 streakBonus = _updateAffiliateDailyStreak(affiliateAddr, streakBase);
-                if (streakBonus != 0) {
-                    newTotal += streakBonus;
-                    totalFlipAward += streakBonus;
-                }
                 earned[affiliateAddr] = newTotal;
                 addFlip(affiliateAddr, totalFlipAward, false);
+                if (address(questModule) != address(0)) {
+                    (
+                        uint256 reward,
+                        bool hardMode,
+                        uint8 questType,
+                        uint32 streak,
+                        bool completed
+                    ) = questModule.handleAffiliate(affiliateAddr, affiliateShare);
+                    _questApplyReward(affiliateAddr, reward, hardMode, questType, streak, completed);
+                }
 
                 _updatePlayerScore(1, affiliateAddr, newTotal);
             }
@@ -745,6 +767,16 @@ contract Purgecoin {
                     uplineTotal += bonus;
                     earned[upline] = uplineTotal;
                     addFlip(upline, bonus, false);
+                    if (address(questModule) != address(0)) {
+                        (
+                            uint256 reward,
+                            bool hardMode,
+                            uint8 questType,
+                            uint32 streak,
+                            bool completed
+                        ) = questModule.handleAffiliate(upline, bonus);
+                        _questApplyReward(upline, reward, hardMode, questType, streak, completed);
+                    }
                     _updatePlayerScore(1, upline, uplineTotal);
                 }
             }
@@ -869,6 +901,13 @@ contract Purgecoin {
         purgeGameTrophies.wireAndPrime(game_, address(this), 1);
     }
 
+    /// @notice Configure the quest module responsible for daily quest state.
+    /// @dev Creator only; module may be updated if logic is upgraded.
+    function setQuestModule(address module) external {
+        if (msg.sender != creator) revert OnlyDeployer();
+        questModule = IPurgeQuestModule(module);
+    }
+
     /// @notice Credit the creator's share of gameplay proceeds.
     /// @dev Access: PurgeGame only. Zero amounts are ignored.
     function burnie(uint256 amount) external payable onlyPurgeGameContract {
@@ -904,6 +943,58 @@ contract Purgecoin {
             playerLuckbox[player] = newLuck;
         }
     }
+
+    // ---------------------------------------------------------------------
+    // Daily quest wiring (delegated to quest module)
+    // ---------------------------------------------------------------------
+
+    function rollDailyQuest(uint48 day, uint256 entropy) external onlyPurgeGameContract {
+        IPurgeQuestModule module = questModule;
+        if (address(module) == address(0)) return;
+        (bool rolled, uint8 questType, bool highDifficulty, uint8 stakeMask, uint8 stakeRisk) = module.rollDailyQuest(
+            day,
+            entropy
+        );
+        if (rolled) {
+            emit DailyQuestRolled(day, questType, highDifficulty, stakeMask, stakeRisk);
+        }
+    }
+
+    function notifyQuestMint(address player, uint32 quantity, bool paidWithEth) external onlyGameplayContracts {
+        IPurgeQuestModule module = questModule;
+        if (address(module) == address(0) || player == address(0) || quantity == 0) return;
+        (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleMint(
+            player,
+            quantity,
+            paidWithEth
+        );
+        _questApplyReward(player, reward, hardMode, questType, streak, completed);
+    }
+
+    function getActiveQuest()
+        external
+        view
+        returns (uint48 day, uint8 questType, bool highDifficulty, uint8 stakeMask, uint8 stakeRisk)
+    {
+        IPurgeQuestModule module = questModule;
+        if (address(module) == address(0)) {
+            return (0, 0, false, 0, 0);
+        }
+        return module.getActiveQuest();
+    }
+
+    function playerQuestState(address player)
+        external
+        view
+        returns (uint32 streak, uint32 lastCompletedDay, uint128 progress, bool completedToday)
+    {
+        IPurgeQuestModule module = questModule;
+        if (address(module) == address(0)) {
+            return (0, 0, 0, false);
+        }
+        return module.playerQuestState(player);
+    }
+
 
     /// @notice Burn PURGE from `target` during gameplay flows (purchases, fees).
     /// @dev Access: PurgeGame, NFT, or trophy module only. OZ ERC20 `_burn` reverts on zero address or insufficient balance.
@@ -1591,12 +1682,6 @@ contract Purgecoin {
         }
     }
 
-    function affiliateDailyStreak(address affiliate) external view returns (uint32 lastDay, uint32 streak) {
-        uint64 packed = affiliateDailyStreakPacked[affiliate];
-        lastDay = uint32(packed >> 32);
-        streak = uint32(packed);
-    }
-
     function resetCoinflipLeaderboard() external onlyPurgeGameContract {
         uint8 len = topLen;
         for (uint8 k; k < len; ) {
@@ -1795,6 +1880,19 @@ contract Purgecoin {
         }
     }
 
+    function _questApplyReward(
+        address player,
+        uint256 reward,
+        bool hardMode,
+        uint8 questType,
+        uint32 streak,
+        bool completed
+    ) private {
+        if (!completed || reward == 0 || player == address(0)) return;
+        _mint(player, reward);
+        emit QuestCompleted(player, questType, streak, reward, hardMode);
+    }
+
     function _decBucketDenominator(uint256 streak) internal pure returns (uint8) {
         if (streak <= 5) {
             return uint8(15 - streak);
@@ -1848,59 +1946,6 @@ contract Purgecoin {
         decBuckets[lvl][bucket].push(p);
         unchecked {
             decPlayersCount[lvl] = idx + 1;
-        }
-    }
-
-    /// @notice Track consecutive days a direct affiliate has been paid and return the daily streak bonus (if any).
-    function _updateAffiliateDailyStreak(address affiliate, uint256 baseAmount) private returns (uint256 bonus) {
-        if (affiliate == address(0) || affiliate == address(1)) return 0;
-
-        uint32 currentDay = uint32(block.timestamp / 1 days);
-
-        // Track raw base-amount accrual for the current day (before bonuses)
-        uint128 basePacked = affiliateDailyBasePacked[affiliate];
-        uint32 baseDay = uint32(basePacked >> 96);
-        uint96 baseTotal = uint96(basePacked);
-        if (baseDay != currentDay) {
-            baseDay = currentDay;
-            baseTotal = 0;
-        }
-        if (baseAmount != 0) {
-            uint256 updated = uint256(baseTotal) + baseAmount;
-            if (updated > type(uint96).max) updated = type(uint96).max;
-            baseTotal = uint96(updated);
-        }
-        affiliateDailyBasePacked[affiliate] = (uint128(baseDay) << 96) | uint128(baseTotal);
-
-        if (baseTotal < AFFILIATE_STREAK_BASE_THRESHOLD) {
-            return 0;
-        }
-
-        uint64 packed = affiliateDailyStreakPacked[affiliate];
-        uint32 lastDay = uint32(packed >> 32);
-        uint32 streak = uint32(packed);
-        if (lastDay == currentDay) {
-            return 0;
-        }
-
-        if (lastDay != 0 && currentDay == lastDay + 1) {
-            if (streak != type(uint32).max) {
-                unchecked {
-                    ++streak;
-                }
-            }
-        } else {
-            streak = 1;
-        }
-
-        affiliateDailyStreakPacked[affiliate] = (uint64(currentDay) << 32) | uint64(streak);
-
-        if (streak >= 2) {
-            uint256 bonusDays = streak - 1;
-            if (bonusDays > 40) bonusDays = 40;
-            bonus = bonusDays * 50 * MILLION;
-        } else {
-            bonus = 0;
         }
     }
 

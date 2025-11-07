@@ -37,6 +37,8 @@ interface IPurgeCoinModule {
     function resetAffiliateLeaderboard(uint24 lvl) external;
 
     function burnie(uint256 amount) external payable;
+
+    function rollDailyQuest(uint48 day, uint256 entropy) external;
 }
 
 interface IPurgeGameTrophiesModule {

@@ -146,6 +146,10 @@ contract PurgeGameJackpotModule {
 
             coinContract.resetCoinflipLeaderboard();
 
+            uint48 questDay = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
+            uint256 questEntropy = uint256(keccak256(abi.encode(entropyWord, targetLevel, jackpotCounter, "daily-quest")));
+            coinContract.rollDailyQuest(questDay, questEntropy);
+
             if (dailyPaidEth != 0) {
                 uint256 carryAfter = carryoverForNextLevel;
                 carryoverForNextLevel = dailyPaidEth > carryAfter ? 0 : carryAfter - dailyPaidEth;

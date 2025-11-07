@@ -340,7 +340,7 @@ contract PurgeGameNFT {
         if (payInCoin) {
             if (msg.value != 0) revert E();
             if (!game.coinMintUnlock(currentLevel)) revert NotTimeYet();
-            _coinReceive(buyer, quantity * priceCoinUnit, targetLevel, bonusCoinReward);
+            _coinReceive(buyer, uint32(quantity), quantity * priceCoinUnit, targetLevel, bonusCoinReward);
         } else {
             uint8 phase = game.currentPhase();
             bool creditNext = (state == 3 || state == 1);
@@ -398,7 +398,7 @@ contract PurgeGameNFT {
         if (payInCoin) {
             if (msg.value != 0) revert E();
             if (!game.coinMintUnlock(lvl)) revert NotTimeYet();
-            _coinReceive(buyer, coinCost - mapRebate, lvl, mapBonus);
+            _coinReceive(buyer, uint32(quantity), coinCost - mapRebate, lvl, mapBonus);
         } else {
             bool creditNext = (state == 3 || state == 1);
             bonus = _processEthPurchase(
@@ -452,12 +452,13 @@ contract PurgeGameNFT {
 
         if (msg.value != expectedWei) revert E();
 
-        uint256 streakBonus = game.recordMint{value: expectedWei}(
-            payer,
-            lvl,
-            creditNextPool,
-            false
-        );
+        uint32 mintedQuantity = mapPurchase ? uint32(scaledQty / 25) : uint32(scaledQty / 100);
+
+        uint256 streakBonus = game.recordMint{value: expectedWei}(payer, lvl, creditNextPool, false);
+
+        if (mintedQuantity != 0) {
+            coin.notifyQuestMint(payer, mintedQuantity, true);
+        }
 
         uint256 priceUnit = game.coinPriceUnit();
         uint256 affiliateAmount = (scaledQty * priceUnit * 15) / 100;
@@ -483,13 +484,16 @@ contract PurgeGameNFT {
         }
     }
 
-    function _coinReceive(address payer, uint256 amount, uint24 lvl, uint256 discount) private {
+    function _coinReceive(address payer, uint32 quantity, uint256 amount, uint24 lvl, uint256 discount) private {
         uint8 stepMod = uint8(lvl % 20);
         if (stepMod == 13) amount = (amount * 3) / 2;
         else if (stepMod == 18) amount = (amount * 9) / 10;
         if (discount != 0) amount -= discount;
         coin.burnCoin(payer, amount);
         game.recordMint(payer, lvl, false, true);
+        if (quantity != 0) {
+            coin.notifyQuestMint(payer, quantity, false);
+        }
     }
 
     function _recordPurchase(address buyer, uint32 quantity) private {

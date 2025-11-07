@@ -42,5 +42,17 @@ interface IPurgeCoin {
 
     function playerLuckbox(address player) external view returns (uint256);
 
-    function affiliateDailyStreak(address affiliate) external view returns (uint32 lastDay, uint32 streak);
+    function rollDailyQuest(uint48 day, uint256 entropy) external;
+
+    function notifyQuestMint(address player, uint32 quantity, bool paidWithEth) external;
+
+    function getActiveQuest()
+        external
+        view
+        returns (uint48 day, uint8 questType, bool highDifficulty, uint8 stakeMask, uint8 stakeRisk);
+
+    function playerQuestState(address player)
+        external
+        view
+        returns (uint32 streak, uint32 lastCompletedDay, uint128 progress, bool completedToday);
 }

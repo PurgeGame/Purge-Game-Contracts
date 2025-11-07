@@ -879,46 +879,13 @@ contract PurgeGame {
         uint256 data;
 
         if (coinMint) {
-            uint24 prevAggStreak = uint24((prevData >> AGG_DAY_STREAK_SHIFT) & MINT_MASK_20);
             data = _applyMintDay(prevData, day, COIN_DAY_SHIFT, MINT_MASK_32, COIN_DAY_STREAK_SHIFT, MINT_MASK_20);
-
-            uint24 aggStreak = uint24((data >> AGG_DAY_STREAK_SHIFT) & MINT_MASK_20);
-            if (aggStreak > prevAggStreak) {
-                uint256 dailyBonus = _dailyStreakBonus(aggStreak);
-                if (dailyBonus != 0) {
-                    unchecked {
-                        coinReward += dailyBonus;
-                    }
-                }
-            }
         } else {
             uint24 prevLevel = uint24((prevData >> ETH_LAST_LEVEL_SHIFT) & MINT_MASK_24);
             uint24 total = uint24((prevData >> ETH_LEVEL_COUNT_SHIFT) & MINT_MASK_24);
             uint24 streak = uint24((prevData >> ETH_LEVEL_STREAK_SHIFT) & MINT_MASK_24);
-            uint24 prevAggStreak = uint24((prevData >> AGG_DAY_STREAK_SHIFT) & MINT_MASK_20);
-            uint24 prevEthDayStreak = uint24((prevData >> ETH_DAY_STREAK_SHIFT) & MINT_MASK_20);
 
             data = _applyMintDay(prevData, day, ETH_DAY_SHIFT, MINT_MASK_32, ETH_DAY_STREAK_SHIFT, MINT_MASK_20);
-
-            uint24 aggStreak = uint24((data >> AGG_DAY_STREAK_SHIFT) & MINT_MASK_20);
-            if (aggStreak > prevAggStreak) {
-                uint256 dailyBonus = _dailyStreakBonus(aggStreak);
-                if (dailyBonus != 0) {
-                    unchecked {
-                        coinReward += dailyBonus;
-                    }
-                }
-            }
-
-            uint24 ethDayStreak = uint24((data >> ETH_DAY_STREAK_SHIFT) & MINT_MASK_20);
-            if (ethDayStreak > prevEthDayStreak) {
-                uint256 ethDailyBonus = _dailyStreakBonus(ethDayStreak);
-                if (ethDailyBonus != 0) {
-                    unchecked {
-                        coinReward += ethDailyBonus;
-                    }
-                }
-            }
 
             if (prevLevel == lvl) {
                 if (data != prevData) {
@@ -1037,13 +1004,6 @@ contract PurgeGame {
 
     function _setPacked(uint256 data, uint256 shift, uint256 mask, uint256 value) private pure returns (uint256) {
         return (data & ~(mask << shift)) | ((value & mask) << shift);
-    }
-
-    function _dailyStreakBonus(uint256 streak) private pure returns (uint256) {
-        if (streak < 2) return 0;
-        uint256 bonus = 50 + (streak - 2) * 10;
-        if (bonus > 320) bonus = 320;
-        return bonus * COIN_BASE_UNIT;
     }
 
     // --- Shared jackpot helpers ----------------------------------------------------------------------
