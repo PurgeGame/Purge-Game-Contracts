@@ -196,7 +196,6 @@ contract Purgecoin {
     uint32 private payoutIndex;
 
     // Daily jackpot accounting
-    uint256 private dailyCoinBurn;
     uint256 private currentTenthPlayerBonusPool;
 
     // Coinflip roster stored as a reusable ring buffer.
@@ -321,10 +320,6 @@ contract Purgecoin {
             playerLuckbox[caller] = stakeCredit;
         }
 
-        unchecked {
-            dailyCoinBurn += amount;
-        }
-
         emit CoinflipDeposit(caller, amount, 0, stakeCredit);
     }
 
@@ -337,10 +332,6 @@ contract Purgecoin {
 
         address caller = msg.sender;
         _burn(caller, amount);
-
-        unchecked {
-            dailyCoinBurn += amount;
-        }
 
         bool specialDec = (lvl == DECIMATOR_SPECIAL_LEVEL);
         uint8 bucket = specialDec
@@ -401,7 +392,6 @@ contract Purgecoin {
         if (code == bytes32(0)) return address(0);
         return affiliateCode[code].owner;
     }
-
 
     // Stake with encoded risk window
     function _encodeStakeLane(uint256 principalRounded, uint8 risk) private pure returns (uint256) {
@@ -511,8 +501,7 @@ contract Purgecoin {
         uint72 principal = cand.principal;
 
         if (award && candLevel == level && player != address(0) && principal != 0) {
-            uint256 dataWord =
-                (uint256(0xFFFF) << 152) |
+            uint256 dataWord = (uint256(0xFFFF) << 152) |
                 (uint256(level) << TROPHY_BASE_LEVEL_SHIFT) |
                 TROPHY_FLAG_STAKE;
             purgeGameTrophies.awardTrophy(player, level, PURGE_TROPHY_KIND_STAKE, dataWord, 0);
@@ -628,9 +617,7 @@ contract Purgecoin {
         }
 
         if (currLevel == 1 && stakeGameState == 1) {
-            boostedPrincipal = distance >= 10
-                ? (boostedPrincipal * 3) / 2
-                : (boostedPrincipal * 6) / 5;
+            boostedPrincipal = distance >= 10 ? (boostedPrincipal * 3) / 2 : (boostedPrincipal * 6) / 5;
         }
 
         uint8 stakeTrophyBoost = purgeGameTrophies.stakeTrophyBonus(sender);
@@ -674,11 +661,12 @@ contract Purgecoin {
     ///   is diverted to the buyer as flip credit.
     /// - Their upline (if any and already active this level) receives a 20% bonus coinflip credit of the same
     ///   (post-doubling) amount.
-    function payAffiliate(uint256 amount, bytes32 code, address sender, uint24 lvl)
-        external
-        onlyGameplayContracts
-        returns (uint256 playerRakeback)
-    {
+    function payAffiliate(
+        uint256 amount,
+        bytes32 code,
+        address sender,
+        uint24 lvl
+    ) external onlyGameplayContracts returns (uint256 playerRakeback) {
         bytes32 storedCode = playerReferralCode[sender];
         if (storedCode == REF_CODE_LOCKED) return 0;
 
@@ -946,7 +934,11 @@ contract Purgecoin {
             if (currentEpoch == 0) currentEpoch = 1;
             streakEpoch = currentEpoch;
             nukeStream = word;
-            if (bonusActive && ((word & 1) == 0)) {unchecked { ++word;}}
+            if (bonusActive && ((word & 1) == 0)) {
+                unchecked {
+                    ++word;
+                }
+            }
         }
         // --- Step sizing (bounded work) ----------------------------------------------------
 
@@ -1151,16 +1143,14 @@ contract Purgecoin {
         return false;
     }
 
-    function prepareCoinJackpot() external onlyPurgeGameContract returns (uint256 poolAmount, address biggestFlip) {
-        uint256 burnBase = dailyCoinBurn;
-        uint256 pool = (burnBase * 60) / 100;
-        uint256 minPool = 10_000 * MILLION;
-        if (pool < minPool) pool = minPool;
-
-        poolAmount = pool;
+    function prepareCoinJackpot()
+        external
+        view
+        onlyPurgeGameContract
+        returns (uint256 poolAmount, address biggestFlip)
+    {
+        poolAmount = 10_000 * MILLION;
         biggestFlip = topBettors[0].player;
-
-        dailyCoinBurn = 0;
     }
 
     function addToBounty(uint256 amount) external onlyPurgeGameContract {
@@ -1409,7 +1399,7 @@ contract Purgecoin {
             uint256[] memory tmpAmounts = new uint256[](tmpCap);
             uint256 n2;
             uint256 per = uint256(bs.per);
-                uint256 retWei = uint256(bafState.returnAmountWei);
+            uint256 retWei = uint256(bafState.returnAmountWei);
 
             for (uint32 i = scanCursor; i < end; ) {
                 address p = _playerAt(i);
@@ -1807,23 +1797,20 @@ contract Purgecoin {
 
     function _decBucketDenominator(uint256 streak) internal pure returns (uint8) {
         if (streak <= 5) {
-            uint256 denom = 15 - streak;
-            if (denom < 2) denom = 2;
-            return uint8(denom);
+            return uint8(15 - streak);
         }
 
         if (streak <= 15) {
-            uint256 offset = streak - 6; // maps 6 -> 0
-            uint256 denom = 9;
-            denom -= offset / 2;
-            if (denom < 2) denom = 2;
+            uint256 denom = 9 - ((streak - 6) / 2);
+            if (denom < 4) denom = 4;
             return uint8(denom);
         }
 
-        if (streak <= 25) return 5;
-        if (streak <= 35) return 4;
-        if (streak <= 45) return 3;
-        return 2;
+        if (streak <= 25) {
+            return 5;
+        }
+
+        return 4;
     }
 
     function _decBucketDenominatorFromLevels(uint256 levels) internal pure returns (uint8) {

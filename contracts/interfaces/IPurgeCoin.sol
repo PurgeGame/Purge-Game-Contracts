@@ -20,7 +20,7 @@ interface IPurgeCoin {
 
     function coinflipWorkPending(uint24 level) external view returns (bool);
 
-    function prepareCoinJackpot() external returns (uint256 poolAmount, address biggestFlip);
+    function prepareCoinJackpot() external view returns (uint256 poolAmount, address biggestFlip);
 
     function addToBounty(uint256 amount) external;
 
