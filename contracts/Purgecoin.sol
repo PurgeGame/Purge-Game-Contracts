@@ -157,6 +157,7 @@ contract Purgecoin {
     uint256 private constant PRESALE_MAX_ETH_PER_TX = 0.25 ether;
     uint256 private constant AFFILIATE_STREAK_BASE_THRESHOLD = 15 * 1000 * MILLION;
     bytes32 private constant REF_CODE_LOCKED = bytes32(uint256(1));
+    uint24 private constant DECIMATOR_SPECIAL_LEVEL = 100;
 
     // Scan sentinels
     // ---------------------------------------------------------------------
@@ -251,7 +252,7 @@ contract Purgecoin {
     mapping(address => DecEntry) private decBurn;
     mapping(uint24 => mapping(uint24 => address[])) private decBuckets; // level => bucketIdx => players
     mapping(uint24 => uint32) private decPlayersCount;
-    uint32[16] private decBucketAccumulator; // indexed by denominator (2..15)
+    uint32[32] private decBucketAccumulator; // index by denominator (2..31)
     // ---------------------------------------------------------------------
     // Modifiers
     // ---------------------------------------------------------------------
@@ -341,7 +342,10 @@ contract Purgecoin {
             dailyCoinBurn += amount;
         }
 
-        uint8 bucket = _decBucketDenominator(purgeGame.ethMintStreakCount(caller));
+        bool specialDec = (lvl == DECIMATOR_SPECIAL_LEVEL);
+        uint8 bucket = specialDec
+            ? _decBucketDenominatorFromLevels(purgeGame.ethMintLevelCount(caller))
+            : _decBucketDenominator(purgeGame.ethMintStreakCount(caller));
         DecEntry storage e = decBurn[caller];
 
         if (e.level != lvl) {
@@ -1784,7 +1788,7 @@ contract Purgecoin {
     }
 
     function _seedDecBucketState(uint256 entropy) internal {
-        for (uint8 denom = 2; denom <= 15; ) {
+        for (uint8 denom = 2; denom <= 20; ) {
             decBucketAccumulator[denom] = uint32(uint256(keccak256(abi.encodePacked(entropy, denom))) % denom);
             unchecked {
                 ++denom;
@@ -1793,7 +1797,7 @@ contract Purgecoin {
     }
 
     function _resetDecBucketState() internal {
-        for (uint8 denom = 2; denom <= 15; ) {
+        for (uint8 denom = 2; denom <= 20; ) {
             decBucketAccumulator[denom] = 0;
             unchecked {
                 ++denom;
@@ -1822,12 +1826,30 @@ contract Purgecoin {
         return 2;
     }
 
+    function _decBucketDenominatorFromLevels(uint256 levels) internal pure returns (uint8) {
+        if (levels >= 100) return 2;
+        if (levels >= 90) return 3;
+        if (levels >= 80) return 4;
+
+        uint256 reductions = levels / 5;
+        uint256 denom = 20;
+        if (reductions >= 20) {
+            denom = 2;
+        } else {
+            denom -= reductions;
+            if (denom < 4) denom = 4; // should only hit for >=80 but guard anyway
+        }
+        return uint8(denom);
+    }
+
     /// @notice Check whether the Decimator window is active for the current level.
     /// @return on  True if level >= 25 and `level % 10 == 5` (Decimator checkpoint).
     /// @return lvl Current game level.
     function _decWindow() internal view returns (bool on, uint24 lvl) {
         lvl = purgeGame.level();
-        on = (lvl >= 25 && (lvl % 10) == 5 && (lvl % 100) != 95);
+        bool standard = (lvl >= 25 && (lvl % 10) == 5 && (lvl % 100) != 95);
+        bool special = (lvl == DECIMATOR_SPECIAL_LEVEL);
+        on = standard || special;
     }
 
     /// @notice Append a player to the Decimator roster for a given level.

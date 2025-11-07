@@ -40,6 +40,8 @@ contract PurgeGameEndgameModule {
     uint256 private prizePool;
     uint256 private nextPrizePool;
     uint256 private carryOver;
+    uint256 private decimatorHundredPool;
+    bool private decimatorHundredReady;
 
     // -----------------------
     // Time / Session Tracking
@@ -143,12 +145,30 @@ contract PurgeGameEndgameModule {
             bool decWindow = prevLevel >= 25 && prevMod10 == 5 && prevMod100 != 95;
             if (prevLevel != 0 && (prevLevel % 20) == 0) {
                 uint256 bafPoolWei = (carryOver * 24) / 100;
-                (bool bafFinished, ) = _progressExternal(0, bafPoolWei, cap, prevLevel, rngWord, coinContract);
+                (bool bafFinished, ) = _progressExternal(0, bafPoolWei, cap, prevLevel, rngWord, coinContract, true);
                 if (!bafFinished) return;
             }
-            if (decWindow) {
+            bool bigDecWindow = decimatorHundredReady && prevLevel == 100;
+            if (bigDecWindow) {
+                uint256 bigPool = decimatorHundredPool;
+                (bool decFinished, uint256 returnWei) = _progressExternal(
+                    1,
+                    bigPool,
+                    cap,
+                    prevLevel,
+                    rngWord,
+                    coinContract,
+                    false
+                );
+                if (!decFinished) return;
+                decimatorHundredPool = 0;
+                decimatorHundredReady = false;
+                if (returnWei != 0) {
+                    carryOver += returnWei;
+                }
+            } else if (decWindow) {
                 uint256 decPoolWei = (carryOver * 15) / 100;
-                (bool decFinished, ) = _progressExternal(1, decPoolWei, cap, prevLevel, rngWord, coinContract);
+                (bool decFinished, ) = _progressExternal(1, decPoolWei, cap, prevLevel, rngWord, coinContract, true);
                 if (!decFinished) return;
             }
 
@@ -291,7 +311,8 @@ contract PurgeGameEndgameModule {
         uint32 cap,
         uint24 lvl,
         uint256 rngWord,
-        IPurgeCoinModule coinContract
+        IPurgeCoinModule coinContract,
+        bool consumeCarry
     ) private returns (bool finished, uint256 returnedWei) {
         (bool isFinished, address[] memory winnersArr, uint256[] memory amountsArr, uint256 returnWei) = coinContract
             .runExternalJackpot(kind, poolWei, cap, lvl, rngWord);
@@ -304,8 +325,10 @@ contract PurgeGameEndgameModule {
         }
 
         if (isFinished) {
-            carryOver -= (poolWei - returnWei);
             returnedWei = returnWei;
+            if (consumeCarry && poolWei != 0) {
+                carryOver -= (poolWei - returnWei);
+            }
         }
         return (isFinished, returnedWei);
     }

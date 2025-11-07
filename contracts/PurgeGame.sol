@@ -123,6 +123,8 @@ contract PurgeGame {
     uint256 private prizePool; // Live ETH pool for current level
     uint256 private nextPrizePool; // ETH collected during purge for upcoming level
     uint256 private carryOver; // Carryover amount reserved for the next level (wei)
+    uint256 private decimatorHundredPool; // Locked carryover reserved for the level 100 Decimator
+    bool private decimatorHundredReady; // True once the level 100 Decimator pool has been funded
 
     // -----------------------
     // Time / Session Tracking
@@ -802,6 +804,12 @@ contract PurgeGame {
         unchecked {
             levelSnapshot++;
             level++;
+        }
+
+        if (level == 100 && !decimatorHundredReady) {
+            decimatorHundredPool = carryOver;
+            carryOver = 0;
+            decimatorHundredReady = true;
         }
 
         traitRebuildCursor = 0;
