@@ -84,7 +84,7 @@ contract PurgeGame {
     uint48 private constant JACKPOT_RESET_TIME = 82620; // Offset anchor for "daily" windows
     uint32 private constant DEFAULT_PAYOUTS_PER_TX = 420; // Keeps participant payouts safely under ~15M gas
     uint32 private constant WRITES_BUDGET_SAFE = 800; // Keeps map batching within the ~15M gas budget
-    uint32 private constant TRAIT_REBUILD_TOKENS_PER_TX = 4_096; // Max tokens processed per trait rebuild slice
+    uint32 private constant TRAIT_REBUILD_TOKENS_PER_TX = 1800; // Max tokens processed per trait rebuild slice
     uint64 private constant MAP_LCG_MULT = 0x5851F42D4C957F2D; // LCG multiplier for map RNG slices
     uint8 private constant JACKPOTS_PER_DAY = 5;
     uint8 private constant JACKPOT_LEVEL_CAP = 10;
@@ -309,59 +309,6 @@ contract PurgeGame {
         return uint24((mintPacked_[player] >> ETH_LEVEL_STREAK_SHIFT) & MINT_MASK_24);
     }
 
-    function ethMintLastDay(address player) external view returns (uint48) {
-        return uint48((mintPacked_[player] >> ETH_DAY_SHIFT) & MINT_MASK_32);
-    }
-
-    function ethMintDayStreak(address player) external view returns (uint24) {
-        return uint24((mintPacked_[player] >> ETH_DAY_STREAK_SHIFT) & MINT_MASK_20);
-    }
-
-    function coinMintLastDay(address player) external view returns (uint48) {
-        return uint48((mintPacked_[player] >> COIN_DAY_SHIFT) & MINT_MASK_32);
-    }
-
-    function coinMintDayStreak(address player) external view returns (uint24) {
-        return uint24((mintPacked_[player] >> COIN_DAY_STREAK_SHIFT) & MINT_MASK_20);
-    }
-
-    function mintLastDay(address player) external view returns (uint48) {
-        return uint48((mintPacked_[player] >> AGG_DAY_SHIFT) & MINT_MASK_32);
-    }
-
-    function mintDayStreak(address player) external view returns (uint24) {
-        return uint24((mintPacked_[player] >> AGG_DAY_STREAK_SHIFT) & MINT_MASK_20);
-    }
-
-    function playerMintData(
-        address player
-    )
-        external
-        view
-        returns (
-            uint24 ethLastLevel,
-            uint24 ethLevelCount,
-            uint24 ethLevelStreak,
-            uint48 ethLastDay,
-            uint24 ethDayStreak,
-            uint48 coinLastDay,
-            uint24 coinDayStreak,
-            uint48 overallLastDay,
-            uint24 overallDayStreak
-        )
-    {
-        uint256 packed = mintPacked_[player];
-        ethLastLevel = uint24((packed >> ETH_LAST_LEVEL_SHIFT) & MINT_MASK_24);
-        ethLevelCount = uint24((packed >> ETH_LEVEL_COUNT_SHIFT) & MINT_MASK_24);
-        ethLevelStreak = uint24((packed >> ETH_LEVEL_STREAK_SHIFT) & MINT_MASK_24);
-        ethLastDay = uint48((packed >> ETH_DAY_SHIFT) & MINT_MASK_32);
-        ethDayStreak = uint24((packed >> ETH_DAY_STREAK_SHIFT) & MINT_MASK_20);
-        coinLastDay = uint48((packed >> COIN_DAY_SHIFT) & MINT_MASK_32);
-        coinDayStreak = uint24((packed >> COIN_DAY_STREAK_SHIFT) & MINT_MASK_20);
-        overallLastDay = uint48((packed >> AGG_DAY_SHIFT) & MINT_MASK_32);
-        overallDayStreak = uint24((packed >> AGG_DAY_STREAK_SHIFT) & MINT_MASK_20);
-    }
-
     function recordMint(
         address player,
         uint24 lvl,
@@ -415,7 +362,7 @@ contract PurgeGame {
             if (cap == 0) {
                 uint256 mintData = mintPacked_[caller];
                 uint32 lastEthDay = uint32((mintData >> ETH_DAY_SHIFT) & MINT_MASK_32);
-                if (lastEthDay < minAllowedDay || lastEthDay > currentDay) revert MustMintToday();
+                if (lastEthDay < minAllowedDay || (lastEthDay > currentDay && cap == 0)) revert MustMintToday();
             }
             uint256 rngWord = rngAndTimeGate(day);
             if (rngWord == 1) {
@@ -557,9 +504,10 @@ contract PurgeGame {
                         ++i;
                     }
                 }
+
                 if (!keepGoing || gameState != 3) break;
                 dailyIdx = day;
-
+                _unlockRng();
                 break;
             }
 

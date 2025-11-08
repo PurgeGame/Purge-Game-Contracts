@@ -20,40 +20,11 @@ interface IPurgeGame {
 
     function coinMintUnlock(uint24 lvl) external view returns (bool);
 
-    function ethMintLastDay(address player) external view returns (uint48);
-
-    function ethMintDayStreak(address player) external view returns (uint24);
-
-    function coinMintLastDay(address player) external view returns (uint48);
-
-    function coinMintDayStreak(address player) external view returns (uint24);
-
-    function mintLastDay(address player) external view returns (uint48);
-
-    function mintDayStreak(address player) external view returns (uint24);
-
     function ethMintLevelCount(address player) external view returns (uint24);
 
     function ethMintStreakCount(address player) external view returns (uint24);
 
     function ethMintLastLevel(address player) external view returns (uint24);
-
-    function playerMintData(
-        address player
-    )
-        external
-        view
-        returns (
-            uint24 ethLastLevel,
-            uint24 ethLevelCount,
-            uint24 ethLevelStreak,
-            uint48 ethLastDay,
-            uint24 ethDayStreak,
-            uint48 coinLastDay,
-            uint24 coinDayStreak,
-            uint48 overallLastDay,
-            uint24 overallDayStreak
-        );
 
     function enqueueMap(address buyer, uint32 quantity) external;
 
