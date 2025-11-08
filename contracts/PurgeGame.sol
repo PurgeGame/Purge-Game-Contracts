@@ -293,11 +293,6 @@ contract PurgeGame {
         return rngFulfilled;
     }
 
-    function releaseRngLock() external {
-        if (msg.sender != address(nft)) revert E();
-        _unlockRng();
-    }
-
     function coinMintUnlock(uint24 lvl) external view returns (bool) {
         return lvl < 5 || earlyPurgePercent >= EARLY_PURGE_UNLOCK_PERCENT;
     }
@@ -535,7 +530,7 @@ contract PurgeGame {
                 traitRebuildCursor = 0;
                 airdropMultiplier = 1;
                 gameState = 3;
-
+                _unlockRng();
                 break;
             }
 
@@ -564,7 +559,7 @@ contract PurgeGame {
                 }
                 if (!keepGoing || gameState != 3) break;
                 dailyIdx = day;
-                _unlockRng();
+
                 break;
             }
 
@@ -579,7 +574,7 @@ contract PurgeGame {
 
         emit Advance(_gameState, _phase);
 
-        if (_gameState != 0 && cap == 0) coinContract.bonusCoinflip(caller, priceCoin, rngReady, 0);
+        if (_gameState != 0 && cap == 0) coinContract.bonusCoinflip(caller, priceCoin, false, 0);
     }
 
     // --- Purchases: schedule NFT mints (traits precomputed) ----------------------------------------

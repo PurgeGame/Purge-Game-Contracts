@@ -344,15 +344,7 @@ contract PurgeGameNFT {
         } else {
             uint8 phase = game.currentPhase();
             bool creditNext = (state == 3 || state == 1);
-            bonus = _processEthPurchase(
-                buyer,
-                quantity * 100,
-                affiliateCode,
-                quantity,
-                targetLevel,
-                false,
-                creditNext
-            );
+            bonus = _processEthPurchase(buyer, quantity * 100, affiliateCode, quantity, targetLevel, false, creditNext);
             if (phase == 3 && (targetLevel % 100) > 90) {
                 bonus += (quantity * priceCoinUnit) / 5;
             }
@@ -960,12 +952,7 @@ contract PurgeGameNFT {
     function finalizePurchasePhase(uint32 minted) external onlyGame {
         _setSeasonMintedSnapshot(minted);
         uint256 baseTokenId = _currentBaseTokenId();
-        if (minted != 0) {
-            uint256 endTokenId = baseTokenId + uint256(minted);
-            _dormantCursor.push(baseTokenId);
-            _dormantEnd.push(endTokenId);
-            _processDormant(0);
-        }
+
         uint256 startId = baseTokenId + uint256(minted);
         _nextBaseTokenIdHint = ((startId + 99) / 100) * 100 + 1;
         _purchaseCount = 0;
@@ -977,7 +964,6 @@ contract PurgeGameNFT {
         } else {
             _mintQueueStartOffset = 0;
         }
-        game.releaseRngLock();
     }
 
     function purge(address owner, uint256[] calldata tokenIds) external onlyGame {

@@ -739,13 +739,8 @@ contract Purgecoin {
                 earned[affiliateAddr] = newTotal;
                 addFlip(affiliateAddr, totalFlipAward, false);
                 if (address(questModule) != address(0)) {
-                    (
-                        uint256 reward,
-                        bool hardMode,
-                        uint8 questType,
-                        uint32 streak,
-                        bool completed
-                    ) = questModule.handleAffiliate(affiliateAddr, affiliateShare);
+                    (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = questModule
+                        .handleAffiliate(affiliateAddr, affiliateShare);
                     _questApplyReward(affiliateAddr, reward, hardMode, questType, streak, completed);
                 }
 
@@ -770,13 +765,8 @@ contract Purgecoin {
                     earned[upline] = uplineTotal;
                     addFlip(upline, bonus, false);
                     if (address(questModule) != address(0)) {
-                        (
-                            uint256 reward,
-                            bool hardMode,
-                            uint8 questType,
-                            uint32 streak,
-                            bool completed
-                        ) = questModule.handleAffiliate(upline, bonus);
+                        (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = questModule
+                            .handleAffiliate(upline, bonus);
                         _questApplyReward(upline, reward, hardMode, questType, streak, completed);
                     }
                     _updatePlayerScore(1, upline, uplineTotal);
@@ -1007,11 +997,9 @@ contract Purgecoin {
         return module.getActiveQuests();
     }
 
-    function playerQuestState(address player)
-        external
-        view
-        returns (uint32 streak, uint32 lastCompletedDay, uint128 progress, bool completedToday)
-    {
+    function playerQuestState(
+        address player
+    ) external view returns (uint32 streak, uint32 lastCompletedDay, uint128 progress, bool completedToday) {
         IPurgeQuestModule module = questModule;
         if (address(module) == address(0)) {
             return (0, 0, 0, false);
@@ -1019,15 +1007,12 @@ contract Purgecoin {
         return module.playerQuestState(player);
     }
 
-    function playerQuestStates(address player)
+    function playerQuestStates(
+        address player
+    )
         external
         view
-        returns (
-            uint32 streak,
-            uint32 lastCompletedDay,
-            uint128[2] memory progress,
-            bool[2] memory completed
-        )
+        returns (uint32 streak, uint32 lastCompletedDay, uint128[2] memory progress, bool[2] memory completed)
     {
         IPurgeQuestModule module = questModule;
         if (address(module) == address(0)) {
@@ -1035,7 +1020,6 @@ contract Purgecoin {
         }
         return module.playerQuestStates(player);
     }
-
 
     /// @notice Burn PURGE from `target` during gameplay flows (purchases, fees).
     /// @dev Access: PurgeGame, NFT, or trophy module only. OZ ERC20 `_burn` reverts on zero address or insufficient balance.
@@ -1433,7 +1417,6 @@ contract Purgecoin {
         return cfPlayers[cfHead + idx];
     }
 
-
     // Append to the queue, reusing storage slots while advancing the ring tail.
     function _pushPlayer(address p) internal {
         uint256 pos = uint256(cfTail);
@@ -1547,7 +1530,6 @@ contract Purgecoin {
         uint24 lvl = purgeGame.level();
         return lvl != 0 && (lvl % 20) == 0;
     }
-
 
     function _questApplyReward(
         address player,
