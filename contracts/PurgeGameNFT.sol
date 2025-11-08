@@ -42,10 +42,6 @@ interface IPurgeGameNFT {
     function finalizePurchasePhase(uint32 minted) external;
     function purge(address owner, uint256[] calldata tokenIds) external;
     function currentBaseTokenId() external view returns (uint256);
-    function recordSeasonMinted(uint256 minted) external;
-    function currentRngWord() external view returns (uint256);
-    function rngLocked() external view returns (bool);
-    function isRngFulfilled() external view returns (bool);
     function processPendingMints(uint32 playersToProcess) external returns (bool finished);
     function tokensOwed(address player) external view returns (uint32);
     function processDormant(uint32 maxCount) external returns (bool finished, bool worked);
@@ -928,25 +924,9 @@ contract PurgeGameNFT {
     // VRF / RNG
     // ---------------------------------------------------------------------
 
-    function rngLocked() external view returns (bool) {
-        return game.rngLocked();
-    }
-
-    function currentRngWord() external view returns (uint256) {
-        return game.currentRngWord();
-    }
-
-    function isRngFulfilled() external view returns (bool) {
-        return game.isRngFulfilled();
-    }
-
     function _setSeasonMintedSnapshot(uint256 minted) private {
         seasonMintedSnapshot = minted;
         seasonPurgedCount = 0;
-    }
-
-    function recordSeasonMinted(uint256 minted) external onlyGame {
-        _setSeasonMintedSnapshot(minted);
     }
 
     function finalizePurchasePhase(uint32 minted) external onlyGame {

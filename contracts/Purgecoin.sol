@@ -286,7 +286,7 @@ contract Purgecoin {
     /// @notice Burn PURGE to increase the caller’s coinflip stake, applying streak bonuses when eligible.
     /// @param amount Amount (6 decimals) to burn; must satisfy the global minimum.
     function depositCoinflip(uint256 amount) external {
-        if (purgeGameNFT.rngLocked()) revert BettingPaused();
+        if (purgeGame.rngLocked()) revert BettingPaused();
         if (amount < MIN) revert AmountLTMin();
 
         address caller = msg.sender;
@@ -535,7 +535,7 @@ contract Purgecoin {
     /// - Enforces no overlap/collision with caller's existing stakes.
     function stake(uint256 burnAmt, uint24 targetLevel, uint8 risk) external {
         if (burnAmt < 250 * MILLION) revert AmountLTMin();
-        if (purgeGameNFT.rngLocked()) revert BettingPaused();
+        if (purgeGame.rngLocked()) revert BettingPaused();
         address sender = msg.sender;
         uint24 currLevel = purgeGame.level();
         if (targetLevel < currLevel) revert StakeInvalid();

@@ -14,8 +14,6 @@ interface IPurgeGameNftModule {
     function decrementTrophySupply(uint256 amount) external;
     function gameAddress() external view returns (address);
     function coinAddress() external view returns (address);
-    function rngLocked() external view returns (bool);
-    function currentRngWord() external view returns (uint256);
 }
 
 uint8 constant PURGE_TROPHY_KIND_MAP = 0;
@@ -82,6 +80,8 @@ interface IPurgeGameTrophies {
 interface IPurgeGameMinimal {
     function level() external view returns (uint24);
     function gameState() external view returns (uint8);
+    function rngLocked() external view returns (bool);
+    function currentRngWord() external view returns (uint256);
 }
 
 interface IPurgecoinMinimal {
@@ -900,7 +900,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             return (address(0), affiliateRecipients);
         }
         bool traitWin = req.traitId != TRAIT_ID_TIMEOUT;
-        uint256 randomWord = nft.currentRngWord();
+        uint256 randomWord = game.currentRngWord();
 
         if (traitWin) {
             affiliateRecipients = _processTraitWin(req, nextLevel, levelTokenId, affiliateTokenId, randomWord);
@@ -1052,7 +1052,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         uint32 last = ctx.lastClaim;
         if (last < floor) last = floor;
         if (ctx.currentLevel > last) {
-            if (nft.rngLocked()) revert CoinPaused();
+            if (game.rngLocked()) revert CoinPaused();
             uint32 from = last + 1;
             uint32 offsetStart = from - start;
             uint32 offsetEnd = ctx.currentLevel - start;
@@ -1244,7 +1244,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     // ---------------------------------------------------------------------
 
     function setTrophyStake(uint256 tokenId, bool stake) external override {
-        if (nft.rngLocked()) revert CoinPaused();
+        if (game.rngLocked()) revert CoinPaused();
 
         address sender = msg.sender;
         if (address(uint160(nft.packedOwnershipOf(tokenId))) != sender) revert Unauthorized();
