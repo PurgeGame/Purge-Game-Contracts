@@ -367,7 +367,12 @@ contract PurgeGame {
         overallDayStreak = uint24((packed >> AGG_DAY_STREAK_SHIFT) & MINT_MASK_20);
     }
 
-    function recordMint(address player, uint24 lvl, bool creditNext, bool coinMint) external payable returns (uint256 coinReward) {
+    function recordMint(
+        address player,
+        uint24 lvl,
+        bool creditNext,
+        bool coinMint
+    ) external payable returns (uint256 coinReward) {
         if (msg.sender != address(nft)) revert E();
         if (coinMint) {
             if (creditNext || msg.value != 0) revert E();
@@ -461,13 +466,14 @@ contract PurgeGame {
                         if (!batchesFinished) break;
                         batchesPending = false;
                     }
-
-                    endDayJackpot(lvl, day, rngWord);
+                    payDailyJackpot(false, lvl, rngWord);
 
                     if (advanceToAirdrop && !batchesPending) {
                         airdropMultiplier = _calculateAirdropMultiplier(nft.purchaseCount());
                         phase = 3;
                     }
+                    dailyIdx = day;
+                    _unlockRng();
 
                     break;
                 }
@@ -542,9 +548,7 @@ contract PurgeGame {
                     break;
                 }
 
-                uint8 remaining = jackpotCounter >= JACKPOT_LEVEL_CAP
-                    ? 0
-                    : uint8(JACKPOT_LEVEL_CAP - jackpotCounter);
+                uint8 remaining = jackpotCounter >= JACKPOT_LEVEL_CAP ? 0 : uint8(JACKPOT_LEVEL_CAP - jackpotCounter);
                 uint8 toPay = remaining > JACKPOTS_PER_DAY ? JACKPOTS_PER_DAY : remaining;
 
                 bool keepGoing = true;
@@ -1164,14 +1168,6 @@ contract PurgeGame {
         return airdropIndex >= total;
     }
 
-    function endDayJackpot(uint24 lvl, uint48 day, uint256 rngWord) private {
-        payDailyJackpot(false, lvl, rngWord);
-        dailyIdx = day;
-        if (rngLockedFlag) {
-            _unlockRng();
-        }
-    }
-
     function _requestRng() private {
         uint256 id = vrfCoordinator.requestRandomWords(
             VRFRandomWordsRequest({
@@ -1213,7 +1209,6 @@ contract PurgeGame {
         } catch {
             revert E();
         }
-
         (uint96 bal, , , , ) = vrfCoordinator.getSubscription(vrfSubscriptionId);
         uint16 mult = _tierMultPermille(uint256(bal));
         if (mult == 0) return;
@@ -1260,10 +1255,7 @@ contract PurgeGame {
         uint8 trait1 = _deriveTrait(uint64(rand >> 64)) | 64;
         uint8 trait2 = _deriveTrait(uint64(rand >> 128)) | 128;
         uint8 trait3 = _deriveTrait(uint64(rand >> 192)) | 192;
-        packed = uint32(trait0) |
-            (uint32(trait1) << 8) |
-            (uint32(trait2) << 16) |
-            (uint32(trait3) << 24);
+        packed = uint32(trait0) | (uint32(trait1) << 8) | (uint32(trait2) << 16) | (uint32(trait3) << 24);
     }
 
     function _seedTraitCounts() private {
