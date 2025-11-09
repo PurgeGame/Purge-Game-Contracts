@@ -362,7 +362,7 @@ contract PurgeGame {
             if (cap == 0) {
                 uint256 mintData = mintPacked_[caller];
                 uint32 lastEthDay = uint32((mintData >> ETH_DAY_SHIFT) & MINT_MASK_32);
-                if (lastEthDay < minAllowedDay || (lastEthDay > currentDay && cap == 0)) revert MustMintToday();
+                if ((lastEthDay < minAllowedDay || ((lastEthDay > currentDay) && cap == 0))) revert MustMintToday();
             }
             uint256 rngWord = rngAndTimeGate(day);
             if (rngWord == 1) {
