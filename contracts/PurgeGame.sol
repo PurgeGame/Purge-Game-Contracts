@@ -346,19 +346,13 @@ contract PurgeGame {
         uint8 modTwenty = uint8(lvl % 20);
         uint8 _gameState = gameState;
         uint8 _phase = phase;
-        bool rngReady = true;
+
         uint48 day = uint48((ts - JACKPOT_RESET_TIME) / 1 days);
         uint48 gateIdx = dailyIdx;
         uint32 currentDay = uint32(day);
         uint32 minAllowedDay = gateIdx == 0 ? currentDay : uint32(gateIdx);
 
         do {
-            if (_gameState == 1) {
-                (, bool dormantWorked) = nft.processDormant(cap);
-                if (dormantWorked) {
-                    break;
-                }
-            }
             if (cap == 0) {
                 uint256 mintData = mintPacked_[caller];
                 uint32 lastEthDay = uint32((mintData >> ETH_DAY_SHIFT) & MINT_MASK_32);
@@ -366,11 +360,14 @@ contract PurgeGame {
             }
             uint256 rngWord = rngAndTimeGate(day);
             if (rngWord == 1) {
-                rngReady = false;
-                break;
+                revert RngNotReady();
             }
             // --- State 1 - Pregame ---
             if (_gameState == 1) {
+                (, bool dormantWorked) = nft.processDormant(cap);
+                if (dormantWorked) {
+                    break;
+                }
                 _runEndgameModule(lvl, cap, day, rngWord); // handles payouts, wipes, endgame dist, and jackpots
                 if (gameState == 2 && pendingEndLevel.level == 0 && rngLockedFlag) {
                     dailyIdx = day;
