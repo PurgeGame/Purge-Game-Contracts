@@ -615,7 +615,7 @@ contract Purgecoin {
         // Base credit and compounded boost factors
         uint256 cappedDist = distance > 200 ? 200 : distance;
         uint256 levelBps = 100 + cappedDist;
-        uint256 riskBps = 25 * uint256(risk - 1);
+        uint256 riskBps = 12 * uint256(risk - 1);
         uint256 stepBps = levelBps + riskBps; // per-level growth in bps
 
         // Compounded growth applied to the full burned amount
