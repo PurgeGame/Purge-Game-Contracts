@@ -360,7 +360,7 @@ contract PurgeGame {
             }
             uint256 rngWord = rngAndTimeGate(day);
             if (rngWord == 1) {
-                revert RngNotReady();
+                break;
             }
             // --- State 1 - Pregame ---
             if (_gameState == 1) {
