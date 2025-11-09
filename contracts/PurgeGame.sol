@@ -491,7 +491,9 @@ contract PurgeGame {
                 }
 
                 uint8 remaining = jackpotCounter >= JACKPOT_LEVEL_CAP ? 0 : uint8(JACKPOT_LEVEL_CAP - jackpotCounter);
-                uint8 toPay = remaining > JACKPOTS_PER_DAY ? JACKPOTS_PER_DAY : remaining;
+                bool mapOnlyLevel = (lvl % 20) == 16; // Non map-only levels should only run one jackpot per day
+                uint8 perDayCap = mapOnlyLevel ? JACKPOTS_PER_DAY : 1;
+                uint8 toPay = remaining > perDayCap ? perDayCap : remaining;
 
                 bool keepGoing = true;
                 for (uint8 i; i < toPay; ) {
@@ -504,7 +506,6 @@ contract PurgeGame {
                         ++i;
                     }
                 }
-
                 if (!keepGoing || gameState != 3) break;
                 dailyIdx = day;
                 _unlockRng();
