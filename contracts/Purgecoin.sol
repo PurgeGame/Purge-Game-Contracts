@@ -196,7 +196,7 @@ contract Purgecoin {
     uint256 private tbPrize; // prize per tenth player
 
     // Scan cursors / progress
-    uint24 private stakeLevelComplete = 1;
+    uint24 private stakeLevelComplete;
     uint32 private scanCursor = SS_IDLE;
     uint32 private payoutIndex;
 
@@ -1065,84 +1065,97 @@ contract Purgecoin {
         if (!win) stepPayout <<= 2; // 4x work on losses to clear backlog faster
         // --- Phase 1: stake propagation (only processed on wins) --------
         if (payoutIndex == 0 && stakeLevelComplete < level) {
-            uint32 st = scanCursor;
-            if (st == SS_IDLE) {
-                st = 0;
-                scanCursor = 0;
-                if (stakeTrophyCandidate.level != level) {
-                    delete stakeTrophyCandidate;
+            uint24 settleLevel = level - 1;
+            if (settleLevel == 0) {
+                scanCursor = SS_DONE;
+                stakeLevelComplete = level;
+            } else {
+                uint32 st = scanCursor;
+                if (st == SS_IDLE) {
+                    st = 0;
+                    scanCursor = 0;
+                    if (stakeTrophyCandidate.level != settleLevel) {
+                        delete stakeTrophyCandidate;
+                    }
                 }
-            }
 
-            if (st != SS_DONE) {
-                // If loss: mark complete; no propagation.
-                if (!win) {
-                    scanCursor = SS_DONE;
-                    stakeLevelComplete = level;
-                    _finalizeStakeTrophy(level, false);
-                } else {
-                    // Win: process stakers at this level in slices.
-                    address[] storage roster = stakeAddr[level];
-                    uint32 len = uint32(roster.length);
-                    if (st < len) {
-                        uint32 en = st + stepStake;
-                        if (en > len) en = len;
+                if (st != SS_DONE) {
+                    // If loss: mark complete; no propagation.
+                    if (!win) {
+                        scanCursor = SS_DONE;
+                        stakeLevelComplete = level;
+                        _finalizeStakeTrophy(settleLevel, false);
+                    } else {
+                        // Win: process stakers at this level in slices.
+                        address[] storage roster = stakeAddr[settleLevel];
+                        uint32 len = uint32(roster.length);
+                        if (len == 0) {
+                            scanCursor = SS_DONE;
+                            stakeLevelComplete = level;
+                            _finalizeStakeTrophy(settleLevel, false);
+                            return false;
+                        }
+                        if (st < len) {
+                            uint32 en = st + stepStake;
+                            if (en > len) en = len;
 
-                        for (uint32 i = st; i < en; ) {
-                            address player = roster[i];
-                            uint256 enc = stakeAmt[level][player];
-                            for (uint8 li; li < STAKE_MAX_LANES; ) {
-                                uint256 lane = _laneAt(enc, li);
-                                if (lane == 0) break;
+                            for (uint32 i = st; i < en; ) {
+                                address player = roster[i];
+                                uint256 enc = stakeAmt[settleLevel][player];
+                                for (uint8 li; li < STAKE_MAX_LANES; ) {
+                                    uint256 lane = _laneAt(enc, li);
+                                    if (lane == 0) break;
 
-                                uint256 principalRounded = (lane & STAKE_LANE_PRINCIPAL_MASK) * STAKE_PRINCIPAL_FACTOR;
-                                uint8 riskFactor = uint8((lane & STAKE_LANE_RISK_MASK) >> STAKE_LANE_RISK_SHIFT);
+                                    uint256 principalRounded = (lane & STAKE_LANE_PRINCIPAL_MASK) *
+                                        STAKE_PRINCIPAL_FACTOR;
+                                    uint8 riskFactor = uint8((lane & STAKE_LANE_RISK_MASK) >> STAKE_LANE_RISK_SHIFT);
 
-                                if (riskFactor <= 1) {
-                                    _recordStakeTrophyCandidate(level, player, principalRounded);
-                                    if (principalRounded != 0) {
-                                        uint256 luck = playerLuckbox[player] + principalRounded;
-                                        playerLuckbox[player] = luck;
-                                        addFlip(player, principalRounded, false);
-                                    }
-                                } else {
-                                    uint24 nextL = level + 1;
-                                    uint8 newRf = riskFactor - 1;
-                                    uint256 units = (lane & STAKE_LANE_PRINCIPAL_MASK) << 1; // double principal units
-                                    if (units > STAKE_LANE_PRINCIPAL_MASK) units = STAKE_LANE_PRINCIPAL_MASK;
-                                    uint256 laneValue = (units & STAKE_LANE_PRINCIPAL_MASK) |
-                                        (uint256(newRf) << STAKE_LANE_RISK_SHIFT);
-                                    uint256 nextEnc = stakeAmt[nextL][player];
-                                    if (nextEnc == 0) {
-                                        stakeAmt[nextL][player] = laneValue;
-                                        stakeAddr[nextL].push(player);
+                                    if (riskFactor <= 1) {
+                                        _recordStakeTrophyCandidate(settleLevel, player, principalRounded);
+                                        if (principalRounded != 0) {
+                                            uint256 luck = playerLuckbox[player] + principalRounded;
+                                            playerLuckbox[player] = luck;
+                                            addFlip(player, principalRounded, false);
+                                        }
                                     } else {
-                                        stakeAmt[nextL][player] = _insertLane(nextEnc, laneValue);
+                                        uint24 nextL = settleLevel + 1;
+                                        uint8 newRf = riskFactor - 1;
+                                        uint256 units = (lane & STAKE_LANE_PRINCIPAL_MASK) << 1; // double principal units
+                                        if (units > STAKE_LANE_PRINCIPAL_MASK) units = STAKE_LANE_PRINCIPAL_MASK;
+                                        uint256 laneValue = (units & STAKE_LANE_PRINCIPAL_MASK) |
+                                            (uint256(newRf) << STAKE_LANE_RISK_SHIFT);
+                                        uint256 nextEnc = stakeAmt[nextL][player];
+                                        if (nextEnc == 0) {
+                                            stakeAmt[nextL][player] = laneValue;
+                                            stakeAddr[nextL].push(player);
+                                        } else {
+                                            stakeAmt[nextL][player] = _insertLane(nextEnc, laneValue);
+                                        }
+                                    }
+                                    unchecked {
+                                        ++li;
                                     }
                                 }
                                 unchecked {
-                                    ++li;
+                                    ++i;
                                 }
                             }
-                            unchecked {
-                                ++i;
+
+                            bool sliceFinished = (en == len);
+                            scanCursor = sliceFinished ? SS_DONE : en;
+                            if (sliceFinished) {
+                                stakeLevelComplete = level;
+                                _finalizeStakeTrophy(settleLevel, true);
                             }
+                            return false; // more stake processing remains
                         }
 
-                        bool sliceFinished = (en == len);
-                        scanCursor = sliceFinished ? SS_DONE : en;
-                        if (sliceFinished) {
-                            stakeLevelComplete = level;
-                            _finalizeStakeTrophy(level, true);
-                        }
-                        return false; // more stake processing remains
+                        // Finished this phase.
+                        scanCursor = SS_DONE;
+                        stakeLevelComplete = level;
+                        _finalizeStakeTrophy(settleLevel, true);
+                        return false; // allow caller to continue in a subsequent call
                     }
-
-                    // Finished this phase.
-                    scanCursor = SS_DONE;
-                    stakeLevelComplete = level;
-                    _finalizeStakeTrophy(level, true);
-                    return false; // allow caller to continue in a subsequent call
                 }
             }
         }
