@@ -196,7 +196,7 @@ contract Purgecoin {
     uint256 private tbPrize; // prize per tenth player
 
     // Scan cursors / progress
-    uint24 private stakeLevelComplete;
+    uint24 private stakeLevelComplete = 1;
     uint32 private scanCursor = SS_IDLE;
     uint32 private payoutIndex;
 
