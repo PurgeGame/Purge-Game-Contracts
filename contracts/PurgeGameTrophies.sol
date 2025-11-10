@@ -6,6 +6,8 @@ interface IPurgeGameNftModule {
     function mintPlaceholders(uint256 quantity) external returns (uint256 startTokenId);
     function getBasePointers() external view returns (uint256 previousBase, uint256 currentBase);
     function setBasePointers(uint256 previousBase, uint256 currentBase) external;
+    function scheduleDormantRange(uint256 startTokenId, uint256 endTokenId) external;
+    function processDormant(uint32 limit) external returns (bool finished, bool worked);
     function packedOwnershipOf(uint256 tokenId) external view returns (uint256 packed);
     function transferTrophy(address from, address to, uint256 tokenId) external;
     function setTrophyPackedInfo(uint256 tokenId, uint8 kind, bool staked) external;
@@ -844,6 +846,12 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         if (mintedStart != startId) {
             // Defensive: NFT must mint sequentially.
             revert InvalidToken();
+        }
+
+        uint256 paddingEnd = mintedEnd - placeholderCount;
+        if (paddingEnd > startId) {
+            nft.scheduleDormantRange(startId, paddingEnd);
+            nft.processDormant(type(uint32).max);
         }
 
         uint256 cursor = mintedEnd;

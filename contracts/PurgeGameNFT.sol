@@ -868,6 +868,12 @@ contract PurgeGameNFT {
         return startTokenId;
     }
 
+    function scheduleDormantRange(uint256 startTokenId, uint256 endTokenId) external onlyTrophyModule {
+        if (startTokenId >= endTokenId) return;
+        _dormantCursor.push(startTokenId);
+        _dormantEnd.push(endTokenId);
+    }
+
     function getBasePointers() external view onlyTrophyModule returns (uint256 previousBase, uint256 currentBase) {
         previousBase = basePointers >> 128;
         currentBase = _currentBaseTokenId();
@@ -1008,10 +1014,6 @@ contract PurgeGameNFT {
     }
 
     function processDormant(uint32 limit) external returns (bool finished, bool worked) {
-        return _processDormant(limit);
-    }
-
-    function _processDormant(uint32 limit) private returns (bool finished, bool worked) {
         uint256 head = _dormantHead;
         uint256 len = _dormantCursor.length;
         if (head >= len) {
