@@ -1553,12 +1553,12 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     }
 
     function prepareNextLevel(uint24 nextLevel) public override {
-        (uint256 previousBase, uint256 currentBase) = nft.getBasePointers();
+        (, uint256 currentBase) = nft.getBasePointers();
         if (msg.sender != gameAddress) {
             if (msg.sender != coinAddress || currentBase != 0) revert Unauthorized();
         }
         uint256 newBase = _mintTrophyPlaceholders(nextLevel);
-        nft.setBasePointers(previousBase, newBase);
+        nft.setBasePointers(currentBase, newBase);
     }
 
     function _wire(address game_, address coin_) private {
