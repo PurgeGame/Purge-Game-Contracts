@@ -133,7 +133,7 @@ contract PurgeGameEndgameModule {
                 phase = 0;
                 return;
             }
-            bool bafPending = prevLevel != 0 && (prevLevel % 20) == 0;
+            bool bafPending = prevLevel != 0 && (prevLevel % 20) == 0 && (prevLevel % 100) != 0;
             bool gateCoinflip = !bafPending && (_phase >= 3 || (lvl % 20) != 0);
             if (gateCoinflip && coinContract.coinflipWorkPending(lvl)) {
                 coinContract.processCoinflipPayouts(lvl, cap, false, rngWord, day);
@@ -143,7 +143,7 @@ contract PurgeGameEndgameModule {
             return;
         } else {
             bool decWindow = prevLevel >= 25 && prevMod10 == 5 && prevMod100 != 95;
-            if (prevLevel != 0 && (prevLevel % 20) == 0) {
+            if (prevLevel != 0 && (prevLevel % 20) == 0 && (prevLevel % 100) != 0) {
                 uint256 bafPoolWei = (carryOver * 24) / 100;
                 (bool bafFinished, ) = _progressExternal(0, bafPoolWei, cap, prevLevel, rngWord, coinContract, true);
                 if (!bafFinished) return;

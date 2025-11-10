@@ -49,4 +49,8 @@ interface IPurgeGameTrophiesModule {
     function awardTrophy(address to, uint24 level, uint8 kind, uint256 data, uint256 deferredWei) external payable;
 
     function stakedTrophySample(uint64 salt) external view returns (address owner);
+
+    function burnBafPlaceholder(uint24 level) external;
+
+    function burnDecPlaceholder(uint24 level) external;
 }

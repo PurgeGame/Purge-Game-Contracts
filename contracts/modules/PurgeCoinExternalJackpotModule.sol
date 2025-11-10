@@ -63,6 +63,14 @@ contract PurgeCoinExternalJackpotModule {
     uint256 private constant BUCKET_SIZE = 1500;
     uint32 private constant SS_IDLE = type(uint32).max;
     uint32 private constant SS_DONE = type(uint32).max - 1;
+    uint8 private constant PURGE_TROPHY_KIND_BAF = 4;
+    uint8 private constant PURGE_TROPHY_KIND_DECIMATOR = 5;
+    uint16 private constant BAF_TRAIT_SENTINEL = 0xFFFA;
+    uint16 private constant DECIMATOR_TRAIT_SENTINEL = 0xFFFB;
+    uint256 private constant TROPHY_FLAG_BAF = uint256(1) << 203;
+    uint256 private constant TROPHY_FLAG_DECIMATOR = uint256(1) << 204;
+    uint256 private constant TROPHY_BASE_LEVEL_SHIFT = 128;
+    uint24 private constant DECIMATOR_SPECIAL_LEVEL = 100;
 
     // ---------------------------------------------------------------------
     // Storage mirror (keep order identical to Purgecoin)
@@ -171,6 +179,8 @@ contract PurgeCoinExternalJackpotModule {
                 uint256 n;
                 uint256 credited;
                 uint256 toReturn;
+                bool coinflipWin = (rngWord & 1) == 1;
+                address trophyRecipient;
 
                 {
                     uint256 prize = (P * 20) / 100;
@@ -182,6 +192,7 @@ contract PurgeCoinExternalJackpotModule {
                             ++n;
                         }
                         credited += prize;
+                        trophyRecipient = w;
                     } else {
                         toReturn += prize;
                     }
@@ -255,6 +266,15 @@ contract PurgeCoinExternalJackpotModule {
                 } else {
                     bs.per = 0;
                     bafState.returnAmountWei = uint120(toReturn + scatter);
+                }
+
+                if (coinflipWin && trophyRecipient != address(0)) {
+                    uint256 trophyData = (uint256(BAF_TRAIT_SENTINEL) << 152) |
+                        (uint256(lvl) << TROPHY_BASE_LEVEL_SHIFT) |
+                        TROPHY_FLAG_BAF;
+                    purgeGameTrophies.awardTrophy(trophyRecipient, lvl, PURGE_TROPHY_KIND_BAF, trophyData, 0);
+                } else {
+                    purgeGameTrophies.burnBafPlaceholder(lvl);
                 }
 
                 winners = new address[](n);
@@ -366,6 +386,9 @@ contract PurgeCoinExternalJackpotModule {
 
             if (extVar == 0) {
                 uint256 refund = uint256(bafState.totalPrizePoolWei);
+                if (_hasDecPlaceholder(lvl)) {
+                    purgeGameTrophies.burnDecPlaceholder(lvl);
+                }
                 delete bafState;
                 delete bs;
                 extMode = 0;
@@ -393,6 +416,9 @@ contract PurgeCoinExternalJackpotModule {
             uint256 denom = extVar;
             uint256 paid = uint256(bafState.returnAmountWei);
             if (denom == 0) {
+                if (_hasDecPlaceholder(lvl)) {
+                    purgeGameTrophies.burnDecPlaceholder(lvl);
+                }
                 uint256 refundAll = pool;
                 delete bafState;
                 delete bs;
@@ -436,6 +462,25 @@ contract PurgeCoinExternalJackpotModule {
             }
 
             if (end == bs.limit) {
+                bool hasPlaceholder = _hasDecPlaceholder(lvl);
+                if (hasPlaceholder) {
+                    address trophyOwner = topBettors[0].player;
+                    if (denom != 0 && trophyOwner != address(0)) {
+                        uint256 trophyData = (uint256(DECIMATOR_TRAIT_SENTINEL) << 152) |
+                            (uint256(lvl) << TROPHY_BASE_LEVEL_SHIFT) |
+                            TROPHY_FLAG_DECIMATOR;
+                        purgeGameTrophies.awardTrophy(
+                            trophyOwner,
+                            lvl,
+                            PURGE_TROPHY_KIND_DECIMATOR,
+                            trophyData,
+                            0
+                        );
+                    } else {
+                        purgeGameTrophies.burnDecPlaceholder(lvl);
+                    }
+                }
+
                 uint256 ret = pool > paid ? (pool - paid) : 0;
                 delete bafState;
                 delete bs;
@@ -510,5 +555,13 @@ contract PurgeCoinExternalJackpotModule {
                 ++denom;
             }
         }
+    }
+
+    function _hasDecPlaceholder(uint24 lvl) internal pure returns (bool) {
+        if (lvl == DECIMATOR_SPECIAL_LEVEL) return true;
+        if (lvl < 25) return false;
+        if ((lvl % 10) != 5) return false;
+        if ((lvl % 100) == 95) return false;
+        return true;
     }
 }

@@ -20,6 +20,8 @@ uint8 constant PURGE_TROPHY_KIND_MAP = 0;
 uint8 constant PURGE_TROPHY_KIND_LEVEL = 1;
 uint8 constant PURGE_TROPHY_KIND_AFFILIATE = 2;
 uint8 constant PURGE_TROPHY_KIND_STAKE = 3;
+uint8 constant PURGE_TROPHY_KIND_BAF = 4;
+uint8 constant PURGE_TROPHY_KIND_DECIMATOR = 5;
 
 interface IPurgeGameTrophies {
     struct EndLevelRequest {
@@ -37,6 +39,10 @@ interface IPurgeGameTrophies {
     function prepareNextLevel(uint24 nextLevel) external;
 
     function awardTrophy(address to, uint24 level, uint8 kind, uint256 data, uint256 deferredWei) external payable;
+
+    function burnBafPlaceholder(uint24 level) external;
+
+    function burnDecPlaceholder(uint24 level) external;
 
     function processEndLevel(
         EndLevelRequest calldata req
@@ -192,6 +198,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     uint32 private constant COIN_DRIP_STEPS = 10;
     uint256 private constant COIN_BASE_UNIT = 1_000_000;
     uint256 private constant COIN_EMISSION_UNIT = 1_000 * COIN_BASE_UNIT;
+    uint24 private constant DECIMATOR_SPECIAL_LEVEL = 100;
     uint256 private constant TROPHY_FLAG_MAP = uint256(1) << 200;
     uint256 private constant TROPHY_FLAG_AFFILIATE = uint256(1) << 201;
     uint256 private constant TROPHY_FLAG_STAKE = uint256(1) << 202;
@@ -201,7 +208,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     uint256 private constant TROPHY_BASE_LEVEL_SHIFT = 128;
     uint256 private constant TROPHY_LAST_CLAIM_SHIFT = 168;
     uint256 private constant TROPHY_LAST_CLAIM_MASK = uint256(0xFFFFFF) << TROPHY_LAST_CLAIM_SHIFT;
-    uint48 private constant _PLACEHOLDER_OFFSETS_PACKED = 0x050504030102;
 
     uint8 private constant _STAKE_ERR_TRANSFER_BLOCKED = 1;
     uint8 private constant _STAKE_ERR_NOT_LEVEL = 2;
@@ -286,7 +292,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     // ---------------------------------------------------------------------
 
     function _placeholderTokenId(uint24 level, uint8 kind) private view returns (uint256) {
-        if (kind > PURGE_TROPHY_KIND_STAKE) return 0;
         (uint256 previousBase, uint256 currentBase) = nft.getBasePointers();
         uint24 currentLevel = game.level();
 
@@ -298,8 +303,44 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         }
         if (base == 0) return 0;
 
-        uint8 offset = uint8(_PLACEHOLDER_OFFSETS_PACKED >> (uint8(kind) * 8));
-        return base - offset;
+        bool mintBaf = _shouldMintBaf(level);
+        bool mintDec = _shouldMintDec(level);
+
+        uint256 cursor = base;
+        uint256 levelTokenId = --cursor;
+        uint256 mapTokenId = --cursor;
+        uint256 affiliateTokenId = --cursor;
+        uint256 stakeTokenId = --cursor;
+        uint256 bafTokenId;
+        if (mintBaf) {
+            bafTokenId = --cursor;
+        }
+        uint256 decTokenId;
+        if (mintDec) {
+            decTokenId = --cursor;
+        }
+
+        if (kind == PURGE_TROPHY_KIND_LEVEL) return levelTokenId;
+        if (kind == PURGE_TROPHY_KIND_MAP) return mapTokenId;
+        if (kind == PURGE_TROPHY_KIND_AFFILIATE) return affiliateTokenId;
+        if (kind == PURGE_TROPHY_KIND_STAKE) return stakeTokenId;
+        if (kind == PURGE_TROPHY_KIND_BAF) return mintBaf ? bafTokenId : 0;
+        if (kind == PURGE_TROPHY_KIND_DECIMATOR) return mintDec ? decTokenId : 0;
+        return 0;
+    }
+
+    function _shouldMintBaf(uint24 level) private pure returns (bool) {
+        if (level == 0) return false;
+        if ((level % 100) == 0) return false;
+        return (level % 20) == 0;
+    }
+
+    function _shouldMintDec(uint24 level) private pure returns (bool) {
+        if (level == DECIMATOR_SPECIAL_LEVEL) return true;
+        if (level < 25) return false;
+        if ((level % 10) != 5) return false;
+        if ((level % 100) == 95) return false;
+        return true;
     }
 
     function _setTrophyData(uint256 tokenId, uint256 data) private {
@@ -787,8 +828,12 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
 
     function _mintTrophyPlaceholders(uint24 level) private returns (uint256 newBaseTokenId) {
         uint256 baseData = (uint256(0xFFFF) << 152) | (uint256(level) << TROPHY_BASE_LEVEL_SHIFT);
+        bool mintBafPlaceholder = _shouldMintBaf(level);
+        bool mintDecPlaceholder = _shouldMintDec(level);
+        uint256 placeholderCount = 4 + (mintBafPlaceholder ? 1 : 0) + (mintDecPlaceholder ? 1 : 0);
+
         uint256 startId = nft.nextTokenId();
-        uint256 mintedEnd = startId + 4;
+        uint256 mintedEnd = startId + placeholderCount;
         uint256 remainder = (mintedEnd - 1) % 100;
         if (remainder != 0) {
             mintedEnd += 100 - remainder;
@@ -801,37 +846,36 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             revert InvalidToken();
         }
 
-        uint256 firstPlaceholderId = mintedEnd - 4;
-        uint256 nextId = firstPlaceholderId;
+        uint256 cursor = mintedEnd;
 
-        uint256 stakeTokenId = nextId;
-        unchecked {
-            ++nextId;
-        }
+        uint256 levelTokenId = --cursor;
+        _setTrophyData(levelTokenId, baseData);
+        nft.setTrophyPackedInfo(levelTokenId, PURGE_TROPHY_KIND_LEVEL, false);
+
+        uint256 mapTokenId = --cursor;
+        _setTrophyData(mapTokenId, baseData | TROPHY_FLAG_MAP);
+        nft.setTrophyPackedInfo(mapTokenId, PURGE_TROPHY_KIND_MAP, false);
+
+        uint256 affiliateTokenId = --cursor;
+        _setTrophyData(affiliateTokenId, baseData | TROPHY_FLAG_AFFILIATE);
+        nft.setTrophyPackedInfo(affiliateTokenId, PURGE_TROPHY_KIND_AFFILIATE, false);
+
+        uint256 stakeTokenId = --cursor;
         uint256 stakeData = (uint256(0xFFFF) << 152) | (uint256(level) << TROPHY_BASE_LEVEL_SHIFT) | TROPHY_FLAG_STAKE;
         _setTrophyData(stakeTokenId, stakeData);
         nft.setTrophyPackedInfo(stakeTokenId, PURGE_TROPHY_KIND_STAKE, false);
 
-        uint256 affiliateTokenId = nextId;
-        unchecked {
-            ++nextId;
+        if (mintBafPlaceholder) {
+            uint256 bafTokenId = --cursor;
+            _setTrophyData(bafTokenId, baseData | TROPHY_FLAG_BAF);
+            nft.setTrophyPackedInfo(bafTokenId, PURGE_TROPHY_KIND_BAF, false);
         }
-        _setTrophyData(affiliateTokenId, baseData | TROPHY_FLAG_AFFILIATE);
-        nft.setTrophyPackedInfo(affiliateTokenId, PURGE_TROPHY_KIND_AFFILIATE, false);
 
-        uint256 mapTokenId = nextId;
-        unchecked {
-            ++nextId;
+        if (mintDecPlaceholder) {
+            uint256 decTokenId = --cursor;
+            _setTrophyData(decTokenId, baseData | TROPHY_FLAG_DECIMATOR);
+            nft.setTrophyPackedInfo(decTokenId, PURGE_TROPHY_KIND_DECIMATOR, false);
         }
-        _setTrophyData(mapTokenId, baseData | TROPHY_FLAG_MAP);
-        nft.setTrophyPackedInfo(mapTokenId, PURGE_TROPHY_KIND_MAP, false);
-
-        uint256 levelTokenId = nextId;
-        unchecked {
-            ++nextId;
-        }
-        _setTrophyData(levelTokenId, baseData);
-        nft.setTrophyPackedInfo(levelTokenId, PURGE_TROPHY_KIND_LEVEL, false);
 
         newBaseTokenId = mintedEnd;
     }
@@ -880,6 +924,18 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     function clearStakePreview(uint24 level) external override onlyCoinCaller {
         uint256 tokenId = _placeholderTokenId(level, PURGE_TROPHY_KIND_STAKE);
         _eraseTrophy(tokenId, PURGE_TROPHY_KIND_STAKE, false);
+    }
+
+    function burnBafPlaceholder(uint24 level) external override onlyCoinCaller {
+        uint256 tokenId = _placeholderTokenId(level, PURGE_TROPHY_KIND_BAF);
+        if (tokenId == 0) return;
+        _eraseTrophy(tokenId, PURGE_TROPHY_KIND_BAF, false);
+    }
+
+    function burnDecPlaceholder(uint24 level) external override onlyCoinCaller {
+        uint256 tokenId = _placeholderTokenId(level, PURGE_TROPHY_KIND_DECIMATOR);
+        if (tokenId == 0) return;
+        _eraseTrophy(tokenId, PURGE_TROPHY_KIND_DECIMATOR, false);
     }
 
     function processEndLevel(
@@ -1180,6 +1236,8 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         if (info & TROPHY_FLAG_MAP != 0) return PURGE_TROPHY_KIND_MAP;
         if (info & TROPHY_FLAG_AFFILIATE != 0) return PURGE_TROPHY_KIND_AFFILIATE;
         if (info & TROPHY_FLAG_STAKE != 0) return PURGE_TROPHY_KIND_STAKE;
+        if (info & TROPHY_FLAG_BAF != 0) return PURGE_TROPHY_KIND_BAF;
+        if (info & TROPHY_FLAG_DECIMATOR != 0) return PURGE_TROPHY_KIND_DECIMATOR;
         return PURGE_TROPHY_KIND_LEVEL;
     }
 
@@ -1258,6 +1316,8 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
 
         uint8 storedKind = _kindFromInfo(info);
         bool isBafTrophy = (info & TROPHY_FLAG_BAF) != 0;
+        bool isDecTrophy = (info & TROPHY_FLAG_DECIMATOR) != 0;
+        if (isDecTrophy) revert StakeInvalid();
 
         StakeParams memory params;
         params.player = sender;

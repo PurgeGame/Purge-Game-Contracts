@@ -150,6 +150,7 @@ contract IconRendererTrophy32 {
         bool isStake = (data & STAKE_TROPHY_FLAG) != 0;
         bool isBaf = (data & BAF_TROPHY_FLAG) != 0;
         bool isDec = (data & DECIMATOR_TROPHY_FLAG) != 0;
+        bool isExtermination = !isMap && !isAffiliate && !isStake && !isBaf && !isDec;
         uint32 statusFlags = extras[0];
         if ((statusFlags & 2) == 0 && (data & TROPHY_OWED_MASK) != 0) {
             statusFlags |= 2;
@@ -201,7 +202,7 @@ contract IconRendererTrophy32 {
         bool includeTraitAttr;
         string memory traitType;
         string memory traitValue;
-        if (exTr < 256 && (isMap || (!isMap && !isAffiliate && !isStake && !isBaf && !isDec))) {
+        if (exTr < 256 && (isMap || isExtermination)) {
             uint8 quadrant = uint8(exTr >> 6);
             uint8 raw = uint8(exTr & 0x3F);
             uint8 colorIdx = raw >> 3;
@@ -273,6 +274,7 @@ contract IconRendererTrophy32 {
     ) private view returns (string memory) {
         uint32 innerSide = _innerSquareSide();
         string memory diamondPath = icons.diamond();
+        bool isExtermination = !isMap && !isAffiliate && !isStake && !isBaf && !isDec;
 
         if (exterminatedTrait == 0xFFFF || isStake) {
             uint8 ringIdx;
@@ -321,7 +323,7 @@ contract IconRendererTrophy32 {
 
             string memory centerGlyph = _centerGlyph(isMap, isAffiliate, isStake, placeholderFlameColor, diamondPath);
             string memory body = string(abi.encodePacked(rings, clip, centerGlyph));
-            return _composeSvg(head, body, isMap, isDec, placeholderFlameColor, diamondPath, statusFlags);
+            return _composeSvg(head, body, isMap, isExtermination, placeholderFlameColor, diamondPath, statusFlags);
         }
 
         bool isTopAffiliate = isAffiliate && exterminatedTrait == 0xFFFE;
@@ -365,7 +367,7 @@ contract IconRendererTrophy32 {
         uint32 rMid2 = uint32((uint256(rOut2) * RATIO_MID_1e6) / 1_000_000);
         uint32 rIn2 = uint32((uint256(rOut2) * RATIO_IN_1e6) / 1_000_000);
         if (isBafAward) {
-            uint32 scale = 600_000;
+            uint32 scale = 690_000;
             int256 center = int256(uint256(BAF_FLIP_VB) * uint256(scale)) / 2;
             int256 adjustX = 4_400_000; // shift right ~4.4px
             int256 adjustY = 2_600_000; // shift down ~2.6px
@@ -376,7 +378,15 @@ contract IconRendererTrophy32 {
             );
 
             return
-                _composeSvg(_svgHeader(border, squareFill), anim, isMap, isDec, flameColor, diamondPath, statusFlags);
+                _composeSvg(
+                    _svgHeader(border, squareFill),
+                    anim,
+                    isMap,
+                    isExtermination,
+                    flameColor,
+                    diamondPath,
+                    statusFlags
+                );
         }
 
         string memory innerFill = _resolve(tokenId, 2, "#fff");
@@ -446,7 +456,7 @@ contract IconRendererTrophy32 {
                 _svgHeader(border, squareFill),
                 ringsAndSymbol,
                 isMap,
-                isDec,
+                isExtermination,
                 flameColor,
                 diamondPath,
                 statusFlags
