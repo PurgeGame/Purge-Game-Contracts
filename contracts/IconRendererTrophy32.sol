@@ -66,7 +66,7 @@ contract IconRendererTrophy32 {
     string private constant MAP_BADGE_PATH =
         "M14.3675 2.15671C14.7781 2.01987 15.2219 2.01987 15.6325 2.15671L20.6325 3.82338C21.4491 4.09561 22 4.85988 22 5.72074V19.6126C22 20.9777 20.6626 21.9416 19.3675 21.5099L15 20.0541L9.63246 21.8433C9.22192 21.9801 8.77808 21.9801 8.36754 21.8433L3.36754 20.1766C2.55086 19.9044 2 19.1401 2 18.2792V4.38741C2 3.0223 3.33739 2.05836 4.63246 2.49004L9 3.94589L14.3675 2.15671ZM15 4.05408L9.63246 5.84326C9.22192 5.9801 8.77808 5.9801 8.36754 5.84326L4 4.38741V18.2792L9 19.9459L14.3675 18.1567C14.7781 18.0199 15.2219 18.0199 15.6325 18.1567L20 19.6126V5.72074L15 4.05408ZM13.2929 8.29288C13.6834 7.90235 14.3166 7.90235 14.7071 8.29288L15.5 9.08577L16.2929 8.29288C16.6834 7.90235 17.3166 7.90235 17.7071 8.29288C18.0976 8.6834 18.0976 9.31657 17.7071 9.70709L16.9142 10.5L17.7071 11.2929C18.0976 11.6834 18.0976 12.3166 17.7071 12.7071C17.3166 13.0976 16.6834 13.0976 16.2929 12.7071L15.5 11.9142L14.7071 12.7071C14.3166 13.0976 13.6834 13.0976 13.2929 12.7071C12.9024 12.3166 12.9024 11.6834 13.2929 11.2929L14.0858 10.5L13.2929 9.70709C12.9024 9.31657 12.9024 8.6834 13.2929 8.29288ZM6 16C6.55228 16 7 15.5523 7 15C7 14.4477 6.55228 14 6 14C5.44772 14 5 14.4477 5 15C5 15.5523 5.44772 16 6 16ZM9 12C9 12.5523 8.55228 13 8 13C7.44772 13 7 12.5523 7 12C7 11.4477 7.44772 11 8 11C8.55228 11 9 11.4477 9 12ZM11 12C11.5523 12 12 11.5523 12 11C12 10.4477 11.5523 9.99998 11 9.99998C10.4477 9.99998 10 10.4477 10 11C10 11.5523 10.4477 12 11 12Z";
     string private constant AFFILIATE_BADGE_PATH =
-        "M12 2A10 10 0 1 1 2 12 10 10 0 0 1 12 2Zm0 2.4a.8.8 0 0 0-.73.48l-1.38 3.07-3.33.47a.8.8 0 0 0-.44 1.37l2.4 2.33-.57 3.29a.8.8 0 0 0 1.16.84L12 14.9l2.89 1.43a.8.8 0 0 0 1.16-.84l-.57-3.29 2.4-2.33a.8.8 0 0 0-.44-1.37l-3.33-.47-1.38-3.07A.8.8 0 0 0 12 4.4Z";
+        "M61.55 19.28c-3-2.77-7.15-7-10.53-10l-.2-.14a4 4 0 0 0-1.11-.62C41.56 7 3.63-.09 2.89 0a1.4 1.4 0 0 0-.58.22l-.19.15a2 2 0 0 0-.52.84l-.05.13v.82C5.82 14.05 22.68 53 26 62.14c.2.62.58 1.8 1.29 1.86h.16c.38 0 2-2.14 2-2.14S58.41 26.74 61.34 23a10 10 0 0 0 1-1.48 2.4 2.4 0 0 0-.79-2.24m-24.67 4.09 12.36-10.25 7.25 6.68Zm-4.8-.67L10.8 5.26l34.43 6.35ZM34 27.27l21.78-3.51-24.9 30ZM7.91 7 30.3 26l-3.24 27.78Z";
     uint16 private constant DECIMATOR_SYMBOL_VB = 512;
     uint16 private constant BAF_FLIP_VB = 130;
     uint24[8] private BASE_COLOR = [0xf409cd, 0x7c2bff, 0x30d100, 0xed0e11, 0x1317f7, 0xf7931a, 0x5e5e5e, 0xab8d3f];
@@ -140,11 +140,7 @@ contract IconRendererTrophy32 {
         nft = IERC721Lite(nft_);
     }
 
-    function tokenURI(
-        uint256 tokenId,
-        uint256 data,
-        uint32[4] calldata extras
-    ) external view returns (string memory) {
+    function tokenURI(uint256 tokenId, uint256 data, uint32[4] calldata extras) external view returns (string memory) {
         if ((data >> 128) == 0) revert("renderer:notTrophy");
 
         uint24 lvl = uint24((data >> 128) & 0xFFFFFF);
@@ -229,17 +225,7 @@ contract IconRendererTrophy32 {
         }
         attrs = string(abi.encodePacked(attrs, "]"));
 
-        string memory img = _trophySvg(
-            tokenId,
-            exTr,
-            isMap,
-            isAffiliate,
-            isStake,
-            isBaf,
-            isDec,
-            statusFlags,
-            lvl
-        );
+        string memory img = _trophySvg(tokenId, exTr, isMap, isAffiliate, isStake, isBaf, isDec, statusFlags, lvl);
         return _pack(tokenId, true, img, lvl, desc, trophyType, attrs);
     }
 
@@ -249,7 +235,7 @@ contract IconRendererTrophy32 {
 
     function _readExterminatedTrait(uint256 data) private pure returns (uint16) {
         uint16 ex16 = uint16((data >> 152) & 0xFFFF);
-        if (ex16 >= 0xFFFD) return ex16;
+        if (ex16 >= 0xFFFA) return ex16;
         return uint16(uint8(ex16));
     }
 
@@ -334,13 +320,7 @@ contract IconRendererTrophy32 {
             );
 
             string memory centerGlyph = _centerGlyph(isMap, isAffiliate, isStake, placeholderFlameColor, diamondPath);
-            string memory body = string(
-                abi.encodePacked(
-                    rings,
-                    clip,
-                    centerGlyph
-                )
-            );
+            string memory body = string(abi.encodePacked(rings, clip, centerGlyph));
             return _composeSvg(head, body, isMap, isDec, placeholderFlameColor, diamondPath, statusFlags);
         }
 
@@ -392,16 +372,11 @@ contract IconRendererTrophy32 {
             int256 offsetX = -center + adjustX;
             int256 offsetY = -center + adjustY;
             string memory anim = string(
-                abi.encodePacked(
-                    "<g transform='",
-                    _mat6(scale, offsetX, offsetY),
-                    "'>",
-                    assets.bafFlipSymbol(),
-                    "</g>"
-                )
+                abi.encodePacked("<g transform='", _mat6(scale, offsetX, offsetY), "'>", assets.bafFlipSymbol(), "</g>")
             );
 
-            return _composeSvg(_svgHeader(border, squareFill), anim, isMap, isDec, flameColor, diamondPath, statusFlags);
+            return
+                _composeSvg(_svgHeader(border, squareFill), anim, isMap, isDec, flameColor, diamondPath, statusFlags);
         }
 
         string memory innerFill = _resolve(tokenId, 2, "#fff");
@@ -466,7 +441,16 @@ contract IconRendererTrophy32 {
             ringsAndSymbol = string(abi.encodePacked('<g filter="url(#inv)">', ringsAndSymbol, "</g>"));
         }
 
-        return _composeSvg(_svgHeader(border, squareFill), ringsAndSymbol, isMap, isDec, flameColor, diamondPath, statusFlags);
+        return
+            _composeSvg(
+                _svgHeader(border, squareFill),
+                ringsAndSymbol,
+                isMap,
+                isDec,
+                flameColor,
+                diamondPath,
+                statusFlags
+            );
     }
 
     function _svgHeader(string memory borderColor, string memory squareFill) private pure returns (string memory) {
@@ -519,7 +503,7 @@ contract IconRendererTrophy32 {
                         '<g clip-path="url(#ct)">',
                         '<path fill="',
                         flameFill,
-                        '" transform="matrix(1.85 0 0 1.85 -22.2 -22.2)" d="',
+                        '" transform="matrix(0.6875 0 0 0.6875 -22 -22)" d="',
                         AFFILIATE_BADGE_PATH,
                         '"/>',
                         "</g>"
@@ -538,7 +522,7 @@ contract IconRendererTrophy32 {
                         '" transform="matrix(0.078125 0 0 0.078125 -31.25 -31.25)" d="',
                         stakePath,
                         '"/>',
-                        '</g>'
+                        "</g>"
                     )
                 );
         }

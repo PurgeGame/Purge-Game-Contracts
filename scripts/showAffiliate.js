@@ -17,15 +17,21 @@ async function main() {
   );
   await icons.waitForDeployment();
 
-  const RegistryFactory = await hre.ethers.getContractFactory("MockRegistry");
+  const RegistryFactory = await hre.ethers.getContractFactory(
+    "contracts/mocks/TrophyRendererMocks.sol:MockRegistry"
+  );
   const registry = await RegistryFactory.deploy();
   await registry.waitForDeployment();
 
-  const NFTFactory = await hre.ethers.getContractFactory("MockNFT");
+  const NFTFactory = await hre.ethers.getContractFactory(
+    "contracts/mocks/TrophyRendererMocks.sol:MockNFT"
+  );
   const nft = await NFTFactory.deploy();
   await nft.waitForDeployment();
 
-  const CoinFactory = await hre.ethers.getContractFactory("MockCoin");
+  const CoinFactory = await hre.ethers.getContractFactory(
+    "contracts/mocks/TrophyRendererMocks.sol:MockCoin"
+  );
   const coin = await CoinFactory.deploy();
   await coin.waitForDeployment();
 

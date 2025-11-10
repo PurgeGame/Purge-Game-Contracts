@@ -147,7 +147,9 @@ contract PurgeGameJackpotModule {
             coinContract.resetCoinflipLeaderboard();
 
             uint48 questDay = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
-            uint256 questEntropy = uint256(keccak256(abi.encode(entropyWord, targetLevel, jackpotCounter, "daily-quest")));
+            uint256 questEntropy = uint256(
+                keccak256(abi.encode(entropyWord, targetLevel, jackpotCounter, "daily-quest"))
+            );
             coinContract.rollDailyQuest(questDay, questEntropy);
 
             if (dailyPaidEth != 0) {
@@ -656,32 +658,26 @@ contract PurgeGameJackpotModule {
         bool needTrophy = mapTrophy && traitIdx == 0 && !trophyGivenOut;
         for (uint8 i; i < len; ) {
             address w = winners[i];
-            if (_eligibleJackpotWinner(w, lvl)) {
-                if (needTrophy) {
-                    needTrophy = false;
-                    trophyGivenOut = true;
-                    uint256 half = perWinner / 2;
-                    if (half != 0) {
-                        _addClaimableEth(w, half);
-                        ethDelta += half;
-                    }
-                    uint256 deferred = perWinner - half;
-                    if (deferred != 0 && address(trophiesContract) != address(0)) {
-                        uint256 trophyData = (uint256(traitId) << 152) | (uint256(lvl) << 128) | TROPHY_FLAG_MAP;
-                        trophiesContract.awardTrophy{value: deferred}(
-                            w,
-                            lvl,
-                            PURGE_TROPHY_KIND_MAP,
-                            trophyData,
-                            deferred
-                        );
-                        ethDelta += deferred;
-                    }
-                } else if (_creditJackpot(coinContract, payCoin, w, perWinner)) {
-                    if (payCoin) coinDelta += perWinner;
-                    else ethDelta += perWinner;
+
+            if (needTrophy) {
+                needTrophy = false;
+                trophyGivenOut = true;
+                uint256 half = perWinner / 2;
+                if (half != 0) {
+                    _addClaimableEth(w, half);
+                    ethDelta += half;
                 }
+                uint256 deferred = perWinner - half;
+                if (deferred != 0 && address(trophiesContract) != address(0)) {
+                    uint256 trophyData = (uint256(traitId) << 152) | (uint256(lvl) << 128) | TROPHY_FLAG_MAP;
+                    trophiesContract.awardTrophy{value: deferred}(w, lvl, PURGE_TROPHY_KIND_MAP, trophyData, deferred);
+                    ethDelta += deferred;
+                }
+            } else if (_creditJackpot(coinContract, payCoin, w, perWinner)) {
+                if (payCoin) coinDelta += perWinner;
+                else ethDelta += perWinner;
             }
+
             unchecked {
                 ++i;
             }
@@ -804,12 +800,5 @@ contract PurgeGameJackpotModule {
         uint256 pct = (prizePool * 100) / prevPoolWei;
         if (pct > type(uint8).max) return type(uint8).max;
         return uint8(pct);
-    }
-
-    function _eligibleJackpotWinner(address player, uint24 lvl) private view returns (bool) {
-        if (player == address(0)) return false;
-        uint256 packed = mintPacked_[player];
-        uint24 lastEthLevel = uint24((packed >> ETH_LAST_LEVEL_SHIFT) & MINT_MASK_24);
-        return (lastEthLevel + 2) >= lvl;
     }
 }
