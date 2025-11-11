@@ -70,7 +70,12 @@ contract IconRendererTrophy32 {
     uint16 private constant DECIMATOR_SYMBOL_VB = 512;
     uint16 private constant BAF_FLIP_VB = 130;
     uint24[8] private BASE_COLOR = [0xf409cd, 0x7c2bff, 0x30d100, 0xed0e11, 0x1317f7, 0xf7931a, 0x5e5e5e, 0xab8d3f];
-
+    string private constant STAKE_BADGE_HEX = "#4d2b1f";
+    uint32 private constant STATUS_FLAG_SECOND_EXTERMINATION = 1 << 2;
+    string private constant STAKE_STATUS_TRANSFORM = "matrix(0.02548 0 0 0.02548 -10.583 -10.500)";
+    string private constant ETH_STATUS_TRANSFORM = "matrix(0.00800 0 0 0.00800 -3.131 -5.100)";
+    string private constant MAP_CORNER_TRANSFORM = "matrix(0.51 0 0 0.51 -6.12 -6.12)";
+    string private constant FLAME_CORNER_TRANSFORM = "matrix(0.02810 0 0 0.02810 -12.03 -9.082)";
     int16[8] private BASE_VARIANT_BIAS = [
         int16(-14),
         int16(-6),
@@ -446,7 +451,8 @@ contract IconRendererTrophy32 {
             )
         );
 
-        bool invertTrophy = !isMap && !isTopAffiliate && (exterminatedTrait <= 255 || lvl == 90);
+        bool doubleExtermination = (statusFlags & STATUS_FLAG_SECOND_EXTERMINATION) != 0;
+        bool invertTrophy = !isMap && !isTopAffiliate && (doubleExtermination || lvl == 90);
         if (invertTrophy) {
             ringsAndSymbol = string(abi.encodePacked('<g filter="url(#inv)">', ringsAndSymbol, "</g>"));
         }
@@ -528,7 +534,7 @@ contract IconRendererTrophy32 {
                     abi.encodePacked(
                         '<g clip-path="url(#ct)">',
                         '<path fill="',
-                        flameFill,
+                        STAKE_BADGE_HEX,
                         '" transform="matrix(0.078125 0 0 0.078125 -31.25 -31.25)" d="',
                         stakePath,
                         '"/>',
@@ -561,13 +567,14 @@ contract IconRendererTrophy32 {
             return
                 string(
                     abi.encodePacked(
-                        '<g transform="translate(41.28 40.32)" opacity="0.95">',
-                        '<path fill="',
+                        '<g transform="translate(40.5 40.5)" opacity="0.95">',
+                        '<g transform="',
+                        MAP_CORNER_TRANSFORM,
+                        '"><path fill="',
                         flameFill,
-                        '" transform="matrix(0.442 0 0 0.442 -5.304 -5.304)" d="',
+                        '" d="',
                         MAP_BADGE_PATH,
-                        '"/>',
-                        "</g>"
+                        '"/></g></g>'
                     )
                 );
         }
@@ -576,13 +583,14 @@ contract IconRendererTrophy32 {
             return
                 string(
                     abi.encodePacked(
-                        '<g transform="translate(43 42)" opacity="0.95">',
-                        '<path fill="',
+                        '<g transform="translate(40.5 40.5)" opacity="0.95">',
+                        '<g transform="',
+                        FLAME_CORNER_TRANSFORM,
+                        '"><path fill="',
                         flameFill,
-                        '" transform="matrix(0.021 0 0 0.021 -10.8 -8.10945)" d="',
+                        '" d="',
                         flamePath,
-                        '"/>',
-                        "</g>"
+                        '"/></g></g>'
                     )
                 );
         }
@@ -599,9 +607,12 @@ contract IconRendererTrophy32 {
             markup = string(
                 abi.encodePacked(
                     "<g transform='translate(-41 -41)'>",
-                    "<rect x='-10.5' y='-10.5' width='21' height='21' rx='6' fill='#1b1410' fill-opacity='0.9' stroke='#f6a974' stroke-opacity='0.6' stroke-width='0.7'/>",
-                    "<g transform='translate(-400 -400) scale(0.032)'>",
-                    "<path fill='#f8a471' d='",
+                    "<g transform='",
+                    STAKE_STATUS_TRANSFORM,
+                    "'>",
+                    "<path fill='",
+                    STAKE_BADGE_HEX,
+                    "' d='",
                     stakePath,
                     "'/>",
                     "</g></g>"
@@ -615,8 +626,9 @@ contract IconRendererTrophy32 {
                 abi.encodePacked(
                     markup,
                     "<g transform='translate(41 -41)'>",
-                    "<rect x='-10.5' y='-10.5' width='21' height='21' rx='6' fill='#07151a' fill-opacity='0.9' stroke='#42c1ff' stroke-opacity='0.55' stroke-width='0.7'/>",
-                    "<g transform='scale(0.9)'>",
+                    "<g transform='",
+                    ETH_STATUS_TRANSFORM,
+                    "' style='vector-effect:non-scaling-stroke'>",
                     ethPath,
                     "</g></g>"
                 )

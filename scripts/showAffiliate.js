@@ -1,4 +1,6 @@
 const hre = require("hardhat");
+const fs = require("fs");
+const path = require("path");
 
 async function main() {
   const [deployer] = await hre.ethers.getSigners();
@@ -63,14 +65,18 @@ async function main() {
   const level = 25n;
   const data = (0xfffen << 152n) | (level << 128n) | (1n << 201n);
 
-  const emptyRemaining = [0, 0, 0, 0];
-  const uri = await trophyRenderer.tokenURI(tokenId, data, emptyRemaining);
+  const statusFlags = [3, 0, 0, 0]; // bit0 = staked, bit1 = ETH attachment
+  const uri = await trophyRenderer.tokenURI(tokenId, data, statusFlags);
   const json = Buffer.from(uri.split(",")[1], "base64").toString();
   const metadata = JSON.parse(json);
   const svg = Buffer.from(metadata.image.split(",")[1], "base64").toString();
 
+  const outPath = path.join(__dirname, "..", "artifacts", "tmp", "affiliate-trophy.svg");
+  fs.mkdirSync(path.dirname(outPath), { recursive: true });
+  fs.writeFileSync(outPath, svg);
+
   console.log("Metadata:\n", metadata);
-  console.log("\nSVG:\n", svg);
+  console.log("\nSVG written to:", outPath);
 }
 
 main().catch((err) => {
