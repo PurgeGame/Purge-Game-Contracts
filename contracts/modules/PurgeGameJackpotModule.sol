@@ -524,15 +524,13 @@ contract PurgeGameJackpotModule {
     ) private returns (uint256 totalPaidEth, uint256 entropyCursor, bool trophyGiven) {
         uint256 ethDistributed;
         entropyCursor = entropy;
-        bool trophyBucketHandled;
         for (uint8 traitIdx; traitIdx < 4; ) {
             uint16 shareBps = uint16(traitShareBpsPacked >> (traitIdx * 16));
             uint256 share = _sliceJackpotShare(ethPool, shareBps, traitIdx, ethDistributed);
             uint8 traitId = winningTraits[traitIdx];
             uint16 bucketCount = bucketCounts[traitIdx];
-            bool bucketGetsTrophy = mapTrophy && !trophyBucketHandled && bucketCount == 1;
+            bool bucketGetsTrophy = mapTrophy && !trophyGiven && bucketCount == 1;
             if (bucketGetsTrophy) {
-                trophyBucketHandled = true;
                 if (mapStakeSiphon != 0) {
                     uint256 siphon = mapStakeSiphon > share ? share : mapStakeSiphon;
                     share -= siphon;
