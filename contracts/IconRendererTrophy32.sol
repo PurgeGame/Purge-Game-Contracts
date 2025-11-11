@@ -157,9 +157,11 @@ contract IconRendererTrophy32 {
         bool isDec = (data & DECIMATOR_TROPHY_FLAG) != 0;
         bool isExtermination = !isMap && !isAffiliate && !isStake && !isBaf && !isDec;
         uint32 statusFlags = extras[0];
-        if ((statusFlags & 2) == 0 && (data & TROPHY_OWED_MASK) != 0) {
+        uint256 ethAttachment = data & TROPHY_OWED_MASK;
+        if ((statusFlags & 2) == 0 && ethAttachment != 0) {
             statusFlags |= 2;
         }
+        bool hasEthAttachment = ethAttachment != 0;
 
         string memory lvlStr = (lvl == 0) ? "TBD" : uint256(lvl).toString();
         string memory trophyType;
@@ -204,6 +206,11 @@ contract IconRendererTrophy32 {
             desc = string.concat(desc, isMap ? " MAP jackpot." : " extermination victory.");
         }
 
+        if (hasEthAttachment) {
+            string memory ethAmount = _formatEthAmount(ethAttachment);
+            desc = string.concat(desc, " Contains ", ethAmount, " ETH attachment.");
+        }
+
         bool includeTraitAttr;
         string memory traitType;
         string memory traitValue;
@@ -223,6 +230,8 @@ contract IconRendererTrophy32 {
                 lvlStr,
                 '"},{"trait_type":"Trophy","value":"',
                 trophyType,
+                '"},{"trait_type":"Eth","value":"',
+                hasEthAttachment ? "Yes" : "No",
                 '"}'
             )
         );
@@ -424,10 +433,30 @@ contract IconRendererTrophy32 {
         } else {
             fitSym1e6 = 800_000;
         }
+        if (!isTopAffiliate && dataQ == 1 && _isZodiacShrinkTarget(symIdx)) {
+            fitSym1e6 = (fitSym1e6 * 9) / 10;
+        } else if (!isTopAffiliate && dataQ == 0 && _isCryptoShrinkTarget(symIdx)) {
+            fitSym1e6 = (fitSym1e6 * 85) / 100;
+        } else if (!isTopAffiliate && dataQ == 2) {
+            if (_isGamblingShrinkTarget(symIdx)) {
+                fitSym1e6 = (fitSym1e6 * 9) / 10;
+            } else if (symIdx == 1) {
+                fitSym1e6 = (fitSym1e6 * 115) / 100;
+            }
+        } else if (!isTopAffiliate && dataQ == 3) {
+            if (symIdx != 6 && symIdx != 7) {
+                fitSym1e6 = (fitSym1e6 * 9) / 10;
+            }
+        }
         uint32 sSym1e6 = uint32((uint256(2) * rIn2 * fitSym1e6) / m);
 
         int256 txm = -(int256(uint256(w)) * int256(uint256(sSym1e6))) / 2;
         int256 tyn = -(int256(uint256(h)) * int256(uint256(sSym1e6))) / 2;
+        if (isTopAffiliate) {
+            tyn -= 2_940_000; // lift ~3% of the inner square (≈98px * 3%)
+        }
+
+        bool solidFill = (!isTopAffiliate && dataQ == 0 && (symIdx == 1 || symIdx == 5));
 
         string memory ringsAndSymbol = string(
             abi.encodePacked(
@@ -442,7 +471,7 @@ contract IconRendererTrophy32 {
                         "'><g fill='",
                         symbolColor,
                         "' stroke='",
-                        symbolColor,
+                        solidFill ? "none" : symbolColor,
                         "' style='vector-effect:non-scaling-stroke'>",
                         iconPath,
                         "</g></g></g>"
@@ -519,7 +548,7 @@ contract IconRendererTrophy32 {
                         '<g clip-path="url(#ct)">',
                         '<path fill="',
                         flameFill,
-                        '" transform="matrix(0.068 0 0 0.068 -17.408 -17.408)" d="',
+                        '" transform="matrix(0.06 0 0 0.06 -15.36 -27)" d="',
                         AFFILIATE_BADGE_PATH,
                         '"/>',
                         "</g>"
@@ -831,6 +860,19 @@ contract IconRendererTrophy32 {
         return string.concat("Dice ", (uint256(symbolIdx) + 1).toString());
     }
 
+    function _isCryptoShrinkTarget(uint8 symIdx) private pure returns (bool) {
+        return symIdx == 0 || symIdx == 1 || symIdx == 4;
+    }
+
+    function _isGamblingShrinkTarget(uint8 symIdx) private pure returns (bool) {
+        return symIdx == 0 || symIdx == 6;
+    }
+
+    // All Zodiac symbols except Alpha (indexes 1-7) should shrink slightly.
+    function _isZodiacShrinkTarget(uint8 symIdx) private pure returns (bool) {
+        return symIdx == 1 || symIdx == 2 || symIdx == 3 || symIdx == 4 || symIdx == 5 || symIdx == 6 || symIdx == 7;
+    }
+
     function _traitLabel(uint8 quadrant, uint8 colorIdx, uint8 symbolIdx) private view returns (string memory) {
         return string.concat(_colorTitle(colorIdx), " ", _symbolTitle(quadrant, symbolIdx));
     }
@@ -861,6 +903,44 @@ contract IconRendererTrophy32 {
         }
 
         return string.concat("data:application/json;base64,", Base64.encode(bytes(j)));
+    }
+
+    function _formatEthAmount(uint256 weiAmount) private pure returns (string memory) {
+        if (weiAmount == 0) return "0";
+        uint256 whole = weiAmount / 1 ether;
+        uint256 remainder = weiAmount % 1 ether;
+        if (remainder == 0) {
+            return whole.toString();
+        }
+        uint256 milli = (remainder + 500_000_000_000_000) / 1_000_000_000_000_000;
+        if (milli == 1000) {
+            unchecked {
+                ++whole;
+            }
+            milli = 0;
+        }
+        if (milli == 0) {
+            return whole.toString();
+        }
+        bytes memory frac = new bytes(3);
+        for (uint256 i; i < 3; ++i) {
+            frac[2 - i] = bytes1(uint8(48 + (milli % 10)));
+            milli /= 10;
+        }
+        uint256 trim = 3;
+        while (trim > 0 && frac[trim - 1] == bytes1(uint8(48))) {
+            unchecked {
+                --trim;
+            }
+        }
+        if (trim == 0) {
+            return whole.toString();
+        }
+        bytes memory trimmed = new bytes(trim);
+        for (uint256 i; i < trim; ++i) {
+            trimmed[i] = frac[i];
+        }
+        return string(abi.encodePacked(whole.toString(), ".", trimmed));
     }
 
     function _innerSquareSide() private pure returns (uint32) {
