@@ -7,8 +7,9 @@ import {IPurgeGame} from "./interfaces/IPurgeGame.sol";
 import {IPurgeRenderer} from "./interfaces/IPurgeRenderer.sol";
 import {IPurgeQuestModule, QuestInfo} from "./interfaces/IPurgeQuestModule.sol";
 import {IPurgeCoinExternalJackpotModule} from "./interfaces/IPurgeCoinExternalJackpotModule.sol";
+import {PurgeCoinStorage} from "./storage/PurgeCoinStorage.sol";
 
-contract Purgecoin {
+contract Purgecoin is PurgeCoinStorage {
     // ---------------------------------------------------------------------
     // Events
     // ---------------------------------------------------------------------
@@ -48,13 +49,7 @@ contract Purgecoin {
     // ---------------------------------------------------------------------
     // ERC20 state
     // ---------------------------------------------------------------------
-    string public name = "Purgecoin";
-    string public symbol = "PURGE";
     uint8 public constant decimals = 6;
-
-    uint256 public totalSupply;
-    mapping(address => uint256) public balanceOf;
-    mapping(address => mapping(address => uint256)) public allowance;
 
     function approve(address spender, uint256 amount) public returns (bool) {
         allowance[msg.sender][spender] = amount;
@@ -98,41 +93,6 @@ contract Purgecoin {
     }
 
     // ---------------------------------------------------------------------
-    // Types
-    // ---------------------------------------------------------------------
-    struct PlayerScore {
-        address player;
-        uint96 score; // stores whole-token totals (PURGE units without 6d fractional component)
-    }
-
-    /// @dev BAF jackpot accounting
-    struct BAFState {
-        uint128 totalPrizePoolWei;
-        uint120 returnAmountWei;
-        bool inProgress;
-    }
-
-    /// @dev BAF scatter scan cursor
-    struct BAFScan {
-        uint120 per;
-        uint32 limit;
-        uint8 offset;
-    }
-
-    /// @dev Decimator per-player burn snapshot for a given level
-    struct DecEntry {
-        uint192 burn;
-        uint24 level;
-        uint8 bucket;
-        bool winner;
-    }
-
-    struct AffiliateCodeInfo {
-        address owner;
-        uint8 rakeback; // percentage (0-25)
-    }
-
-    // ---------------------------------------------------------------------
     // Constants (units & limits)
     // ---------------------------------------------------------------------
     uint256 private constant MILLION = 1e6; // token has 6 decimals
@@ -172,89 +132,6 @@ contract Purgecoin {
     // ---------------------------------------------------------------------
     address private immutable creator; // deployer / ETH sink
 
-    // ---------------------------------------------------------------------
-    // Game wiring & state
-    // ---------------------------------------------------------------------
-    IPurgeGame private purgeGame; // PurgeGame contract handle (set once)
-    PurgeGameNFT private purgeGameNFT; // Authorized contract for base NFT operations
-    IPurgeGameTrophies private purgeGameTrophies; // Trophy module handle
-    IPurgeQuestModule private questModule; // Dedicated quest logic module
-    address private externalJackpotModule; // Delegate module for BAF/Decimator logic
-
-    // Session flags
-    bool private tbActive; // "tenth player" bonus active
-    bool private bonusActive; // super bonus mode active
-    uint8 private extMode; // external jackpot mode (state machine)
-
-    // Leaderboard lengths
-    uint8 private affiliateLen;
-    uint8 private topLen;
-
-    // "tenth player" bonus fields
-    uint8 private tbMod; // wheel mod (0..9)
-    uint32 private tbRemain; // remaining awards
-    uint256 private tbPrize; // prize per tenth player
-
-    // Scan cursors / progress
-    uint24 private stakeLevelComplete;
-    uint32 private scanCursor = SS_IDLE;
-    uint32 private payoutIndex;
-
-    // Daily jackpot accounting
-    uint256 private currentTenthPlayerBonusPool;
-
-    // Coinflip roster stored as a reusable ring buffer.
-    address[] private cfPlayers;
-    uint128 private cfHead; // next index to pay
-    uint128 private cfTail; // next slot to write
-
-    mapping(address => uint256) public coinflipAmount;
-
-    // Tracks headline bettors for bonus logic.
-    PlayerScore[8] public topBettors;
-
-    // Affiliates / luckbox
-    mapping(bytes32 => AffiliateCodeInfo) private affiliateCode;
-    mapping(uint24 => mapping(address => uint256)) public affiliateCoinEarned; // level => player => earned
-    mapping(address => bytes32) private playerReferralCode;
-    mapping(address => uint256) public playerLuckbox;
-    PlayerScore[8] public affiliateLeaderboard;
-
-    // Staking
-    mapping(uint24 => address[]) private stakeAddr; // level => stakers
-    mapping(uint24 => mapping(address => uint256)) private stakeAmt; // level => packed stake lanes (principal/risk)
-    struct StakeTrophyCandidate {
-        address player;
-        uint72 principal; // fits with address+level in one slot
-        uint24 level;
-    }
-    StakeTrophyCandidate private stakeTrophyCandidate;
-
-    // Leaderboard index maps (1-based positions)
-    mapping(address => uint8) private affiliatePos;
-    mapping(address => uint8) private topPos;
-    mapping(address => uint32) private luckyFlipStreak;
-    mapping(address => uint48) private lastLuckyStreakEpoch;
-    uint48 private streakEpoch;
-
-    // Bounty / BAF heads
-    uint128 public currentBounty = ONEK;
-    uint128 public biggestFlipEver = ONEK;
-    address private bountyOwedTo;
-    uint96 public totalPresaleSold; // total presale output in base units (6 decimals)
-
-    uint256 private nukeStream;
-
-    // BAF / Decimator execution state
-    BAFState private bafState;
-    BAFScan private bs;
-    uint256 private extVar; // decimator accumulator/denominator
-
-    // Decimator tracking
-    mapping(address => DecEntry) private decBurn;
-    mapping(uint24 => mapping(uint24 => address[])) private decBuckets; // level => bucketIdx => players
-    mapping(uint24 => uint32) private decPlayersCount;
-    uint32[32] private decBucketAccumulator; // index by denominator (2..31)
     // ---------------------------------------------------------------------
     // Modifiers
     // ---------------------------------------------------------------------

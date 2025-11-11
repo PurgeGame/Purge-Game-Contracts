@@ -2,13 +2,14 @@
 pragma solidity ^0.8.26;
 
 import {IPurgeCoinModule, IPurgeGameTrophiesModule} from "./PurgeGameModuleInterfaces.sol";
+import {PurgeGameStorage} from "../storage/PurgeGameStorage.sol";
 
 /**
  * @title PurgeGameJackpotModule
  * @notice Delegate-called module that hosts the jackpot distribution logic for `PurgeGame`.
  *         The storage layout mirrors the core contract so writes land in the parent via `delegatecall`.
  */
-contract PurgeGameJackpotModule {
+contract PurgeGameJackpotModule is PurgeGameStorage {
     event PlayerCredited(address indexed player, uint256 amount);
     event Jackpot(uint256 traits);
 
@@ -28,58 +29,6 @@ contract PurgeGameJackpotModule {
     uint256 private constant TROPHY_FLAG_MAP = uint256(1) << 200;
     uint256 private constant MINT_MASK_24 = (uint256(1) << 24) - 1;
     uint256 private constant ETH_LAST_LEVEL_SHIFT = 0;
-
-    // -----------------------
-    // Storage layout mirror
-    // -----------------------
-    uint256 private price = 0.025 ether;
-    uint256 private priceCoin = 1_000_000_000;
-
-    uint256 private lastPrizePool = 125 ether;
-    uint256 private levelPrizePool;
-    uint256 private prizePool;
-    uint256 private nextPrizePool;
-    uint256 private carryoverForNextLevel;
-    uint256 private decimatorHundredPool; // layout placeholder for core contract
-    bool private decimatorHundredReady; // layout placeholder for core contract
-
-    uint48 private levelStartTime = type(uint48).max;
-    uint48 private dailyIdx;
-
-    uint24 public level = 1;
-    uint8 public gameState = 1;
-    uint8 private jackpotCounter;
-    uint8 private earlyPurgePercent;
-    uint8 private phase;
-    uint16 private lastExterminatedTrait = TRAIT_ID_TIMEOUT;
-    bool private rngLockedFlag;
-    bool private rngFulfilled = true;
-    uint256 private rngWordCurrent;
-    uint256 private vrfRequestId;
-
-    uint32 private airdropMapsProcessedCount;
-    uint32 private airdropIndex;
-    uint32 private traitRebuildCursor;
-    uint32 private airdropMultiplier;
-    bool private traitCountsSeedQueued;
-    bool private traitCountsShouldOverwrite;
-
-    address[] private pendingMapMints;
-    mapping(address => uint32) private playerMapMintsOwed;
-
-    mapping(address => uint256) private claimableWinnings;
-    mapping(uint24 => address[][256]) private traitPurgeTicket;
-
-    struct PendingEndLevel {
-        address exterminator;
-        uint24 level;
-        uint256 sidePool;
-    }
-    PendingEndLevel private pendingEndLevel;
-
-    uint32[80] internal dailyPurgeCount;
-    uint32[256] internal traitRemaining;
-    mapping(address => uint256) private mintPacked_;
 
     function payDailyJackpot(
         bool isDaily,
@@ -101,7 +50,7 @@ contract PurgeGameJackpotModule {
 
             uint24 targetLevel = lvl + 1;
             (uint256 dailyCoinPool, ) = coinContract.prepareCoinJackpot();
-            uint256 carryBal = carryoverForNextLevel;
+            uint256 carryBal = carryOver;
             uint256 ethPool = (carryBal * 50) / 10_000;
             if (ethPool > carryBal) ethPool = carryBal;
 
@@ -155,8 +104,8 @@ contract PurgeGameJackpotModule {
             coinContract.rollDailyQuest(questDay, questEntropy);
 
             if (dailyPaidEth != 0) {
-                uint256 carryAfter = carryoverForNextLevel;
-                carryoverForNextLevel = dailyPaidEth > carryAfter ? 0 : carryAfter - dailyPaidEth;
+                uint256 carryAfter = carryOver;
+                carryOver = dailyPaidEth > carryAfter ? 0 : carryAfter - dailyPaidEth;
             }
 
             unchecked {
@@ -174,7 +123,7 @@ contract PurgeGameJackpotModule {
         bool coinOnly = percentBefore >= EARLY_PURGE_COIN_ONLY_THRESHOLD;
         uint256 poolWei;
         if (!coinOnly && gameState == 2 && phase <= 2) {
-            uint256 carryBal = carryoverForNextLevel;
+            uint256 carryBal = carryOver;
             uint256 poolBps = 50; // default 0.5%
             bool initialTrigger = percentBefore == 0;
             bool thresholdTrigger = percentBefore < EARLY_PURGE_COIN_ONLY_THRESHOLD &&
@@ -259,8 +208,8 @@ contract PurgeGameJackpotModule {
         uint48 currentDay = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
         dailyIdx = currentDay;
 
-        uint256 carry = carryoverForNextLevel;
-        carryoverForNextLevel = paidWei > carry ? 0 : carry - paidWei;
+        uint256 carry = carryOver;
+        carryOver = paidWei > carry ? 0 : carry - paidWei;
     }
 
     function payMapJackpot(
@@ -333,13 +282,13 @@ contract PurgeGameJackpotModule {
         uint256 rngWord,
         IPurgeCoinModule coinContract
     ) external returns (uint256 effectiveWei) {
-        uint256 totalWei = carryoverForNextLevel + prizePool;
+        uint256 totalWei = carryOver + prizePool;
         uint256 burnieAmount = (totalWei * 5 * priceCoin) / 1 ether;
         coinContract.burnie(burnieAmount);
 
         uint256 savePctTimes2 = _mapCarryoverPercent(lvl, rngWord);
         uint256 saveNextWei = (totalWei * savePctTimes2) / 200;
-        carryoverForNextLevel = saveNextWei;
+        carryOver = saveNextWei;
 
         uint256 jackpotBase = totalWei - saveNextWei;
         uint256 mapPct = _mapJackpotPercent(lvl);

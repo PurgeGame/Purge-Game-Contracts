@@ -1,59 +1,18 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {PurgeGameNFT} from "../PurgeGameNFT.sol";
-import {IPurgeGame} from "../interfaces/IPurgeGame.sol";
-import {IPurgeQuestModule} from "../interfaces/IPurgeQuestModule.sol";
-import {IPurgeGameTrophies} from "../PurgeGameTrophies.sol";
+import {PurgeCoinStorage} from "../storage/PurgeCoinStorage.sol";
 
 /**
  * @title PurgeCoinExternalJackpotModule
  * @notice Delegate-call module that hosts the BAF/Decimator external jackpot logic for Purgecoin.
  *         Storage layout mirrors the parent contract so writes land on the main contract via `delegatecall`.
  */
-contract PurgeCoinExternalJackpotModule {
+contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
     // ---------------------------------------------------------------------
     // Errors
     // ---------------------------------------------------------------------
     error InvalidKind();
-
-    // ---------------------------------------------------------------------
-    // Types
-    // ---------------------------------------------------------------------
-    struct PlayerScore {
-        address player;
-        uint96 score;
-    }
-
-    struct BAFState {
-        uint128 totalPrizePoolWei;
-        uint120 returnAmountWei;
-        bool inProgress;
-    }
-
-    struct BAFScan {
-        uint120 per;
-        uint32 limit;
-        uint8 offset;
-    }
-
-    struct DecEntry {
-        uint192 burn;
-        uint24 level;
-        uint8 bucket;
-        bool winner;
-    }
-
-    struct AffiliateCodeInfo {
-        address owner;
-        uint8 rakeback;
-    }
-
-    struct StakeTrophyCandidate {
-        address player;
-        uint72 principal;
-        uint24 level;
-    }
 
     // ---------------------------------------------------------------------
     // Constants
@@ -71,72 +30,6 @@ contract PurgeCoinExternalJackpotModule {
     uint256 private constant TROPHY_FLAG_DECIMATOR = uint256(1) << 204;
     uint256 private constant TROPHY_BASE_LEVEL_SHIFT = 128;
     uint24 private constant DECIMATOR_SPECIAL_LEVEL = 100;
-
-    // ---------------------------------------------------------------------
-    // Storage mirror (keep order identical to Purgecoin)
-    // ---------------------------------------------------------------------
-    IPurgeGame private purgeGame;
-    PurgeGameNFT private purgeGameNFT;
-    IPurgeGameTrophies private purgeGameTrophies;
-    IPurgeQuestModule private questModule;
-    address private externalJackpotModule; // storage slot alignment with Purgecoin
-
-    bool private tbActive;
-    bool private bonusActive;
-    uint8 private extMode;
-
-    uint8 private affiliateLen;
-    uint8 private topLen;
-
-    uint8 private tbMod;
-    uint32 private tbRemain;
-    uint256 private tbPrize;
-
-    uint24 private stakeLevelComplete;
-    uint32 private scanCursor = SS_IDLE;
-    uint32 private payoutIndex;
-
-    uint256 private currentTenthPlayerBonusPool;
-
-    address[] private cfPlayers;
-    uint128 private cfHead;
-    uint128 private cfTail;
-
-    mapping(address => uint256) public coinflipAmount;
-
-    PlayerScore[8] public topBettors;
-
-    mapping(bytes32 => AffiliateCodeInfo) private affiliateCode;
-    mapping(uint24 => mapping(address => uint256)) public affiliateCoinEarned;
-    mapping(address => bytes32) private playerReferralCode;
-    mapping(address => uint256) public playerLuckbox;
-    PlayerScore[8] public affiliateLeaderboard;
-
-    mapping(uint24 => address[]) private stakeAddr;
-    mapping(uint24 => mapping(address => uint256)) private stakeAmt;
-    StakeTrophyCandidate private stakeTrophyCandidate;
-
-    mapping(address => uint8) private affiliatePos;
-    mapping(address => uint8) private topPos;
-    mapping(address => uint32) private luckyFlipStreak;
-    mapping(address => uint48) private lastLuckyStreakEpoch;
-    uint48 private streakEpoch;
-
-    uint128 public currentBounty;
-    uint128 public biggestFlipEver;
-    address private bountyOwedTo;
-    uint96 public totalPresaleSold;
-
-    uint256 private nukeStream;
-
-    BAFState private bafState;
-    BAFScan private bs;
-    uint256 private extVar;
-
-    mapping(address => DecEntry) private decBurn;
-    mapping(uint24 => mapping(uint24 => address[])) private decBuckets;
-    mapping(uint24 => uint32) private decPlayersCount;
-    uint32[32] private decBucketAccumulator;
 
     // ---------------------------------------------------------------------
     // External jackpot logic

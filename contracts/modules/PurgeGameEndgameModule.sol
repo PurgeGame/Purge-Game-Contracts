@@ -3,13 +3,14 @@ pragma solidity ^0.8.26;
 
 import {IPurgeGameTrophies} from "../PurgeGameTrophies.sol";
 import {IPurgeCoinModule, IPurgeGameTrophiesModule} from "./PurgeGameModuleInterfaces.sol";
+import {PurgeGameStorage} from "../storage/PurgeGameStorage.sol";
 
 /**
  * @title PurgeGameEndgameModule
  * @notice Delegate-called module that hosts the slow-path endgame settlement logic for `PurgeGame`.
  *         The storage layout mirrors the core contract so writes land in the parent via `delegatecall`.
  */
-contract PurgeGameEndgameModule {
+contract PurgeGameEndgameModule is PurgeGameStorage {
     // -----------------------
     // Custom Errors / Events
     // -----------------------
@@ -17,84 +18,8 @@ contract PurgeGameEndgameModule {
 
     event PlayerCredited(address indexed player, uint256 amount);
 
-    // -----------------------
-    // Storage layout mirror
-    // -----------------------
-    // -----------------------
-    // Game Constants (subset)
-    // -----------------------
     uint32 private constant DEFAULT_PAYOUTS_PER_TX = 420;
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
-
-    // -----------------------
-    // Price
-    // -----------------------
-    uint256 private price;
-    uint256 private priceCoin;
-
-    // -----------------------
-    // Prize Pools and RNG
-    // -----------------------
-    uint256 private lastPrizePool;
-    uint256 private levelPrizePool;
-    uint256 private prizePool;
-    uint256 private nextPrizePool;
-    uint256 private carryOver;
-    uint256 private decimatorHundredPool;
-    bool private decimatorHundredReady;
-
-    // -----------------------
-    // Time / Session Tracking
-    // -----------------------
-    uint48 private levelStartTime;
-    uint48 private dailyIdx;
-
-    // -----------------------
-    // Game Progress
-    // -----------------------
-    uint24 public level;
-    uint8 public gameState;
-    uint8 private jackpotCounter;
-    uint8 private earlyPurgePercent;
-    uint8 private phase;
-    uint16 private lastExterminatedTrait;
-    bool private rngLockedFlag;
-    bool private rngFulfilled = true;
-    uint256 private rngWordCurrent;
-    uint256 private vrfRequestId;
-
-    // -----------------------
-    // Minting / Airdrops
-    // -----------------------
-    uint32 private airdropMapsProcessedCount;
-    uint32 private airdropIndex;
-    uint32 private traitRebuildCursor;
-    uint32 private airdropMultiplier;
-    bool private traitCountsSeedQueued;
-    bool private traitCountsShouldOverwrite;
-
-    address[] private pendingMapMints;
-    mapping(address => uint32) private playerMapMintsOwed;
-
-    // -----------------------
-    // Token / Trait State
-    // -----------------------
-    mapping(address => uint256) private claimableWinnings;
-    mapping(uint24 => address[][256]) private traitPurgeTicket;
-
-    struct PendingEndLevel {
-        address exterminator;
-        uint24 level;
-        uint256 sidePool;
-    }
-    PendingEndLevel private pendingEndLevel;
-
-    // -----------------------
-    // Daily / Trait Counters
-    // -----------------------
-    uint32[80] internal dailyPurgeCount;
-    uint32[256] internal traitRemaining;
-    mapping(address => uint256) private mintPacked_;
 
     constructor() {}
 

@@ -8,6 +8,7 @@ import {IPurgeCoinModule, IPurgeGameTrophiesModule} from "./modules/PurgeGameMod
 import {IPurgeCoin} from "./interfaces/IPurgeCoin.sol";
 import {IPurgeRendererLike} from "./interfaces/IPurgeRendererLike.sol";
 import {IPurgeGameEndgameModule, IPurgeGameJackpotModule} from "./interfaces/IPurgeGameModules.sol";
+import {PurgeGameStorage} from "./storage/PurgeGameStorage.sol";
 
 /**
  * @title Purge Game — Core NFT game contract
@@ -45,7 +46,7 @@ interface ILinkToken {
 // Contract
 // ===========================================================================
 
-contract PurgeGame {
+contract PurgeGame is PurgeGameStorage {
     // -----------------------
     // Custom Errors
     // -----------------------
@@ -107,80 +108,6 @@ contract PurgeGame {
     uint256 private constant COIN_DAY_STREAK_SHIFT = 156;
     uint256 private constant AGG_DAY_SHIFT = 176;
     uint256 private constant AGG_DAY_STREAK_SHIFT = 208;
-
-    // -----------------------
-    // Price
-    // -----------------------
-    uint256 private price = 0.025 ether; // Base mint price
-    uint256 private priceCoin = 1_000_000_000; // 1,000 Purgecoin (6d) base unit
-
-    // -----------------------
-    // Prize Pools and RNG
-    // -----------------------
-    uint256 private lastPrizePool = 125 ether; // Snapshot from previous epoch (non-zero post L1)
-    uint256 private levelPrizePool; // Snapshot for endgame distribution of current level
-    uint256 private prizePool; // Live ETH pool for current level
-    uint256 private nextPrizePool; // ETH collected during purge for upcoming level
-    uint256 private carryOver; // Carryover amount reserved for the next level (wei)
-    uint256 private decimatorHundredPool; // Locked carryover reserved for the level 100 Decimator
-    bool private decimatorHundredReady; // True once the level 100 Decimator pool has been funded
-
-    // -----------------------
-    // Time / Session Tracking
-    // -----------------------
-    uint48 private levelStartTime = type(uint48).max; // Wall-clock start of current level
-    uint48 private dailyIdx; // Daily session index (derived from JACKPOT_RESET_TIME)
-
-    // -----------------------
-    // Game Progress
-    // -----------------------
-    uint24 public level = 1; // 1-based level counter
-    uint8 public gameState = 1; // Phase FSM
-    uint8 private jackpotCounter; // # of daily jackpots paid in current level
-    uint8 private earlyPurgePercent; // Cached ratio of current prize pool relative to the prior level (0-255)
-    uint8 private phase; // Airdrop sub-phase (0..7)
-    uint16 private lastExterminatedTrait = TRAIT_ID_TIMEOUT; // The winning trait from the previous season (timeout sentinel)
-
-    // -----------------------
-    // RNG Liveness Flags
-    // -----------------------
-    bool private rngLockedFlag;
-    bool private rngFulfilled = true;
-    uint256 private rngWordCurrent;
-    uint256 private vrfRequestId;
-
-    // -----------------------
-    // Minting / Airdrops
-    // -----------------------
-    uint32 private airdropMapsProcessedCount; // Progress inside current map-mint player's queue
-    uint32 private airdropIndex; // Progress across players in pending arrays
-    uint32 private traitRebuildCursor; // Tokens processed during trait rebuild
-    uint32 private airdropMultiplier = 1; // Multiplier applied to purchased tokens during the airdrop
-    bool private traitCountsSeedQueued; // Trait seeding pending after pending mints finish
-    bool private traitCountsShouldOverwrite; // On next rebuild slice, overwrite instead of accumulate
-
-    address[] private pendingMapMints; // Queue of players awaiting map mints
-    mapping(address => uint32) private playerMapMintsOwed; // Player => map mints owed
-
-    // -----------------------
-    // Token / Trait State
-    // -----------------------
-    mapping(address => uint256) private claimableWinnings; // ETH claims accumulated on-chain
-    mapping(uint24 => address[][256]) private traitPurgeTicket; // level => traitId => ticket holders
-
-    struct PendingEndLevel {
-        address exterminator; // Non-zero means trait win; zero means map timeout
-        uint24 level; // Level that just ended (0 sentinel = none pending)
-        uint256 sidePool; // Trait win: pool snapshot for trophy/exterminator splits; Map timeout: full carry pool snapshot
-    }
-    PendingEndLevel private pendingEndLevel;
-
-    // -----------------------
-    // Daily / Trait Counters
-    // -----------------------
-    uint32[80] internal dailyPurgeCount; // Layout: 8 symbol, 8 color, 64 trait buckets
-    uint32[256] internal traitRemaining; // Remaining supply per trait (0 means exhausted)
-    mapping(address => uint256) private mintPacked_;
 
     // -----------------------
     // Constructor
