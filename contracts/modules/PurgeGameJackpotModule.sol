@@ -524,12 +524,26 @@ contract PurgeGameJackpotModule {
     ) private returns (uint256 totalPaidEth, uint256 entropyCursor, bool trophyGiven) {
         uint256 ethDistributed;
         entropyCursor = entropy;
+
+        int8 trophyIndex = -1;
+        if (mapTrophy) {
+            for (uint8 i; i < 4; ) {
+                if (bucketCounts[i] == 1) {
+                    trophyIndex = int8(i);
+                    break;
+                }
+                unchecked {
+                    ++i;
+                }
+            }
+        }
+
         for (uint8 traitIdx; traitIdx < 4; ) {
             uint16 shareBps = uint16(traitShareBpsPacked >> (traitIdx * 16));
             uint256 share = _sliceJackpotShare(ethPool, shareBps, traitIdx, ethDistributed);
             uint8 traitId = winningTraits[traitIdx];
             uint16 bucketCount = bucketCounts[traitIdx];
-            bool bucketGetsTrophy = mapTrophy && !trophyGiven && bucketCount == 1;
+            bool bucketGetsTrophy = mapTrophy && !trophyGiven && trophyIndex >= 0 && traitIdx == uint8(trophyIndex);
             if (bucketGetsTrophy) {
                 if (mapStakeSiphon != 0) {
                     uint256 siphon = mapStakeSiphon > share ? share : mapStakeSiphon;
@@ -641,9 +655,6 @@ contract PurgeGameJackpotModule {
         uint16 totalCount = winnerCount;
         if (totalCount == 0) return (nextEntropy, trophyGivenOut, 0, 0);
 
-        uint256 perWinner = traitShare / totalCount;
-        if (perWinner == 0) return (nextEntropy, trophyGivenOut, 0, 0);
-
         uint8 requested = uint8(totalCount);
         nextEntropy = _entropyStep(nextEntropy ^ (uint256(traitIdx) << 64) ^ traitShare);
         address[] memory winners = _randTraitTicket(
@@ -656,7 +667,11 @@ contract PurgeGameJackpotModule {
         uint8 len = uint8(winners.length);
         if (len > requested) len = requested;
 
-        bool needTrophy = mapTrophy && winnerCount == 1 && !trophyGivenOut;
+        uint256 perWinner = traitShare / totalCount;
+        if (perWinner == 0) return (nextEntropy, trophyGivenOut, 0, 0);
+
+        bool needTrophy = mapTrophy && !trophyGivenOut;
+
         for (uint8 i; i < len; ) {
             address w = winners[i];
 
@@ -683,6 +698,7 @@ contract PurgeGameJackpotModule {
                 ++i;
             }
         }
+
     }
 
     function _scrambleJackpotEntropy(uint256 entropy, uint256 salt) private pure returns (uint256) {
@@ -802,4 +818,5 @@ contract PurgeGameJackpotModule {
         if (pct > type(uint8).max) return type(uint8).max;
         return uint8(pct);
     }
+
 }
