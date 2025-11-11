@@ -769,7 +769,7 @@ contract PurgeGame {
 
     /// @notice Delegatecall into the endgame module to resolve slow settlement paths.
     function _runEndgameModule(uint24 lvl, uint32 cap, uint48 day, uint256 rngWord) private {
-        endgameModule.delegatecall(
+        (bool ok, ) = endgameModule.delegatecall(
             abi.encodeWithSelector(
                 IPurgeGameEndgameModule.finalizeEndgame.selector,
                 lvl,
@@ -780,6 +780,7 @@ contract PurgeGame {
                 trophies
             )
         );
+        if (!ok) revert E();
     }
 
     // --- Claiming winnings (ETH) --------------------------------------------------------------------

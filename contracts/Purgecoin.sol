@@ -869,17 +869,20 @@ contract Purgecoin {
         }
     }
 
-    /// @notice Wire the game, NFT, and renderer contracts required by Purgecoin.
+    /// @notice Wire the game, NFT, renderers, and supporting modules required by Purgecoin.
     /// @dev Creator only; callable once.
     function wire(
         address game_,
         address nft_,
         address trophies_,
         address regularRenderer_,
-        address trophyRenderer_
+        address trophyRenderer_,
+        address questModule_,
+        address externalJackpotModule_
     ) external {
         if (msg.sender != creator) revert OnlyDeployer();
         if (address(purgeGameNFT) != address(0) || address(purgeGame) != address(0)) revert OnlyDeployer();
+        if (questModule_ == address(0) || externalJackpotModule_ == address(0)) revert ZeroAddress();
         purgeGame = IPurgeGame(game_);
         bytes32 h = H;
         assembly {
@@ -887,25 +890,12 @@ contract Purgecoin {
         }
         purgeGameNFT = PurgeGameNFT(nft_);
         purgeGameTrophies = IPurgeGameTrophies(trophies_);
+        questModule = IPurgeQuestModule(questModule_);
+        externalJackpotModule = externalJackpotModule_;
         IPurgeRenderer(regularRenderer_).wireContracts(game_, nft_);
         IPurgeRenderer(trophyRenderer_).wireContracts(game_, nft_);
         purgeGameNFT.wireAll(game_, trophies_);
         purgeGameTrophies.wireAndPrime(game_, address(this), 1);
-    }
-
-    /// @notice Configure the quest module responsible for daily quest state.
-    /// @dev Creator only; module may be updated if logic is upgraded.
-    function setQuestModule(address module) external {
-        if (msg.sender != creator) revert OnlyDeployer();
-        questModule = IPurgeQuestModule(module);
-    }
-
-    /// @notice Configure the delegate module that hosts the external jackpot logic.
-    /// @dev Creator only; must be a deployed contract containing the extracted runtime.
-    function setExternalJackpotModule(address module) external {
-        if (msg.sender != creator) revert OnlyDeployer();
-        if (module == address(0)) revert ZeroAddress();
-        externalJackpotModule = module;
     }
 
     /// @notice Credit the creator's share of gameplay proceeds.

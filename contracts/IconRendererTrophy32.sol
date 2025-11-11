@@ -160,11 +160,11 @@ contract IconRendererTrophy32 {
         string memory trophyType;
         string memory trophyLabel;
         if (isMap) {
-            trophyType = "Map";
+            trophyType = "MAP";
             trophyLabel = "MAP Trophy";
         } else if (isAffiliate) {
-            trophyType = "Top Affiliate's";
-            trophyLabel = "Top Affiliate's Trophy";
+            trophyType = "Affiliate";
+            trophyLabel = "Affiliate Trophy";
         } else if (isStake) {
             trophyType = "Stake";
             trophyLabel = "Stake Trophy";
@@ -175,8 +175,8 @@ contract IconRendererTrophy32 {
             trophyType = "Decimator";
             trophyLabel = "Decimator Trophy";
         } else {
-            trophyType = "Winner's";
-            trophyLabel = "Winner's Trophy";
+            trophyType = "Exterminator";
+            trophyLabel = "Exterminator Trophy";
         }
 
         string memory desc;
