@@ -13,10 +13,14 @@ const TOP_AFFILIATE_SENTINEL = 0xfffen;
 const STAKE_SENTINEL = 0xfffdn;
 const BAF_SENTINEL = 0xfffan;
 const DEC_SENTINEL = 0xfffbn;
+const ETH_ATTACHMENT_MASK = (1n << 128n) - 1n;
 
 const LEVEL_PRIMARY = 25n;
 const LEVEL_DOUBLE = 90n;
 const OUTPUT_ROOT = path.join(__dirname, "..", "artifacts", "tmp", "trophies");
+const WEI_PER_ETH = 1_000_000_000_000_000_000n;
+const SAMPLE_TRAIT_WIN_POOL_WEI = 100n * WEI_PER_ETH; // mirrors a 100 ETH pool for showcase purposes
+const SAMPLE_AFFILIATE_ATTACHMENT = SAMPLE_TRAIT_WIN_POOL_WEI / 100n; // affiliate gets 1% of the pool on-chain
 
 const STATUS_STAKED = 1;
 const STATUS_ETH = 2;
@@ -35,8 +39,8 @@ function encodeSymbolTrait(quadrant, colorIdx, symbolIdx) {
   return BigInt(packed);
 }
 
-function encodeData(flags, trait, level = LEVEL_PRIMARY) {
-  return encodeTraitValue(trait) | (level << 128n) | flags;
+function encodeData(flags, trait, level = LEVEL_PRIMARY, ethAttachment = 0n) {
+  return encodeTraitValue(trait) | (level << 128n) | flags | (ethAttachment & ETH_ATTACHMENT_MASK);
 }
 
 function slug(...parts) {
@@ -118,14 +122,20 @@ async function main() {
 
   const staticVariants = [
     { slug: slug("map", "standard"), flags: MAP_FLAG, trait: RESERVED_SENTINEL, level: LEVEL_PRIMARY },
-    { slug: slug("affiliate", "top"), flags: AFFILIATE_FLAG, trait: TOP_AFFILIATE_SENTINEL, level: LEVEL_PRIMARY },
+    {
+      slug: slug("affiliate", "top"),
+      flags: AFFILIATE_FLAG,
+      trait: TOP_AFFILIATE_SENTINEL,
+      level: LEVEL_PRIMARY,
+      attachment: SAMPLE_AFFILIATE_ATTACHMENT,
+    },
     { slug: slug("stake", "largest"), flags: STAKE_FLAG, trait: STAKE_SENTINEL, level: LEVEL_PRIMARY },
     { slug: slug("baf", "finale"), flags: BAF_FLAG, trait: BAF_SENTINEL, level: LEVEL_PRIMARY },
     { slug: slug("decimator", "finale"), flags: DEC_FLAG, trait: DEC_SENTINEL, level: LEVEL_PRIMARY },
   ];
 
   for (const variant of staticVariants) {
-    const data = encodeData(variant.flags, variant.trait, variant.level);
+    const data = encodeData(variant.flags, variant.trait, variant.level, variant.attachment ?? 0n);
     await renderVariant(variant.slug, data);
   }
 

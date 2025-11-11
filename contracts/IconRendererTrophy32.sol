@@ -88,6 +88,9 @@ contract IconRendererTrophy32 {
     ];
     uint32 private constant RATIO_MID_1e6 = 780_000;
     uint32 private constant RATIO_IN_1e6 = 620_000;
+    int256 private constant VIEWBOX_HEIGHT_1E6 = 120 * 1_000_000;
+    int256 private constant TOP_AFFILIATE_SHIFT_DOWN_1E6 = 3_200_000;
+    int256 private constant TOP_AFFILIATE_UPWARD_1E6 = (VIEWBOX_HEIGHT_1E6 * 4) / 100; // 4% of total height
 
     IPurgedRead private immutable coin;
     IIcons32 private immutable icons;
@@ -187,28 +190,31 @@ contract IconRendererTrophy32 {
         }
 
         string memory desc;
+        string memory attachmentSuffix;
+        if (hasEthAttachment) {
+            attachmentSuffix = string.concat("\\n", _formatEthAmount(ethAttachment), " ETH claimable.");
+        }
         if (exTr == 0xFFFF) {
             if (lvl == 0) {
                 desc = string.concat("Reserved Purge Game ", trophyLabel, ".");
             } else {
-                desc = string.concat("Reserved for Level ", lvlStr, " ", trophyLabel, ".");
+                desc = string.concat("Reserved for level ", lvlStr, " ", trophyLabel, ".");
             }
         } else if (isAffiliate && exTr == 0xFFFE) {
-            desc = string.concat("Awarded for Level ", lvlStr, " Top Affiliate's champion.");
+            desc = string.concat("Awarded to the top affiliate for level ", lvlStr, ".");
         } else if (isStake && exTr == 0xFFFD) {
-            desc = string.concat("Awarded for Level ", lvlStr, " largest stake maturation.");
+            desc = string.concat("Awarded for level ", lvlStr, " largest stake maturation.");
         } else if (isBaf && exTr == BAF_TRAIT_SENTINEL) {
-            desc = string.concat("Awarded for Level ", lvlStr, " BAF finale.");
+            desc = string.concat("Awarded to the biggest coinflipper in the level ", lvlStr, " BAF.");
         } else if (isDec && exTr == DECIMATOR_TRAIT_SENTINEL) {
-            desc = string.concat("Awarded for Level ", lvlStr, " Decimator finale.");
+            desc = string.concat("Awarded to the biggest winner in the level ", lvlStr, " Decimator.");
         } else {
-            desc = string.concat("Awarded for Level ", lvlStr);
-            desc = string.concat(desc, isMap ? " MAP jackpot." : " extermination victory.");
+            desc = string.concat("Awarded for level ", lvlStr);
+            desc = string.concat(desc, isMap ? " MAP Jackpot." : " Extermination victory.");
         }
 
-        if (hasEthAttachment) {
-            string memory ethAmount = _formatEthAmount(ethAttachment);
-            desc = string.concat(desc, " Contains ", ethAmount, " ETH attachment.");
+        if (bytes(attachmentSuffix).length != 0) {
+            desc = string.concat(desc, attachmentSuffix);
         }
 
         bool includeTraitAttr;
@@ -449,7 +455,7 @@ contract IconRendererTrophy32 {
             }
         }
         if (isTopAffiliate) {
-            fitSym1e6 = (fitSym1e6 * 130) / 100;
+            fitSym1e6 = (fitSym1e6 * 936) / 1000; // 20% smaller than 1.3x baseline, then another 10% reduction
         }
 
         uint32 sSym1e6 = uint32((uint256(2) * rIn2 * fitSym1e6) / m);
@@ -457,7 +463,8 @@ contract IconRendererTrophy32 {
         int256 txm = -(int256(uint256(w)) * int256(uint256(sSym1e6))) / 2;
         int256 tyn = -(int256(uint256(h)) * int256(uint256(sSym1e6))) / 2;
         if (isTopAffiliate) {
-            tyn += 3_200_000; // drop the glyph to sit closer to center for placeholders
+            tyn += TOP_AFFILIATE_SHIFT_DOWN_1E6; // baseline drop for placeholder centering
+            tyn -= TOP_AFFILIATE_UPWARD_1E6; // raise by 4% of total image height
         }
 
         bool solidFill = (!isTopAffiliate && dataQ == 0 && (symIdx == 1 || symIdx == 5));
