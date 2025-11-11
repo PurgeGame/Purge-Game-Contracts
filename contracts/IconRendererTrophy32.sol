@@ -448,12 +448,16 @@ contract IconRendererTrophy32 {
                 fitSym1e6 = (fitSym1e6 * 9) / 10;
             }
         }
+        if (isTopAffiliate) {
+            fitSym1e6 = (fitSym1e6 * 130) / 100;
+        }
+
         uint32 sSym1e6 = uint32((uint256(2) * rIn2 * fitSym1e6) / m);
 
         int256 txm = -(int256(uint256(w)) * int256(uint256(sSym1e6))) / 2;
         int256 tyn = -(int256(uint256(h)) * int256(uint256(sSym1e6))) / 2;
         if (isTopAffiliate) {
-            tyn -= 2_940_000; // lift ~3% of the inner square (≈98px * 3%)
+            tyn += 3_200_000; // drop the glyph to sit closer to center for placeholders
         }
 
         bool solidFill = (!isTopAffiliate && dataQ == 0 && (symIdx == 1 || symIdx == 5));

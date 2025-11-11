@@ -21,8 +21,8 @@ const OUTPUT_ROOT = path.join(__dirname, "..", "artifacts", "tmp", "trophies");
 const STATUS_STAKED = 1;
 const STATUS_ETH = 2;
 const STATUS_DOUBLE = 4;
-const STATUS_DEFAULT = STATUS_STAKED | STATUS_ETH;
-const STATUS_DOUBLE_WIN = STATUS_DEFAULT | STATUS_DOUBLE;
+const STATUS_DEFAULT = 0;
+const STATUS_DOUBLE_WIN = STATUS_DOUBLE;
 
 const symbolLabels = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta"];
 

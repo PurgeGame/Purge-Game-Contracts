@@ -1508,7 +1508,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
                     }
                     if (rand == 0) {
                         ++slotSeed;
-                        rand = randomWord | slotSeed;
+                        rand = uint256(keccak256(abi.encode(randomWord, slotSeed, slot)));
                     }
                     uint256 idx = 2 + ((rand & mask) % span);
                     rand >>= 64;
@@ -1534,7 +1534,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
                     }
                     if (rand == 0) {
                         ++slotSeed;
-                        rand = randomWord | slotSeed;
+                        rand = uint256(keccak256(abi.encode(randomWord, slotSeed, slot)));
                     }
                     uint256 idx = 2 + ((rand & mask) % span);
                     rand >>= 64;
