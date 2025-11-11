@@ -40,6 +40,8 @@ contract PurgeGameJackpotModule {
     uint256 private prizePool;
     uint256 private nextPrizePool;
     uint256 private carryoverForNextLevel;
+    uint256 private decimatorHundredPool; // layout placeholder for core contract
+    bool private decimatorHundredReady; // layout placeholder for core contract
 
     uint48 private levelStartTime = type(uint48).max;
     uint48 private dailyIdx;
