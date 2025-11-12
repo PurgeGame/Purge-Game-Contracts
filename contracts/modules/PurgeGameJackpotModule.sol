@@ -274,6 +274,9 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
 
         earlyPurgePercent = 0;
 
+        uint48 questDay = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
+        coinContract.primeMintEthQuest(questDay + 1);
+
         return true;
     }
 

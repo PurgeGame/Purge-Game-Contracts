@@ -53,6 +53,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
     DailyQuest[QUEST_SLOT_COUNT] private activeQuests;
     mapping(address => PlayerQuestState) private questPlayerState;
     mapping(address => bool) private hasEthMint;
+    uint48 private forcedMintEthQuestDay;
 
     uint16[11] private questMintAnyMax = [
         uint16(2),
@@ -155,6 +156,10 @@ contract PurgeQuestModule is IPurgeQuestModule {
         _;
     }
 
+    function primeMintEthQuest(uint48 day) external onlyCoin {
+        forcedMintEthQuestDay = day;
+    }
+
     function rollDailyQuest(uint48 day, uint256 entropy)
         external
         onlyCoin
@@ -170,10 +175,20 @@ contract PurgeQuestModule is IPurgeQuestModule {
         if (entropy == 0) {
             entropy = uint256(keccak256(abi.encodePacked(block.timestamp, block.prevrandao, day, coin)));
         }
+        bool forceMintEth;
+        uint48 forcedDay = forcedMintEthQuestDay;
+        if (forcedDay != 0 && day >= forcedDay) {
+            forceMintEth = day == forcedDay;
+            forcedMintEthQuestDay = 0;
+        }
+
         for (uint8 slot; slot < QUEST_SLOT_COUNT; ) {
             uint8 exclude = slot == 0 ? type(uint8).max : quests[0].questType;
             uint256 slotEntropy = uint256(keccak256(abi.encode(entropy, slot)));
             _seedQuest(quests[slot], day, slotEntropy, exclude);
+            if (slot == 0 && forceMintEth) {
+                quests[slot].questType = QUEST_TYPE_MINT_ETH;
+            }
             unchecked {
                 ++slot;
             }

@@ -10,6 +10,8 @@ struct QuestInfo {
 }
 
 interface IPurgeQuestModule {
+    function primeMintEthQuest(uint48 day) external;
+
     function rollDailyQuest(uint48 day, uint256 entropy)
         external
         returns (bool rolled, uint8 questType, bool highDifficulty, uint8 stakeMask, uint8 stakeRisk);

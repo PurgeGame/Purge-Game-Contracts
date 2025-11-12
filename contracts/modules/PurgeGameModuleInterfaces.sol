@@ -38,6 +38,8 @@ interface IPurgeCoinModule {
 
     function burnie(uint256 amount) external payable;
 
+    function primeMintEthQuest(uint48 day) external;
+
     function rollDailyQuest(uint48 day, uint256 entropy) external;
 }
 
