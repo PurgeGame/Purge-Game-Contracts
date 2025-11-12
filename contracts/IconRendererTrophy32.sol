@@ -88,6 +88,7 @@ contract IconRendererTrophy32 {
     ];
     uint32 private constant RATIO_MID_1e6 = 780_000;
     uint32 private constant RATIO_IN_1e6 = 620_000;
+    uint32 private constant TOP_AFFILIATE_FIT_1e6 = (760_000 * 936) / 1_000;
     int256 private constant VIEWBOX_HEIGHT_1E6 = 120 * 1_000_000;
     int256 private constant TOP_AFFILIATE_SHIFT_DOWN_1E6 = 3_200_000;
     int256 private constant TOP_AFFILIATE_UPWARD_1E6 = (VIEWBOX_HEIGHT_1E6 * 4) / 100; // 4% of total height
@@ -295,8 +296,13 @@ contract IconRendererTrophy32 {
         uint32 innerSide = _innerSquareSide();
         string memory diamondPath = icons.diamond();
         bool isExtermination = !isMap && !isAffiliate && !isStake && !isBaf && !isDec;
+        bool placeholderTrait = exterminatedTrait == 0xFFFF;
+        if (placeholderTrait && isAffiliate && !isStake) {
+            exterminatedTrait = 0xFFFE;
+            placeholderTrait = false;
+        }
 
-        if (exterminatedTrait == 0xFFFF || isStake) {
+        if (placeholderTrait || isStake) {
             uint8 ringIdx;
             if (isMap) {
                 ringIdx = 2;
@@ -363,11 +369,13 @@ contract IconRendererTrophy32 {
 
         string memory ringOuterColor;
         string memory symbolColor;
+        bool hasCustomAffiliateColor;
         {
             string memory defaultColor = _paletteColor(colIdx, lvl);
             if (isTopAffiliate) {
                 string memory custom = registry.topAffiliateColor(tokenId);
-                ringOuterColor = bytes(custom).length != 0 ? custom : defaultColor;
+                hasCustomAffiliateColor = bytes(custom).length != 0;
+                ringOuterColor = hasCustomAffiliateColor ? custom : defaultColor;
                 symbolColor = ringOuterColor;
             } else {
                 ringOuterColor = defaultColor;
@@ -375,9 +383,12 @@ contract IconRendererTrophy32 {
             }
         }
 
-        string memory border = isTopAffiliate
-            ? _resolve(tokenId, 0, ringOuterColor)
-            : _resolve(tokenId, 0, _borderColor(tokenId, uint32(six), _repeat4(colIdx), lvl));
+        string memory border;
+        if (isTopAffiliate && hasCustomAffiliateColor) {
+            border = _resolve(tokenId, 0, ringOuterColor);
+        } else {
+            border = _resolve(tokenId, 0, _borderColor(tokenId, uint32(six), _repeat4(colIdx), lvl));
+        }
 
         string memory flameColor = _resolve(tokenId, 1, "#111");
         string memory squareFill = _resolve(tokenId, 3, "#d9d9d9");
@@ -427,45 +438,10 @@ contract IconRendererTrophy32 {
         uint16 m = w > h ? w : h;
         if (m == 0) m = 1;
 
-        uint32 fitSym1e6;
-        if (isTopAffiliate) {
-            fitSym1e6 = 760_000;
-        } else if (isDecAward) {
-            fitSym1e6 = 738_000;
-        } else if (dataQ == 0 && (symIdx == 3 || symIdx == 7)) {
-            fitSym1e6 = 1_030_000;
-        } else if (dataQ == 1 && symIdx == 6) {
-            fitSym1e6 = 600_000;
-        } else {
-            fitSym1e6 = 800_000;
-        }
-        if (!isTopAffiliate && dataQ == 1 && _isZodiacShrinkTarget(symIdx)) {
-            fitSym1e6 = (fitSym1e6 * 9) / 10;
-        } else if (!isTopAffiliate && dataQ == 0 && _isCryptoShrinkTarget(symIdx)) {
-            fitSym1e6 = (fitSym1e6 * 85) / 100;
-        } else if (!isTopAffiliate && dataQ == 2) {
-            if (_isGamblingShrinkTarget(symIdx)) {
-                fitSym1e6 = (fitSym1e6 * 9) / 10;
-            } else if (symIdx == 1) {
-                fitSym1e6 = (fitSym1e6 * 115) / 100;
-            }
-        } else if (!isTopAffiliate && dataQ == 3) {
-            if (symIdx != 6 && symIdx != 7) {
-                fitSym1e6 = (fitSym1e6 * 9) / 10;
-            }
-        }
-        if (isTopAffiliate) {
-            fitSym1e6 = (fitSym1e6 * 936) / 1000; // 20% smaller than 1.3x baseline, then another 10% reduction
-        }
-
+        uint32 fitSym1e6 = _symbolFitScale(isTopAffiliate, isDecAward, dataQ, symIdx);
         uint32 sSym1e6 = uint32((uint256(2) * rIn2 * fitSym1e6) / m);
 
-        int256 txm = -(int256(uint256(w)) * int256(uint256(sSym1e6))) / 2;
-        int256 tyn = -(int256(uint256(h)) * int256(uint256(sSym1e6))) / 2;
-        if (isTopAffiliate) {
-            tyn += TOP_AFFILIATE_SHIFT_DOWN_1E6; // baseline drop for placeholder centering
-            tyn -= TOP_AFFILIATE_UPWARD_1E6; // raise by 4% of total image height
-        }
+        (int256 txm, int256 tyn) = _symbolTranslate(w, h, sSym1e6, isTopAffiliate);
 
         bool solidFill = (!isTopAffiliate && dataQ == 0 && (symIdx == 1 || symIdx == 5));
 
@@ -559,7 +535,7 @@ contract IconRendererTrophy32 {
                         '<g clip-path="url(#ct)">',
                         '<path fill="',
                         flameFill,
-                        '" transform="matrix(0.06 0 0 0.06 -15.36 -27)" d="',
+                        '" transform="matrix(0.075 0 0 0.075 -19.2 -33.75)" d="',
                         AFFILIATE_BADGE_PATH,
                         '"/>',
                         "</g>"
@@ -986,6 +962,60 @@ contract IconRendererTrophy32 {
             f /= 10;
         }
         return string(b);
+    }
+
+    function _symbolFitScale(
+        bool isTopAffiliate,
+        bool isDecAward,
+        uint8 dataQ,
+        uint8 symIdx
+    ) private pure returns (uint32) {
+        if (isTopAffiliate) {
+            return TOP_AFFILIATE_FIT_1e6;
+        }
+
+        uint32 fitSym1e6;
+        if (isDecAward) {
+            fitSym1e6 = 738_000;
+        } else if (dataQ == 0 && (symIdx == 3 || symIdx == 7)) {
+            fitSym1e6 = 1_030_000;
+        } else if (dataQ == 1 && symIdx == 6) {
+            fitSym1e6 = 600_000;
+        } else {
+            fitSym1e6 = 800_000;
+        }
+
+        if (dataQ == 1 && _isZodiacShrinkTarget(symIdx)) {
+            fitSym1e6 = (fitSym1e6 * 9) / 10;
+        } else if (dataQ == 0 && _isCryptoShrinkTarget(symIdx)) {
+            fitSym1e6 = (fitSym1e6 * 85) / 100;
+        } else if (dataQ == 2) {
+            if (_isGamblingShrinkTarget(symIdx)) {
+                fitSym1e6 = (fitSym1e6 * 9) / 10;
+            } else if (symIdx == 1) {
+                fitSym1e6 = (fitSym1e6 * 115) / 100;
+            }
+        } else if (dataQ == 3) {
+            if (symIdx != 6 && symIdx != 7) {
+                fitSym1e6 = (fitSym1e6 * 9) / 10;
+            }
+        }
+
+        return fitSym1e6;
+    }
+
+    function _symbolTranslate(
+        uint16 w,
+        uint16 h,
+        uint32 scale1e6,
+        bool isTopAffiliate
+    ) private pure returns (int256 txm, int256 tyn) {
+        txm = -(int256(uint256(w)) * int256(uint256(scale1e6))) / 2;
+        tyn = -(int256(uint256(h)) * int256(uint256(scale1e6))) / 2;
+        if (isTopAffiliate) {
+            tyn += TOP_AFFILIATE_SHIFT_DOWN_1E6;
+            tyn -= TOP_AFFILIATE_UPWARD_1E6;
+        }
     }
 
     function _i(int16 v) private pure returns (string memory) {
