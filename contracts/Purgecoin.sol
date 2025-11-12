@@ -1427,7 +1427,7 @@ contract Purgecoin is PurgeCoinStorage {
     ) private {
         if (!completed || player == address(0)) return;
         if (reward != 0) {
-            _mint(player, reward);
+            addFlip(player, reward, false);
         }
         emit QuestCompleted(player, questType, streak, reward, hardMode);
     }
