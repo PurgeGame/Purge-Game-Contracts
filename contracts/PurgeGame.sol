@@ -1090,8 +1090,8 @@ contract PurgeGame is PurgeGameStorage {
     }
 
     function _tierMultPermille(uint256 subBal) private pure returns (uint16) {
-        if (subBal < 200 ether) return 2000;
-        if (subBal < 300 ether) return 1500;
+        if (subBal < 100 ether) return 2000;
+        if (subBal < 200 ether) return 1500;
         if (subBal < 600 ether) return 1000;
         if (subBal < 1000 ether) return 500;
         if (subBal < 2000 ether) return 100;
