@@ -215,17 +215,16 @@ contract PurgeQuestModule is IPurgeQuestModule {
         }
 
         _questSyncState(state, currentDay);
+        uint8 tier = _questTier(state.baseStreak);
 
         if (!hadEthMint) {
             if (!paidWithEth) {
                 return (0, false, QUEST_TYPE_MINT_ETH, state.streak, false);
             }
             _syncForcedProgress(state, currentDay);
-            uint256 updatedForced = uint256(state.forcedProgress) + quantity;
-            if (updatedForced > type(uint128).max) updatedForced = type(uint128).max;
-            state.forcedProgress = uint128(updatedForced);
+            state.forcedProgress = _clampedAdd128(state.forcedProgress, quantity);
             uint256 entropySource = quests[0].day == currentDay ? quests[0].entropy : quests[1].entropy;
-            uint32 forcedTarget = _questMintEthTarget(state.baseStreak, entropySource);
+            uint32 forcedTarget = _questMintEthTarget(tier, entropySource);
             if (state.forcedProgress >= forcedTarget) {
                 return _questCompleteForced(state, currentDay);
             }
@@ -245,7 +244,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
             if (quest.questType == QUEST_TYPE_MINT_ANY || (paidWithEth && quest.questType == QUEST_TYPE_MINT_ETH)) {
                 matched = true;
                 fallbackType = quest.questType;
-                (reward, hardMode, questType, streak, completed) = _questHandleMintSlot(state, quest, slot, quantity);
+                (reward, hardMode, questType, streak, completed) = _questHandleMintSlot(state, quest, slot, quantity, tier);
                 if (completed) {
                     return (reward, hardMode, questType, streak, completed);
                 }
@@ -269,6 +268,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
             return (0, false, quests[0].questType, state.streak, false);
         }
         _questSyncState(state, currentDay);
+        uint8 tier = _questTier(state.baseStreak);
 
         bool matched;
         uint8 fallbackType = quests[0].questType;
@@ -283,12 +283,11 @@ contract PurgeQuestModule is IPurgeQuestModule {
             matched = true;
             fallbackType = quest.questType;
             _questSyncProgress(state, slot, currentDay);
-            uint256 clamped = flipCredit;
-            if (clamped > type(uint128).max) clamped = type(uint128).max;
+            uint128 clamped = _clampToUint128(flipCredit);
             if (clamped > state.progress[slot]) {
-                state.progress[slot] = uint128(clamped);
+                state.progress[slot] = clamped;
             }
-            uint256 target = uint256(_questFlipTargetTokens(state.baseStreak, quest.entropy)) * MILLION;
+            uint256 target = uint256(_questFlipTargetTokens(tier, quest.entropy)) * MILLION;
             if (state.progress[slot] >= target) {
                 return _questComplete(state, slot, quest);
             }
@@ -311,6 +310,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         }
         PlayerQuestState storage state = questPlayerState[player];
         _questSyncState(state, currentDay);
+        uint8 tier = _questTier(state.baseStreak);
 
         bool matched;
         uint8 fallbackType = quests[0].questType;
@@ -325,7 +325,6 @@ contract PurgeQuestModule is IPurgeQuestModule {
             matched = true;
             fallbackType = quest.questType;
             bool meets = true;
-            uint8 tier = _questTier(state.baseStreak);
             if ((quest.stakeMask & QUEST_STAKE_REQUIRE_PRINCIPAL) != 0) {
                 uint256 requiredPrincipal = uint256(_questStakePrincipalTarget(tier, quest.entropy)) * MILLION;
                 meets = principal >= requiredPrincipal;
@@ -359,6 +358,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
             return (0, false, quests[0].questType, state.streak, false);
         }
         _questSyncState(state, currentDay);
+        uint8 tier = _questTier(state.baseStreak);
 
         bool matched;
         uint8 fallbackType = quests[0].questType;
@@ -373,10 +373,8 @@ contract PurgeQuestModule is IPurgeQuestModule {
             matched = true;
             fallbackType = quest.questType;
             _questSyncProgress(state, slot, currentDay);
-            uint256 updated = uint256(state.progress[slot]) + amount;
-            if (updated > type(uint128).max) updated = type(uint128).max;
-            state.progress[slot] = uint128(updated);
-            uint256 target = uint256(_questAffiliateTargetTokens(state.baseStreak, quest.entropy)) * MILLION;
+            state.progress[slot] = _clampedAdd128(state.progress[slot], amount);
+            uint256 target = uint256(_questAffiliateTargetTokens(tier, quest.entropy)) * MILLION;
             if (state.progress[slot] >= target) {
                 return _questComplete(state, slot, quest);
             }
@@ -462,19 +460,32 @@ contract PurgeQuestModule is IPurgeQuestModule {
     // Internal helpers
     // ---------------------------------------------------------------------
 
+    function _clampedAdd128(uint128 current, uint256 delta) private pure returns (uint128) {
+        unchecked {
+            uint256 sum = uint256(current) + delta;
+            if (sum > type(uint128).max) {
+                sum = type(uint128).max;
+            }
+            return uint128(sum);
+        }
+    }
+
+    function _clampToUint128(uint256 value) private pure returns (uint128) {
+        return value > type(uint128).max ? type(uint128).max : uint128(value);
+    }
+
     function _questHandleMintSlot(
         PlayerQuestState storage state,
         DailyQuest memory quest,
         uint8 slot,
-        uint32 quantity
+        uint32 quantity,
+        uint8 tier
     ) private returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) {
         _questSyncProgress(state, slot, quest.day);
-        uint256 updated = uint256(state.progress[slot]) + quantity;
-        if (updated > type(uint128).max) updated = type(uint128).max;
-        state.progress[slot] = uint128(updated);
+        state.progress[slot] = _clampedAdd128(state.progress[slot], quantity);
         uint32 target = quest.questType == QUEST_TYPE_MINT_ANY
-            ? _questMintAnyTarget(state.baseStreak, quest.entropy)
-            : _questMintEthTarget(state.baseStreak, quest.entropy);
+            ? _questMintAnyTarget(tier, quest.entropy)
+            : _questMintEthTarget(tier, quest.entropy);
         if (state.progress[slot] >= target) {
             return _questComplete(state, slot, quest);
         }
@@ -514,8 +525,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         return uint8(tier);
     }
 
-    function _questMintAnyTarget(uint32 streak, uint256 entropy) private view returns (uint32) {
-        uint8 tier = _questTier(streak);
+    function _questMintAnyTarget(uint8 tier, uint256 entropy) private view returns (uint32) {
         uint16 maxVal = questMintAnyMax[tier];
         if (maxVal <= QUEST_MIN_MINT) {
             return QUEST_MIN_MINT;
@@ -524,8 +534,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         return uint32(rand % maxVal) + QUEST_MIN_MINT;
     }
 
-    function _questMintEthTarget(uint32 streak, uint256 entropy) private view returns (uint32) {
-        uint8 tier = _questTier(streak);
+    function _questMintEthTarget(uint8 tier, uint256 entropy) private view returns (uint32) {
         if (tier == 0) {
             return QUEST_MIN_MINT;
         }
@@ -537,8 +546,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         return uint32(rand % maxVal) + QUEST_MIN_MINT;
     }
 
-    function _questFlipTargetTokens(uint32 streak, uint256 entropy) private view returns (uint32) {
-        uint8 tier = _questTier(streak);
+    function _questFlipTargetTokens(uint8 tier, uint256 entropy) private view returns (uint32) {
         uint16 maxVal = questFlipMax[tier];
         uint256 range = uint256(maxVal) - QUEST_MIN_TOKEN + 1;
         uint256 rand = _questRand(entropy, QUEST_TYPE_FLIP, tier, 0);
@@ -560,8 +568,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         return uint16(uint256(minVal) + (rand % range));
     }
 
-    function _questAffiliateTargetTokens(uint32 streak, uint256 entropy) private view returns (uint32) {
-        uint8 tier = _questTier(streak);
+    function _questAffiliateTargetTokens(uint8 tier, uint256 entropy) private view returns (uint32) {
         uint16 maxVal = questAffiliateMax[tier];
         uint256 range = uint256(maxVal) - QUEST_MIN_TOKEN + 1;
         uint256 rand = _questRand(entropy, QUEST_TYPE_AFFILIATE, tier, 0);
