@@ -62,23 +62,23 @@ contract PurgeQuestModule is IPurgeQuestModule {
         uint16(6),
         uint16(7),
         uint16(8),
-        uint16(9),
-        uint16(10),
-        uint16(11),
-        uint16(12)
+        uint16(8),
+        uint16(8),
+        uint16(8),
+        uint16(8)
     ];
     uint16[11] private questMintEthMax = [
+        uint16(1),
         uint16(2),
+        uint16(2),
+        uint16(2),
+        uint16(3),
+        uint16(3),
+        uint16(4),
+        uint16(4),
         uint16(4),
         uint16(5),
-        uint16(6),
-        uint16(7),
-        uint16(8),
-        uint16(9),
-        uint16(9),
-        uint16(9),
-        uint16(9),
-        uint16(9)
+        uint16(5)
     ];
     uint16[11] private questFlipMax = [
         uint16(400),
