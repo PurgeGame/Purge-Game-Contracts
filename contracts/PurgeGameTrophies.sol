@@ -895,9 +895,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         address currentOwner = address(uint160(nft.packedOwnershipOf(tokenId)));
         if (currentOwner != to) {
             nft.transferTrophy(currentOwner, to, tokenId);
-            if (currentOwner == gameAddress) {
-                nft.incrementTrophySupply(1);
-            }
         }
 
         bool incSupply = _awardTrophyData(to, tokenId, data, deferredWei);
@@ -931,19 +928,19 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
 
     function clearStakePreview(uint24 level) external override onlyCoinCaller {
         uint256 tokenId = _placeholderTokenId(level, PURGE_TROPHY_KIND_STAKE);
-        _eraseTrophy(tokenId, PURGE_TROPHY_KIND_STAKE, false);
+        _eraseTrophy(tokenId, PURGE_TROPHY_KIND_STAKE, true);
     }
 
     function burnBafPlaceholder(uint24 level) external override onlyCoinCaller {
         uint256 tokenId = _placeholderTokenId(level, PURGE_TROPHY_KIND_BAF);
         if (tokenId == 0) return;
-        _eraseTrophy(tokenId, PURGE_TROPHY_KIND_BAF, false);
+        _eraseTrophy(tokenId, PURGE_TROPHY_KIND_BAF, true);
     }
 
     function burnDecPlaceholder(uint24 level) external override onlyCoinCaller {
         uint256 tokenId = _placeholderTokenId(level, PURGE_TROPHY_KIND_DECIMATOR);
         if (tokenId == 0) return;
-        _eraseTrophy(tokenId, PURGE_TROPHY_KIND_DECIMATOR, false);
+        _eraseTrophy(tokenId, PURGE_TROPHY_KIND_DECIMATOR, true);
     }
 
     function processEndLevel(
@@ -1058,7 +1055,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         ctx.mapUnit = req.pool / 20;
         mapImmediateRecipient = address(uint160(nft.packedOwnershipOf(mapTokenId)));
 
-        _eraseTrophy(levelTokenId, PURGE_TROPHY_KIND_LEVEL, false);
+        _eraseTrophy(levelTokenId, PURGE_TROPHY_KIND_LEVEL, true);
 
         ctx.valueIn = msg.value;
         ctx.affiliateWinner = req.exterminator;

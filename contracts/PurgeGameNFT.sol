@@ -96,6 +96,7 @@ contract PurgeGameNFT {
     uint256 private constant _BITMASK_TROPHY_BALANCE = ((uint256(1) << 32) - 1) << _BITPOS_TROPHY_BALANCE;
     uint256 private constant _BITPOS_BALANCE_LEVEL = 224;
     uint256 private constant _BITMASK_BALANCE_LEVEL = ((uint256(1) << 24) - 1) << _BITPOS_BALANCE_LEVEL;
+    uint256 private constant _ADDRESS_DATA_BURN_DELTA = (uint256(1) << _BITPOS_NUMBER_BURNED) - 1;
 
     bytes32 private constant _TRANSFER_EVENT_SIGNATURE =
         0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef;
@@ -862,6 +863,9 @@ contract PurgeGameNFT {
         startTokenId = _currentIndex;
         address gameAddr = address(game);
         _mint(gameAddr, quantity);
+        unchecked {
+            totalTrophySupply += quantity;
+        }
         if (gameAddr != address(0)) {
             _updateTrophyBalance(gameAddr, int32(uint32(quantity)), game.level(), true);
         }
@@ -954,52 +958,40 @@ contract PurgeGameNFT {
 
     function purge(address owner, uint256[] calldata tokenIds) external onlyGame {
         uint256 purged;
+        uint256 burnDelta;
+        uint32 trophiesBurned;
         uint256 len = tokenIds.length;
         uint256 baseLimit = _currentBaseTokenId();
         for (uint256 i; i < len; ) {
             uint256 tokenId = tokenIds[i];
             if (tokenId < baseLimit) revert InvalidToken();
-            _purgeToken(owner, tokenId);
+            bool isTrophy = _purgeToken(owner, tokenId);
             unchecked {
+                burnDelta += _ADDRESS_DATA_BURN_DELTA;
+                if (isTrophy) {
+                    ++trophiesBurned;
+                }
                 ++purged;
                 ++i;
             }
         }
+
+        if (burnDelta != 0) {
+            _applyPurgeAccounting(owner, burnDelta, trophiesBurned);
+        }
+
         seasonPurgedCount += purged;
     }
 
-    function _purgeToken(address owner, uint256 tokenId) private {
+    function _purgeToken(address owner, uint256 tokenId) private returns (bool isTrophy) {
         uint256 packed = _packedOwnershipOf(tokenId);
         if (address(uint160(packed)) != owner) revert TransferFromIncorrectOwner();
-        _burnPacked(tokenId, packed);
+        return _burnPacked(tokenId, packed);
     }
 
-    function _burnPacked(uint256 tokenId, uint256 prevOwnershipPacked) private {
+    function _burnPacked(uint256 tokenId, uint256 prevOwnershipPacked) private returns (bool isTrophy) {
         address from = address(uint160(prevOwnershipPacked));
-        bool isTrophy = (prevOwnershipPacked & _BITMASK_TROPHY_ACTIVE) != 0;
-
-        uint24 currentLevel = game.level();
-
-        uint256 packedData;
-        unchecked {
-            packedData = _packedAddressData[from] + ((1 << _BITPOS_NUMBER_BURNED) - 1);
-        }
-
-        if (isTrophy) {
-            uint256 current = (packedData & _BITMASK_TROPHY_BALANCE) >> _BITPOS_TROPHY_BALANCE;
-            if (current != 0) {
-                unchecked {
-                    --current;
-                }
-            }
-            packedData =
-                (packedData & ~(_BITMASK_TROPHY_BALANCE | _BITMASK_BALANCE_LEVEL)) |
-                (current << _BITPOS_TROPHY_BALANCE) |
-                (uint256(currentLevel) << _BITPOS_BALANCE_LEVEL);
-        } else {
-            packedData = (packedData & ~_BITMASK_BALANCE_LEVEL) | (uint256(currentLevel) << _BITPOS_BALANCE_LEVEL);
-        }
-        _packedAddressData[from] = packedData;
+        isTrophy = (prevOwnershipPacked & _BITMASK_TROPHY_ACTIVE) != 0;
 
         _packedOwnerships[tokenId] = _packOwnershipData(from, _BITMASK_BURNED | _BITMASK_NEXT_INITIALIZED);
 
@@ -1011,6 +1003,24 @@ contract PurgeGameNFT {
         }
 
         emit Transfer(from, address(0), tokenId);
+    }
+
+    function _applyPurgeAccounting(address owner, uint256 burnDelta, uint32 trophiesBurned) private {
+        uint256 packedData = _packedAddressData[owner];
+        unchecked {
+            packedData += burnDelta;
+        }
+
+        uint24 currentLevel = game.level();
+
+        if (trophiesBurned != 0) {
+            uint256 current = (packedData & _BITMASK_TROPHY_BALANCE) >> _BITPOS_TROPHY_BALANCE;
+            uint256 updated = current > trophiesBurned ? current - trophiesBurned : 0;
+            packedData = (packedData & ~_BITMASK_TROPHY_BALANCE) | (updated << _BITPOS_TROPHY_BALANCE);
+        }
+
+        packedData = (packedData & ~_BITMASK_BALANCE_LEVEL) | (uint256(currentLevel) << _BITPOS_BALANCE_LEVEL);
+        _packedAddressData[owner] = packedData;
     }
 
     function processDormant(uint32 limit) external returns (bool finished, bool worked) {
