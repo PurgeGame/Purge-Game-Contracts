@@ -45,6 +45,7 @@ interface IPurgeGameNFT {
     function processPendingMints(uint32 playersToProcess) external returns (bool finished);
     function tokensOwed(address player) external view returns (uint32);
     function processDormant(uint32 maxCount) external returns (bool finished, bool worked);
+    function clearPlaceholderPadding(uint256 startTokenId, uint256 endTokenId) external;
 }
 
 contract PurgeGameNFT {
@@ -612,6 +613,26 @@ contract PurgeGameNFT {
         return packed;
     }
 
+    function _packedOwnershipOfUnchecked(uint256 tokenId) private view returns (uint256 packed) {
+        if (tokenId >= _currentIndex) revert InvalidToken();
+
+        packed = _packedOwnerships[tokenId];
+        if (packed == 0) {
+            unchecked {
+                uint256 curr = tokenId;
+                while (true) {
+                    packed = _packedOwnerships[--curr];
+                    if (packed != 0) break;
+                }
+            }
+        }
+
+        if (packed & _BITMASK_BURNED != 0 || (packed & _BITMASK_ADDRESS) == 0) {
+            revert InvalidToken();
+        }
+        return packed;
+    }
+
     function _packOwnershipData(address owner, uint256 flags) private view returns (uint256 result) {
         assembly {
             owner := and(owner, _BITMASK_ADDRESS)
@@ -867,7 +888,7 @@ contract PurgeGameNFT {
             totalTrophySupply += quantity;
         }
         if (gameAddr != address(0)) {
-            _updateTrophyBalance(gameAddr, int32(uint32(quantity)), game.level(), true);
+            _updateTrophyBalance(gameAddr, 0, game.level(), true);
         }
         return startTokenId;
     }
@@ -876,6 +897,44 @@ contract PurgeGameNFT {
         if (startTokenId >= endTokenId) return;
         _dormantCursor.push(startTokenId);
         _dormantEnd.push(endTokenId);
+    }
+
+    function clearPlaceholderPadding(uint256 startTokenId, uint256 endTokenId) external onlyTrophyModule {
+        if (startTokenId >= endTokenId) return;
+
+        uint256 count = endTokenId - startTokenId;
+        uint256 tokenId = startTokenId;
+        address currentOwner;
+        uint256 burnDelta;
+
+        while (tokenId < endTokenId) {
+            uint256 packed = _packedOwnershipOfUnchecked(tokenId);
+            address owner = address(uint160(packed));
+            bool isTrophy = _burnPacked(tokenId, packed);
+            if (isTrophy) revert E();
+
+            if (owner != currentOwner) {
+                if (currentOwner != address(0) && burnDelta != 0) {
+                    _applyPurgeAccounting(currentOwner, burnDelta, 0);
+                }
+                currentOwner = owner;
+                burnDelta = 0;
+            }
+
+            unchecked {
+                burnDelta += _ADDRESS_DATA_BURN_DELTA;
+                ++tokenId;
+            }
+        }
+
+        if (currentOwner != address(0) && burnDelta != 0) {
+            _applyPurgeAccounting(currentOwner, burnDelta, 0);
+        }
+
+        if (totalTrophySupply < count) revert E();
+        unchecked {
+            totalTrophySupply -= count;
+        }
     }
 
     function getBasePointers() external view onlyTrophyModule returns (uint256 previousBase, uint256 currentBase) {

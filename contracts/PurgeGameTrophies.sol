@@ -8,6 +8,7 @@ interface IPurgeGameNftModule {
     function setBasePointers(uint256 previousBase, uint256 currentBase) external;
     function scheduleDormantRange(uint256 startTokenId, uint256 endTokenId) external;
     function processDormant(uint32 limit) external returns (bool finished, bool worked);
+    function clearPlaceholderPadding(uint256 startTokenId, uint256 endTokenId) external;
     function packedOwnershipOf(uint256 tokenId) external view returns (uint256 packed);
     function transferTrophy(address from, address to, uint256 tokenId) external;
     function setTrophyPackedInfo(uint256 tokenId, uint8 kind, bool staked) external;
@@ -850,8 +851,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
 
         uint256 paddingEnd = mintedEnd - placeholderCount;
         if (paddingEnd > startId) {
-            nft.scheduleDormantRange(startId, paddingEnd);
-            nft.processDormant(type(uint32).max);
+            nft.clearPlaceholderPadding(startId, paddingEnd);
         }
 
         uint256 cursor = mintedEnd;
