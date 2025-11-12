@@ -207,6 +207,8 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     uint256 private constant TROPHY_FLAG_STAKE = uint256(1) << 202;
     uint256 private constant TROPHY_FLAG_BAF = uint256(1) << 203;
     uint256 private constant TROPHY_FLAG_DECIMATOR = uint256(1) << 204;
+    uint256 private constant TROPHY_STAKE_LEVEL_SHIFT = 205;
+    uint256 private constant TROPHY_STAKE_LEVEL_MASK = uint256(0xFFFFFF) << TROPHY_STAKE_LEVEL_SHIFT;
     uint256 private constant TROPHY_OWED_MASK = (uint256(1) << 128) - 1;
     uint256 private constant TROPHY_BASE_LEVEL_SHIFT = 128;
     uint256 private constant TROPHY_LAST_CLAIM_SHIFT = 168;
@@ -516,16 +518,22 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         if (trophyData_[params.tokenId] == 0) revert StakeInvalid();
         if (trophyStaked[params.tokenId]) revert TrophyStakeViolation(_STAKE_ERR_ALREADY_STAKED);
         uint256 info = trophyData_[params.tokenId];
+        uint256 levelValue = uint256(params.effectiveLevel & 0xFFFFFF);
         uint256 owed = info & TROPHY_OWED_MASK;
         if (owed != 0) {
-            uint256 levelBits = uint256(params.effectiveLevel & 0xFFFFFF);
             uint256 baseCleared = info & ~(uint256(0xFFFFFF) << TROPHY_BASE_LEVEL_SHIFT);
             uint256 lastCleared = baseCleared & ~TROPHY_LAST_CLAIM_MASK;
             uint256 updatedInfo = lastCleared |
-                (levelBits << TROPHY_BASE_LEVEL_SHIFT) |
-                (levelBits << TROPHY_LAST_CLAIM_SHIFT);
+                (levelValue << TROPHY_BASE_LEVEL_SHIFT) |
+                (levelValue << TROPHY_LAST_CLAIM_SHIFT);
             trophyData_[params.tokenId] = updatedInfo;
             info = updatedInfo;
+        }
+        uint256 stakeLevelBits = levelValue << TROPHY_STAKE_LEVEL_SHIFT;
+        uint256 infoWithStakeLevel = (info & ~TROPHY_STAKE_LEVEL_MASK) | stakeLevelBits;
+        if (infoWithStakeLevel != info) {
+            trophyData_[params.tokenId] = infoWithStakeLevel;
+            info = infoWithStakeLevel;
         }
         trophyStaked[params.tokenId] = true;
         _addStakedTrophy(params.tokenId);
@@ -708,6 +716,11 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             }
             data.kind = 4;
             data.count = current;
+        }
+
+        uint256 storedInfo = trophyData_[params.tokenId];
+        if ((storedInfo & TROPHY_STAKE_LEVEL_MASK) != 0) {
+            trophyData_[params.tokenId] = storedInfo & ~TROPHY_STAKE_LEVEL_MASK;
         }
 
         data.discountBps = 0;

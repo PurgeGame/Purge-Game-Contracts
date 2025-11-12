@@ -60,6 +60,8 @@ contract IconRendererTrophy32 {
     uint256 private constant STAKE_TROPHY_FLAG = uint256(1) << 202;
     uint256 private constant BAF_TROPHY_FLAG = uint256(1) << 203;
     uint256 private constant DECIMATOR_TROPHY_FLAG = uint256(1) << 204;
+    uint256 private constant TROPHY_STAKE_LEVEL_SHIFT = 205;
+    uint256 private constant TROPHY_STAKE_LEVEL_MASK = uint256(0xFFFFFF) << TROPHY_STAKE_LEVEL_SHIFT;
     uint256 private constant TROPHY_OWED_MASK = (uint256(1) << 128) - 1;
     uint16 private constant BAF_TRAIT_SENTINEL = 0xFFFA;
     uint16 private constant DECIMATOR_TRAIT_SENTINEL = 0xFFFB;
@@ -166,6 +168,15 @@ contract IconRendererTrophy32 {
             statusFlags |= 2;
         }
         bool hasEthAttachment = ethAttachment != 0;
+        uint24 stakedLevel = uint24((data & TROPHY_STAKE_LEVEL_MASK) >> TROPHY_STAKE_LEVEL_SHIFT);
+        bool hasStakedLevel = stakedLevel != 0;
+        string memory stakedDurationStr;
+        string memory stakeAttrValue = "No";
+        if (hasStakedLevel) {
+            uint256 duration = uint256(lvl) >= uint256(stakedLevel) ? uint256(lvl) - uint256(stakedLevel) : 0;
+            stakedDurationStr = duration.toString();
+            stakeAttrValue = string.concat(stakedDurationStr, " Levels");
+        }
 
         string memory lvlStr = (lvl == 0) ? "TBD" : uint256(lvl).toString();
         string memory trophyType;
@@ -191,10 +202,6 @@ contract IconRendererTrophy32 {
         }
 
         string memory desc;
-        string memory attachmentSuffix;
-        if (hasEthAttachment) {
-            attachmentSuffix = string.concat("\\n", _formatEthAmount(ethAttachment), " ETH claimable.");
-        }
         if (exTr == 0xFFFF) {
             if (lvl == 0) {
                 desc = string.concat("Reserved Purge Game ", trophyLabel, ".");
@@ -214,8 +221,11 @@ contract IconRendererTrophy32 {
             desc = string.concat(desc, isMap ? " MAP Jackpot." : " Extermination victory.");
         }
 
-        if (bytes(attachmentSuffix).length != 0) {
-            desc = string.concat(desc, attachmentSuffix);
+        if (hasEthAttachment) {
+            desc = string.concat(desc, "\\n", _formatEthAmount(ethAttachment), " ETH claimable.");
+        }
+        if (hasStakedLevel) {
+            desc = string.concat(desc, "\\nStaked for ", stakedDurationStr, " levels.");
         }
 
         bool includeTraitAttr;
@@ -245,6 +255,7 @@ contract IconRendererTrophy32 {
         if (includeTraitAttr) {
             attrs = string(abi.encodePacked(attrs, ',{"trait_type":"', traitType, '","value":"', traitValue, '"}'));
         }
+        attrs = string(abi.encodePacked(attrs, ',{"trait_type":"Staked","value":"', stakeAttrValue, '"}'));
         attrs = string(abi.encodePacked(attrs, "]"));
 
         string memory img = _trophySvg(tokenId, exTr, isMap, isAffiliate, isStake, isBaf, isDec, statusFlags, lvl);
@@ -317,7 +328,7 @@ contract IconRendererTrophy32 {
             } else {
                 ringIdx = 3;
             }
-            string memory borderColor = _resolve(tokenId, 0, _borderColor(tokenId, 0, _repeat4(ringIdx), lvl));
+            string memory borderColor = _resolve(tokenId, 0, _borderColor(tokenId, 0, uint8(1) << ringIdx, lvl));
 
             uint32 pct = registry.trophyOuter(tokenId);
             uint32 diameter = (pct <= 1) ? 88 : uint32((uint256(innerSide) * pct) / 1_000_000);
@@ -387,7 +398,7 @@ contract IconRendererTrophy32 {
         if (isTopAffiliate && hasCustomAffiliateColor) {
             border = _resolve(tokenId, 0, ringOuterColor);
         } else {
-            border = _resolve(tokenId, 0, _borderColor(tokenId, uint32(six), _repeat4(colIdx), lvl));
+            border = _resolve(tokenId, 0, _borderColor(tokenId, uint32(six), uint8(1) << colIdx, lvl));
         }
 
         string memory flameColor = _resolve(tokenId, 1, "#111");
@@ -730,24 +741,16 @@ contract IconRendererTrophy32 {
     function _borderColor(
         uint256 tokenId,
         uint32 traits,
-        uint8[4] memory used,
+        uint8 excludeMask,
         uint24 level
     ) private view returns (string memory) {
         uint8 initial = uint8(uint256(keccak256(abi.encodePacked(tokenId, traits))) % 8);
 
         for (uint8 i; i < 8; ) {
             uint8 idx = uint8(initial + i) & 7;
-            bool isUsed;
-            for (uint8 j; j < 4; ) {
-                if (used[j] == idx) {
-                    isUsed = true;
-                    break;
-                }
-                unchecked {
-                    ++j;
-                }
+            if ((excludeMask & (uint8(1) << idx)) == 0) {
+                return _paletteColor(idx, level);
             }
-            if (!isUsed) return _paletteColor(idx, level);
             unchecked {
                 ++i;
             }
@@ -808,13 +811,6 @@ contract IconRendererTrophy32 {
     function _hexChar(uint8 nibble) private pure returns (bytes1) {
         uint8 v = nibble & 0x0F;
         return bytes1(v + (v < 10 ? 48 : 87));
-    }
-
-    function _repeat4(uint8 v) private pure returns (uint8[4] memory a) {
-        a[0] = v;
-        a[1] = v;
-        a[2] = v;
-        a[3] = v;
     }
 
     function _colorTitle(uint8 idx) private pure returns (string memory) {
