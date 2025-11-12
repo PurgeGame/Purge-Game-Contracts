@@ -477,6 +477,7 @@ contract PurgeGame is PurgeGameStorage {
         if (count == 0 || count > 75) revert InvalidQuantity();
         address caller = msg.sender;
         nft.purge(caller, tokenIds);
+        coin.notifyQuestPurge(caller, uint32(count));
 
         uint24 lvl = level;
         uint8 mod10 = uint8(lvl % 10);

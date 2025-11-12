@@ -50,6 +50,8 @@ interface IPurgeCoin {
 
     function notifyQuestMint(address player, uint32 quantity, bool paidWithEth) external;
 
+    function notifyQuestPurge(address player, uint32 quantity) external;
+
     function getActiveQuest()
         external
         view
@@ -71,4 +73,5 @@ interface IPurgeCoin {
             uint128[2] memory progress,
             bool[2] memory completed
         );
+
 }

@@ -10,6 +10,8 @@ struct QuestInfo {
 }
 
 interface IPurgeQuestModule {
+    function wireGame(address game) external;
+
     function primeMintEthQuest(uint48 day) external;
 
     function rollDailyQuest(uint48 day, uint256 entropy)
@@ -29,6 +31,10 @@ interface IPurgeQuestModule {
         returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed);
 
     function handleAffiliate(address player, uint256 amount)
+        external
+        returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed);
+
+    function handlePurge(address player, uint32 quantity)
         external
         returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed);
 

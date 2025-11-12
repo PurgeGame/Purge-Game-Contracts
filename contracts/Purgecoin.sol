@@ -768,6 +768,7 @@ contract Purgecoin is PurgeCoinStorage {
         purgeGameNFT = PurgeGameNFT(nft_);
         purgeGameTrophies = IPurgeGameTrophies(trophies_);
         questModule = IPurgeQuestModule(questModule_);
+        questModule.wireGame(game_);
         externalJackpotModule = externalJackpotModule_;
         IPurgeRenderer(regularRenderer_).wireContracts(game_, nft_);
         IPurgeRenderer(trophyRenderer_).wireContracts(game_, nft_);
@@ -846,6 +847,15 @@ contract Purgecoin is PurgeCoinStorage {
             player,
             quantity,
             paidWithEth
+        );
+        _questApplyReward(player, reward, hardMode, questType, streak, completed);
+    }
+
+    function notifyQuestPurge(address player, uint32 quantity) external onlyGameplayContracts {
+        IPurgeQuestModule module = questModule;
+        (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handlePurge(
+            player,
+            quantity
         );
         _questApplyReward(player, reward, hardMode, questType, streak, completed);
     }
