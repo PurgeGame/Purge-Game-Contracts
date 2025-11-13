@@ -16,8 +16,8 @@ contract Purgecoin is PurgeCoinStorage {
     event Transfer(address indexed from, address indexed to, uint256 amount);
     event Approval(address indexed owner, address indexed spender, uint256 amount);
     event StakeCreated(address indexed player, uint24 targetLevel, uint8 risk, uint256 principal);
-    event CoinflipDeposit(address indexed player, uint256 amountBurned, uint256 rakeAmount, uint256 creditedFlip);
-    event DecimatorBurn(address indexed player, uint256 amountBurned, uint256 weightedContribution);
+    event CoinflipDeposit(address indexed player, uint256 creditedFlip);
+    event DecimatorBurn(address indexed player, uint256 amountBurned, uint8 bucket);
     event Affiliate(uint256 amount, bytes32 indexed code, address sender);
     event CoinflipFinished(bool result);
     event CoinJackpotPaid(uint16 trait, address winner, uint256 amount);
@@ -65,7 +65,9 @@ contract Purgecoin is PurgeCoinStorage {
     function transferFrom(address from, address to, uint256 amount) public returns (bool) {
         uint256 allowed = allowance[from][msg.sender];
         if (allowed != type(uint256).max) {
-            allowance[from][msg.sender] = allowed - amount;
+            uint256 newAllowance = allowed - amount;
+            allowance[from][msg.sender] = newAllowance;
+            emit Approval(from, msg.sender, newAllowance);
         }
         _transfer(from, to, amount);
         return true;
@@ -170,20 +172,17 @@ contract Purgecoin is PurgeCoinStorage {
 
         _burn(caller, amount);
 
-        uint256 flipCredit = amount;
-        if (flipCredit == 0) revert Insufficient();
-
-        addFlip(caller, flipCredit, true);
+        addFlip(caller, amount, true);
 
         if (address(questModule) != address(0)) {
             (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = questModule.handleFlip(
                 caller,
-                flipCredit
+                amount
             );
             _questApplyReward(caller, reward, hardMode, questType, streak, completed);
         }
 
-        emit CoinflipDeposit(caller, amount, 0, flipCredit);
+        emit CoinflipDeposit(caller, amount);
     }
 
     /// @notice Burn PURGE during an active Decimator window to accrue weighted participation.
@@ -226,7 +225,7 @@ contract Purgecoin is PurgeCoinStorage {
             _questApplyReward(caller, reward, hardMode, questType, streak, completed);
         }
 
-        emit DecimatorBurn(caller, amount, amount);
+        emit DecimatorBurn(caller, amount, e.bucket);
     }
 
     // Affiliate code management
@@ -480,12 +479,26 @@ contract Purgecoin is PurgeCoinStorage {
         uint256 riskBps = 12 * uint256(risk - 1);
         uint256 stepBps = levelBps + riskBps; // per-level growth in bps
 
-        // Compounded growth applied to the full burned amount
         uint256 boostedPrincipal = burnAmt;
-        for (uint24 i = distance; i != 0; ) {
-            boostedPrincipal = (boostedPrincipal * (10_000 + stepBps)) / 10_000;
-            unchecked {
-                --i;
+        if (distance != 0) {
+            uint256 factor = 10_000 + stepBps;
+            uint24 remaining = distance;
+
+            while (remaining >= 4) {
+                boostedPrincipal = (boostedPrincipal * factor) / 10_000;
+                boostedPrincipal = (boostedPrincipal * factor) / 10_000;
+                boostedPrincipal = (boostedPrincipal * factor) / 10_000;
+                boostedPrincipal = (boostedPrincipal * factor) / 10_000;
+                unchecked {
+                    remaining -= 4;
+                }
+            }
+
+            while (remaining != 0) {
+                boostedPrincipal = (boostedPrincipal * factor) / 10_000;
+                unchecked {
+                    --remaining;
+                }
             }
         }
 
@@ -584,10 +597,12 @@ contract Purgecoin is PurgeCoinStorage {
         }
 
         mapping(address => uint256) storage earned = affiliateCoinEarned[lvl];
+        IPurgeQuestModule module = questModule;
+        IPurgeGameTrophies trophies = purgeGameTrophies;
         // Pay direct affiliate (skip sentinels)
         if (affiliateAddr != address(0)) {
             uint256 payout = baseAmount;
-            uint8 stakeBonus = purgeGameTrophies.affiliateStakeBonus(affiliateAddr);
+            uint8 stakeBonus = trophies.affiliateStakeBonus(affiliateAddr);
             if (stakeBonus != 0) {
                 payout += (payout * stakeBonus) / 100;
             }
@@ -600,9 +615,11 @@ contract Purgecoin is PurgeCoinStorage {
                 uint256 totalFlipAward = affiliateShare;
                 earned[affiliateAddr] = newTotal;
                 addFlip(affiliateAddr, totalFlipAward, false);
-                if (address(questModule) != address(0)) {
-                    (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = questModule
-                        .handleAffiliate(affiliateAddr, affiliateShare);
+                if (address(module) != address(0)) {
+                    (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleAffiliate(
+                        affiliateAddr,
+                        affiliateShare
+                    );
                     _questApplyReward(affiliateAddr, reward, hardMode, questType, streak, completed);
                 }
 
@@ -619,16 +636,18 @@ contract Purgecoin is PurgeCoinStorage {
             if (uplineTotal != 0) {
                 uint256 bonus = baseAmount / 5;
                 if (bonus != 0) {
-                    uint8 stakeBonusUpline = purgeGameTrophies.affiliateStakeBonus(upline);
+                    uint8 stakeBonusUpline = trophies.affiliateStakeBonus(upline);
                     if (stakeBonusUpline != 0) {
                         bonus += (bonus * stakeBonusUpline) / 100;
                     }
                     uplineTotal += bonus;
                     earned[upline] = uplineTotal;
                     addFlip(upline, bonus, false);
-                    if (address(questModule) != address(0)) {
-                        (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = questModule
-                            .handleAffiliate(upline, bonus);
+                    if (address(module) != address(0)) {
+                        (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleAffiliate(
+                            upline,
+                            bonus
+                        );
                         _questApplyReward(upline, reward, hardMode, questType, streak, completed);
                     }
                     _updatePlayerScore(1, upline, uplineTotal);
@@ -666,7 +685,6 @@ contract Purgecoin is PurgeCoinStorage {
             }
             bonusActive = aff;
         }
-        delete affiliateLeaderboard;
         affiliateLen = 0;
     }
     /// @notice Buy PURGE during the presale; price increases linearly as tokens are sold.
@@ -710,7 +728,12 @@ contract Purgecoin is PurgeCoinStorage {
             if (!gameOk) revert Insufficient();
         }
 
-        uint256 creatorCut = costWei - gameCut + refund;
+        if (refund != 0) {
+            (bool refundOk, ) = buyer.call{value: refund}("");
+            if (!refundOk) revert Insufficient();
+        }
+
+        uint256 creatorCut = costWei - gameCut;
         (bool ok, ) = payable(creator).call{value: creatorCut}("");
         if (!ok) revert Insufficient();
 
@@ -794,13 +817,11 @@ contract Purgecoin is PurgeCoinStorage {
 
     function primeMintEthQuest(uint48 day) external onlyPurgeGameContract {
         IPurgeQuestModule module = questModule;
-        if (address(module) == address(0)) return;
         module.primeMintEthQuest(day);
     }
 
     function rollDailyQuest(uint48 day, uint256 entropy) external onlyPurgeGameContract {
         IPurgeQuestModule module = questModule;
-        if (address(module) == address(0)) return;
         (bool rolled, , , , ) = module.rollDailyQuest(day, entropy);
         if (rolled) {
             QuestInfo[2] memory quests = module.getActiveQuests();
@@ -808,6 +829,7 @@ contract Purgecoin is PurgeCoinStorage {
                 QuestInfo memory info = quests[i];
                 if (info.day == day) {
                     emit DailyQuestRolled(day, info.questType, info.highDifficulty, info.stakeMask, info.stakeRisk);
+                    break;
                 }
                 unchecked {
                     ++i;
@@ -818,7 +840,6 @@ contract Purgecoin is PurgeCoinStorage {
 
     function notifyQuestMint(address player, uint32 quantity, bool paidWithEth) external onlyGameplayContracts {
         IPurgeQuestModule module = questModule;
-        if (address(module) == address(0) || player == address(0) || quantity == 0) return;
         (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleMint(
             player,
             quantity,
@@ -842,17 +863,11 @@ contract Purgecoin is PurgeCoinStorage {
         returns (uint48 day, uint8 questType, bool highDifficulty, uint8 stakeMask, uint8 stakeRisk)
     {
         IPurgeQuestModule module = questModule;
-        if (address(module) == address(0)) {
-            return (0, 0, false, 0, 0);
-        }
         return module.getActiveQuest();
     }
 
     function getActiveQuests() external view returns (QuestInfo[2] memory quests) {
         IPurgeQuestModule module = questModule;
-        if (address(module) == address(0)) {
-            return quests;
-        }
         return module.getActiveQuests();
     }
 
@@ -860,9 +875,6 @@ contract Purgecoin is PurgeCoinStorage {
         address player
     ) external view returns (uint32 streak, uint32 lastCompletedDay, uint128 progress, bool completedToday) {
         IPurgeQuestModule module = questModule;
-        if (address(module) == address(0)) {
-            return (0, 0, 0, false);
-        }
         return module.playerQuestState(player);
     }
 
@@ -874,9 +886,6 @@ contract Purgecoin is PurgeCoinStorage {
         returns (uint32 streak, uint32 lastCompletedDay, uint128[2] memory progress, bool[2] memory completed)
     {
         IPurgeQuestModule module = questModule;
-        if (address(module) == address(0)) {
-            return (0, 0, progress, completed);
-        }
         return module.playerQuestStates(player);
     }
 
@@ -1263,26 +1272,23 @@ contract Purgecoin is PurgeCoinStorage {
     /// @notice Return addresses from a leaderboard.
     /// @param which 1 = affiliate (<=8), 2 = top bettors (<=8).
     function getLeaderboardAddresses(uint8 which) external view returns (address[] memory out) {
+        PlayerScore[8] storage board;
+        uint8 len;
         if (which == 1) {
-            uint8 len = affiliateLen;
-            out = new address[](len);
-            for (uint8 i; i < len; ) {
-                out[i] = affiliateLeaderboard[i].player;
-                unchecked {
-                    ++i;
-                }
-            }
+            board = affiliateLeaderboard;
+            len = affiliateLen;
         } else if (which == 2) {
-            uint8 len = topLen;
-            out = new address[](len);
-            for (uint8 i; i < len; ) {
-                out[i] = topBettors[i].player;
-                unchecked {
-                    ++i;
-                }
-            }
+            board = topBettors;
+            len = topLen;
         } else {
             revert InvalidLeaderboard();
+        }
+        out = new address[](len);
+        for (uint8 i; i < len; ) {
+            out[i] = board[i].player;
+            unchecked {
+                ++i;
+            }
         }
     }
 
@@ -1302,7 +1308,6 @@ contract Purgecoin is PurgeCoinStorage {
                 ++k;
             }
         }
-        delete topBettors;
         topLen = 0;
     }
 
@@ -1311,22 +1316,31 @@ contract Purgecoin is PurgeCoinStorage {
     }
 
     /// @notice Return player address at global coinflip index `idx`.
-    /// @dev Indexing is flattened into fixed-size buckets to avoid resizing a single array.
-    ///      Callers must ensure 0 <= idx < `_coinflipCount()` for the current session.
+    /// @dev Ring buffer backed by `cfPlayers`. Callers must ensure 0 <= idx < `_coinflipCount()`.
     function _playerAt(uint256 idx) internal view returns (address) {
-        return cfPlayers[cfHead + idx];
+        uint256 capacity = cfPlayers.length;
+        if (capacity == 0) return address(0);
+        uint256 physical = (uint256(cfHead) + idx) % capacity;
+        return cfPlayers[physical];
     }
 
     // Append to the queue, reusing storage slots while advancing the ring tail.
     function _pushPlayer(address p) internal {
-        uint256 pos = uint256(cfTail);
-        if (pos == cfPlayers.length) {
+        uint128 tail = cfTail;
+        uint128 head = cfHead;
+        uint256 capacity = cfPlayers.length;
+        uint256 inQueue = uint256(tail) - uint256(head);
+
+        if (capacity == 0 || inQueue == capacity) {
+            // Grow (first entry or fully utilized capacity).
             cfPlayers.push(p);
         } else {
-            cfPlayers[pos] = p;
+            uint256 slot = uint256(tail) % capacity;
+            cfPlayers[slot] = p;
         }
+
         unchecked {
-            cfTail = uint128(pos + 1);
+            cfTail = tail + 1;
         }
     }
 
@@ -1425,9 +1439,6 @@ contract Purgecoin is PurgeCoinStorage {
 
     function _questStreak(address player) private view returns (uint32) {
         IPurgeQuestModule module = questModule;
-        if (address(module) == address(0) || player == address(0)) {
-            return 0;
-        }
         (uint32 streak, , , ) = module.playerQuestState(player);
         return streak;
     }
