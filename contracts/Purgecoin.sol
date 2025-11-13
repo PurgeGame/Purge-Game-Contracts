@@ -190,6 +190,7 @@ contract Purgecoin is PurgeCoinStorage {
     /// @param amount Amount (6 decimals) to burn; must satisfy the global minimum.
     function decimatorBurn(uint256 amount) external {
         (bool decOn, uint24 lvl) = _decWindow();
+        if (purgeGame.rngLocked()) revert BettingPaused();
         if (!decOn) revert NotDecimatorWindow();
         if (amount < MIN) revert AmountLTMin();
 
@@ -215,6 +216,15 @@ contract Purgecoin is PurgeCoinStorage {
         uint256 updated = uint256(e.burn) + amount;
         if (updated > type(uint192).max) updated = type(uint192).max;
         e.burn = uint192(updated);
+
+        IPurgeQuestModule module = questModule;
+        if (address(module) != address(0)) {
+            (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleDecimator(
+                caller,
+                amount
+            );
+            _questApplyReward(caller, reward, hardMode, questType, streak, completed);
+        }
 
         emit DecimatorBurn(caller, amount, amount);
     }

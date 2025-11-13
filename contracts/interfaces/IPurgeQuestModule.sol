@@ -26,6 +26,10 @@ interface IPurgeQuestModule {
         external
         returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed);
 
+    function handleDecimator(address player, uint256 burnAmount)
+        external
+        returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed);
+
     function handleStake(address player, uint256 principal, uint24 distance, uint8 risk)
         external
         returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed);
