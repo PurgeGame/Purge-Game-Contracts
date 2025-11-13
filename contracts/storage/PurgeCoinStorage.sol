@@ -104,9 +104,6 @@ abstract contract PurgeCoinStorage {
 
     mapping(address => uint8) internal affiliatePos;
     mapping(address => uint8) internal topPos;
-    mapping(address => uint32) internal luckyFlipStreak;
-    mapping(address => uint48) internal lastLuckyStreakEpoch;
-    uint48 internal streakEpoch;
 
     uint128 public currentBounty = 1_000_000_000;
     uint128 public biggestFlipEver = 1_000_000_000;

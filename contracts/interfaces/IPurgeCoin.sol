@@ -4,7 +4,7 @@ pragma solidity ^0.8.26;
 import {QuestInfo} from "./IPurgeQuestModule.sol";
 
 interface IPurgeCoin {
-    function bonusCoinflip(address player, uint256 amount, bool rngReady, uint256 luckboxBonus) external;
+    function bonusCoinflip(address player, uint256 amount, bool rngReady) external;
 
     function burnie(uint256 amount) external payable;
 

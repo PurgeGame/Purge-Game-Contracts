@@ -94,7 +94,7 @@ interface IPurgeGameMinimal {
 }
 
 interface IPurgecoinMinimal {
-    function bonusCoinflip(address player, uint256 amount, bool rngReady, uint256 luckboxBonus) external;
+    function bonusCoinflip(address player, uint256 amount, bool rngReady) external;
     function burnCoin(address target, uint256 amount) external;
 
     function getLeaderboardAddresses(uint8 which) external view returns (address[] memory);
@@ -1311,7 +1311,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         }
 
         if (ctx.coinClaimed) {
-            coin.bonusCoinflip(msg.sender, ctx.coinAmount, true, 0);
+            coin.bonusCoinflip(msg.sender, ctx.coinAmount, true);
         }
     }
 
@@ -1436,7 +1436,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         uint8 kind = _kindFromInfo(info);
         _eraseTrophy(tokenId, kind, true);
 
-        coin.bonusCoinflip(sender, 100_000 * COIN_BASE_UNIT, false, 0);
+        coin.bonusCoinflip(sender, 100_000 * COIN_BASE_UNIT, false);
     }
 
     function stakedTrophySample(uint64 salt) external view override returns (address owner) {

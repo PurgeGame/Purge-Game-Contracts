@@ -28,7 +28,7 @@ interface IPurgeCoinModule {
 
     function getLeaderboardAddresses(uint8 which) external view returns (address[] memory);
 
-    function bonusCoinflip(address player, uint256 amount, bool rngReady, uint256 luckboxBonus) external;
+    function bonusCoinflip(address player, uint256 amount, bool rngReady) external;
 
     function addToBounty(uint256 amount) external;
 

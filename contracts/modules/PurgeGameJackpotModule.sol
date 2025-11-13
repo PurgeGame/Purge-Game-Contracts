@@ -171,7 +171,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
 
             if (biggestShare != 0) {
                 if (biggestFlip != address(0)) {
-                    coinContract.bonusCoinflip(biggestFlip, biggestShare, true, 0);
+                    coinContract.bonusCoinflip(biggestFlip, biggestShare, true);
                 } else {
                     bountyOverflow += biggestShare;
                 }
@@ -189,7 +189,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
                 }
 
                 if (candidate != address(0)) {
-                    coinContract.bonusCoinflip(candidate, secondaryShare, true, 0);
+                    coinContract.bonusCoinflip(candidate, secondaryShare, true);
                 } else {
                     bountyOverflow += secondaryShare;
                 }
@@ -678,7 +678,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
     ) private returns (bool) {
         if (beneficiary == address(0) || amount == 0) return false;
         if (payInCoin) {
-            coinContract.bonusCoinflip(beneficiary, amount, true, 0);
+            coinContract.bonusCoinflip(beneficiary, amount, true);
         } else {
             _addClaimableEth(beneficiary, amount);
         }

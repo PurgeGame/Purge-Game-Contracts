@@ -167,38 +167,13 @@ contract Purgecoin is PurgeCoinStorage {
         if (amount < MIN) revert AmountLTMin();
 
         address caller = msg.sender;
-        uint256 prevStake = coinflipAmount[caller];
 
         _burn(caller, amount);
 
         uint256 flipCredit = amount;
         if (flipCredit == 0) revert Insufficient();
 
-        if (prevStake == 0) {
-            uint48 epoch = streakEpoch;
-            if (epoch == 0) epoch = 1;
-            uint48 lastEpoch = lastLuckyStreakEpoch[caller];
-            if (lastEpoch != epoch) {
-                uint32 streak = luckyFlipStreak[caller];
-                if (lastEpoch != 0 && epoch == lastEpoch + 1) {
-                    unchecked {
-                        streak += 1;
-                    }
-                } else {
-                    streak = 1;
-                }
-                luckyFlipStreak[caller] = streak;
-                lastLuckyStreakEpoch[caller] = epoch;
-                uint256 bonusTotal = _streakExtra(streak);
-                flipCredit += bonusTotal;
-            }
-        }
-
         addFlip(caller, flipCredit, true);
-
-        if (!_isBafActive()) {
-            playerLuckbox[caller] = flipCredit;
-        }
 
         if (address(questModule) != address(0)) {
             (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = questModule.handleFlip(
@@ -792,12 +767,7 @@ contract Purgecoin is PurgeCoinStorage {
 
     /// @notice Grant a pending coinflip stake during gameplay flows instead of minting PURGE.
     /// @dev Access: PurgeGame, NFT, or trophy module only. Zero address is ignored. Optional luckbox bonus credited directly.
-    function bonusCoinflip(
-        address player,
-        uint256 amount,
-        bool rngReady,
-        uint256 luckboxBonus
-    ) external onlyGameplayContracts {
+    function bonusCoinflip(address player, uint256 amount, bool rngReady) external onlyGameplayContracts {
         if (player == address(0)) return;
         if (amount != 0) {
             if (!rngReady) {
@@ -805,10 +775,6 @@ contract Purgecoin is PurgeCoinStorage {
             } else {
                 addFlip(player, amount, false);
             }
-        }
-        if (luckboxBonus != 0 && !_isBafActive()) {
-            uint256 newLuck = playerLuckbox[player] + luckboxBonus;
-            playerLuckbox[player] = newLuck;
         }
     }
 
@@ -929,10 +895,11 @@ contract Purgecoin is PurgeCoinStorage {
     ) external onlyPurgeGameContract returns (bool finished) {
         uint256 word = rngWord;
         if (payoutIndex == 0) {
-            uint48 currentEpoch = epoch;
-            if (currentEpoch == 0) currentEpoch = 1;
-            streakEpoch = currentEpoch;
-            nukeStream = word;
+            uint256 seedWord = word;
+            if (epoch != 0) {
+                seedWord = uint256(keccak256(abi.encodePacked(word, epoch)));
+            }
+            nukeStream = seedWord;
             if (bonusActive && ((word & 1) == 0)) {
                 unchecked {
                     ++word;
@@ -941,7 +908,7 @@ contract Purgecoin is PurgeCoinStorage {
         }
         // --- Step sizing (bounded work) ----------------------------------------------------
 
-        uint32 stepPayout = (cap == 0) ? 500 : cap;
+        uint32 stepPayout = (cap == 0) ? 420 : cap;
         uint32 stepStake = (cap == 0) ? 200 : cap;
 
         bool win = (word & 1) == 1;
@@ -996,8 +963,6 @@ contract Purgecoin is PurgeCoinStorage {
                                     if (riskFactor <= 1) {
                                         _recordStakeTrophyCandidate(settleLevel, player, principalRounded);
                                         if (principalRounded != 0) {
-                                            uint256 luck = playerLuckbox[player] + principalRounded;
-                                            playerLuckbox[player] = luck;
                                             addFlip(player, principalRounded, false);
                                         }
                                     } else {
@@ -1101,7 +1066,7 @@ contract Purgecoin is PurgeCoinStorage {
                 if (win) {
                     if (bonusFlip) amt = (amt * 11) / 10; // keep current rounding semantics
                     uint256 payout = amt * 2;
-                    uint32 streak = luckyFlipStreak[p];
+                    uint32 streak = _questStreak(p);
                     uint16 nukeRate = _nukeRateBps(streak);
                     bool nuked;
                     if (nukeRate != 0) {
@@ -1119,7 +1084,10 @@ contract Purgecoin is PurgeCoinStorage {
                 }
             }
 
-            if (credit != 0) _mint(p, credit);
+            if (credit != 0) {
+                _mint(p, credit);
+                playerLuckbox[p] += credit;
+            }
 
             unchecked {
                 ++i;
@@ -1383,23 +1351,6 @@ contract Purgecoin is PurgeCoinStorage {
         return uint16(rate);
     }
 
-    function _streakExtra(uint32 streak) private pure returns (uint256) {
-        if (streak == 0) return 0;
-        if (streak <= 12) {
-            return (25 + (uint256(streak) - 1) * 5) * MILLION;
-        }
-        if (streak <= 32) {
-            return (80 + (uint256(streak) - 12) * 4) * MILLION;
-        }
-        if (streak <= 52) {
-            return (160 + (uint256(streak) - 32) * 3) * MILLION;
-        }
-        if (streak <= 72) {
-            return (220 + (uint256(streak) - 52) * 2) * MILLION;
-        }
-        return 250 * MILLION;
-    }
-
     /// @notice Pick the address with the highest luckbox from a candidate list.
     /// @param players Candidate addresses (may include address(0)).
     /// @return best Address with the maximum `playerLuckbox` value among `players` (zero if none).
@@ -1421,12 +1372,6 @@ contract Purgecoin is PurgeCoinStorage {
         }
     }
 
-    function _isBafActive() internal view returns (bool) {
-        if (bafState.inProgress) return true;
-        uint24 lvl = purgeGame.level();
-        return lvl != 0 && (lvl % 20) == 0;
-    }
-
     function _questApplyReward(
         address player,
         uint256 reward,
@@ -1440,6 +1385,15 @@ contract Purgecoin is PurgeCoinStorage {
             addFlip(player, reward, false);
         }
         emit QuestCompleted(player, questType, streak, reward, hardMode);
+    }
+
+    function _questStreak(address player) private view returns (uint32) {
+        IPurgeQuestModule module = questModule;
+        if (address(module) == address(0) || player == address(0)) {
+            return 0;
+        }
+        (uint32 streak, , , ) = module.playerQuestState(player);
+        return streak;
     }
 
     function _decBucketDenominator(uint256 streak) internal pure returns (uint8) {

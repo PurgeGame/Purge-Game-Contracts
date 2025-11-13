@@ -92,7 +92,7 @@ contract PurgeGame is PurgeGameStorage {
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
     uint8 private constant EARLY_PURGE_UNLOCK_PERCENT = 30; // 30% early-purge threshold gate
     uint256 private constant COIN_BASE_UNIT = 1_000_000; // 1 PURGED (6 decimals)
-    uint256 private constant LUCK_PER_LINK = 220 * COIN_BASE_UNIT; // Base credit per 1 LINK (pre-multiplier)
+    uint256 private constant LUCK_PER_LINK = 220 * COIN_BASE_UNIT; // flip credit per LINK before multiplier
     uint32 private constant VRF_CALLBACK_GAS_LIMIT = 200_000;
     uint16 private constant VRF_REQUEST_CONFIRMATIONS = 10;
 
@@ -447,7 +447,7 @@ contract PurgeGame is PurgeGameStorage {
 
         emit Advance(_gameState, _phase);
 
-        if (_gameState != 0 && cap == 0) coinContract.bonusCoinflip(caller, priceCoin, false, 0);
+        if (_gameState != 0 && cap == 0) coinContract.bonusCoinflip(caller, priceCoin, false);
     }
 
     // --- Purchases: schedule NFT mints (traits precomputed) ----------------------------------------
@@ -587,11 +587,7 @@ contract PurgeGame is PurgeGameStorage {
         }
 
         if (isDoubleCountStep) count <<= 1;
-        uint256 priceUnit = priceCoinLocal / 10;
-        if (stakeBonusCoin != 0) {
-            coin.bonusCoinflip(caller, stakeBonusCoin, false, 0);
-        }
-        coin.bonusCoinflip(caller, (count + bonusTenths) * priceUnit, true, 0);
+        _creditPurgeFlip(caller, stakeBonusCoin, priceCoinLocal, count, bonusTenths);
         emit Purge(caller, tokenIds);
 
         if (winningTrait != TRAIT_ID_TIMEOUT) {
@@ -1067,6 +1063,22 @@ contract PurgeGame is PurgeGameStorage {
         rngWordCurrent = randomWords[0];
     }
 
+    function _creditPurgeFlip(
+        address caller,
+        uint256 stakeBonusCoin,
+        uint256 priceCoinLocal,
+        uint256 count,
+        uint256 bonusTenths
+    ) private {
+        uint256 priceUnit = priceCoinLocal / 10;
+        uint256 flipCredit = stakeBonusCoin;
+        unchecked {
+            flipCredit += (count + bonusTenths) * priceUnit;
+        }
+
+        coin.bonusCoinflip(caller, flipCredit, true);
+    }
+
     function onTokenTransfer(address from, uint256 amount, bytes calldata) external {
         if (msg.sender != linkToken) revert E();
         if (amount == 0) revert E();
@@ -1082,11 +1094,10 @@ contract PurgeGame is PurgeGameStorage {
         (uint96 bal, , , , ) = vrfCoordinator.getSubscription(vrfSubscriptionId);
         uint16 mult = _tierMultPermille(uint256(bal));
         if (mult == 0) return;
-
-        uint256 base = (amount * LUCK_PER_LINK) / 1 ether;
-        uint256 credit = (base * mult) / 1000;
+        uint256 baseCredit = (amount * LUCK_PER_LINK) / 1 ether;
+        uint256 credit = (baseCredit * mult) / 1000;
         if (credit != 0) {
-            coin.bonusCoinflip(from, 0, true, credit);
+            coin.bonusCoinflip(from, credit, true);
         }
     }
 
