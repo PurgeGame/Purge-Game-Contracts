@@ -1286,6 +1286,11 @@ contract Purgecoin is PurgeCoinStorage {
         }
     }
 
+    function getTopAffiliate() external view returns (address) {
+        if (affiliateLen == 0) return address(0);
+        return affiliateLeaderboard[0].player;
+    }
+
     function resetCoinflipLeaderboard() external onlyPurgeGameContract {
         uint8 len = topLen;
         for (uint8 k; k < len; ) {

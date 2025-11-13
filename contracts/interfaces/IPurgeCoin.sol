@@ -41,6 +41,7 @@ interface IPurgeCoin {
     function resetCoinflipLeaderboard() external;
 
     function getLeaderboardAddresses(uint8 which) external view returns (address[] memory);
+    function getTopAffiliate() external view returns (address);
 
     function playerLuckbox(address player) external view returns (uint256);
 

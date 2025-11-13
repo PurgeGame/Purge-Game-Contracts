@@ -117,8 +117,7 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         bool traitWin = pend.exterminator != address(0);
         uint24 prevLevelPending = pend.level;
         uint256 poolValue = pend.sidePool;
-        address[] memory topAffiliates = coinContract.getLeaderboardAddresses(1);
-        address topAffiliate = topAffiliates.length != 0 ? topAffiliates[0] : address(0);
+        address topAffiliate = coinContract.getTopAffiliate();
 
         if (traitWin) {
             uint256 exterminatorShare = (prevLevelPending % 10 == 4 && prevLevelPending != 4)
@@ -135,8 +134,6 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
             uint256 baseTimes20 = base * 20;
             uint256 affiliateTrophyShare = baseTimes20 + remainder;
             uint256 legacyAffiliateShare = base * 10;
-            uint256[6] memory affiliatePayouts = [baseTimes20, baseTimes20, base * 10, base * 8, base * 7, base * 5];
-
             address affiliateTrophyRecipient = topAffiliate != address(0) ? topAffiliate : pend.exterminator;
             if (affiliateTrophyRecipient == address(0)) {
                 affiliateTrophyRecipient = pend.exterminator;
@@ -157,7 +154,18 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
                 if (recipient == address(0)) {
                     recipient = affiliateTrophyRecipient;
                 }
-                uint256 amount = affiliatePayouts[i];
+                uint256 amount;
+                if (i < 2) {
+                    amount = baseTimes20;
+                } else if (i == 2) {
+                    amount = base * 10;
+                } else if (i == 3) {
+                    amount = base * 8;
+                } else if (i == 4) {
+                    amount = base * 7;
+                } else {
+                    amount = base * 5;
+                }
                 if (amount != 0) {
                     _addClaimableEth(recipient, amount);
                 }
