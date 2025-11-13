@@ -75,8 +75,11 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
                 bool coinflipWin = (rngWord & 1) == 1;
                 address trophyRecipient;
 
+                uint256 entropy = rngWord;
+                uint256 salt;
+
                 {
-                    uint256 prize = (P * 20) / 100;
+                    uint256 prize = P / 5;
                     address w = topBettors[0].player;
                     if (_eligible(w)) {
                         tmpW[n] = w;
@@ -92,8 +95,12 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
                 }
 
                 {
-                    uint256 prize = (P * 10) / 100;
-                    address w = topBettors[2 + (uint256(keccak256(abi.encodePacked(executeWord, "p34"))) & 1)].player;
+                    unchecked {
+                        ++salt;
+                    }
+                    entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
+                    uint256 prize = P / 10;
+                    address w = topBettors[2 + (entropy & 1)].player;
                     if (_eligible(w)) {
                         tmpW[n] = w;
                         tmpA[n] = prize;
@@ -107,8 +114,12 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
                 }
 
                 {
-                    uint256 prize = (P * 10) / 100;
-                    address w = _randomEligible(uint256(keccak256(abi.encodePacked(executeWord, "re"))));
+                    unchecked {
+                        ++salt;
+                    }
+                    entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
+                    uint256 prize = P / 10;
+                    address w = _randomEligible(entropy);
                     if (w != address(0)) {
                         tmpW[n] = w;
                         tmpA[n] = prize;
@@ -122,12 +133,13 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
                 }
 
                 {
-                    uint256[4] memory shares = [(P * 5) / 100, (P * 5) / 100, (P * 25) / 1000, (P * 25) / 1000];
                     for (uint256 s; s < 4; ) {
-                        uint256 prize = shares[s];
-                        address w = purgeGameTrophies.stakedTrophySample(
-                            uint64(uint256(keccak256(abi.encodePacked(executeWord, s, "st"))))
-                        );
+                        uint256 prize = s < 2 ? P / 20 : P / 40;
+                        unchecked {
+                            ++salt;
+                        }
+                        entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
+                        address w = purgeGameTrophies.stakedTrophySample(uint64(entropy));
                         if (w != address(0)) {
                             tmpW[n] = w;
                             tmpA[n] = prize;
@@ -144,7 +156,7 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
                     }
                 }
 
-                uint256 scatter = (P * 40) / 100;
+                uint256 scatter = (P * 2) / 5;
                 uint256 unallocated = P - credited - toReturn - scatter;
                 if (unallocated != 0) {
                     toReturn += unallocated;
@@ -200,8 +212,8 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
             if (end > bs.limit) end = bs.limit;
 
             uint256 tmpCap = uint256(batch) / 10 + 2;
-            address[] memory tmpWinners = new address[](tmpCap);
-            uint256[] memory tmpAmounts = new uint256[](tmpCap);
+            address[] memory winnersBuf = new address[](tmpCap);
+            uint256[] memory amountsBuf = new uint256[](tmpCap);
             uint256 n2;
             uint256 per = uint256(bs.per);
             uint256 retWei = uint256(bafState.returnAmountWei);
@@ -209,8 +221,8 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
             for (uint32 i = scanCursor; i < end; ) {
                 address p = _playerAt(i);
                 if (_eligible(p)) {
-                    tmpWinners[n2] = p;
-                    tmpAmounts[n2] = per;
+                    winnersBuf[n2] = p;
+                    amountsBuf[n2] = per;
                     unchecked {
                         ++n2;
                     }
@@ -224,14 +236,11 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
             scanCursor = end;
             bafState.returnAmountWei = uint120(retWei);
 
-            winners = new address[](n2);
-            amounts = new uint256[](n2);
-            for (uint256 k; k < n2; ) {
-                winners[k] = tmpWinners[k];
-                amounts[k] = tmpAmounts[k];
-                unchecked {
-                    ++k;
-                }
+            winners = winnersBuf;
+            amounts = amountsBuf;
+            assembly {
+                mstore(winners, n2)
+                mstore(amounts, n2)
             }
 
             if (end == bs.limit) {
@@ -301,8 +310,8 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
             if (end > bs.limit) end = bs.limit;
 
             uint256 tmpCap = uint256(batch) / 10 + 2;
-            address[] memory tmpWinners = new address[](tmpCap);
-            uint256[] memory tmpAmounts = new uint256[](tmpCap);
+            address[] memory winnersBuf = new address[](tmpCap);
+            uint256[] memory amountsBuf = new uint256[](tmpCap);
             uint256 n2;
 
             uint256 pool = uint256(bafState.totalPrizePoolWei);
@@ -328,8 +337,8 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
                 if (e.level == lvl && e.burn != 0 && e.winner) {
                     uint256 amt = (pool * e.burn) / denom;
                     if (amt != 0) {
-                        tmpWinners[n2] = p;
-                        tmpAmounts[n2] = amt;
+                        winnersBuf[n2] = p;
+                        amountsBuf[n2] = amt;
                         unchecked {
                             ++n2;
                             paid += amt;
@@ -344,14 +353,11 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
             scanCursor = end;
             bafState.returnAmountWei = uint120(paid);
 
-            winners = new address[](n2);
-            amounts = new uint256[](n2);
-            for (uint256 k; k < n2; ) {
-                winners[k] = tmpWinners[k];
-                amounts[k] = tmpAmounts[k];
-                unchecked {
-                    ++k;
-                }
+            winners = winnersBuf;
+            amounts = amountsBuf;
+            assembly {
+                mstore(winners, n2)
+                mstore(amounts, n2)
             }
 
             if (end == bs.limit) {
@@ -434,7 +440,8 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
 
     function _seedDecBucketState(uint256 entropy) internal {
         for (uint8 denom = 2; denom <= 20; ) {
-            decBucketAccumulator[denom] = uint32(uint256(keccak256(abi.encodePacked(entropy, denom))) % denom);
+            entropy = uint256(keccak256(abi.encode(entropy, denom)));
+            decBucketAccumulator[denom] = uint32(entropy % denom);
             unchecked {
                 ++denom;
             }
