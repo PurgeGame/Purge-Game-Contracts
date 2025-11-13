@@ -7,6 +7,7 @@ import "../interfaces/IPurgeGame.sol";
 contract PurgeQuestModule is IPurgeQuestModule {
     error OnlyCoin();
     error InvalidQuestDay();
+    error InvalidEntropy();
 
     uint256 private constant MILLION = 1e6;
     uint8 private constant QUEST_SLOT_COUNT = 2;
@@ -57,102 +58,20 @@ contract PurgeQuestModule is IPurgeQuestModule {
 
     DailyQuest[QUEST_SLOT_COUNT] private activeQuests;
     mapping(address => PlayerQuestState) private questPlayerState;
-    mapping(address => bool) private hasEthMint;
     uint48 private forcedMintEthQuestDay;
-    uint48 private forcedPurgeQuestDay;
     uint48 private purgeQuestCompletedDay;
 
-    uint16[11] private questMintAnyMax = [
-        uint16(2),
-        uint16(3),
-        uint16(4),
-        uint16(5),
-        uint16(6),
-        uint16(7),
-        uint16(8),
-        uint16(8),
-        uint16(8),
-        uint16(8),
-        uint16(8)
-    ];
-    uint16[11] private questMintEthMax = [
-        uint16(1),
-        uint16(2),
-        uint16(2),
-        uint16(2),
-        uint16(3),
-        uint16(3),
-        uint16(4),
-        uint16(4),
-        uint16(4),
-        uint16(5),
-        uint16(5)
-    ];
-    uint16[11] private questFlipMax = [
-        uint16(400),
-        uint16(500),
-        uint16(650),
-        uint16(800),
-        uint16(1000),
-        uint16(1250),
-        uint16(1550),
-        uint16(1900),
-        uint16(2300),
-        uint16(2500),
-        uint16(2500)
-    ];
-    uint16[11] private questStakePrincipalMax = [
-        uint16(400),
-        uint16(525),
-        uint16(675),
-        uint16(825),
-        uint16(1000),
-        uint16(1225),
-        uint16(1500),
-        uint16(1825),
-        uint16(2200),
-        uint16(2500),
-        uint16(2500)
-    ];
-    uint16[11] private questAffiliateMax = [
-        uint16(500),
-        uint16(650),
-        uint16(800),
-        uint16(1000),
-        uint16(1250),
-        uint16(1550),
-        uint16(1550),
-        uint16(1550),
-        uint16(1550),
-        uint16(1550),
-        uint16(1550)
-    ];
-    uint16[11] private questStakeDistanceMin = [
-        uint16(10),
-        uint16(15),
-        uint16(20),
-        uint16(25),
-        uint16(25),
-        uint16(25),
-        uint16(25),
-        uint16(25),
-        uint16(25),
-        uint16(25),
-        uint16(25)
-    ];
-    uint16[11] private questStakeDistanceMax = [
-        uint16(40),
-        uint16(45),
-        uint16(50),
-        uint16(55),
-        uint16(60),
-        uint16(65),
-        uint16(70),
-        uint16(75),
-        uint16(75),
-        uint16(75),
-        uint16(75)
-    ];
+    uint256 private constant QUEST_MINT_ANY_PACKED = 0x0000000000000000000000080008000800080008000700060005000400030002;
+    uint256 private constant QUEST_MINT_ETH_PACKED = 0x0000000000000000000000050005000400040004000300030002000200020001;
+    uint256 private constant QUEST_FLIP_PACKED = 0x0000000000000000000009c409c408fc076c060e04e203e80320028a01f40190;
+    uint256 private constant QUEST_STAKE_PRINCIPAL_PACKED =
+        0x0000000000000000000009c409c40898072105dc04c903e8033902a3020d0190;
+    uint256 private constant QUEST_AFFILIATE_PACKED =
+        0x00000000000000000000060e060e060e060e060e060e04e203e80320028a01f4;
+    uint256 private constant QUEST_STAKE_DISTANCE_MIN_PACKED =
+        0x00000000000000000000001900190019001900190019001900190014000f000a;
+    uint256 private constant QUEST_STAKE_DISTANCE_MAX_PACKED =
+        0x00000000000000000000004b004b004b004b00460041003c00370032002d0028;
 
     constructor(address coin_) {
         coin = coin_;
@@ -169,15 +88,14 @@ contract PurgeQuestModule is IPurgeQuestModule {
 
     function primeMintEthQuest(uint48 day) external onlyCoin {
         forcedMintEthQuestDay = day;
-        forcedPurgeQuestDay = day;
     }
 
-    function rollDailyQuest(uint48 day, uint256 entropy)
-        external
-        onlyCoin
-        returns (bool rolled, uint8 questType, bool highDifficulty, uint8 stakeMask, uint8 stakeRisk)
-    {
+    function rollDailyQuest(
+        uint48 day,
+        uint256 entropy
+    ) external onlyCoin returns (bool rolled, uint8 questType, bool highDifficulty, uint8 stakeMask, uint8 stakeRisk) {
         if (day == 0) revert InvalidQuestDay();
+        if (entropy == 0) revert InvalidEntropy();
         DailyQuest[QUEST_SLOT_COUNT] storage quests = activeQuests;
         uint8 phase_ = _questPhase();
         bool purgeAllowed = _canRollPurgeQuest(phase_);
@@ -188,31 +106,22 @@ contract PurgeQuestModule is IPurgeQuestModule {
             bool hard = (current.flags & QUEST_FLAG_HIGH_DIFFICULTY) != 0;
             return (false, current.questType, hard, current.stakeMask, current.stakeRisk);
         }
-        if (entropy == 0) {
-            entropy = uint256(keccak256(abi.encodePacked(block.timestamp, block.prevrandao, day, coin)));
-        }
         bool forceMintEth;
         uint48 forcedDay = forcedMintEthQuestDay;
         if (forcedDay != 0 && day >= forcedDay) {
             forceMintEth = day == forcedDay;
             forcedMintEthQuestDay = 0;
         }
-        bool forcePurgeQuest;
-        uint48 purgeDay = forcedPurgeQuestDay;
-        if (purgeDay != 0 && day >= purgeDay) {
-            forcePurgeQuest = day == purgeDay && purgeAllowed;
-            forcedPurgeQuestDay = 0;
-        }
-
         for (uint8 slot; slot < QUEST_SLOT_COUNT; ) {
             uint8 exclude = slot == 0 ? type(uint8).max : quests[0].questType;
-            uint256 slotEntropy = uint256(keccak256(abi.encode(entropy, slot)));
+            uint256 slotEntropy = entropy;
+            if (slot == 1) {
+                // Re-use the other half of the VRF word instead of hashing again.
+                slotEntropy = (entropy >> 128) | (entropy << 128);
+            }
             _seedQuest(quests[slot], day, slotEntropy, exclude);
             if (slot == 0 && forceMintEth) {
                 quests[slot].questType = QUEST_TYPE_MINT_ETH;
-            } else if (slot == 1 && forcePurgeQuest) {
-                quests[slot].questType = QUEST_TYPE_PURGE;
-                forcePurgeQuest = false;
             } else if (quests[slot].questType == QUEST_TYPE_PURGE && !purgeAllowed) {
                 quests[slot].questType = QUEST_TYPE_MINT_ETH;
             } else if (quests[slot].questType == QUEST_TYPE_DECIMATOR && !decAllowed) {
@@ -227,20 +136,16 @@ contract PurgeQuestModule is IPurgeQuestModule {
         return (true, primary.questType, hardMode, primary.stakeMask, primary.stakeRisk);
     }
 
-    function handleMint(address player, uint32 quantity, bool paidWithEth)
-        external
-        onlyCoin
-        returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed)
-    {
+    function handleMint(
+        address player,
+        uint32 quantity,
+        bool paidWithEth
+    ) external onlyCoin returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) {
         _normalizeActivePurgeQuests();
         DailyQuest[QUEST_SLOT_COUNT] memory quests = activeQuests;
         uint48 currentDay = _currentQuestDay(quests);
         PlayerQuestState storage state = questPlayerState[player];
         bool mintedRecently = _hasRecentEthMint(player);
-        bool hadEthMint = hasEthMint[player];
-        if (paidWithEth && !hadEthMint) {
-            hasEthMint[player] = true;
-        }
         if (player == address(0) || quantity == 0 || currentDay == 0) {
             return (0, false, quests[0].questType, state.streak, false);
         }
@@ -275,7 +180,13 @@ contract PurgeQuestModule is IPurgeQuestModule {
             if (quest.questType == QUEST_TYPE_MINT_ANY || (paidWithEth && quest.questType == QUEST_TYPE_MINT_ETH)) {
                 matched = true;
                 fallbackType = quest.questType;
-                (reward, hardMode, questType, streak, completed) = _questHandleMintSlot(state, quest, slot, quantity, tier);
+                (reward, hardMode, questType, streak, completed) = _questHandleMintSlot(
+                    state,
+                    quest,
+                    slot,
+                    quantity,
+                    tier
+                );
                 if (completed) {
                     return (reward, hardMode, questType, streak, completed);
                 }
@@ -287,11 +198,10 @@ contract PurgeQuestModule is IPurgeQuestModule {
         return (0, false, matched ? fallbackType : QUEST_TYPE_MINT_ANY, state.streak, false);
     }
 
-    function handleFlip(address player, uint256 flipCredit)
-        external
-        onlyCoin
-        returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed)
-    {
+    function handleFlip(
+        address player,
+        uint256 flipCredit
+    ) external onlyCoin returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) {
         _normalizeActivePurgeQuests();
         DailyQuest[QUEST_SLOT_COUNT] memory quests = activeQuests;
         uint48 currentDay = _currentQuestDay(quests);
@@ -330,11 +240,10 @@ contract PurgeQuestModule is IPurgeQuestModule {
         return (0, false, matched ? fallbackType : QUEST_TYPE_FLIP, state.streak, false);
     }
 
-    function handleDecimator(address player, uint256 burnAmount)
-        external
-        onlyCoin
-        returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed)
-    {
+    function handleDecimator(
+        address player,
+        uint256 burnAmount
+    ) external onlyCoin returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) {
         _normalizeActivePurgeQuests();
         DailyQuest[QUEST_SLOT_COUNT] memory quests = activeQuests;
         uint48 currentDay = _currentQuestDay(quests);
@@ -373,11 +282,12 @@ contract PurgeQuestModule is IPurgeQuestModule {
         return (0, false, matched ? fallbackType : QUEST_TYPE_DECIMATOR, state.streak, false);
     }
 
-    function handleStake(address player, uint256 principal, uint24 distance, uint8 risk)
-        external
-        onlyCoin
-        returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed)
-    {
+    function handleStake(
+        address player,
+        uint256 principal,
+        uint24 distance,
+        uint8 risk
+    ) external onlyCoin returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) {
         _normalizeActivePurgeQuests();
         DailyQuest[QUEST_SLOT_COUNT] memory quests = activeQuests;
         uint48 currentDay = _currentQuestDay(quests);
@@ -422,11 +332,10 @@ contract PurgeQuestModule is IPurgeQuestModule {
         return (0, false, matched ? fallbackType : QUEST_TYPE_STAKE, state.streak, false);
     }
 
-    function handleAffiliate(address player, uint256 amount)
-        external
-        onlyCoin
-        returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed)
-    {
+    function handleAffiliate(
+        address player,
+        uint256 amount
+    ) external onlyCoin returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) {
         _normalizeActivePurgeQuests();
         DailyQuest[QUEST_SLOT_COUNT] memory quests = activeQuests;
         uint48 currentDay = _currentQuestDay(quests);
@@ -462,11 +371,10 @@ contract PurgeQuestModule is IPurgeQuestModule {
         return (0, false, matched ? fallbackType : QUEST_TYPE_AFFILIATE, state.streak, false);
     }
 
-    function handlePurge(address player, uint32 quantity)
-        external
-        onlyCoin
-        returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed)
-    {
+    function handlePurge(
+        address player,
+        uint32 quantity
+    ) external onlyCoin returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) {
         _normalizeActivePurgeQuests();
         DailyQuest[QUEST_SLOT_COUNT] memory quests = activeQuests;
         uint48 currentDay = _currentQuestDay(quests);
@@ -513,7 +421,13 @@ contract PurgeQuestModule is IPurgeQuestModule {
         if (quest.questType == QUEST_TYPE_PURGE && !purgeAllowed && !_isPurgeQuestLocked(quest.day)) {
             quest.questType = QUEST_TYPE_MINT_ETH;
         }
-        return (quest.day, quest.questType, (quest.flags & QUEST_FLAG_HIGH_DIFFICULTY) != 0, quest.stakeMask, quest.stakeRisk);
+        return (
+            quest.day,
+            quest.questType,
+            (quest.flags & QUEST_FLAG_HIGH_DIFFICULTY) != 0,
+            quest.stakeMask,
+            quest.stakeRisk
+        );
     }
 
     function getActiveQuests() external view override returns (QuestInfo[2] memory quests) {
@@ -543,32 +457,28 @@ contract PurgeQuestModule is IPurgeQuestModule {
         }
     }
 
-    function playerQuestState(address player)
-        external
-        view
-        override
-        returns (uint32 streak, uint32 lastCompletedDay, uint128 progress, bool completedToday)
-    {
+    function playerQuestState(
+        address player
+    ) external view override returns (uint32 streak, uint32 lastCompletedDay, uint128 progress, bool completedToday) {
         PlayerQuestState memory state = questPlayerState[player];
         streak = state.streak;
         lastCompletedDay = state.lastCompletedDay;
         DailyQuest memory quest = activeQuests[0];
         if (quest.day != 0 && state.lastProgressDay[0] == quest.day) {
             progress = state.progress[0];
-            completedToday = state.lastSyncDay == quest.day && (state.completionMask & QUEST_STATE_COMPLETED_SLOT0) != 0;
+            completedToday =
+                state.lastSyncDay == quest.day &&
+                (state.completionMask & QUEST_STATE_COMPLETED_SLOT0) != 0;
         }
     }
 
-    function playerQuestStates(address player)
+    function playerQuestStates(
+        address player
+    )
         external
         view
         override
-        returns (
-            uint32 streak,
-            uint32 lastCompletedDay,
-            uint128[2] memory progress,
-            bool[2] memory completed
-        )
+        returns (uint32 streak, uint32 lastCompletedDay, uint128[2] memory progress, bool[2] memory completed)
     {
         PlayerQuestState memory state = questPlayerState[player];
         streak = state.streak;
@@ -621,10 +531,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         _normalizeActivePurgeQuestsStorage(quests, purgeAllowed);
     }
 
-    function _normalizeActivePurgeQuestsStorage(
-        DailyQuest[QUEST_SLOT_COUNT] storage quests,
-        bool inPurge
-    ) private {
+    function _normalizeActivePurgeQuestsStorage(DailyQuest[QUEST_SLOT_COUNT] storage quests, bool inPurge) private {
         if (inPurge) return;
         for (uint8 slot; slot < QUEST_SLOT_COUNT; ) {
             DailyQuest storage quest = quests[slot];
@@ -722,8 +629,12 @@ contract PurgeQuestModule is IPurgeQuestModule {
         return uint8(tier);
     }
 
-    function _questMintAnyTarget(uint8 tier, uint256 entropy) private view returns (uint32) {
-        uint16 maxVal = questMintAnyMax[tier];
+    function _questPackedValue(uint256 packed, uint8 tier) private pure returns (uint16) {
+        return uint16((packed >> (tier * 16)) & 0xFFFF);
+    }
+
+    function _questMintAnyTarget(uint8 tier, uint256 entropy) private pure returns (uint32) {
+        uint16 maxVal = _questPackedValue(QUEST_MINT_ANY_PACKED, tier);
         if (maxVal <= QUEST_MIN_MINT) {
             return QUEST_MIN_MINT;
         }
@@ -731,11 +642,11 @@ contract PurgeQuestModule is IPurgeQuestModule {
         return uint32(rand % maxVal) + QUEST_MIN_MINT;
     }
 
-    function _questMintEthTarget(uint8 tier, uint256 entropy) private view returns (uint32) {
+    function _questMintEthTarget(uint8 tier, uint256 entropy) private pure returns (uint32) {
         if (tier == 0) {
             return QUEST_MIN_MINT;
         }
-        uint16 maxVal = questMintEthMax[tier];
+        uint16 maxVal = _questPackedValue(QUEST_MINT_ETH_PACKED, tier);
         if (maxVal <= QUEST_MIN_MINT) {
             return QUEST_MIN_MINT;
         }
@@ -743,18 +654,18 @@ contract PurgeQuestModule is IPurgeQuestModule {
         return uint32(rand % maxVal) + QUEST_MIN_MINT;
     }
 
-    function _questPurgeTarget(uint8 tier, uint256 entropy) private view returns (uint32) {
+    function _questPurgeTarget(uint8 tier, uint256 entropy) private pure returns (uint32) {
         return _questMintEthTarget(tier, entropy);
     }
 
-    function _questFlipTargetTokens(uint8 tier, uint256 entropy) private view returns (uint32) {
-        uint16 maxVal = questFlipMax[tier];
+    function _questFlipTargetTokens(uint8 tier, uint256 entropy) private pure returns (uint32) {
+        uint16 maxVal = _questPackedValue(QUEST_FLIP_PACKED, tier);
         uint256 range = uint256(maxVal) - QUEST_MIN_TOKEN + 1;
         uint256 rand = _questRand(entropy, QUEST_TYPE_FLIP, tier, 0);
         return uint32(uint256(QUEST_MIN_TOKEN) + (rand % range));
     }
 
-    function _questDecimatorTargetTokens(uint8 tier, uint256 entropy) private view returns (uint32) {
+    function _questDecimatorTargetTokens(uint8 tier, uint256 entropy) private pure returns (uint32) {
         uint32 base = _questFlipTargetTokens(tier, entropy);
         uint32 doubled = base * 2;
         if (doubled < base) {
@@ -763,23 +674,23 @@ contract PurgeQuestModule is IPurgeQuestModule {
         return doubled;
     }
 
-    function _questStakePrincipalTarget(uint8 tier, uint256 entropy) private view returns (uint32) {
-        uint16 maxVal = questStakePrincipalMax[tier];
+    function _questStakePrincipalTarget(uint8 tier, uint256 entropy) private pure returns (uint32) {
+        uint16 maxVal = _questPackedValue(QUEST_STAKE_PRINCIPAL_PACKED, tier);
         uint256 range = uint256(maxVal) - QUEST_MIN_TOKEN + 1;
         uint256 rand = _questRand(entropy, QUEST_TYPE_STAKE, tier, 1);
         return uint32(uint256(QUEST_MIN_TOKEN) + (rand % range));
     }
 
-    function _questStakeDistanceTarget(uint8 tier, uint256 entropy) private view returns (uint16) {
-        uint16 minVal = questStakeDistanceMin[tier];
-        uint16 maxVal = questStakeDistanceMax[tier];
+    function _questStakeDistanceTarget(uint8 tier, uint256 entropy) private pure returns (uint16) {
+        uint16 minVal = _questPackedValue(QUEST_STAKE_DISTANCE_MIN_PACKED, tier);
+        uint16 maxVal = _questPackedValue(QUEST_STAKE_DISTANCE_MAX_PACKED, tier);
         uint256 range = uint256(maxVal) - minVal + 1;
         uint256 rand = _questRand(entropy, QUEST_TYPE_STAKE, tier, 2);
         return uint16(uint256(minVal) + (rand % range));
     }
 
-    function _questAffiliateTargetTokens(uint8 tier, uint256 entropy) private view returns (uint32) {
-        uint16 maxVal = questAffiliateMax[tier];
+    function _questAffiliateTargetTokens(uint8 tier, uint256 entropy) private pure returns (uint32) {
+        uint16 maxVal = _questPackedValue(QUEST_AFFILIATE_PACKED, tier);
         uint256 range = uint256(maxVal) - QUEST_MIN_TOKEN + 1;
         uint256 rand = _questRand(entropy, QUEST_TYPE_AFFILIATE, tier, 0);
         return uint32(uint256(QUEST_MIN_TOKEN) + (rand % range));
@@ -790,10 +701,10 @@ contract PurgeQuestModule is IPurgeQuestModule {
         return uint256(keccak256(abi.encode(entropy, questType, tier, salt)));
     }
 
-    function _questCompleteForced(PlayerQuestState storage state, uint48 currentDay)
-        private
-        returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed)
-    {
+    function _questCompleteForced(
+        PlayerQuestState storage state,
+        uint48 currentDay
+    ) private returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) {
         if ((state.completionMask & QUEST_STATE_STREAK_CREDITED) == 0) {
             state.completionMask |= QUEST_STATE_STREAK_CREDITED;
             uint32 newStreak = state.streak + 1;
@@ -844,12 +755,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         }
     }
 
-    function _seedQuest(
-        DailyQuest storage quest,
-        uint48 day,
-        uint256 entropy,
-        uint8 excludeType
-    ) private {
+    function _seedQuest(DailyQuest storage quest, uint48 day, uint256 entropy, uint8 excludeType) private {
         uint8 qType = uint8(entropy % QUEST_TYPE_COUNT);
         if (excludeType != type(uint8).max && qType == excludeType) {
             qType = uint8((qType + 1 + uint8(entropy % (QUEST_TYPE_COUNT - 1))) % QUEST_TYPE_COUNT);
@@ -894,7 +800,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         }
         IPurgeGame game_ = questGame;
         if (address(game_) == address(0)) {
-            return hasEthMint[player];
+            return false;
         }
         uint24 lastLevel = game_.ethMintLastLevel(player);
         if (lastLevel == 0) {
