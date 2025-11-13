@@ -911,6 +911,7 @@ contract Purgecoin is PurgeCoinStorage {
         uint32 stepPayout = (cap == 0) ? 420 : cap;
         uint32 stepStake = (cap == 0) ? 200 : cap;
 
+        bool isBafLevel = _isBafLevel(level);
         bool win = (word & 1) == 1;
         if (!win) stepPayout <<= 2; // 4x work on losses to clear backlog faster
         // --- Phase 1: stake propagation (only processed on wins) --------
@@ -1062,24 +1063,32 @@ contract Purgecoin is PurgeCoinStorage {
             // Flip payout: double on win, zero out stake in all cases.
             uint256 amt = coinflipAmount[p];
             if (amt != 0) {
-                coinflipAmount[p] = 0;
-                if (win) {
-                    if (bonusFlip) amt = (amt * 11) / 10; // keep current rounding semantics
-                    uint256 payout = amt * 2;
-                    uint32 streak = _questStreak(p);
-                    uint16 nukeRate = _nukeRateBps(streak);
-                    bool nuked;
-                    if (nukeRate != 0) {
-                        uint256 sample = uint256(_nextNukeSample());
-                        uint256 threshold = (uint256(nukeRate) * 65536) / 10_000;
-                        nuked = sample < threshold;
-                    }
-                    if (!nuked) {
-                        unchecked {
-                            credit += payout;
-                        }
+                if (!win) {
+                    coinflipAmount[p] = 0;
+                } else {
+                    uint256 workingAmt = amt;
+                    if (bonusFlip) workingAmt = (workingAmt * 11) / 10; // keep current rounding semantics
+                    uint256 payout = workingAmt * 2;
+                    if (isBafLevel) {
+                        coinflipAmount[p] = payout;
                     } else {
-                        emit FlipNuked(p, streak, payout);
+                        uint32 streak = _questStreak(p);
+                        uint16 nukeRate = _nukeRateBps(streak);
+                        bool nuked;
+                        if (nukeRate != 0) {
+                            uint256 sample = uint256(_nextNukeSample());
+                            uint256 threshold = (uint256(nukeRate) * 65536) / 10_000;
+                            nuked = sample < threshold;
+                        }
+                        if (nuked) {
+                            coinflipAmount[p] = 0;
+                            emit FlipNuked(p, streak, payout);
+                        } else {
+                            coinflipAmount[p] = 0;
+                            unchecked {
+                                credit += payout;
+                            }
+                        }
                     }
                 }
             }
@@ -1101,11 +1110,16 @@ contract Purgecoin is PurgeCoinStorage {
             tbRemain = 0;
             tbPrize = 0;
             tbMod = 0;
-            cfHead = cfTail;
+            if (!isBafLevel) {
+                cfHead = cfTail;
+            }
             payoutIndex = 0;
 
             scanCursor = SS_IDLE;
             nukeStream = 0;
+            if (isBafLevel) {
+                lastBafFlipLevel = level;
+            }
             emit CoinflipFinished(win);
             return true;
         }
@@ -1114,13 +1128,20 @@ contract Purgecoin is PurgeCoinStorage {
     }
 
     function coinflipWorkPending(uint24 level) external view onlyPurgeGameContract returns (bool) {
-        if ((level % 20) == 0) {
-            return stakeLevelComplete < level;
-        }
         if (payoutIndex != 0) return true;
+
         if (stakeLevelComplete < level) return true;
-        if (_coinflipCount() != 0) return true;
-        return false;
+
+        uint256 queued = _coinflipCount();
+        if (queued == 0) return false;
+
+        if (_isBafLevel(level)) {
+            // BAF checkpoints only need a single doubling pass per level; after that the queue remains
+            // armed until a future non-BAF loss clears it.
+            return lastBafFlipLevel < level;
+        }
+
+        return true;
     }
 
     function prepareCoinJackpot()
@@ -1394,6 +1415,12 @@ contract Purgecoin is PurgeCoinStorage {
         }
         (uint32 streak, , , ) = module.playerQuestState(player);
         return streak;
+    }
+
+    function _isBafLevel(uint24 lvl) private pure returns (bool) {
+        if (lvl == 0) return false;
+        if ((lvl % 20) != 0) return false;
+        return (lvl % 100) != 0;
     }
 
     function _decBucketDenominator(uint256 streak) internal pure returns (uint8) {

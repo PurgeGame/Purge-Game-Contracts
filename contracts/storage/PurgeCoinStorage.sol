@@ -87,6 +87,7 @@ abstract contract PurgeCoinStorage {
     address[] internal cfPlayers;
     uint128 internal cfHead;
     uint128 internal cfTail;
+    uint24 internal lastBafFlipLevel;
 
     mapping(address => uint256) public coinflipAmount;
 

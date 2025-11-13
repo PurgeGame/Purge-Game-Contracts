@@ -270,7 +270,6 @@ contract PurgeGame is PurgeGameStorage {
             if (bal > 0) coinContract.burnie{value: bal}(0);
         }
         uint24 lvl = level;
-        uint8 modTwenty = uint8(lvl % 20);
         uint8 _gameState = gameState;
         uint8 _phase = phase;
 
@@ -306,24 +305,17 @@ contract PurgeGame is PurgeGameStorage {
             // --- State 2 - Purchase / Airdrop ---
             if (_gameState == 2) {
                 if (_phase <= 2) {
-                    bool prizeReady = prizePool >= lastPrizePool;
-                    bool levelGate = prizeReady;
-                    if (modTwenty == 16) {
-                        levelGate = prizeReady;
-                    }
-
                     bool advanceToAirdrop;
-                    if (_phase == 2 && levelGate) {
-                        if (modTwenty != 0 && coinContract.coinflipWorkPending(lvl)) {
+                    bool flipsPending = coinContract.coinflipWorkPending(lvl);
+                    if (_phase == 2 && prizePool >= lastPrizePool) {
+                        if (flipsPending) {
                             coinContract.processCoinflipPayouts(lvl, cap, true, rngWord, day);
                             break;
                         }
                         advanceToAirdrop = true;
-                    } else if (modTwenty != 0) {
-                        if (coinContract.coinflipWorkPending(lvl)) {
-                            coinContract.processCoinflipPayouts(lvl, cap, false, rngWord, day);
-                            break;
-                        }
+                    } else if (flipsPending) {
+                        coinContract.processCoinflipPayouts(lvl, cap, false, rngWord, day);
+                        break;
                     }
 
                     bool batchesPending = airdropIndex < pendingMapMints.length;
@@ -354,7 +346,7 @@ contract PurgeGame is PurgeGameStorage {
                 }
 
                 if (_phase == 4) {
-                    if (modTwenty != 0 && coinContract.coinflipWorkPending(lvl)) {
+                    if (coinContract.coinflipWorkPending(lvl)) {
                         coinContract.processCoinflipPayouts(lvl, cap, false, rngWord, day);
                         break;
                     }
