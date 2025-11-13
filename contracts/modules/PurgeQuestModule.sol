@@ -236,6 +236,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         DailyQuest[QUEST_SLOT_COUNT] memory quests = activeQuests;
         uint48 currentDay = _currentQuestDay(quests);
         PlayerQuestState storage state = questPlayerState[player];
+        bool mintedRecently = _hasRecentEthMint(player);
         bool hadEthMint = hasEthMint[player];
         if (paidWithEth && !hadEthMint) {
             hasEthMint[player] = true;
@@ -247,7 +248,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         _questSyncState(state, currentDay);
         uint8 tier = _questTier(state.baseStreak);
 
-        if (!hadEthMint) {
+        if (!mintedRecently) {
             if (!paidWithEth) {
                 return (0, false, QUEST_TYPE_MINT_ETH, state.streak, false);
             }
@@ -885,5 +886,24 @@ contract PurgeQuestModule is IPurgeQuestModule {
         uint48 day0 = quests[0].day;
         if (day0 != 0) return day0;
         return quests[1].day;
+    }
+
+    function _hasRecentEthMint(address player) private view returns (bool) {
+        if (player == address(0)) {
+            return false;
+        }
+        IPurgeGame game_ = questGame;
+        if (address(game_) == address(0)) {
+            return hasEthMint[player];
+        }
+        uint24 lastLevel = game_.ethMintLastLevel(player);
+        if (lastLevel == 0) {
+            return false;
+        }
+        uint24 currentLevel = game_.level();
+        if (currentLevel <= lastLevel) {
+            return true;
+        }
+        return currentLevel - lastLevel <= 3;
     }
 }
