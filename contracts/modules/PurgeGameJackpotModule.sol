@@ -129,41 +129,38 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
             bool thresholdTrigger = percentBefore < EARLY_PURGE_COIN_ONLY_THRESHOLD &&
                 percentAfter >= EARLY_PURGE_COIN_ONLY_THRESHOLD;
 
-            if (percentBefore == 0) {
+            if (initialTrigger || thresholdTrigger) {
                 poolBps = 400;
-            } else if (
-                percentBefore < EARLY_PURGE_COIN_ONLY_THRESHOLD && percentAfter >= EARLY_PURGE_COIN_ONLY_THRESHOLD
-            ) {
-                poolBps = 400;
-            }
-            if (initialTrigger && thresholdTrigger) {
-                poolBps = 600;
+                if (initialTrigger && thresholdTrigger) {
+                    poolBps += 200;
+                }
             }
             poolWei = (carryBal * poolBps) / 10_000;
         }
 
         (uint256 coinPool, address biggestFlip) = coinContract.prepareCoinJackpot();
-        address[] memory topBettors = coinContract.getLeaderboardAddresses(2);
-        address thirdFlip = topBettors.length > 2 ? topBettors[2] : address(0);
-        address fourthFlip = topBettors.length > 3 ? topBettors[3] : address(0);
-
         uint256 paidWei;
         uint256 coinRemainder;
-        (paidWei, , coinRemainder) = _runJackpot(
-            lvl,
-            poolWei,
-            coinPool,
-            false,
-            entropyWord ^ (uint256(lvl) << 192),
-            winningTraits,
-            DAILY_JACKPOT_SHARES_PACKED,
-            coinContract,
-            trophiesContract,
-            0,
-            0
-        );
+        if (poolWei != 0 || coinPool != 0) {
+            (paidWei, , coinRemainder) = _runJackpot(
+                lvl,
+                poolWei,
+                coinPool,
+                false,
+                entropyWord ^ (uint256(lvl) << 192),
+                winningTraits,
+                DAILY_JACKPOT_SHARES_PACKED,
+                coinContract,
+                trophiesContract,
+                0,
+                0
+            );
+        }
 
         if (coinRemainder != 0) {
+            address[] memory topBettors = coinContract.getLeaderboardAddresses(2);
+            address thirdFlip = topBettors.length > 2 ? topBettors[2] : address(0);
+            address fourthFlip = topBettors.length > 3 ? topBettors[3] : address(0);
             uint256 biggestShare = coinRemainder / 2;
             uint256 secondaryShare = coinRemainder / 4;
             uint256 bountyShare = coinRemainder - biggestShare - secondaryShare;
@@ -245,8 +242,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         mapTrophyFallback += stakeRemainder;
 
         uint256 paidWeiMap;
-        uint256 coinRemainder;
-        (paidWeiMap, , coinRemainder) = _runJackpot(
+        (paidWeiMap, , ) = _runJackpot(
             lvl,
             effectiveWei,
             0,
@@ -259,10 +255,6 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
             stakeTotal,
             mapTrophyFallback
         );
-
-        if (coinRemainder != 0) {
-            coinContract.addToBounty(coinRemainder);
-        }
 
         uint256 distributedEth = paidWeiMap + stakePaid;
         if (distributedEth > effectiveWei) {
@@ -431,22 +423,28 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         uint256 mapStakeSiphon,
         uint256 mapTrophyBonus
     ) private returns (uint256 totalPaidEth, uint256 totalPaidCoin, uint256 coinRemainder) {
+        if (ethPool == 0 && coinPool == 0) {
+            return (0, 0, 0);
+        }
+
         uint8 band = uint8((lvl % 100) / 20) + 1;
         uint16[4] memory bucketCounts = _traitBucketCounts(band, entropy);
 
-        (totalPaidEth, , ) = _runJackpotEth(
-            mapTrophy,
-            lvl,
-            ethPool,
-            entropy,
-            winningTraits,
-            traitShareBpsPacked,
-            bucketCounts,
-            coinContract,
-            trophiesContract,
-            mapStakeSiphon,
-            mapTrophyBonus
-        );
+        if (ethPool != 0) {
+            (totalPaidEth, , ) = _runJackpotEth(
+                mapTrophy,
+                lvl,
+                ethPool,
+                entropy,
+                winningTraits,
+                traitShareBpsPacked,
+                bucketCounts,
+                coinContract,
+                trophiesContract,
+                mapStakeSiphon,
+                mapTrophyBonus
+            );
+        }
 
         if (coinPool != 0) {
             totalPaidCoin = _runJackpotCoin(
