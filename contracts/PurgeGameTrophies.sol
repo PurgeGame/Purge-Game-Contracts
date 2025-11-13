@@ -1266,6 +1266,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     function claimTrophy(uint256 tokenId) external override {
         address owner = address(uint160(nft.packedOwnershipOf(tokenId)));
         if (owner != msg.sender) revert Unauthorized();
+        if (game.rngLocked()) revert CoinPaused();
 
         ClaimContext memory ctx;
         ctx.info = trophyData_[tokenId];
