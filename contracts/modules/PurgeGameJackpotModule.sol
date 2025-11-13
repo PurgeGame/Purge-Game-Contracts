@@ -96,12 +96,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
             }
 
             coinContract.resetCoinflipLeaderboard();
-
-            uint48 questDay = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
-            uint256 questEntropy = uint256(
-                keccak256(abi.encode(entropyWord, targetLevel, jackpotCounter, "daily-quest"))
-            );
-            coinContract.rollDailyQuest(questDay, questEntropy);
+            _rollQuestForJackpot(coinContract, entropyWord, targetLevel);
 
             if (dailyPaidEth != 0) {
                 uint256 carryAfter = carryOver;
@@ -199,6 +194,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         }
 
         coinContract.resetCoinflipLeaderboard();
+        _rollQuestForJackpot(coinContract, entropyWord, lvl);
 
         earlyPurgePercent = percentAfter;
 
@@ -265,6 +261,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         levelPrizePool += remainingPool;
 
         earlyPurgePercent = 0;
+        _rollQuestForJackpot(coinContract, rngWord, lvl);
 
         uint48 questDay = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
         coinContract.primeMintEthQuest(questDay + 1);
@@ -666,6 +663,14 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
             state ^= state << 8;
         }
         return state;
+    }
+
+    function _rollQuestForJackpot(IPurgeCoinModule coinContract, uint256 entropySource, uint24 questLevel) private {
+        uint48 questDay = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
+        uint256 questEntropy = uint256(
+            keccak256(abi.encode(entropySource, questLevel, jackpotCounter, "daily-quest"))
+        );
+        coinContract.rollDailyQuest(questDay, questEntropy);
     }
 
     function _creditJackpot(
