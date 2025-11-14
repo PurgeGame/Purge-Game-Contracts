@@ -173,21 +173,6 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
                     ++i;
                 }
             }
-        } else {
-            uint256 poolCarry = poolValue;
-            uint256 mapUnit = poolCarry / 20;
-            uint256 affiliateAward = topAffiliate == address(0) ? 0 : mapUnit;
-            uint256 mapPayoutValue = mapUnit * 4 + affiliateAward;
-
-            (address mapRecipient, ) = trophiesContract.processEndLevel{value: mapPayoutValue}(
-                IPurgeGameTrophies.EndLevelRequest({
-                    exterminator: topAffiliate,
-                    traitId: TRAIT_ID_TIMEOUT,
-                    level: prevLevelPending,
-                    pool: poolCarry
-                })
-            );
-            _addClaimableEth(mapRecipient, mapUnit);
         }
 
         delete pendingEndLevel;

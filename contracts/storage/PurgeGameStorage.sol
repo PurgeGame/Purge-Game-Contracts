@@ -23,6 +23,8 @@ abstract contract PurgeGameStorage {
     uint256 internal carryOver;
     uint256 internal decimatorHundredPool;
     bool internal decimatorHundredReady;
+    uint256 internal dailyJackpotBase;
+    uint256 internal dailyJackpotPaid;
 
     // -----------------------
     // Time / Session Tracking

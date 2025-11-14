@@ -650,11 +650,17 @@ contract PurgeGame is PurgeGameStorage {
             uint256 poolCarry = prizePool;
 
             pend.exterminator = address(0);
-            pend.sidePool = poolCarry;
+            pend.sidePool = 0;
 
+            if (poolCarry != 0) {
+                carryOver += poolCarry;
+            }
             prizePool = 0;
             lastExterminatedTrait = TRAIT_ID_TIMEOUT;
         }
+
+        dailyJackpotBase = 0;
+        dailyJackpotPaid = 0;
 
         trophies.prepareNextLevel(levelSnapshot + 1);
 

@@ -229,6 +229,8 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         lastPrizePool = prizePool;
         prizePool = mainWei;
         levelPrizePool = mainWei;
+        dailyJackpotBase = mainWei;
+        dailyJackpotPaid = 0;
 
         effectiveWei = mapWei;
     }
@@ -458,8 +460,23 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         if (remainingJackpots == 0) {
             remainingJackpots = 1;
         }
-        uint256 budget = prizePool / remainingJackpots;
+        uint8 executed = JACKPOT_LEVEL_CAP > remainingJackpots ? uint8(JACKPOT_LEVEL_CAP - remainingJackpots) : 0;
+        uint8 jackpotIndex = executed + 1;
+        uint256 paidSoFar = dailyJackpotPaid;
+        uint256 budget;
+        if (dailyJackpotBase != 0 && jackpotIndex <= JACKPOT_LEVEL_CAP) {
+            uint256 targetPaid = _dailyJackpotTarget(jackpotIndex);
+            if (targetPaid > paidSoFar) {
+                budget = targetPaid - paidSoFar;
+            }
+        }
+        if (budget == 0) {
+            budget = prizePool / remainingJackpots;
+        }
         if (budget == 0) return;
+        if (budget > prizePool) {
+            budget = prizePool;
+        }
         (uint256 paid, , ) = _runJackpot(
             lvl,
             budget,
@@ -476,8 +493,22 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         if (paid == 0) return;
         uint256 poolBal = prizePool;
         prizePool = paid > poolBal ? 0 : poolBal - paid;
+        dailyJackpotPaid = paidSoFar + paid;
         uint256 levelPool = levelPrizePool;
         levelPrizePool = paid > levelPool ? 0 : levelPool - paid;
+    }
+
+    function _dailyJackpotTarget(uint8 jackpotsExecuted) private view returns (uint256) {
+        if (jackpotsExecuted == 0) {
+            return 0;
+        }
+        uint256 base = dailyJackpotBase;
+        if (base == 0) {
+            return 0;
+        }
+        uint256 n = jackpotsExecuted;
+        uint256 numerator = n * (n + 17);
+        return (base * numerator) / 300;
     }
 
     function _payFutureDailyJackpot(
