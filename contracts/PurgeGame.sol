@@ -609,7 +609,7 @@ contract PurgeGame is PurgeGameStorage {
     /// After either path:
     /// - Reset per-level state, mint the next level’s trophy placeholder,
     ///   set default exterminated sentinel to TRAIT_ID_TIMEOUT, and request fresh VRF.
-    function _endLevel(uint16 exterminated) private {
+    function _endLevel(uint16 exterminated) internal {
         PendingEndLevel storage pend = pendingEndLevel;
 
         address exterminator = msg.sender;
@@ -684,8 +684,8 @@ contract PurgeGame is PurgeGameStorage {
     }
 
     /// @notice Delegatecall into the endgame module to resolve slow settlement paths.
-    function _runEndgameModule(uint24 lvl, uint32 cap, uint48 day, uint256 rngWord) private {
-        (bool ok, ) = endgameModule.delegatecall(
+    function _runEndgameModule(uint24 lvl, uint32 cap, uint48 day, uint256 rngWord) internal {
+        (bool ok, bytes memory data) = endgameModule.delegatecall(
             abi.encodeWithSelector(
                 IPurgeGameEndgameModule.finalizeEndgame.selector,
                 lvl,
@@ -696,7 +696,14 @@ contract PurgeGame is PurgeGameStorage {
                 trophies
             )
         );
-        if (!ok) revert E();
+        if (!ok) {
+            if (data.length != 0) {
+                assembly {
+                    revert(add(data, 0x20), mload(data))
+                }
+            }
+            revert E();
+        }
     }
 
     // --- Claiming winnings (ETH) --------------------------------------------------------------------
@@ -883,7 +890,7 @@ contract PurgeGame is PurgeGameStorage {
         return abi.decode(data, (bool));
     }
 
-    function _calcPrizePoolForJackpot(uint24 lvl, uint256 rngWord) private returns (uint256 effectiveWei) {
+    function _calcPrizePoolForJackpot(uint24 lvl, uint256 rngWord) internal returns (uint256 effectiveWei) {
         (bool ok, bytes memory data) = jackpotModule.delegatecall(
             abi.encodeWithSelector(
                 IPurgeGameJackpotModule.calcPrizePoolForJackpot.selector,
@@ -912,7 +919,7 @@ contract PurgeGame is PurgeGameStorage {
         if (!ok) revert E();
     }
 
-    function _handleJackpotLevelCap() private returns (bool) {
+    function _handleJackpotLevelCap() internal returns (bool) {
         if (jackpotCounter >= JACKPOT_LEVEL_CAP) {
             _endLevel(TRAIT_ID_TIMEOUT);
             return false;
@@ -950,7 +957,7 @@ contract PurgeGame is PurgeGameStorage {
     /// @notice Process a batch of map mints using a caller-provided writes budget (0 = auto).
     /// @param writesBudget Count of SSTORE writes allowed this tx; hard-clamped to stay ≤15M-safe.
     /// @return finished True if all pending map mints have been fully processed.
-    function _processMapBatch(uint32 writesBudget) private returns (bool finished) {
+    function _processMapBatch(uint32 writesBudget) internal returns (bool finished) {
         uint256 total = pendingMapMints.length;
         if (airdropIndex >= total) return true;
 

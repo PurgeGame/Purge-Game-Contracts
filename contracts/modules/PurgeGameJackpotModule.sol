@@ -15,6 +15,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
 
     uint48 private constant JACKPOT_RESET_TIME = 82620;
     uint8 private constant JACKPOT_KIND_DAILY = 4;
+    uint8 private constant JACKPOT_LEVEL_CAP = 10;
     uint8 private constant JACKPOT_KIND_MAP = 9;
     uint8 private constant EARLY_PURGE_COIN_ONLY_THRESHOLD = 50;
     uint8 private constant PURGE_TROPHY_KIND_MAP = 0;
@@ -42,78 +43,15 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         earlyPurgePercent = percentAfter;
 
         uint256 entropyWord = randWord;
-        uint8[4] memory winningTraits;
 
         if (isDaily) {
-            entropyWord = _scrambleJackpotEntropy(entropyWord, jackpotCounter);
-            winningTraits = _getRandomTraits(entropyWord);
-
-            uint24 targetLevel = lvl + 1;
-            (uint256 dailyCoinPool, ) = coinContract.prepareCoinJackpot();
-            uint256 carryBal = carryOver;
-            uint256 ethPool = (carryBal * 50) / 10_000;
-            if (ethPool > carryBal) ethPool = carryBal;
-
-            uint256 dailyPaidEth;
-            uint256 dailyCoinRemainder;
-            (dailyPaidEth, , dailyCoinRemainder) = _runJackpot(
-                targetLevel,
-                ethPool,
-                dailyCoinPool,
-                false,
-                entropyWord ^ (uint256(targetLevel) << 192),
-                winningTraits,
-                DAILY_JACKPOT_SHARES_PACKED,
-                coinContract,
-                trophiesContract,
-                0,
-                0
-            );
-
-            if (dailyCoinRemainder != 0) {
-                bool distributedRemainder;
-                for (uint8 traitIdx; traitIdx < 4 && !distributedRemainder; ) {
-                    address[] memory fallbackWinners = _randTraitTicket(
-                        traitPurgeTicket[targetLevel],
-                        entropyWord,
-                        winningTraits[traitIdx],
-                        1,
-                        uint8(240 + traitIdx)
-                    );
-                    if (fallbackWinners.length != 0) {
-                        address candidate = fallbackWinners[0];
-                        if (_creditJackpot(coinContract, true, candidate, dailyCoinRemainder)) {
-                            distributedRemainder = true;
-                        }
-                    }
-                    unchecked {
-                        ++traitIdx;
-                    }
-                }
-                if (!distributedRemainder) {
-                    coinContract.addToBounty(dailyCoinRemainder);
-                }
-            }
-
-            coinContract.resetCoinflipLeaderboard();
-            _rollQuestForJackpot(coinContract, entropyWord, targetLevel);
-
-            if (dailyPaidEth != 0) {
-                uint256 carryAfter = carryOver;
-                carryOver = dailyPaidEth > carryAfter ? 0 : carryAfter - dailyPaidEth;
-            }
-
-            unchecked {
-                ++jackpotCounter;
-            }
-            if (jackpotCounter < 10) {
-                _clearDailyPurgeCount();
-            }
+            _handleDailyJackpot(lvl, randWord, coinContract, trophiesContract);
             return;
         }
 
         entropyWord = _scrambleJackpotEntropy(entropyWord, jackpotCounter);
-        winningTraits = _getRandomTraits(entropyWord);
+        uint8[4] memory winningTraits = _getRandomTraits(entropyWord);
+        uint32 winningTraitsPacked = _packWinningTraits(winningTraits);
 
         bool coinOnly = percentBefore >= EARLY_PURGE_COIN_ONLY_THRESHOLD;
         uint256 poolWei;
@@ -143,7 +81,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
                 coinPool,
                 false,
                 entropyWord ^ (uint256(lvl) << 192),
-                winningTraits,
+                winningTraitsPacked,
                 DAILY_JACKPOT_SHARES_PACKED,
                 coinContract,
                 trophiesContract,
@@ -213,6 +151,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         IPurgeGameTrophiesModule trophiesContract
     ) external returns (bool finished) {
         uint8[4] memory winningTraits = _getRandomTraits(rngWord);
+        uint32 winningTraitsPacked = _packWinningTraits(winningTraits);
         uint256 stakeTotal = (effectiveWei * 5) / 100;
         uint256 stakePer = stakeTotal / 2;
         uint256 stakePaid;
@@ -244,7 +183,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
             0,
             true,
             rngWord,
-            winningTraits,
+            winningTraitsPacked,
             MAP_JACKPOT_SHARES_PACKED,
             coinContract,
             trophiesContract,
@@ -413,7 +352,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         uint256 coinPool,
         bool mapTrophy,
         uint256 entropy,
-        uint8[4] memory winningTraits,
+        uint32 winningTraitsPacked,
         uint64 traitShareBpsPacked,
         IPurgeCoinModule coinContract,
         IPurgeGameTrophiesModule trophiesContract,
@@ -434,7 +373,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
                 lvl,
                 ethPool,
                 entropy,
-                winningTraits,
+                winningTraitsPacked,
                 traitShareBpsPacked,
                 bucketCounts,
                 bucketOffset,
@@ -450,7 +389,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
                 lvl,
                 coinPool,
                 entropy ^ uint256(COIN_JACKPOT_TAG),
-                winningTraits,
+                winningTraitsPacked,
                 traitShareBpsPacked,
                 bucketCounts,
                 bucketOffset,
@@ -461,12 +400,150 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         coinRemainder = coinPool > totalPaidCoin ? coinPool - totalPaidCoin : 0;
     }
 
+    function _handleDailyJackpot(
+        uint24 lvl,
+        uint256 randWord,
+        IPurgeCoinModule coinContract,
+        IPurgeGameTrophiesModule trophiesContract
+    ) private {
+        uint256 entropyWord = _scrambleJackpotEntropy(randWord, jackpotCounter);
+
+        uint32 winningTraitsPacked = _packWinningTraits(_getRandomTraits(entropyWord));
+        uint8 remainingJackpots = JACKPOT_LEVEL_CAP > jackpotCounter ? uint8(JACKPOT_LEVEL_CAP - jackpotCounter) : uint8(1);
+        uint256 currentEntropy = entropyWord ^ (uint256(lvl) << 192);
+        _payCurrentLevelDailyJackpot(
+            lvl,
+            currentEntropy,
+            winningTraitsPacked,
+            remainingJackpots,
+            coinContract,
+            trophiesContract
+        );
+
+        uint24 nextLevel = lvl + 1;
+        (uint256 dailyCoinPool, ) = coinContract.prepareCoinJackpot();
+        uint256 carryBal = carryOver;
+        uint256 futureEthPool = (carryBal * 50) / 10_000;
+        if (futureEthPool > carryBal) futureEthPool = carryBal;
+
+        uint256 dailyPaidEth = _payFutureDailyJackpot(
+            nextLevel,
+            entropyWord,
+            winningTraitsPacked,
+            futureEthPool,
+            dailyCoinPool,
+            coinContract,
+            trophiesContract
+        );
+
+        coinContract.resetCoinflipLeaderboard();
+        _rollQuestForJackpot(coinContract, entropyWord, nextLevel);
+
+        if (dailyPaidEth != 0) {
+            uint256 carryAfter = carryOver;
+            carryOver = dailyPaidEth > carryAfter ? 0 : carryAfter - dailyPaidEth;
+        }
+
+        unchecked {
+            ++jackpotCounter;
+        }
+        if (jackpotCounter < JACKPOT_LEVEL_CAP) {
+            _clearDailyPurgeCount();
+        }
+    }
+
+    function _payCurrentLevelDailyJackpot(
+        uint24 lvl,
+        uint256 entropy,
+        uint32 winningTraitsPacked,
+        uint8 remainingJackpots,
+        IPurgeCoinModule coinContract,
+        IPurgeGameTrophiesModule trophiesContract
+    ) private {
+        if (remainingJackpots == 0) {
+            remainingJackpots = 1;
+        }
+        uint256 budget = prizePool / remainingJackpots;
+        if (budget == 0) return;
+        (uint256 paid, , ) = _runJackpot(
+            lvl,
+            budget,
+            0,
+            false,
+            entropy,
+            winningTraitsPacked,
+            DAILY_JACKPOT_SHARES_PACKED,
+            coinContract,
+            trophiesContract,
+            0,
+            0
+        );
+        if (paid == 0) return;
+        uint256 poolBal = prizePool;
+        prizePool = paid > poolBal ? 0 : poolBal - paid;
+        uint256 levelPool = levelPrizePool;
+        levelPrizePool = paid > levelPool ? 0 : levelPool - paid;
+    }
+
+    function _payFutureDailyJackpot(
+        uint24 nextLevel,
+        uint256 entropyWord,
+        uint32 winningTraitsPacked,
+        uint256 futureEthPool,
+        uint256 dailyCoinPool,
+        IPurgeCoinModule coinContract,
+        IPurgeGameTrophiesModule trophiesContract
+    ) private returns (uint256 paidEth) {
+        if (futureEthPool == 0 && dailyCoinPool == 0) return 0;
+
+        uint256 coinRemainder;
+        uint256 nextEntropy = _entropyStep(entropyWord) ^ (uint256(nextLevel) << 192);
+        (paidEth, , coinRemainder) = _runJackpot(
+            nextLevel,
+            futureEthPool,
+            dailyCoinPool,
+            false,
+            nextEntropy,
+            winningTraitsPacked,
+            DAILY_JACKPOT_SHARES_PACKED,
+            coinContract,
+            trophiesContract,
+            0,
+            0
+        );
+
+        if (coinRemainder != 0) {
+            bool distributedRemainder;
+            for (uint8 traitIdx; traitIdx < 4 && !distributedRemainder; ) {
+                address[] memory fallbackWinners = _randTraitTicket(
+                    traitPurgeTicket[nextLevel],
+                    entropyWord,
+                    _traitFromPacked(winningTraitsPacked, traitIdx),
+                    1,
+                    uint8(240 + traitIdx)
+                );
+                if (fallbackWinners.length != 0) {
+                    address candidate = fallbackWinners[0];
+                    if (_creditJackpot(coinContract, true, candidate, coinRemainder)) {
+                        distributedRemainder = true;
+                    }
+                }
+                unchecked {
+                    ++traitIdx;
+                }
+            }
+            if (!distributedRemainder) {
+                coinContract.addToBounty(coinRemainder);
+            }
+        }
+    }
+
     function _runJackpotEth(
         bool mapTrophy,
         uint24 lvl,
         uint256 ethPool,
         uint256 entropy,
-        uint8[4] memory winningTraits,
+        uint32 winningTraitsPacked,
         uint64 traitShareBpsPacked,
         uint16[4] memory bucketCounts,
         uint8 bucketOffset,
@@ -494,7 +571,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         for (uint8 traitIdx; traitIdx < 4; ) {
             uint16 shareBps = _rotatedShareBps(traitShareBpsPacked, bucketOffset, traitIdx);
             uint256 share = _sliceJackpotShare(ethPool, shareBps, traitIdx, ethDistributed);
-            uint8 traitId = winningTraits[traitIdx];
+            uint8 traitId = _traitFromPacked(winningTraitsPacked, traitIdx);
             uint16 bucketCount = bucketCounts[traitIdx];
             bool bucketGetsTrophy = mapTrophy && !trophyGiven && trophyIndex >= 0 && traitIdx == uint8(trophyIndex);
             if (bucketGetsTrophy) {
@@ -538,7 +615,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         uint24 lvl,
         uint256 coinPool,
         uint256 entropy,
-        uint8[4] memory winningTraits,
+        uint32 winningTraitsPacked,
         uint64 traitShareBpsPacked,
         uint16[4] memory bucketCounts,
         uint8 bucketOffset,
@@ -548,7 +625,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         for (uint8 traitIdx; traitIdx < 4; ) {
             uint16 shareBps = _rotatedShareBps(traitShareBpsPacked, bucketOffset, traitIdx);
             uint256 share = _sliceJackpotShare(coinPool, shareBps, traitIdx, coinDistributed);
-            uint8 traitId = winningTraits[traitIdx];
+            uint8 traitId = _traitFromPacked(winningTraitsPacked, traitIdx);
             uint16 bucketCount = bucketCounts[traitIdx];
             if (traitIdx < 3) {
                 unchecked {
@@ -696,6 +773,18 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
             _addClaimableEth(beneficiary, amount);
         }
         return true;
+    }
+
+    function _packWinningTraits(uint8[4] memory traits) private pure returns (uint32 packed) {
+        packed =
+            uint32(traits[0]) |
+            (uint32(traits[1]) << 8) |
+            (uint32(traits[2]) << 16) |
+            (uint32(traits[3]) << 24);
+    }
+
+    function _traitFromPacked(uint32 packed, uint8 idx) private pure returns (uint8) {
+        return uint8(packed >> (uint32(idx) * 8));
     }
 
     function _getRandomTraits(uint256 rw) private pure returns (uint8[4] memory w) {
