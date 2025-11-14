@@ -609,7 +609,7 @@ contract PurgeGame is PurgeGameStorage {
     /// After either path:
     /// - Reset per-level state, mint the next level’s trophy placeholder,
     ///   set default exterminated sentinel to TRAIT_ID_TIMEOUT, and request fresh VRF.
-    function _endLevel(uint16 exterminated) internal {
+    function _endLevel(uint16 exterminated) private {
         PendingEndLevel storage pend = pendingEndLevel;
 
         address exterminator = msg.sender;
@@ -685,7 +685,7 @@ contract PurgeGame is PurgeGameStorage {
 
     /// @notice Delegatecall into the endgame module to resolve slow settlement paths.
     function _runEndgameModule(uint24 lvl, uint32 cap, uint48 day, uint256 rngWord) internal {
-        (bool ok, bytes memory data) = endgameModule.delegatecall(
+        (bool ok, ) = endgameModule.delegatecall(
             abi.encodeWithSelector(
                 IPurgeGameEndgameModule.finalizeEndgame.selector,
                 lvl,
@@ -696,14 +696,7 @@ contract PurgeGame is PurgeGameStorage {
                 trophies
             )
         );
-        if (!ok) {
-            if (data.length != 0) {
-                assembly {
-                    revert(add(data, 0x20), mload(data))
-                }
-            }
-            revert E();
-        }
+        if (!ok) revert E();
     }
 
     // --- Claiming winnings (ETH) --------------------------------------------------------------------
