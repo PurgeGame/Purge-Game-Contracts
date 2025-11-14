@@ -406,6 +406,12 @@ contract PurgeGame is PurgeGameStorage {
                     break;
                 }
 
+                bool batchesPending = airdropIndex < pendingMapMints.length;
+                if (batchesPending) {
+                    bool batchesFinished = _processMapBatch(cap);
+                    if (!batchesFinished) break;
+                }
+
                 uint8 remaining = jackpotCounter >= JACKPOT_LEVEL_CAP ? 0 : uint8(JACKPOT_LEVEL_CAP - jackpotCounter);
                 bool mapOnlyLevel = (lvl % 20) == 16; // Non map-only levels should only run one jackpot per day
                 uint8 perDayCap = mapOnlyLevel ? JACKPOTS_PER_DAY : 1;
@@ -962,6 +968,11 @@ contract PurgeGame is PurgeGameStorage {
 
         if (writesBudget == 0) writesBudget = WRITES_BUDGET_SAFE;
         uint24 lvl = level;
+        if (gameState == 3) {
+            unchecked {
+                ++lvl;
+            }
+        }
         bool throttleWrites;
         if (phase <= 1) {
             throttleWrites = true;
