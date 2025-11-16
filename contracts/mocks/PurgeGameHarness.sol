@@ -61,6 +61,10 @@ contract PurgeGameHarness is PurgeGame {
         levelPrizePool = amount;
     }
 
+    function harnessGetNextPrizePool() external view returns (uint256) {
+        return nextPrizePool;
+    }
+
     function harnessSetCarry(uint256 amount) external {
         carryOver = amount;
     }

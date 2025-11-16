@@ -1,0 +1,753 @@
+
+
+  PurgeGame money flow simulation
+Level 1 priorPurge funding contributed 60.00 ETH / 60.00 ETH
+Level 1 day1 funding contributed 30.00 ETH / 30.00 ETH
+Level 1 day2 funding contributed 60.00 ETH / 60.00 ETH
+Level 1 map flow
+┌─────────┬───────────────────────────────┬──────────────┬──────────────┐
+│ (index) │ bucket                        │ expected     │ actual       │
+├─────────┼───────────────────────────────┼──────────────┼──────────────┤
+│ 0       │ 'Carryover deposit'           │ '40.00 ETH'  │ '40.00 ETH'  │
+│ 1       │ 'Prize pool before jackpots'  │ '150.00 ETH' │ '150.00 ETH' │
+│ 2       │ 'Credited to participants'    │ '17.86 ETH'  │ '17.86 ETH'  │
+│ 3       │ 'Recycled back to prize pool' │ '0.00 ETH'   │ '0.00 ETH'   │
+└─────────┴───────────────────────────────┴──────────────┴──────────────┘
+Expected-only buckets
+┌─────────┬──────────────────────────────────┬──────────────┐
+│ (index) │ bucket                           │ expected     │
+├─────────┼──────────────────────────────────┼──────────────┤
+│ 0       │ 'Total pool (carry + prize)'     │ '190.00 ETH' │
+│ 1       │ 'Map jackpot (effective pool)'   │ '25.52 ETH'  │
+│ 2       │ 'Carry saved for next level'     │ '39.90 ETH'  │
+│ 3       │ 'Reserved prize pool after calc' │ '124.58 ETH' │
+│ 4       │ 'Map trophy direct award'        │ '7.66 ETH'   │
+└─────────┴──────────────────────────────────┴──────────────┘
+Level 1 bucket distribution
+┌─────────┬────────────┬─────────┬─────────────┬────────────┬───────────────┐
+│ (index) │ bucket     │ winners │ theoretical │ actual     │ trophyPortion │
+├─────────┼────────────┼─────────┼─────────────┼────────────┼───────────────┤
+│ 0       │ 'Bucket 1' │ 25      │ '3.40 ETH'  │ '3.40 ETH' │ '0.00 ETH'    │
+│ 1       │ 'Bucket 2' │ 15      │ '3.40 ETH'  │ '3.40 ETH' │ '0.00 ETH'    │
+│ 2       │ 'Bucket 3' │ 10      │ '3.40 ETH'  │ '3.40 ETH' │ '0.00 ETH'    │
+│ 3       │ 'Bucket 4' │ 1       │ '15.31 ETH' │ '7.66 ETH' │ '7.66 ETH'    │
+└─────────┴────────────┴─────────┴─────────────┴────────────┴───────────────┘
+Level 1 top map winners
+┌─────────┬───────────────┬────────────┐
+│ (index) │ address       │ winnings   │
+├─────────┼───────────────┼────────────┤
+│ 0       │ '0x9e56…4C7B' │ '7.66 ETH' │
+│ 1       │ '0x722C…7689' │ '0.91 ETH' │
+│ 2       │ '0xEFdC…D99c' │ '0.82 ETH' │
+│ 3       │ '0x3271…BE59' │ '0.82 ETH' │
+│ 4       │ '0x6A43…50d7' │ '0.68 ETH' │
+│ 5       │ '0x844D…Ce8F' │ '0.68 ETH' │
+│ 6       │ '0x8264…aC8a' │ '0.68 ETH' │
+│ 7       │ '0x4BEe…41E1' │ '0.57 ETH' │
+│ 8       │ '0xefb6…4D2d' │ '0.48 ETH' │
+│ 9       │ '0x0518…3422' │ '0.36 ETH' │
+└─────────┴───────────────┴────────────┘
+Level 1 after map jackpot bucket snapshot
+┌─────────┬──────────────────────┬──────────────┐
+│ (index) │ bucket               │ amount       │
+├─────────┼──────────────────────┼──────────────┤
+│ 0       │ 'Carryover'          │ '39.90 ETH'  │
+│ 1       │ 'Prize pool'         │ '124.58 ETH' │
+│ 2       │ 'Next prize pool'    │ '60.00 ETH'  │
+│ 3       │ 'Claimable winnings' │ '17.86 ETH'  │
+│ 4       │ 'Held by trophies'   │ '7.66 ETH'   │
+└─────────┴──────────────────────┴──────────────┘
+Game balance vs buckets: 242.34 ETH vs 242.34 ETH (Δ 0.00 ETH)
+Total inflow vs tracked: 250.00 ETH vs 250.00 ETH (Δ 0.00 ETH)
+Level 2 priorPurge funding contributed 66.25 ETH / 66.00 ETH
+Level 1 daily jackpots
+┌─────────┬─────┬──────────┬─────────────┬─────────────┬────────────┬─────────────────┬────────────────┬─────────────┬─────────────┬───────────┬─────────────┬─────────────┐
+│ (index) │ day │ jackpots │ carryBefore │ carryAfter  │ carryPaid  │ prizePoolBefore │ prizePoolAfter │ poolPaid    │ totalPaid   │ mapBuyers │ mapQuantity │ mapSpent    │
+├─────────┼─────┼──────────┼─────────────┼─────────────┼────────────┼─────────────────┼────────────────┼─────────────┼─────────────┼───────────┼─────────────┼─────────────┤
+│ 0       │ 1   │ 1        │ '39.90 ETH' │ '39.90 ETH' │ '0.00 ETH' │ '124.58 ETH'    │ '117.11 ETH'   │ '7.47 ETH'  │ '7.47 ETH'  │ 53        │ 10600       │ '66.25 ETH' │
+│ 1       │ 2   │ 1        │ '39.90 ETH' │ '39.90 ETH' │ '0.00 ETH' │ '117.11 ETH'    │ '108.80 ETH'   │ '8.31 ETH'  │ '8.31 ETH'  │ 0         │ 0           │ '0.00 ETH'  │
+│ 2       │ 3   │ 1        │ '39.90 ETH' │ '39.90 ETH' │ '0.00 ETH' │ '108.80 ETH'    │ '99.67 ETH'    │ '9.14 ETH'  │ '9.14 ETH'  │ 0         │ 0           │ '0.00 ETH'  │
+│ 3       │ 4   │ 1        │ '39.90 ETH' │ '39.90 ETH' │ '0.00 ETH' │ '99.67 ETH'     │ '89.70 ETH'    │ '9.97 ETH'  │ '9.97 ETH'  │ 0         │ 0           │ '0.00 ETH'  │
+│ 4       │ 5   │ 1        │ '39.90 ETH' │ '39.90 ETH' │ '0.00 ETH' │ '89.70 ETH'     │ '78.90 ETH'    │ '10.80 ETH' │ '10.80 ETH' │ 0         │ 0           │ '0.00 ETH'  │
+│ 5       │ 6   │ 1        │ '39.90 ETH' │ '39.90 ETH' │ '0.00 ETH' │ '78.90 ETH'     │ '67.27 ETH'    │ '11.63 ETH' │ '11.63 ETH' │ 0         │ 0           │ '0.00 ETH'  │
+│ 6       │ 7   │ 1        │ '39.90 ETH' │ '39.90 ETH' │ '0.00 ETH' │ '67.27 ETH'     │ '54.82 ETH'    │ '12.46 ETH' │ '12.46 ETH' │ 0         │ 0           │ '0.00 ETH'  │
+│ 7       │ 8   │ 1        │ '39.90 ETH' │ '39.90 ETH' │ '0.00 ETH' │ '54.82 ETH'     │ '41.53 ETH'    │ '13.29 ETH' │ '13.29 ETH' │ 0         │ 0           │ '0.00 ETH'  │
+│ 8       │ 9   │ 1        │ '39.90 ETH' │ '39.90 ETH' │ '0.00 ETH' │ '41.53 ETH'     │ '27.41 ETH'    │ '14.12 ETH' │ '14.12 ETH' │ 0         │ 0           │ '0.00 ETH'  │
+│ 9       │ 10  │ 1        │ '39.90 ETH' │ '52.36 ETH' │ '0.00 ETH' │ '27.41 ETH'     │ '0.00 ETH'     │ '27.41 ETH' │ '27.41 ETH' │ 0         │ 0           │ '0.00 ETH'  │
+└─────────┴─────┴──────────┴─────────────┴─────────────┴────────────┴─────────────────┴────────────────┴─────────────┴─────────────┴───────────┴─────────────┴─────────────┘
+Level 1 after daily jackpots bucket snapshot
+┌─────────┬──────────────────────┬──────────────┐
+│ (index) │ bucket               │ amount       │
+├─────────┼──────────────────────┼──────────────┤
+│ 0       │ 'Carryover'          │ '52.36 ETH'  │
+│ 1       │ 'Prize pool'         │ '0.00 ETH'   │
+│ 2       │ 'Next prize pool'    │ '126.25 ETH' │
+│ 3       │ 'Claimable winnings' │ '129.99 ETH' │
+│ 4       │ 'Held by trophies'   │ '7.66 ETH'   │
+└─────────┴──────────────────────┴──────────────┘
+Game balance vs buckets: 308.59 ETH vs 308.59 ETH (Δ 0.00 ETH)
+Total inflow vs tracked: 316.25 ETH vs 316.25 ETH (Δ 0.00 ETH)
+Level 1 claims paid 129.99 ETH to 48 players
+Level 1 after player claims bucket snapshot
+┌─────────┬──────────────────────┬──────────────┐
+│ (index) │ bucket               │ amount       │
+├─────────┼──────────────────────┼──────────────┤
+│ 0       │ 'Carryover'          │ '52.36 ETH'  │
+│ 1       │ 'Prize pool'         │ '0.00 ETH'   │
+│ 2       │ 'Next prize pool'    │ '126.25 ETH' │
+│ 3       │ 'Claimable winnings' │ '0.00 ETH'   │
+│ 4       │ 'Held by trophies'   │ '7.66 ETH'   │
+└─────────┴──────────────────────┴──────────────┘
+Total claimed so far: 129.99 ETH
+Game balance vs buckets: 178.61 ETH vs 178.61 ETH (Δ 0.00 ETH)
+Total inflow vs tracked: 186.26 ETH vs 186.26 ETH (Δ 0.00 ETH)
+Level 1 player profit: 7/100 (7.00%)
+Level 1 top 5 winners
+┌─────────┬───────────────┬────────────┬────────────┬─────────────────┬────────────┐
+│ (index) │ address       │ spent      │ winnings   │ coinAwarded     │ net        │
+├─────────┼───────────────┼────────────┼────────────┼─────────────────┼────────────┤
+│ 0       │ '0x9e56…4C7B' │ '3.75 ETH' │ '8.45 ETH' │ '40230.0 PURGE' │ '4.70 ETH' │
+│ 1       │ '0x3271…BE59' │ '5.00 ETH' │ '7.10 ETH' │ '50230.0 PURGE' │ '2.10 ETH' │
+│ 2       │ '0xCf63…1B0E' │ '5.00 ETH' │ '6.99 ETH' │ '50230.0 PURGE' │ '1.99 ETH' │
+│ 3       │ '0x02Fa…4AC3' │ '5.00 ETH' │ '6.82 ETH' │ '50230.0 PURGE' │ '1.82 ETH' │
+│ 4       │ '0x22c8…eBb2' │ '5.00 ETH' │ '5.53 ETH' │ '50230.0 PURGE' │ '0.53 ETH' │
+└─────────┴───────────────┴────────────┴────────────┴─────────────────┴────────────┘
+Level 1 top 5 losers
+┌─────────┬───────────────┬────────────┬────────────┬─────────────────┬─────────────┐
+│ (index) │ address       │ spent      │ winnings   │ coinAwarded     │ net         │
+├─────────┼───────────────┼────────────┼────────────┼─────────────────┼─────────────┤
+│ 0       │ '0x73C1…A2Ef' │ '5.00 ETH' │ '0.91 ETH' │ '50230.0 PURGE' │ '-4.09 ETH' │
+│ 1       │ '0xEF07…8E09' │ '5.00 ETH' │ '1.03 ETH' │ '50230.0 PURGE' │ '-3.97 ETH' │
+│ 2       │ '0x712f…C6Ca' │ '5.00 ETH' │ '1.53 ETH' │ '50230.0 PURGE' │ '-3.47 ETH' │
+│ 3       │ '0x18f4…75aa' │ '5.00 ETH' │ '1.67 ETH' │ '50230.0 PURGE' │ '-3.33 ETH' │
+│ 4       │ '0x2b24…703c' │ '3.75 ETH' │ '0.44 ETH' │ '40230.0 PURGE' │ '-3.31 ETH' │
+└─────────┴───────────────┴────────────┴────────────┴─────────────────┴─────────────┘
+Level 1 total coin minted: 2221540.0 PURGE
+Level 2 day1 funding contributed 33.75 ETH / 33.00 ETH
+Level 2 day2 funding contributed 66.25 ETH / 66.00 ETH
+Level 2 map flow
+┌─────────┬───────────────────────────────┬──────────────┬──────────────┐
+│ (index) │ bucket                        │ expected     │ actual       │
+├─────────┼───────────────────────────────┼──────────────┼──────────────┤
+│ 0       │ 'Carryover deposit'           │ '52.36 ETH'  │ '52.36 ETH'  │
+│ 1       │ 'Prize pool before jackpots'  │ '165.00 ETH' │ '165.00 ETH' │
+│ 2       │ 'Credited to participants'    │ '18.11 ETH'  │ '18.11 ETH'  │
+│ 3       │ 'Recycled back to prize pool' │ '0.00 ETH'   │ '0.00 ETH'   │
+└─────────┴───────────────────────────────┴──────────────┴──────────────┘
+Expected-only buckets
+┌─────────┬──────────────────────────────────┬──────────────┐
+│ (index) │ bucket                           │ expected     │
+├─────────┼──────────────────────────────────┼──────────────┤
+│ 0       │ 'Total pool (carry + prize)'     │ '217.36 ETH' │
+│ 1       │ 'Map jackpot (effective pool)'   │ '25.87 ETH'  │
+│ 2       │ 'Carry saved for next level'     │ '65.21 ETH'  │
+│ 3       │ 'Reserved prize pool after calc' │ '126.29 ETH' │
+│ 4       │ 'Map trophy direct award'        │ '7.76 ETH'   │
+└─────────┴──────────────────────────────────┴──────────────┘
+Level 2 bucket distribution
+┌─────────┬────────────┬─────────┬─────────────┬────────────┬───────────────┐
+│ (index) │ bucket     │ winners │ theoretical │ actual     │ trophyPortion │
+├─────────┼────────────┼─────────┼─────────────┼────────────┼───────────────┤
+│ 0       │ 'Bucket 1' │ 25      │ '3.45 ETH'  │ '3.45 ETH' │ '0.00 ETH'    │
+│ 1       │ 'Bucket 2' │ 15      │ '3.45 ETH'  │ '3.45 ETH' │ '0.00 ETH'    │
+│ 2       │ 'Bucket 3' │ 10      │ '3.45 ETH'  │ '3.45 ETH' │ '0.00 ETH'    │
+│ 3       │ 'Bucket 4' │ 1       │ '15.52 ETH' │ '7.76 ETH' │ '7.76 ETH'    │
+└─────────┴────────────┴─────────┴─────────────┴────────────┴───────────────┘
+Level 2 top map winners
+┌─────────┬───────────────┬────────────┐
+│ (index) │ address       │ winnings   │
+├─────────┼───────────────┼────────────┤
+│ 0       │ '0xf788…0156' │ '7.76 ETH' │
+│ 1       │ '0x47FA…f56E' │ '1.15 ETH' │
+│ 2       │ '0xc4Ab…7748' │ '1.04 ETH' │
+│ 3       │ '0x22c8…eBb2' │ '0.74 ETH' │
+│ 4       │ '0x8Eb6…4Ac7' │ '0.69 ETH' │
+│ 5       │ '0x844D…Ce8F' │ '0.51 ETH' │
+│ 6       │ '0xcAE3…658a' │ '0.48 ETH' │
+│ 7       │ '0x239d…617d' │ '0.46 ETH' │
+│ 8       │ '0xF68C…eeA6' │ '0.41 ETH' │
+│ 9       │ '0x3FA2…e89D' │ '0.41 ETH' │
+└─────────┴───────────────┴────────────┘
+Level 2 after map jackpot bucket snapshot
+┌─────────┬──────────────────────┬──────────────┐
+│ (index) │ bucket               │ amount       │
+├─────────┼──────────────────────┼──────────────┤
+│ 0       │ 'Carryover'          │ '65.21 ETH'  │
+│ 1       │ 'Prize pool'         │ '126.29 ETH' │
+│ 2       │ 'Next prize pool'    │ '126.25 ETH' │
+│ 3       │ 'Claimable winnings' │ '18.11 ETH'  │
+│ 4       │ 'Held by trophies'   │ '15.41 ETH'  │
+└─────────┴──────────────────────┴──────────────┘
+Total claimed so far: 129.99 ETH
+Game balance vs buckets: 335.85 ETH vs 335.85 ETH (Δ 0.00 ETH)
+Total inflow vs tracked: 351.26 ETH vs 351.26 ETH (Δ 0.00 ETH)
+Level 3 priorPurge funding contributed 73.75 ETH / 72.60 ETH
+Level 2 daily jackpots
+┌─────────┬─────┬──────────┬─────────────┬─────────────┬────────────┬─────────────────┬────────────────┬─────────────┬─────────────┬───────────┬─────────────┬─────────────┐
+│ (index) │ day │ jackpots │ carryBefore │ carryAfter  │ carryPaid  │ prizePoolBefore │ prizePoolAfter │ poolPaid    │ totalPaid   │ mapBuyers │ mapQuantity │ mapSpent    │
+├─────────┼─────┼──────────┼─────────────┼─────────────┼────────────┼─────────────────┼────────────────┼─────────────┼─────────────┼───────────┼─────────────┼─────────────┤
+│ 0       │ 1   │ 1        │ '65.21 ETH' │ '65.21 ETH' │ '0.00 ETH' │ '126.29 ETH'    │ '118.71 ETH'   │ '7.58 ETH'  │ '7.58 ETH'  │ 59        │ 11800       │ '73.75 ETH' │
+│ 1       │ 2   │ 1        │ '65.21 ETH' │ '65.21 ETH' │ '0.00 ETH' │ '118.71 ETH'    │ '110.29 ETH'   │ '8.42 ETH'  │ '8.42 ETH'  │ 0         │ 0           │ '0.00 ETH'  │
+│ 2       │ 3   │ 1        │ '65.21 ETH' │ '65.21 ETH' │ '0.00 ETH' │ '110.29 ETH'    │ '101.03 ETH'   │ '9.26 ETH'  │ '9.26 ETH'  │ 0         │ 0           │ '0.00 ETH'  │
+│ 3       │ 4   │ 1        │ '65.21 ETH' │ '65.21 ETH' │ '0.00 ETH' │ '101.03 ETH'    │ '90.93 ETH'    │ '10.10 ETH' │ '10.10 ETH' │ 0         │ 0           │ '0.00 ETH'  │
+│ 4       │ 5   │ 1        │ '65.21 ETH' │ '65.21 ETH' │ '0.00 ETH' │ '90.93 ETH'     │ '79.98 ETH'    │ '10.94 ETH' │ '10.94 ETH' │ 0         │ 0           │ '0.00 ETH'  │
+│ 5       │ 6   │ 1        │ '65.21 ETH' │ '65.21 ETH' │ '0.00 ETH' │ '79.98 ETH'     │ '68.19 ETH'    │ '11.79 ETH' │ '11.79 ETH' │ 0         │ 0           │ '0.00 ETH'  │
+│ 6       │ 7   │ 1        │ '65.21 ETH' │ '65.21 ETH' │ '0.00 ETH' │ '68.19 ETH'     │ '55.57 ETH'    │ '12.63 ETH' │ '12.63 ETH' │ 0         │ 0           │ '0.00 ETH'  │
+│ 7       │ 8   │ 1        │ '65.21 ETH' │ '65.21 ETH' │ '0.00 ETH' │ '55.57 ETH'     │ '42.10 ETH'    │ '13.47 ETH' │ '13.47 ETH' │ 0         │ 0           │ '0.00 ETH'  │
+│ 8       │ 9   │ 1        │ '65.21 ETH' │ '65.21 ETH' │ '0.00 ETH' │ '42.10 ETH'     │ '27.78 ETH'    │ '14.31 ETH' │ '14.31 ETH' │ 0         │ 0           │ '0.00 ETH'  │
+│ 9       │ 10  │ 1        │ '65.21 ETH' │ '77.84 ETH' │ '0.00 ETH' │ '27.78 ETH'     │ '0.00 ETH'     │ '27.78 ETH' │ '27.78 ETH' │ 0         │ 0           │ '0.00 ETH'  │
+└─────────┴─────┴──────────┴─────────────┴─────────────┴────────────┴─────────────────┴────────────────┴─────────────┴─────────────┴───────────┴─────────────┴─────────────┘
+Level 2 after daily jackpots bucket snapshot
+┌─────────┬──────────────────────┬──────────────┐
+│ (index) │ bucket               │ amount       │
+├─────────┼──────────────────────┼──────────────┤
+│ 0       │ 'Carryover'          │ '77.84 ETH'  │
+│ 1       │ 'Prize pool'         │ '0.00 ETH'   │
+│ 2       │ 'Next prize pool'    │ '200.00 ETH' │
+│ 3       │ 'Claimable winnings' │ '131.76 ETH' │
+│ 4       │ 'Held by trophies'   │ '15.41 ETH'  │
+└─────────┴──────────────────────┴──────────────┘
+Total claimed so far: 129.99 ETH
+Game balance vs buckets: 409.60 ETH vs 409.60 ETH (Δ 0.00 ETH)
+Total inflow vs tracked: 425.01 ETH vs 425.01 ETH (Δ 0.00 ETH)
+Level 2 claims paid 131.76 ETH to 53 players
+Level 2 after player claims bucket snapshot
+┌─────────┬──────────────────────┬──────────────┐
+│ (index) │ bucket               │ amount       │
+├─────────┼──────────────────────┼──────────────┤
+│ 0       │ 'Carryover'          │ '77.84 ETH'  │
+│ 1       │ 'Prize pool'         │ '0.00 ETH'   │
+│ 2       │ 'Next prize pool'    │ '200.00 ETH' │
+│ 3       │ 'Claimable winnings' │ '0.00 ETH'   │
+│ 4       │ 'Held by trophies'   │ '15.41 ETH'  │
+└─────────┴──────────────────────┴──────────────┘
+Total claimed so far: 261.75 ETH
+Game balance vs buckets: 277.84 ETH vs 277.84 ETH (Δ 0.00 ETH)
+Total inflow vs tracked: 293.25 ETH vs 293.25 ETH (Δ 0.00 ETH)
+Level 2 player profit: 7/100 (7.00%)
+Level 2 top 5 winners
+┌─────────┬───────────────┬────────────┬────────────┬─────────────────┬────────────┐
+│ (index) │ address       │ spent      │ winnings   │ coinAwarded     │ net        │
+├─────────┼───────────────┼────────────┼────────────┼─────────────────┼────────────┤
+│ 0       │ '0xf788…0156' │ '5.00 ETH' │ '9.58 ETH' │ '40460.0 PURGE' │ '4.58 ETH' │
+│ 1       │ '0x0518…3422' │ '5.00 ETH' │ '7.89 ETH' │ '40460.0 PURGE' │ '2.89 ETH' │
+│ 2       │ '0x3FA2…e89D' │ '3.75 ETH' │ '5.56 ETH' │ '30460.0 PURGE' │ '1.81 ETH' │
+│ 3       │ '0x47FA…f56E' │ '5.00 ETH' │ '5.95 ETH' │ '40460.0 PURGE' │ '0.95 ETH' │
+│ 4       │ '0x722C…7689' │ '5.00 ETH' │ '5.71 ETH' │ '40460.0 PURGE' │ '0.71 ETH' │
+└─────────┴───────────────┴────────────┴────────────┴─────────────────┴────────────┘
+Level 2 top 5 losers
+┌─────────┬───────────────┬────────────┬────────────┬─────────────────┬─────────────┐
+│ (index) │ address       │ spent      │ winnings   │ coinAwarded     │ net         │
+├─────────┼───────────────┼────────────┼────────────┼─────────────────┼─────────────┤
+│ 0       │ '0x5C2B…D63E' │ '5.00 ETH' │ '0.76 ETH' │ '40460.0 PURGE' │ '-4.24 ETH' │
+│ 1       │ '0xefb6…4D2d' │ '5.00 ETH' │ '1.13 ETH' │ '40460.0 PURGE' │ '-3.87 ETH' │
+│ 2       │ '0xCf63…1B0E' │ '5.00 ETH' │ '1.30 ETH' │ '40460.0 PURGE' │ '-3.70 ETH' │
+│ 3       │ '0x18f4…75aa' │ '5.00 ETH' │ '1.56 ETH' │ '40460.0 PURGE' │ '-3.44 ETH' │
+│ 4       │ '0x9142…c72e' │ '5.00 ETH' │ '1.63 ETH' │ '40460.0 PURGE' │ '-3.37 ETH' │
+└─────────┴───────────────┴────────────┴────────────┴─────────────────┴─────────────┘
+Level 2 total coin minted: 1934330.0 PURGE
+Level 3 day1 funding contributed 37.50 ETH / 36.30 ETH
+Level 3 day2 funding contributed 73.75 ETH / 72.60 ETH
+Level 3 map flow
+┌─────────┬───────────────────────────────┬──────────────┬──────────────┐
+│ (index) │ bucket                        │ expected     │ actual       │
+├─────────┼───────────────────────────────┼──────────────┼──────────────┤
+│ 0       │ 'Carryover deposit'           │ '77.84 ETH'  │ '77.84 ETH'  │
+│ 1       │ 'Prize pool before jackpots'  │ '182.50 ETH' │ '182.50 ETH' │
+│ 2       │ 'Credited to participants'    │ '18.90 ETH'  │ '18.90 ETH'  │
+│ 3       │ 'Recycled back to prize pool' │ '0.00 ETH'   │ '0.00 ETH'   │
+└─────────┴───────────────────────────────┴──────────────┴──────────────┘
+Expected-only buckets
+┌─────────┬──────────────────────────────────┬──────────────┐
+│ (index) │ bucket                           │ expected     │
+├─────────┼──────────────────────────────────┼──────────────┤
+│ 0       │ 'Total pool (carry + prize)'     │ '260.34 ETH' │
+│ 1       │ 'Map jackpot (effective pool)'   │ '27.00 ETH'  │
+│ 2       │ 'Carry saved for next level'     │ '101.53 ETH' │
+│ 3       │ 'Reserved prize pool after calc' │ '131.81 ETH' │
+│ 4       │ 'Map trophy direct award'        │ '8.10 ETH'   │
+└─────────┴──────────────────────────────────┴──────────────┘
+Level 3 bucket distribution
+┌─────────┬────────────┬─────────┬─────────────┬────────────┬───────────────┐
+│ (index) │ bucket     │ winners │ theoretical │ actual     │ trophyPortion │
+├─────────┼────────────┼─────────┼─────────────┼────────────┼───────────────┤
+│ 0       │ 'Bucket 1' │ 10      │ '3.60 ETH'  │ '3.60 ETH' │ '0.00 ETH'    │
+│ 1       │ 'Bucket 2' │ 1       │ '16.20 ETH' │ '8.10 ETH' │ '8.10 ETH'    │
+│ 2       │ 'Bucket 3' │ 25      │ '3.60 ETH'  │ '3.60 ETH' │ '0.00 ETH'    │
+│ 3       │ 'Bucket 4' │ 15      │ '3.60 ETH'  │ '3.60 ETH' │ '0.00 ETH'    │
+└─────────┴────────────┴─────────┴─────────────┴────────────┴───────────────┘
+Level 3 top map winners
+┌─────────┬───────────────┬────────────┐
+│ (index) │ address       │ winnings   │
+├─────────┼───────────────┼────────────┤
+│ 0       │ '0x5C2B…D63E' │ '8.10 ETH' │
+│ 1       │ '0x4A8D…10b0' │ '1.08 ETH' │
+│ 2       │ '0xC11a…64Df' │ '1.08 ETH' │
+│ 3       │ '0x722C…7689' │ '1.08 ETH' │
+│ 4       │ '0x0aA0…4829' │ '0.96 ETH' │
+│ 5       │ '0x3715…7188' │ '0.72 ETH' │
+│ 6       │ '0x9142…c72e' │ '0.53 ETH' │
+│ 7       │ '0x3FA2…e89D' │ '0.48 ETH' │
+│ 8       │ '0xDfdc…3203' │ '0.36 ETH' │
+│ 9       │ '0x0518…3422' │ '0.36 ETH' │
+└─────────┴───────────────┴────────────┘
+Level 3 after map jackpot bucket snapshot
+┌─────────┬──────────────────────┬──────────────┐
+│ (index) │ bucket               │ amount       │
+├─────────┼──────────────────────┼──────────────┤
+│ 0       │ 'Carryover'          │ '101.53 ETH' │
+│ 1       │ 'Prize pool'         │ '131.81 ETH' │
+│ 2       │ 'Next prize pool'    │ '200.00 ETH' │
+│ 3       │ 'Claimable winnings' │ '18.90 ETH'  │
+│ 4       │ 'Held by trophies'   │ '23.51 ETH'  │
+└─────────┴──────────────────────┴──────────────┘
+Total claimed so far: 261.75 ETH
+Game balance vs buckets: 452.24 ETH vs 452.24 ETH (Δ 0.00 ETH)
+Total inflow vs tracked: 475.75 ETH vs 475.75 ETH (Δ 0.00 ETH)
+Level 4 priorPurge funding contributed 80.00 ETH / 79.86 ETH
+Level 3 daily jackpots
+┌─────────┬─────┬──────────┬──────────────┬──────────────┬────────────┬─────────────────┬────────────────┬─────────────┬─────────────┬───────────┬─────────────┬─────────────┐
+│ (index) │ day │ jackpots │ carryBefore  │ carryAfter   │ carryPaid  │ prizePoolBefore │ prizePoolAfter │ poolPaid    │ totalPaid   │ mapBuyers │ mapQuantity │ mapSpent    │
+├─────────┼─────┼──────────┼──────────────┼──────────────┼────────────┼─────────────────┼────────────────┼─────────────┼─────────────┼───────────┼─────────────┼─────────────┤
+│ 0       │ 1   │ 1        │ '101.53 ETH' │ '101.53 ETH' │ '0.00 ETH' │ '131.81 ETH'    │ '123.90 ETH'   │ '7.91 ETH'  │ '7.91 ETH'  │ 64        │ 12800       │ '80.00 ETH' │
+│ 1       │ 2   │ 1        │ '101.53 ETH' │ '101.53 ETH' │ '0.00 ETH' │ '123.90 ETH'    │ '115.11 ETH'   │ '8.79 ETH'  │ '8.79 ETH'  │ 0         │ 0           │ '0.00 ETH'  │
+│ 2       │ 3   │ 1        │ '101.53 ETH' │ '101.53 ETH' │ '0.00 ETH' │ '115.11 ETH'    │ '105.45 ETH'   │ '9.67 ETH'  │ '9.67 ETH'  │ 0         │ 0           │ '0.00 ETH'  │
+│ 3       │ 4   │ 1        │ '101.53 ETH' │ '101.53 ETH' │ '0.00 ETH' │ '105.45 ETH'    │ '94.90 ETH'    │ '10.54 ETH' │ '10.54 ETH' │ 0         │ 0           │ '0.00 ETH'  │
+│ 4       │ 5   │ 1        │ '101.53 ETH' │ '101.53 ETH' │ '0.00 ETH' │ '94.90 ETH'     │ '83.48 ETH'    │ '11.42 ETH' │ '11.42 ETH' │ 0         │ 0           │ '0.00 ETH'  │
+│ 5       │ 6   │ 1        │ '101.53 ETH' │ '101.53 ETH' │ '0.00 ETH' │ '83.48 ETH'     │ '71.18 ETH'    │ '12.30 ETH' │ '12.30 ETH' │ 0         │ 0           │ '0.00 ETH'  │
+│ 6       │ 7   │ 1        │ '101.53 ETH' │ '101.53 ETH' │ '0.00 ETH' │ '71.18 ETH'     │ '58.00 ETH'    │ '13.18 ETH' │ '13.18 ETH' │ 0         │ 0           │ '0.00 ETH'  │
+│ 7       │ 8   │ 1        │ '101.53 ETH' │ '101.53 ETH' │ '0.00 ETH' │ '58.00 ETH'     │ '43.94 ETH'    │ '14.06 ETH' │ '14.06 ETH' │ 0         │ 0           │ '0.00 ETH'  │
+│ 8       │ 9   │ 1        │ '101.53 ETH' │ '101.53 ETH' │ '0.00 ETH' │ '43.94 ETH'     │ '29.00 ETH'    │ '14.94 ETH' │ '14.94 ETH' │ 0         │ 0           │ '0.00 ETH'  │
+│ 9       │ 10  │ 1        │ '101.53 ETH' │ '114.71 ETH' │ '0.00 ETH' │ '29.00 ETH'     │ '0.00 ETH'     │ '29.00 ETH' │ '29.00 ETH' │ 0         │ 0           │ '0.00 ETH'  │
+└─────────┴─────┴──────────┴──────────────┴──────────────┴────────────┴─────────────────┴────────────────┴─────────────┴─────────────┴───────────┴─────────────┴─────────────┘
+Level 3 after daily jackpots bucket snapshot
+┌─────────┬──────────────────────┬──────────────┐
+│ (index) │ bucket               │ amount       │
+├─────────┼──────────────────────┼──────────────┤
+│ 0       │ 'Carryover'          │ '114.71 ETH' │
+│ 1       │ 'Prize pool'         │ '0.00 ETH'   │
+│ 2       │ 'Next prize pool'    │ '280.00 ETH' │
+│ 3       │ 'Claimable winnings' │ '137.53 ETH' │
+│ 4       │ 'Held by trophies'   │ '23.51 ETH'  │
+└─────────┴──────────────────────┴──────────────┘
+Total claimed so far: 261.75 ETH
+Game balance vs buckets: 532.24 ETH vs 532.24 ETH (Δ 0.00 ETH)
+Total inflow vs tracked: 555.75 ETH vs 555.75 ETH (Δ 0.00 ETH)
+Level 3 claims paid 137.53 ETH to 59 players
+Level 3 after player claims bucket snapshot
+┌─────────┬──────────────────────┬──────────────┐
+│ (index) │ bucket               │ amount       │
+├─────────┼──────────────────────┼──────────────┤
+│ 0       │ 'Carryover'          │ '114.71 ETH' │
+│ 1       │ 'Prize pool'         │ '0.00 ETH'   │
+│ 2       │ 'Next prize pool'    │ '280.00 ETH' │
+│ 3       │ 'Claimable winnings' │ '0.00 ETH'   │
+│ 4       │ 'Held by trophies'   │ '23.51 ETH'  │
+└─────────┴──────────────────────┴──────────────┘
+Total claimed so far: 399.27 ETH
+Game balance vs buckets: 394.71 ETH vs 394.71 ETH (Δ 0.00 ETH)
+Total inflow vs tracked: 418.23 ETH vs 418.23 ETH (Δ 0.00 ETH)
+Level 3 player profit: 7/100 (7.00%)
+Level 3 top 5 winners
+┌─────────┬───────────────┬────────────┬────────────┬─────────────────┬────────────┐
+│ (index) │ address       │ spent      │ winnings   │ coinAwarded     │ net        │
+├─────────┼───────────────┼────────────┼────────────┼─────────────────┼────────────┤
+│ 0       │ '0x6A43…50d7' │ '5.00 ETH' │ '9.04 ETH' │ '40640.0 PURGE' │ '4.04 ETH' │
+│ 1       │ '0x5C2B…D63E' │ '5.00 ETH' │ '8.51 ETH' │ '40640.0 PURGE' │ '3.51 ETH' │
+│ 2       │ '0x73C1…A2Ef' │ '5.00 ETH' │ '8.19 ETH' │ '40640.0 PURGE' │ '3.19 ETH' │
+│ 3       │ '0x9524…3b66' │ '3.75 ETH' │ '6.58 ETH' │ '30380.0 PURGE' │ '2.83 ETH' │
+│ 4       │ '0xB04A…f633' │ '3.75 ETH' │ '6.19 ETH' │ '30640.0 PURGE' │ '2.44 ETH' │
+└─────────┴───────────────┴────────────┴────────────┴─────────────────┴────────────┘
+Level 3 top 5 losers
+┌─────────┬───────────────┬────────────┬────────────┬─────────────────┬─────────────┐
+│ (index) │ address       │ spent      │ winnings   │ coinAwarded     │ net         │
+├─────────┼───────────────┼────────────┼────────────┼─────────────────┼─────────────┤
+│ 0       │ '0x7405…298B' │ '5.00 ETH' │ '0.35 ETH' │ '40640.0 PURGE' │ '-4.65 ETH' │
+│ 1       │ '0xA2Ba…d465' │ '5.00 ETH' │ '0.63 ETH' │ '40640.0 PURGE' │ '-4.37 ETH' │
+│ 2       │ '0xB73e…160f' │ '5.00 ETH' │ '0.89 ETH' │ '40640.0 PURGE' │ '-4.11 ETH' │
+│ 3       │ '0x9142…c72e' │ '5.00 ETH' │ '1.03 ETH' │ '40640.0 PURGE' │ '-3.97 ETH' │
+│ 4       │ '0x4BEe…41E1' │ '5.00 ETH' │ '1.08 ETH' │ '40640.0 PURGE' │ '-3.92 ETH' │
+└─────────┴───────────────┴────────────┴────────────┴─────────────────┴─────────────┘
+Level 3 total coin minted: 2136050.0 PURGE
+Level 4 day1 funding contributed 40.00 ETH / 39.93 ETH
+Level 4 day2 funding contributed 80.00 ETH / 79.86 ETH
+Level 4 map flow
+┌─────────┬───────────────────────────────┬──────────────┬──────────────┐
+│ (index) │ bucket                        │ expected     │ actual       │
+├─────────┼───────────────────────────────┼──────────────┼──────────────┤
+│ 0       │ 'Carryover deposit'           │ '114.71 ETH' │ '114.71 ETH' │
+│ 1       │ 'Prize pool before jackpots'  │ '200.00 ETH' │ '200.00 ETH' │
+│ 2       │ 'Credited to participants'    │ '22.10 ETH'  │ '22.10 ETH'  │
+│ 3       │ 'Recycled back to prize pool' │ '0.00 ETH'   │ '0.00 ETH'   │
+└─────────┴───────────────────────────────┴──────────────┴──────────────┘
+Expected-only buckets
+┌─────────┬──────────────────────────────────┬──────────────┐
+│ (index) │ bucket                           │ expected     │
+├─────────┼──────────────────────────────────┼──────────────┤
+│ 0       │ 'Total pool (carry + prize)'     │ '314.71 ETH' │
+│ 1       │ 'Map jackpot (effective pool)'   │ '31.57 ETH'  │
+│ 2       │ 'Carry saved for next level'     │ '129.03 ETH' │
+│ 3       │ 'Reserved prize pool after calc' │ '154.11 ETH' │
+│ 4       │ 'Map trophy direct award'        │ '9.47 ETH'   │
+└─────────┴──────────────────────────────────┴──────────────┘
+Level 4 bucket distribution
+┌─────────┬────────────┬─────────┬─────────────┬────────────┬───────────────┐
+│ (index) │ bucket     │ winners │ theoretical │ actual     │ trophyPortion │
+├─────────┼────────────┼─────────┼─────────────┼────────────┼───────────────┤
+│ 0       │ 'Bucket 1' │ 25      │ '4.21 ETH'  │ '4.21 ETH' │ '0.00 ETH'    │
+│ 1       │ 'Bucket 2' │ 15      │ '4.21 ETH'  │ '4.21 ETH' │ '0.00 ETH'    │
+│ 2       │ 'Bucket 3' │ 10      │ '4.21 ETH'  │ '4.21 ETH' │ '0.00 ETH'    │
+│ 3       │ 'Bucket 4' │ 1       │ '18.94 ETH' │ '9.47 ETH' │ '9.47 ETH'    │
+└─────────┴────────────┴─────────┴─────────────┴────────────┴───────────────┘
+Level 4 top map winners
+┌─────────┬───────────────┬────────────┐
+│ (index) │ address       │ winnings   │
+├─────────┼───────────────┼────────────┤
+│ 0       │ '0x5266…e83a' │ '9.47 ETH' │
+│ 1       │ '0xCf63…1B0E' │ '1.09 ETH' │
+│ 2       │ '0x8197…bAb6' │ '1.09 ETH' │
+│ 3       │ '0xB04A…f633' │ '0.84 ETH' │
+│ 4       │ '0x0aA0…4829' │ '0.84 ETH' │
+│ 5       │ '0xEeFD…c0B5' │ '0.76 ETH' │
+│ 6       │ '0xD2c2…6869' │ '0.59 ETH' │
+│ 7       │ '0xf788…0156' │ '0.56 ETH' │
+│ 8       │ '0x7405…298B' │ '0.56 ETH' │
+│ 9       │ '0xC11a…64Df' │ '0.50 ETH' │
+└─────────┴───────────────┴────────────┘
+Level 4 after map jackpot bucket snapshot
+┌─────────┬──────────────────────┬──────────────┐
+│ (index) │ bucket               │ amount       │
+├─────────┼──────────────────────┼──────────────┤
+│ 0       │ 'Carryover'          │ '129.03 ETH' │
+│ 1       │ 'Prize pool'         │ '154.11 ETH' │
+│ 2       │ 'Next prize pool'    │ '280.00 ETH' │
+│ 3       │ 'Claimable winnings' │ '22.10 ETH'  │
+│ 4       │ 'Held by trophies'   │ '32.98 ETH'  │
+└─────────┴──────────────────────┴──────────────┘
+Total claimed so far: 399.27 ETH
+Game balance vs buckets: 585.24 ETH vs 585.24 ETH (Δ 0.00 ETH)
+Total inflow vs tracked: 618.23 ETH vs 618.23 ETH (Δ 0.00 ETH)
+Level 5 priorPurge funding contributed 88.75 ETH / 87.85 ETH
+Level 4 daily jackpots
+┌─────────┬─────┬──────────┬──────────────┬──────────────┬────────────┬─────────────────┬────────────────┬─────────────┬─────────────┬───────────┬─────────────┬─────────────┐
+│ (index) │ day │ jackpots │ carryBefore  │ carryAfter   │ carryPaid  │ prizePoolBefore │ prizePoolAfter │ poolPaid    │ totalPaid   │ mapBuyers │ mapQuantity │ mapSpent    │
+├─────────┼─────┼──────────┼──────────────┼──────────────┼────────────┼─────────────────┼────────────────┼─────────────┼─────────────┼───────────┼─────────────┼─────────────┤
+│ 0       │ 1   │ 1        │ '129.03 ETH' │ '129.03 ETH' │ '0.00 ETH' │ '154.11 ETH'    │ '144.87 ETH'   │ '9.25 ETH'  │ '9.25 ETH'  │ 71        │ 14200       │ '88.75 ETH' │
+│ 1       │ 2   │ 1        │ '129.03 ETH' │ '129.03 ETH' │ '0.00 ETH' │ '144.87 ETH'    │ '134.59 ETH'   │ '10.27 ETH' │ '10.27 ETH' │ 0         │ 0           │ '0.00 ETH'  │
+│ 2       │ 3   │ 1        │ '129.03 ETH' │ '129.03 ETH' │ '0.00 ETH' │ '134.59 ETH'    │ '123.29 ETH'   │ '11.30 ETH' │ '11.30 ETH' │ 0         │ 0           │ '0.00 ETH'  │
+│ 3       │ 4   │ 1        │ '129.03 ETH' │ '129.03 ETH' │ '0.00 ETH' │ '123.29 ETH'    │ '110.96 ETH'   │ '12.33 ETH' │ '12.33 ETH' │ 0         │ 0           │ '0.00 ETH'  │
+│ 4       │ 5   │ 1        │ '129.03 ETH' │ '129.03 ETH' │ '0.00 ETH' │ '110.96 ETH'    │ '97.61 ETH'    │ '13.36 ETH' │ '13.36 ETH' │ 0         │ 0           │ '0.00 ETH'  │
+│ 5       │ 6   │ 1        │ '129.03 ETH' │ '129.03 ETH' │ '0.00 ETH' │ '97.61 ETH'     │ '83.22 ETH'    │ '14.38 ETH' │ '14.38 ETH' │ 0         │ 0           │ '0.00 ETH'  │
+│ 6       │ 7   │ 1        │ '129.03 ETH' │ '129.03 ETH' │ '0.00 ETH' │ '83.22 ETH'     │ '67.81 ETH'    │ '15.41 ETH' │ '15.41 ETH' │ 0         │ 0           │ '0.00 ETH'  │
+│ 7       │ 8   │ 1        │ '129.03 ETH' │ '129.03 ETH' │ '0.00 ETH' │ '67.81 ETH'     │ '51.37 ETH'    │ '16.44 ETH' │ '16.44 ETH' │ 0         │ 0           │ '0.00 ETH'  │
+│ 8       │ 9   │ 1        │ '129.03 ETH' │ '129.03 ETH' │ '0.00 ETH' │ '51.37 ETH'     │ '33.91 ETH'    │ '17.47 ETH' │ '17.47 ETH' │ 0         │ 0           │ '0.00 ETH'  │
+│ 9       │ 10  │ 1        │ '129.03 ETH' │ '144.44 ETH' │ '0.00 ETH' │ '33.91 ETH'     │ '0.00 ETH'     │ '33.91 ETH' │ '33.91 ETH' │ 0         │ 0           │ '0.00 ETH'  │
+└─────────┴─────┴──────────┴──────────────┴──────────────┴────────────┴─────────────────┴────────────────┴─────────────┴─────────────┴───────────┴─────────────┴─────────────┘
+Level 4 after daily jackpots bucket snapshot
+┌─────────┬──────────────────────┬──────────────┐
+│ (index) │ bucket               │ amount       │
+├─────────┼──────────────────────┼──────────────┤
+│ 0       │ 'Carryover'          │ '144.44 ETH' │
+│ 1       │ 'Prize pool'         │ '0.00 ETH'   │
+│ 2       │ 'Next prize pool'    │ '368.75 ETH' │
+│ 3       │ 'Claimable winnings' │ '160.80 ETH' │
+│ 4       │ 'Held by trophies'   │ '32.98 ETH'  │
+└─────────┴──────────────────────┴──────────────┘
+Total claimed so far: 399.27 ETH
+Game balance vs buckets: 673.99 ETH vs 673.99 ETH (Δ 0.00 ETH)
+Total inflow vs tracked: 706.98 ETH vs 706.98 ETH (Δ 0.00 ETH)
+Level 4 claims paid 160.80 ETH to 64 players
+Level 4 after player claims bucket snapshot
+┌─────────┬──────────────────────┬──────────────┐
+│ (index) │ bucket               │ amount       │
+├─────────┼──────────────────────┼──────────────┤
+│ 0       │ 'Carryover'          │ '144.44 ETH' │
+│ 1       │ 'Prize pool'         │ '0.00 ETH'   │
+│ 2       │ 'Next prize pool'    │ '368.75 ETH' │
+│ 3       │ 'Claimable winnings' │ '0.00 ETH'   │
+│ 4       │ 'Held by trophies'   │ '32.98 ETH'  │
+└─────────┴──────────────────────┴──────────────┘
+Total claimed so far: 560.07 ETH
+Game balance vs buckets: 513.19 ETH vs 513.19 ETH (Δ 0.00 ETH)
+Total inflow vs tracked: 546.18 ETH vs 546.18 ETH (Δ 0.00 ETH)
+Level 4 player profit: 10/100 (10.00%)
+Level 4 top 5 winners
+┌─────────┬───────────────┬────────────┬─────────────┬─────────────────┬────────────┐
+│ (index) │ address       │ spent      │ winnings    │ coinAwarded     │ net        │
+├─────────┼───────────────┼────────────┼─────────────┼─────────────────┼────────────┤
+│ 0       │ '0x5266…e83a' │ '3.75 ETH' │ '10.11 ETH' │ '30620.0 PURGE' │ '6.36 ETH' │
+│ 1       │ '0xf788…0156' │ '5.00 ETH' │ '9.29 ETH'  │ '40620.0 PURGE' │ '4.29 ETH' │
+│ 2       │ '0x6755…9Dc1' │ '3.75 ETH' │ '7.64 ETH'  │ '30490.0 PURGE' │ '3.89 ETH' │
+│ 3       │ '0x3FA2…e89D' │ '3.75 ETH' │ '4.81 ETH'  │ '30620.0 PURGE' │ '1.06 ETH' │
+│ 4       │ '0x1832…64D5' │ '3.75 ETH' │ '4.70 ETH'  │ '30490.0 PURGE' │ '0.95 ETH' │
+└─────────┴───────────────┴────────────┴─────────────┴─────────────────┴────────────┘
+Level 4 top 5 losers
+┌─────────┬───────────────┬────────────┬────────────┬─────────────────┬─────────────┐
+│ (index) │ address       │ spent      │ winnings   │ coinAwarded     │ net         │
+├─────────┼───────────────┼────────────┼────────────┼─────────────────┼─────────────┤
+│ 0       │ '0x8264…aC8a' │ '5.00 ETH' │ '0.98 ETH' │ '40620.0 PURGE' │ '-4.02 ETH' │
+│ 1       │ '0x905a…d241' │ '5.00 ETH' │ '1.06 ETH' │ '40620.0 PURGE' │ '-3.94 ETH' │
+│ 2       │ '0xA2Ba…d465' │ '5.00 ETH' │ '1.06 ETH' │ '40620.0 PURGE' │ '-3.94 ETH' │
+│ 3       │ '0xefb6…4D2d' │ '5.00 ETH' │ '1.15 ETH' │ '40620.0 PURGE' │ '-3.85 ETH' │
+│ 4       │ '0xB73e…160f' │ '5.00 ETH' │ '1.36 ETH' │ '40620.0 PURGE' │ '-3.64 ETH' │
+└─────────┴───────────────┴────────────┴────────────┴─────────────────┴─────────────┘
+Level 4 total coin minted: 2346220.0 PURGE
+Level 5 day1 funding contributed 45.00 ETH / 43.92 ETH
+Level 5 day2 funding contributed 88.75 ETH / 87.85 ETH
+Level 5 map flow
+┌─────────┬───────────────────────────────┬──────────────┬──────────────┐
+│ (index) │ bucket                        │ expected     │ actual       │
+├─────────┼───────────────────────────────┼──────────────┼──────────────┤
+│ 0       │ 'Carryover deposit'           │ '144.44 ETH' │ '144.44 ETH' │
+│ 1       │ 'Prize pool before jackpots'  │ '220.00 ETH' │ '220.00 ETH' │
+│ 2       │ 'Credited to participants'    │ '22.77 ETH'  │ '22.77 ETH'  │
+│ 3       │ 'Recycled back to prize pool' │ '0.00 ETH'   │ '0.00 ETH'   │
+└─────────┴───────────────────────────────┴──────────────┴──────────────┘
+Expected-only buckets
+┌─────────┬──────────────────────────────────┬──────────────┐
+│ (index) │ bucket                           │ expected     │
+├─────────┼──────────────────────────────────┼──────────────┤
+│ 0       │ 'Total pool (carry + prize)'     │ '364.44 ETH' │
+│ 1       │ 'Map jackpot (effective pool)'   │ '32.53 ETH'  │
+│ 2       │ 'Carry saved for next level'     │ '173.11 ETH' │
+│ 3       │ 'Reserved prize pool after calc' │ '158.81 ETH' │
+│ 4       │ 'Map trophy direct award'        │ '9.76 ETH'   │
+└─────────┴──────────────────────────────────┴──────────────┘
+Level 5 bucket distribution
+┌─────────┬────────────┬─────────┬─────────────┬────────────┬───────────────┐
+│ (index) │ bucket     │ winners │ theoretical │ actual     │ trophyPortion │
+├─────────┼────────────┼─────────┼─────────────┼────────────┼───────────────┤
+│ 0       │ 'Bucket 1' │ 15      │ '4.34 ETH'  │ '4.34 ETH' │ '0.00 ETH'    │
+│ 1       │ 'Bucket 2' │ 10      │ '4.34 ETH'  │ '4.34 ETH' │ '0.00 ETH'    │
+│ 2       │ 'Bucket 3' │ 1       │ '19.52 ETH' │ '9.76 ETH' │ '9.76 ETH'    │
+│ 3       │ 'Bucket 4' │ 25      │ '4.34 ETH'  │ '4.34 ETH' │ '0.00 ETH'    │
+└─────────┴────────────┴─────────┴─────────────┴────────────┴───────────────┘
+Level 5 top map winners
+┌─────────┬───────────────┬────────────┐
+│ (index) │ address       │ winnings   │
+├─────────┼───────────────┼────────────┤
+│ 0       │ '0xEFdC…D99c' │ '9.76 ETH' │
+│ 1       │ '0x47FA…f56E' │ '1.47 ETH' │
+│ 2       │ '0x6A43…50d7' │ '1.07 ETH' │
+│ 3       │ '0x7405…298B' │ '0.87 ETH' │
+│ 4       │ '0xbED6…592f' │ '0.87 ETH' │
+│ 5       │ '0x42aa…0813' │ '0.87 ETH' │
+│ 6       │ '0x9524…3b66' │ '0.72 ETH' │
+│ 7       │ '0x8197…bAb6' │ '0.69 ETH' │
+│ 8       │ '0x7f33…4112' │ '0.58 ETH' │
+│ 9       │ '0xe9d7…098d' │ '0.58 ETH' │
+└─────────┴───────────────┴────────────┘
+Level 5 after map jackpot bucket snapshot
+┌─────────┬──────────────────────┬──────────────┐
+│ (index) │ bucket               │ amount       │
+├─────────┼──────────────────────┼──────────────┤
+│ 0       │ 'Carryover'          │ '173.11 ETH' │
+│ 1       │ 'Prize pool'         │ '158.81 ETH' │
+│ 2       │ 'Next prize pool'    │ '368.75 ETH' │
+│ 3       │ 'Claimable winnings' │ '22.77 ETH'  │
+│ 4       │ 'Held by trophies'   │ '42.74 ETH'  │
+└─────────┴──────────────────────┴──────────────┘
+Total claimed so far: 560.07 ETH
+Game balance vs buckets: 723.44 ETH vs 723.44 ETH (Δ 0.00 ETH)
+Total inflow vs tracked: 766.18 ETH vs 766.18 ETH (Δ 0.00 ETH)
+Level 6 priorPurge funding contributed 97.50 ETH / 96.63 ETH
+Level 5 daily jackpots
+┌─────────┬─────┬──────────┬──────────────┬──────────────┬────────────┬─────────────────┬────────────────┬─────────────┬─────────────┬───────────┬─────────────┬─────────────┐
+│ (index) │ day │ jackpots │ carryBefore  │ carryAfter   │ carryPaid  │ prizePoolBefore │ prizePoolAfter │ poolPaid    │ totalPaid   │ mapBuyers │ mapQuantity │ mapSpent    │
+├─────────┼─────┼──────────┼──────────────┼──────────────┼────────────┼─────────────────┼────────────────┼─────────────┼─────────────┼───────────┼─────────────┼─────────────┤
+│ 0       │ 1   │ 1        │ '173.11 ETH' │ '173.11 ETH' │ '0.00 ETH' │ '158.81 ETH'    │ '149.28 ETH'   │ '9.53 ETH'  │ '9.53 ETH'  │ 78        │ 15600       │ '97.50 ETH' │
+│ 1       │ 2   │ 1        │ '173.11 ETH' │ '173.11 ETH' │ '0.00 ETH' │ '149.28 ETH'    │ '138.69 ETH'   │ '10.59 ETH' │ '10.59 ETH' │ 0         │ 0           │ '0.00 ETH'  │
+│ 2       │ 3   │ 1        │ '173.11 ETH' │ '173.11 ETH' │ '0.00 ETH' │ '138.69 ETH'    │ '127.04 ETH'   │ '11.65 ETH' │ '11.65 ETH' │ 0         │ 0           │ '0.00 ETH'  │
+│ 3       │ 4   │ 1        │ '173.11 ETH' │ '173.11 ETH' │ '0.00 ETH' │ '127.04 ETH'    │ '114.34 ETH'   │ '12.70 ETH' │ '12.70 ETH' │ 0         │ 0           │ '0.00 ETH'  │
+│ 4       │ 5   │ 1        │ '173.11 ETH' │ '173.11 ETH' │ '0.00 ETH' │ '114.34 ETH'    │ '100.58 ETH'   │ '13.76 ETH' │ '13.76 ETH' │ 0         │ 0           │ '0.00 ETH'  │
+│ 5       │ 6   │ 1        │ '173.11 ETH' │ '173.11 ETH' │ '0.00 ETH' │ '100.58 ETH'    │ '85.76 ETH'    │ '14.82 ETH' │ '14.82 ETH' │ 0         │ 0           │ '0.00 ETH'  │
+│ 6       │ 7   │ 1        │ '173.11 ETH' │ '173.11 ETH' │ '0.00 ETH' │ '85.76 ETH'     │ '69.87 ETH'    │ '15.88 ETH' │ '15.88 ETH' │ 0         │ 0           │ '0.00 ETH'  │
+│ 7       │ 8   │ 1        │ '173.11 ETH' │ '173.11 ETH' │ '0.00 ETH' │ '69.87 ETH'     │ '52.94 ETH'    │ '16.94 ETH' │ '16.94 ETH' │ 0         │ 0           │ '0.00 ETH'  │
+│ 8       │ 9   │ 1        │ '173.11 ETH' │ '173.11 ETH' │ '0.00 ETH' │ '52.94 ETH'     │ '34.94 ETH'    │ '18.00 ETH' │ '18.00 ETH' │ 0         │ 0           │ '0.00 ETH'  │
+│ 9       │ 10  │ 1        │ '173.11 ETH' │ '188.99 ETH' │ '0.00 ETH' │ '34.94 ETH'     │ '0.00 ETH'     │ '34.94 ETH' │ '34.94 ETH' │ 0         │ 0           │ '0.00 ETH'  │
+└─────────┴─────┴──────────┴──────────────┴──────────────┴────────────┴─────────────────┴────────────────┴─────────────┴─────────────┴───────────┴─────────────┴─────────────┘
+Level 5 after daily jackpots bucket snapshot
+┌─────────┬──────────────────────┬──────────────┐
+│ (index) │ bucket               │ amount       │
+├─────────┼──────────────────────┼──────────────┤
+│ 0       │ 'Carryover'          │ '188.99 ETH' │
+│ 1       │ 'Prize pool'         │ '0.00 ETH'   │
+│ 2       │ 'Next prize pool'    │ '466.25 ETH' │
+│ 3       │ 'Claimable winnings' │ '165.69 ETH' │
+│ 4       │ 'Held by trophies'   │ '42.74 ETH'  │
+└─────────┴──────────────────────┴──────────────┘
+Total claimed so far: 560.07 ETH
+Game balance vs buckets: 820.94 ETH vs 820.94 ETH (Δ 0.00 ETH)
+Total inflow vs tracked: 863.68 ETH vs 863.68 ETH (Δ 0.00 ETH)
+Level 5 claims paid 165.69 ETH to 70 players
+Level 5 after player claims bucket snapshot
+┌─────────┬──────────────────────┬──────────────┐
+│ (index) │ bucket               │ amount       │
+├─────────┼──────────────────────┼──────────────┤
+│ 0       │ 'Carryover'          │ '188.99 ETH' │
+│ 1       │ 'Prize pool'         │ '0.00 ETH'   │
+│ 2       │ 'Next prize pool'    │ '466.25 ETH' │
+│ 3       │ 'Claimable winnings' │ '0.00 ETH'   │
+│ 4       │ 'Held by trophies'   │ '42.74 ETH'  │
+└─────────┴──────────────────────┴──────────────┘
+Total claimed so far: 725.77 ETH
+Game balance vs buckets: 655.24 ETH vs 655.24 ETH (Δ 0.00 ETH)
+Total inflow vs tracked: 697.98 ETH vs 697.98 ETH (Δ 0.00 ETH)
+Level 5 player profit: 10/100 (10.00%)
+Level 5 top 5 winners
+┌─────────┬───────────────┬────────────┬─────────────┬─────────────────┬────────────┐
+│ (index) │ address       │ spent      │ winnings    │ coinAwarded     │ net        │
+├─────────┼───────────────┼────────────┼─────────────┼─────────────────┼────────────┤
+│ 0       │ '0xEFdC…D99c' │ '3.75 ETH' │ '10.87 ETH' │ '30650.0 PURGE' │ '7.12 ETH' │
+│ 1       │ '0x6A43…50d7' │ '5.00 ETH' │ '8.54 ETH'  │ '40650.0 PURGE' │ '3.54 ETH' │
+│ 2       │ '0x2b24…703c' │ '3.75 ETH' │ '7.28 ETH'  │ '30650.0 PURGE' │ '3.53 ETH' │
+│ 3       │ '0x8264…aC8a' │ '5.00 ETH' │ '7.48 ETH'  │ '40650.0 PURGE' │ '2.48 ETH' │
+│ 4       │ '0xB73e…160f' │ '5.00 ETH' │ '6.63 ETH'  │ '40650.0 PURGE' │ '1.63 ETH' │
+└─────────┴───────────────┴────────────┴─────────────┴─────────────────┴────────────┘
+Level 5 top 5 losers
+┌─────────┬───────────────┬────────────┬────────────┬─────────────────┬─────────────┐
+│ (index) │ address       │ spent      │ winnings   │ coinAwarded     │ net         │
+├─────────┼───────────────┼────────────┼────────────┼─────────────────┼─────────────┤
+│ 0       │ '0x712f…C6Ca' │ '5.00 ETH' │ '0.61 ETH' │ '40650.0 PURGE' │ '-4.39 ETH' │
+│ 1       │ '0x4BEe…41E1' │ '5.00 ETH' │ '0.65 ETH' │ '40650.0 PURGE' │ '-4.35 ETH' │
+│ 2       │ '0xDfdc…3203' │ '5.00 ETH' │ '0.68 ETH' │ '40650.0 PURGE' │ '-4.32 ETH' │
+│ 3       │ '0xF68C…eeA6' │ '5.00 ETH' │ '1.11 ETH' │ '40650.0 PURGE' │ '-3.89 ETH' │
+│ 4       │ '0xaAB6…C313' │ '5.00 ETH' │ '1.11 ETH' │ '40650.0 PURGE' │ '-3.89 ETH' │
+└─────────┴───────────────┴────────────┴────────────┴─────────────────┴─────────────┘
+Level 5 total coin minted: 2578350.0 PURGE
+Players in profit: 2/100 (2.00%), total spent 1383.75 ETH, total winnings 768.51 ETH
+Simulation final standings top 2 winners
+┌─────────┬───────────────┬─────────────┬─────────────┬──────────────────┬────────────┐
+│ (index) │ address       │ spent       │ winnings    │ coinAwarded      │ net        │
+├─────────┼───────────────┼─────────────┼─────────────┼──────────────────┼────────────┤
+│ 0       │ '0xf788…0156' │ '25.00 ETH' │ '26.76 ETH' │ '202600.0 PURGE' │ '1.76 ETH' │
+│ 1       │ '0x6A43…50d7' │ '23.75 ETH' │ '24.81 ETH' │ '192600.0 PURGE' │ '1.06 ETH' │
+└─────────┴───────────────┴─────────────┴─────────────┴──────────────────┴────────────┘
+Simulation final standings top 5 losers
+┌─────────┬───────────────┬─────────────┬────────────┬──────────────────┬──────────────┐
+│ (index) │ address       │ spent       │ winnings   │ coinAwarded      │ net          │
+├─────────┼───────────────┼─────────────┼────────────┼──────────────────┼──────────────┤
+│ 0       │ '0x712f…C6Ca' │ '26.25 ETH' │ '6.97 ETH' │ '212600.0 PURGE' │ '-19.28 ETH' │
+│ 1       │ '0xEF07…8E09' │ '26.25 ETH' │ '8.78 ETH' │ '212600.0 PURGE' │ '-17.47 ETH' │
+│ 2       │ '0x18f4…75aa' │ '26.25 ETH' │ '8.79 ETH' │ '212600.0 PURGE' │ '-17.46 ETH' │
+│ 3       │ '0x49f6…BBcD' │ '20.00 ETH' │ '4.38 ETH' │ '162600.0 PURGE' │ '-15.62 ETH' │
+│ 4       │ '0xE2C8…C0f4' │ '21.25 ETH' │ '5.78 ETH' │ '172600.0 PURGE' │ '-15.47 ETH' │
+└─────────┴───────────────┴─────────────┴────────────┴──────────────────┴──────────────┘
+Coin minted per level
+┌─────────┬───────┬───────────────────┐
+│ (index) │ level │ coinMinted        │
+├─────────┼───────┼───────────────────┤
+│ 0       │ 1     │ '2221540.0 PURGE' │
+│ 1       │ 2     │ '1934330.0 PURGE' │
+│ 2       │ 3     │ '2136050.0 PURGE' │
+│ 3       │ 4     │ '2346220.0 PURGE' │
+│ 4       │ 5     │ '2578350.0 PURGE' │
+└─────────┴───────┴───────────────────┘
+Total coin minted across mints: 11216490.0 PURGE
+Average coin per mint (1107 mints): 10132.330623 PURGE
+Early purge mint distribution (overall)
+┌─────────┬──────────────────────────┬───────┬──────────┐
+│ (index) │ stage                    │ mints │ tokens   │
+├─────────┼──────────────────────────┼───────┼──────────┤
+│ 0       │ 'Pre-unlock (<30%)'      │ 1107  │ '221400' │
+│ 1       │ 'Unlock window (30-49%)' │ 0     │ '0'      │
+│ 2       │ 'Bonus window (≥50%)'    │ 0     │ '0'      │
+└─────────┴──────────────────────────┴───────┴──────────┘
+Early purge mint distribution by level
+┌─────────┬───────┬────────────────┬─────────────────┬─────────────┬──────────────┬────────────┬─────────────┐
+│ (index) │ level │ preUnlockMints │ preUnlockTokens │ unlockMints │ unlockTokens │ bonusMints │ bonusTokens │
+├─────────┼───────┼────────────────┼─────────────────┼─────────────┼──────────────┼────────────┼─────────────┤
+│ 0       │ 1     │ 168            │ '33600'         │ 0           │ '0'          │ 0          │ '0'         │
+│ 1       │ 2     │ 185            │ '37000'         │ 0           │ '0'          │ 0          │ '0'         │
+│ 2       │ 3     │ 205            │ '41000'         │ 0           │ '0'          │ 0          │ '0'         │
+│ 3       │ 4     │ 224            │ '44800'         │ 0           │ '0'          │ 0          │ '0'         │
+│ 4       │ 5     │ 247            │ '49400'         │ 0           │ '0'          │ 0          │ '0'         │
+│ 5       │ 6     │ 78             │ '15600'         │ 0           │ '0'          │ 0          │ '0'         │
+└─────────┴───────┴────────────────┴─────────────────┴─────────────┴──────────────┴────────────┴─────────────┘
+Simulation complete bucket snapshot
+┌─────────┬──────────────────────┬──────────────┐
+│ (index) │ bucket               │ amount       │
+├─────────┼──────────────────────┼──────────────┤
+│ 0       │ 'Carryover'          │ '188.99 ETH' │
+│ 1       │ 'Prize pool'         │ '0.00 ETH'   │
+│ 2       │ 'Next prize pool'    │ '466.25 ETH' │
+│ 3       │ 'Claimable winnings' │ '0.00 ETH'   │
+│ 4       │ 'Held by trophies'   │ '42.74 ETH'  │
+└─────────┴──────────────────────┴──────────────┘
+Total claimed so far: 725.77 ETH
+Game balance vs buckets: 655.24 ETH vs 655.24 ETH (Δ 0.00 ETH)
+Total inflow vs tracked: 697.98 ETH vs 697.98 ETH (Δ 0.00 ETH)
+    ✔ runs levels 1-5 money flow end to end (25684ms)
+
+
+  1 passing (26s)
+
+··························································································································
+|  [32m[1mSolidity and Network Configuration[22m[39m                                                                                    │
+·····································|·················|················|················|································
+|  [36mSolidity: 0.8.30[39m                  ·  [36mOptim: true[39m    ·  [36mRuns: 2[39m       ·  [36mviaIR: true[39m   ·     [36mBlock: 30,000,000 gas[39m     │
+·····································|·················|················|················|································
+|  [32m[1mMethods[22m[39m                                                                                                               │
+·····································|·················|················|················|················|···············
+|  [32m[1mContracts / Methods[22m[39m               ·  [1mMin[22m            ·  [1mMax[22m           ·  [1mAvg[22m           ·  [1m# calls[22m       ·  [1musd (avg)[22m   │
+·····································|·················|················|················|················|···············
+|  [1mPurgecoinHarness[22m                  ·                                                                                   │
+·····································|·················|················|················|················|···············
+|      harnessSetStakeLevelComplete  ·              [90m-[39m  ·             [90m-[39m  ·        26,493  ·             1  ·           [32m[90m-[39m[32m[39m  │
+·····································|·················|················|················|················|···············
+|      wire                          ·              [90m-[39m  ·             [90m-[39m  ·       628,037  ·             2  ·           [32m[90m-[39m[32m[39m  │
+·····································|·················|················|················|················|···············
+|  [1mPurgeGameHarness[22m                  ·                                                                                   │
+·····································|·················|················|················|················|···············
+|      claimWinnings                 ·              [90m-[39m  ·             [90m-[39m  ·        34,037  ·           588  ·           [32m[90m-[39m[32m[39m  │
+·····································|·················|················|················|················|···············
+|      harnessCalcMapJackpot         ·         [36m91,504[39m  ·       [31m108,712[39m  ·        95,008  ·            10  ·           [32m[90m-[39m[32m[39m  │
+·····································|·················|················|················|················|···············
+|      harnessProcessMapBatch        ·      [36m8,425,687[39m  ·    [31m13,610,679[39m  ·    10,966,139  ·           954  ·           [32m[90m-[39m[32m[39m  │
+·····································|·················|················|················|················|···············
+|      harnessRunDailyJackpot        ·        [36m479,967[39m  ·     [31m3,431,449[39m  ·       853,409  ·           100  ·           [32m[90m-[39m[32m[39m  │
+·····································|·················|················|················|················|···············
+|      harnessRunMapJackpot          ·        [36m553,796[39m  ·     [31m1,089,393[39m  ·       667,885  ·            10  ·           [32m[90m-[39m[32m[39m  │
+·····································|·················|················|················|················|···············
+|      harnessSetCarry               ·              [90m-[39m  ·             [90m-[39m  ·        23,664  ·             1  ·           [32m[90m-[39m[32m[39m  │
+·····································|·················|················|················|················|···············
+|      harnessSetRng                 ·         [36m29,806[39m  ·        [31m46,918[39m  ·        30,128  ·            55  ·           [32m[90m-[39m[32m[39m  │
+·····································|·················|················|················|················|···············
+|      harnessSetState               ·         [36m28,022[39m  ·        [31m28,034[39m  ·        28,030  ·            15  ·           [32m[90m-[39m[32m[39m  │
+·····································|·················|················|················|················|···············
+|  [1mPurgeGameNFT[22m                      ·                                                                                   │
+·····································|·················|················|················|················|···············
+|      mintAndPurge                  ·        [36m127,131[39m  ·       [31m380,585[39m  ·       181,800  ·          2214  ·           [32m[90m-[39m[32m[39m  │
+·····································|·················|················|················|················|···············
+|  [32m[1mDeployments[22m[39m                                         ·                                 ·  [1m% of limit[22m    ·              │
+·····································|·················|················|················|················|···············
+|  [1mMockLinkToken[22m                     ·              [90m-[39m  ·             [90m-[39m  ·       244,133  ·         0.8 %  ·           [32m[90m-[39m[32m[39m  │
+·····································|·················|················|················|················|···············
+|  [1mMockRenderer[22m                      ·              [90m-[39m  ·             [90m-[39m  ·       221,164  ·         0.7 %  ·           [32m[90m-[39m[32m[39m  │
+·····································|·················|················|················|················|···············
+|  [1mMockVRFCoordinator[22m                ·              [90m-[39m  ·             [90m-[39m  ·       313,097  ·           1 %  ·           [32m[90m-[39m[32m[39m  │
+·····································|·················|················|················|················|···············
+|  [1mPurgeCoinExternalJackpotModule[22m    ·              [90m-[39m  ·             [90m-[39m  ·     1,765,716  ·         5.9 %  ·           [32m[90m-[39m[32m[39m  │
+·····································|·················|················|················|················|···············
+|  [1mPurgecoinHarness[22m                  ·              [90m-[39m  ·             [90m-[39m  ·     5,371,696  ·        17.9 %  ·           [32m[90m-[39m[32m[39m  │
+·····································|·················|················|················|················|···············
+|  [1mPurgeGameEndgameModule[22m            ·              [90m-[39m  ·             [90m-[39m  ·     1,237,934  ·         4.1 %  ·           [32m[90m-[39m[32m[39m  │
+·····································|·················|················|················|················|···············
+|  [1mPurgeGameHarness[22m                  ·              [90m-[39m  ·             [90m-[39m  ·     4,763,489  ·        15.9 %  ·           [32m[90m-[39m[32m[39m  │
+·····································|·················|················|················|················|···············
+|  [1mPurgeGameJackpotModule[22m            ·              [90m-[39m  ·             [90m-[39m  ·     2,661,330  ·         8.9 %  ·           [32m[90m-[39m[32m[39m  │
+·····································|·················|················|················|················|···············
+|  [1mPurgeGameNFT[22m                      ·              [90m-[39m  ·             [90m-[39m  ·     4,065,671  ·        13.6 %  ·           [32m[90m-[39m[32m[39m  │
+·····································|·················|················|················|················|···············
+|  [1mPurgeGameTrophies[22m                 ·              [90m-[39m  ·             [90m-[39m  ·     5,235,482  ·        17.5 %  ·           [32m[90m-[39m[32m[39m  │
+·····································|·················|················|················|················|···············
+|  [1mPurgeQuestModule[22m                  ·              [90m-[39m  ·             [90m-[39m  ·     2,473,217  ·         8.2 %  ·           [32m[90m-[39m[32m[39m  │
+·····································|·················|················|················|················|···············
+|  [32m[1mKey[22m[39m                                                                                                                   │
+··························································································································
+|  [35m[1m◯[22m[39m  Execution gas for this method does not include intrinsic gas overhead                                              │
+··························································································································
+|  [35m[1m△[22m[39m  Cost was non-zero but below the precision setting for the currency display (see options)                           │
+··························································································································
+|  [35mToolchain:[39m  hardhat                                                                                                   │
+··························································································································

@@ -1,0 +1,102 @@
+{
+  "ownerPrivateKey": "0x42a2d316ae39d372cf319de54be460cbb79270f0be084f4d522ecc83e82aa507",
+  "players": [
+    {
+      "name": "Player 1",
+      "privateKey": "0x5f8921ab6c7f8efefaf351e8a4d5d7dc28a7df6dad0029027f740fa7588285e6"
+    },
+    {
+      "name": "Player 2",
+      "privateKey": "0x699389fcad54aafb6bdff11a17ae531003afb0fb236170bd2595a5345aa10dff"
+    },
+    {
+      "name": "Player 3",
+      "privateKey": "0xf746b4262b61fb94835b81732ce68ccfd97a2775497812734b9ec1d7b9c45893"
+    },
+    {
+      "name": "Player 4",
+      "privateKey": "0x077eecd9e4692069f8a5e28110080b511a0e5872de352f693be26796b23097e5"
+    },
+    {
+      "name": "Player 5",
+      "privateKey": "0x6d92521c36d715fbc90fe7d62809795a52d2e8bb080b50a02e6b0b2aaac34d4f"
+    },
+    {
+      "name": "Player 6",
+      "privateKey": "0xf47a51637ce8718093d8373b13dd69c7266f3c7bb18b43c8bc3ce073726ccb7a"
+    },
+    {
+      "name": "Player 7",
+      "privateKey": "0x04d0182cb13b5cee88c2a520cf84e6df4c3535a41642df6ae036886a5d035360"
+    },
+    {
+      "name": "Player 8",
+      "privateKey": "0xf7d45ca09aa2ac0fe8e6eba4306d6a98e21d225f17349da87c3d4921ca251859"
+    },
+    {
+      "name": "Player 9",
+      "privateKey": "0xa48951a7a9ebe8e8dd1c3017fdcf90a7d7eb20c430c8ae54b25f22a952e98c43"
+    },
+    {
+      "name": "Player 10",
+      "privateKey": "0x049c085a71502e4cb2c7af361f626135f677196cab8b31057baecc500823926f"
+    },
+    {
+      "name": "Player 11",
+      "privateKey": "0xa13881e223454c982dc8d7aec32964b7fee996b2a78ed758ef2f33cc271c0843"
+    },
+    {
+      "name": "Player 12",
+      "privateKey": "0x93d453cf9bb8b96d3b267d121fea07b71b46bc110d44452d3d3c55c4208179ba"
+    },
+    {
+      "name": "Player 13",
+      "privateKey": "0x2e590cdfa89daade2cfa3061635768cdec53a15af1d21444a551b67e6a346883"
+    },
+    {
+      "name": "Player 14",
+      "privateKey": "0x5c7346cdff2d491ae7d0c48569ccc40ba671b079d53121d82673d0fc566aceb7"
+    },
+    {
+      "name": "Player 15",
+      "privateKey": "0xbb4592db2ef3d36efadd5c164819cdcfffda42c618631d3b20381e0d8fb96168"
+    },
+    {
+      "name": "Player 16",
+      "privateKey": "0xd76e75a440b57d5c8bbb974f9b61e2e32ee9615dc7c150b112f56f1712394eb4"
+    },
+    {
+      "name": "Player 17",
+      "privateKey": "0x15d3be26d15469bacf56a6b70833e306762db6d83a745bd6b056c2931cdf839b"
+    },
+    {
+      "name": "Player 18",
+      "privateKey": "0x8a8127981ee593317e32e8af2a16673cfd078925c87a823984a5d8466e1e8733"
+    },
+    {
+      "name": "Player 19",
+      "privateKey": "0xeb795ed7d29ae57efc464ac03d91fc5bf8b066ded0dbc8d7ff226d577c5800db"
+    }
+  ],
+  "contracts": {
+    "renderer": "0xF919A53e063c2BD068D4dd09d04A5df482e112AD",
+    "purgecoin": "0x8CC9Bd305BDD5b1cb7CdfDD68D73A012649f11b7",
+    "game": "0x0B6fBc09CaFb26bff87d669d1Ac28Ae2Fd71F0dE",
+    "icons32": "0x7713E89f9628D3F47E3bbA53e16B8780474172AF",
+    "nft": "0x4bC37C5E62A3782d9955Ed41705bdbDf8aF6f4c9",
+    "registry": "0x8418B5E6D9918462afE24ab337722290Ab6afde8",
+    "rendererRegular": "0xF919A53e063c2BD068D4dd09d04A5df482e112AD",
+    "rendererTrophy": "0x8D84b1c0C960d82a5AaB781387eBe65808264F9A",
+    "vrfCoordinator": "0x9DdfaCa8183c41ad55329BdeeD9F6A8d53168B1B",
+    "vrfKeyHash": "0x787d74caea10b2b357790d5b5247c2f63d1d91572a9846f780606e4d953677ae",
+    "vrfSubscriptionId": "84508818054754482320553311920328291068110972594757996421906264339531042560463",
+    "linkToken": "0x779877A7B0D9E8603169DdbD7836e478b4624789",
+    "trophies": "0x18e43a5234754991C67ab5b4777A9310E661Eb95",
+    "endgameModule": "0xb791D6fCB03ACC5D617d070e0f358b2E6052d204",
+    "trophyAssets": "0xED77DD0152B20884A06732E3D886B85FC40CC539",
+    "jackpotModule": "0xb3A503dde51315C2aBcd67a8b371bFa1212521F9",
+    "externalJackpotModule": "0x53e4F6228642f6c681a9d24c370E999356B503Be",
+    "questModule": "0xb80F6Cc7C0980A26b9Dbace7511bd4088Ef3A0C2"
+  },
+  "ownerAddress": "0xceE410a785AA2D4a78130FB9bF519408c115C21b"
+}
