@@ -153,6 +153,8 @@ const NO_BONUS_STRATEGY = {
   quantityRange: { min: STRATEGY_MAP_QUANTITY, max: STRATEGY_MAP_QUANTITY * 5 },
   rngSeed: 0x5ab1en,
 };
+const NEXT_LEVEL_DAY1_PREFUND_BPS = 1000n; // 10% of next-level requirement front-loaded on purge day 1
+const NEXT_LEVEL_DAILY_PREFUND_BPS = 500n; // 5% drip during daily jackpots
 
 function createDeterministicRng(seed = 0x5150n) {
   const mask = (1n << 64n) - 1n;
@@ -276,6 +278,8 @@ async function primeNextLevelMaps({
   contributions,
   referralCodes,
   stageFundingPlan,
+  percentBps = 0n,
+  absoluteWei = 0n,
 }) {
   const nextLevelValue = levelValue + 1;
   if (!stageFundingPlan.has(nextLevelValue)) {
@@ -287,14 +291,29 @@ async function primeNextLevelMaps({
   if (remaining === 0n) {
     return { buyers: 0, quantity: 0n, totalCost: 0n };
   }
+  let desiredContribution = remaining;
+  let descriptor = stageInfo.contributed === 0n ? "initial 30%" : "top-up";
+  if (absoluteWei !== 0n) {
+    desiredContribution = absoluteWei > remaining ? remaining : absoluteWei;
+    descriptor = "fixed front-load";
+  } else if (percentBps !== 0n) {
+    const percentTarget = (stageInfo.target * percentBps) / 10000n;
+    if (percentTarget > 0n) {
+      desiredContribution = percentTarget > remaining ? remaining : percentTarget;
+    }
+    descriptor = `daily drip (${Number(percentBps) / 100}%)`;
+  }
+  if (desiredContribution === 0n) {
+    return { buyers: 0, quantity: 0n, totalCost: 0n };
+  }
   console.log(
-    `Priming level ${nextLevelValue} with ${ethers.formatEther(remaining)} ETH in map mints (${stageInfo.contributed === 0n ? "initial 30%" : "top-up"})`
+    `Priming level ${nextLevelValue} with ${ethers.formatEther(desiredContribution)} ETH in map mints (${descriptor})`
   );
   const { contributions: primeContributions, stats } = await seedContractWithMaps(
     purgeGame,
     purgeNFT,
     players,
-    remaining,
+    desiredContribution,
     undefined,
     referralCodes,
     nextLevelValue,
@@ -510,6 +529,8 @@ function collectCredits(purgeGame, receipts) {
   return { ordered, totals };
 }
 
+let seedPlayerCursor = 0;
+
 async function seedContractWithMaps(
   purgeGame,
   purgeNFT,
@@ -534,13 +555,17 @@ async function seedContractWithMaps(
 
   let iterations = 0;
   const iterationCap = players.length * 50;
+  const startCursor = seedPlayerCursor % players.length;
+  let buyersUsed = 0;
+  let lastBalance = await provider.getBalance(gameAddress);
   while (true) {
     const currentBalance = await provider.getBalance(gameAddress);
+    lastBalance = currentBalance;
     if (!exactAmount && currentBalance >= targetWei) {
-      return { balance: currentBalance, contributions, stats };
+      break;
     }
     if (exactAmount && stats.totalCost >= targetWei) {
-      return { balance: currentBalance, contributions, stats };
+      break;
     }
     if (iterations >= iterationCap) {
       throw new Error(
@@ -548,8 +573,10 @@ async function seedContractWithMaps(
       );
     }
 
-    const player = players[iterations % players.length];
+    const playerIndex = (startCursor + buyersUsed) % players.length;
+    const player = players[playerIndex];
     iterations += 1;
+    buyersUsed += 1;
     const info = await purgeGame.gameInfo();
     const currentPrice = info.price_;
     const mapCost = (currentPrice * BigInt(mapQty) * 25n) / 100n;
@@ -567,6 +594,8 @@ async function seedContractWithMaps(
       })
     ).wait();
   }
+  seedPlayerCursor = (startCursor + buyersUsed) % players.length;
+  return { balance: lastBalance, contributions, stats };
 }
 
 function mergeContributionMaps(target, additions) {
@@ -1377,6 +1406,7 @@ describe("PurgeGame money flow simulation", function () {
       day1: { target: (nextLevelTotal * 20n) / 100n, contributed: 0n },
       day2: { target: nextLevelTotal - ((nextLevelTotal * 30n) / 100n) - ((nextLevelTotal * 20n) / 100n), contributed: 0n },
     });
+    targetPerLevel.push(nextLevelTotal);
 
     const contributions = new Map();
     const strategyMintCounts = new Map();
@@ -1643,22 +1673,50 @@ describe("PurgeGame money flow simulation", function () {
         mintCountLedger: strategyMintCounts,
       });
       pendingDailyMapActivity = accumulateDailyMapActivity(pendingDailyMapActivity, strategyActivity);
-      const primeActivity = await primeNextLevelMaps({
-        levelValue,
-        purgeGame,
-        purgeNFT,
-        players: stageFundingPlayers,
-        contributions,
-        referralCodes: referralAssignments,
-        stageFundingPlan,
-      });
-      pendingDailyMapActivity = accumulateDailyMapActivity(pendingDailyMapActivity, primeActivity);
+      if (NEXT_LEVEL_DAY1_PREFUND_BPS !== 0n) {
+        const nextLevelIndex = nextLevelValue - 1;
+        const nextLevelTotal = nextLevelIndex < targetPerLevel.length ? targetPerLevel[nextLevelIndex] : 0n;
+        if (nextLevelTotal !== 0n) {
+          const dayOneWei = (nextLevelTotal * NEXT_LEVEL_DAY1_PREFUND_BPS) / 10000n;
+          if (dayOneWei !== 0n) {
+            const dayOneActivity = await primeNextLevelMaps({
+              levelValue,
+              purgeGame,
+              purgeNFT,
+              players: stageFundingPlayers,
+              contributions,
+              referralCodes: referralAssignments,
+              stageFundingPlan,
+              absoluteWei: dayOneWei,
+            });
+            pendingDailyMapActivity = accumulateDailyMapActivity(pendingDailyMapActivity, dayOneActivity);
+            if (dayOneActivity.totalCost !== 0n) {
+              await processAllMapMints(purgeGame);
+            }
+          }
+        }
+      }
       await processAllMapMints(purgeGame);
 
       const daySummaries = [];
       let jackpotsExecuted = 0;
       while (jackpotsExecuted < JACKPOT_LEVEL_CAP) {
         await time.increase(DAY_SECONDS);
+
+        const dripActivity = await primeNextLevelMaps({
+          levelValue,
+          purgeGame,
+          purgeNFT,
+          players: stageFundingPlayers,
+          contributions,
+          referralCodes: referralAssignments,
+          stageFundingPlan,
+          percentBps: NEXT_LEVEL_DAILY_PREFUND_BPS,
+        });
+        pendingDailyMapActivity = accumulateDailyMapActivity(pendingDailyMapActivity, dripActivity);
+        if (dripActivity.totalCost !== 0n) {
+          await processAllMapMints(purgeGame);
+        }
 
         const dayRng = randomJackpotWord(`daily-${levelValue}-${jackpotsExecuted}`);
         await purgeGame.harnessSetRng(dayRng, true, false);

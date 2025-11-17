@@ -148,7 +148,6 @@ contract PurgeGame is PurgeGameStorage {
         vrfKeyHash = vrfKeyHash_;
         vrfSubscriptionId = vrfSubscriptionId_;
         linkToken = linkToken_;
-        firstEarlyJackpotPending = true;
     }
 
     // --- View: lightweight game status -------------------------------------------------
@@ -296,7 +295,7 @@ contract PurgeGame is PurgeGameStorage {
                     break;
                 }
                 _runEndgameModule(lvl, cap, day, rngWord); // handles payouts, wipes, endgame dist, and jackpots
-                if (firstEarlyJackpotPending && pendingEndLevel.level == 0) {
+                if (!firstEarlyJackpotPaid && pendingEndLevel.level == 0) {
                     payDailyJackpot(false, level, rngWord);
                 }
                 if (gameState == 2 && pendingEndLevel.level == 0 && rngLockedFlag) {
@@ -397,6 +396,7 @@ contract PurgeGame is PurgeGameStorage {
                 traitRebuildCursor = 0;
                 airdropMultiplier = 1;
                 gameState = 3;
+                firstPurgeJackpotPaid = false;
                 _unlockRng();
                 break;
             }
@@ -697,7 +697,7 @@ contract PurgeGame is PurgeGameStorage {
         }
 
         gameState = 1;
-        firstEarlyJackpotPending = true;
+        firstEarlyJackpotPaid = false;
     }
 
     /// @notice Delegatecall into the endgame module to resolve slow settlement paths.

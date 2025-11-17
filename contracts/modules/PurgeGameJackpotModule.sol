@@ -39,9 +39,10 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         IPurgeGameTrophiesModule trophiesContract
     ) external {
         uint8 percentBefore = earlyPurgePercent;
-        bool kickoffJackpot = firstEarlyJackpotPending;
+        bool kickoffJackpot = !firstEarlyJackpotPaid;
         bool purchasePhaseActive = (gameState == 2 && phase <= 2 && !kickoffJackpot);
         bool purgePhaseActive = (gameState == 3);
+        bool purgePhaseFirstJackpot = purgePhaseActive && !firstPurgeJackpotPaid;
         uint8 percentAfter = percentBefore;
         if (purchasePhaseActive) {
             percentAfter = _currentEarlyPurgePercent();
@@ -74,13 +75,19 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
             if (thresholdTrigger) {
                 boostedBps += 300;
             }
+            if (purgePhaseFirstJackpot) {
+                boostedBps += 300;
+            }
             if (boostedBps != 0) {
                 poolBps = boostedBps;
             }
 
             poolWei = (carryBal * poolBps) / 10_000;
             if (kickoffJackpot) {
-                firstEarlyJackpotPending = false;
+                firstEarlyJackpotPaid = true;
+            }
+            if (purgePhaseFirstJackpot) {
+                firstPurgeJackpotPaid = true;
             }
         }
 
