@@ -64,6 +64,9 @@ contract MockLinkToken {
 contract MockVRFCoordinator {
     uint64 private nextId = 1;
     uint96 private immutable subscriptionBalance;
+    uint256 public lastRequestId;
+    mapping(uint256 => address) private pendingConsumer;
+    mapping(uint256 => uint32) private pendingWordCounts;
 
     constructor(uint96 initialBalance) {
         subscriptionBalance = initialBalance;
@@ -71,15 +74,31 @@ contract MockVRFCoordinator {
 
     function requestRandomWords(VRFRandomWordsRequest calldata req) external returns (uint256 requestId) {
         requestId = nextId++;
-        uint32 count = req.numWords == 0 ? 1 : req.numWords;
+        pendingConsumer[requestId] = msg.sender;
+        pendingWordCounts[requestId] = req.numWords == 0 ? 1 : req.numWords;
+        lastRequestId = requestId;
+    }
+
+    function fulfill(address consumer, uint256 requestId, uint256 randomWord) external {
+        address target = pendingConsumer[requestId];
+        if (target != consumer || target == address(0)) revert("invalid request");
+        delete pendingConsumer[requestId];
+        uint32 count = pendingWordCounts[requestId];
+        if (count == 0) {
+            count = 1;
+        }
+        delete pendingWordCounts[requestId];
         uint256[] memory words = new uint256[](count);
         for (uint32 i; i < count; ) {
-            words[i] = uint256(keccak256(abi.encodePacked(block.timestamp, requestId, i, msg.sender)));
+            uint256 seed = randomWord == 0
+                ? uint256(keccak256(abi.encodePacked(block.timestamp, requestId, i, consumer)))
+                : randomWord;
+            words[i] = seed;
             unchecked {
                 ++i;
             }
         }
-        IPurgeGameRngConsumer(msg.sender).rawFulfillRandomWords(requestId, words);
+        IPurgeGameRngConsumer(consumer).rawFulfillRandomWords(requestId, words);
     }
 
     function getSubscription(
