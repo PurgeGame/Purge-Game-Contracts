@@ -39,6 +39,7 @@ abstract contract PurgeGameStorage {
     uint8 public gameState = 1;
     uint8 internal jackpotCounter;
     uint8 internal earlyPurgePercent;
+    bool internal firstEarlyJackpotPending;
     uint8 internal phase;
     uint16 internal lastExterminatedTrait = 420;
     bool internal rngLockedFlag;

@@ -110,10 +110,49 @@ const MINIMUM_PRIZE_POOL_WEI = ethers.parseEther("125");
 const INITIAL_CARRYOVER_WEI = ethers.parseEther("40");
 const MAP_PURCHASE_TARGET_WEI = ethers.parseEther("150");
 const JACKPOT_LEVEL_CAP = 10;
-const LEVEL_COUNT = 5;
+const LEVEL_COUNT = 10;
 const FUTURE_MAP_OPTIONS = { baseQuantity: 100, quantityVariance: 20, minBuyers: 8, maxBuyers: 12 };
 const EARLY_PURGE_UNLOCK_THRESHOLD = 30;
 const EARLY_PURGE_BONUS_THRESHOLD = 50;
+const MILLION = 1_000_000n;
+const STRATEGY_MAP_QUANTITY = 4;
+const QUEST_TYPES = {
+  MINT_ANY: 0,
+  MINT_ETH: 1,
+  FLIP: 2,
+  STAKE: 3,
+  AFFILIATE: 4,
+  PURGE: 5,
+  DECIMATOR: 6,
+};
+const QUEST_STAKE_REQUIRE_PRINCIPAL = 1;
+const QUEST_STAKE_REQUIRE_DISTANCE = 1 << 1;
+const QUEST_STAKE_REQUIRE_RISK = 1 << 2;
+const QUEST_COMPLETION_PARAMS = {
+  mintQuantity: 12,
+  purgeQuantity: 12,
+  flipAmount: 5000n * MILLION,
+  stakePrincipal: 12000n * MILLION,
+  stakeDistance: 120,
+  stakeRisk: 14,
+  affiliateAmount: 6000n * MILLION,
+  decimatorAmount: 10000n * MILLION,
+};
+const QUEST_MINT_ATTEMPT_LIMIT = 8;
+const STAKE_STRATEGY = {
+  playerCount: 10,
+  burnAmount: 5_000n * MILLION,
+  targetLead: 30,
+  risk: 5,
+  maxPerLevel: 1,
+};
+const NO_BONUS_STRATEGY = {
+  playerCount: 25,
+  quantity: STRATEGY_MAP_QUANTITY,
+  thresholdPercent: 50,
+  quantityRange: { min: STRATEGY_MAP_QUANTITY, max: STRATEGY_MAP_QUANTITY * 5 },
+  rngSeed: 0x5ab1en,
+};
 
 function createDeterministicRng(seed = 0x5150n) {
   const mask = (1n << 64n) - 1n;
@@ -229,68 +268,225 @@ function mapMinimumQuantity(level) {
   return 4;
 }
 
-async function mintMapsForFutureLevel(
+async function primeNextLevelMaps({
+  levelValue,
   purgeGame,
   purgeNFT,
   players,
   contributions,
-  rng,
-  options = {}
-) {
-  if (typeof rng !== "function") {
-    throw new Error("mintMapsForFutureLevel requires an RNG function");
+  referralCodes,
+  stageFundingPlan,
+}) {
+  const nextLevelValue = levelValue + 1;
+  if (!stageFundingPlan.has(nextLevelValue)) {
+    return { buyers: 0, quantity: 0n, totalCost: 0n };
   }
-  const currentLevel = Number(await purgeGame.level());
-  const targetLevel = currentLevel + 1;
-  const baseQuantity = options.baseQuantity ?? mapMinimumQuantity(targetLevel);
-  const quantityVariance = Math.max(0, options.quantityVariance ?? 0);
-  const quantity = baseQuantity + (quantityVariance > 0 ? rng(quantityVariance + 1) : 0);
-  if (quantity === 0) {
-    return { buyers: 0, quantity: 0, totalCost: 0n };
+  const nextPlan = stageFundingPlan.get(nextLevelValue);
+  const stageInfo = nextPlan.priorPurge;
+  const remaining = stageInfo.target > stageInfo.contributed ? stageInfo.target - stageInfo.contributed : 0n;
+  if (remaining === 0n) {
+    return { buyers: 0, quantity: 0n, totalCost: 0n };
   }
+  console.log(
+    `Priming level ${nextLevelValue} with ${ethers.formatEther(remaining)} ETH in map mints (${stageInfo.contributed === 0n ? "initial 30%" : "top-up"})`
+  );
+  const { contributions: primeContributions, stats } = await seedContractWithMaps(
+    purgeGame,
+    purgeNFT,
+    players,
+    remaining,
+    undefined,
+    referralCodes,
+    nextLevelValue,
+    { exactAmount: true }
+  );
+  mergeContributionMaps(contributions, primeContributions);
+  stageInfo.contributed += stats.totalCost;
+  return stats;
+}
 
-  const mintPrice = await purgeGame.mintPrice();
-  const costPerBuyer = (mintPrice * BigInt(quantity) * 25n) / 100n;
-
-  const minBuyers = options.minBuyers ?? 2;
-  const maxBuyers = Math.max(minBuyers, options.maxBuyers ?? 5);
-  const buyerSpan = maxBuyers - minBuyers;
-  const buyerCount = minBuyers + (buyerSpan > 0 ? rng(buyerSpan + 1) : 0);
-  if (buyerCount === 0) {
-    return { buyers: 0, quantity, totalCost: 0n };
+function accumulateDailyMapActivity(target, addition) {
+  if (!addition) {
+    return target;
   }
-
-  const selected = [];
-  const seen = new Set();
-  while (selected.length < buyerCount && seen.size < players.length) {
-    const idx = rng(players.length);
-    if (seen.has(idx)) continue;
-    seen.add(idx);
-    selected.push(players[idx]);
-  }
-
-  for (const player of selected) {
-    await recordEarlyPurgeMint(purgeGame, targetLevel, quantity);
-    await (
-      await purgeNFT.connect(player).mintAndPurge(quantity, false, ethers.ZeroHash, {
-        value: costPerBuyer,
-      })
-    ).wait();
-    const prev = contributions.get(player.address) ?? 0n;
-    contributions.set(player.address, prev + costPerBuyer);
-    addLevelContribution(targetLevel, player.address, costPerBuyer);
-  }
-
-  if (selected.length !== 0) {
-    await processAllMapMints(purgeGame);
-  }
-
   return {
-    buyers: selected.length,
-    quantity,
-    totalCost: costPerBuyer * BigInt(selected.length),
+    buyers: target.buyers + (addition.buyers ?? 0),
+    quantity: target.quantity + (addition.quantity ?? 0n),
+    totalCost: target.totalCost + (addition.totalCost ?? 0n),
   };
 }
+
+async function runStrategyMapPurchases({
+  players,
+  purgeGame,
+  purgeNFT,
+  contributions,
+  referralCodes,
+  targetLevel,
+  quantity = STRATEGY_MAP_QUANTITY,
+  mintCountLedger,
+  quantityRange,
+  quantityRng,
+}) {
+  if (!players || players.length === 0) {
+    return { buyers: 0, quantity: 0n, totalCost: 0n };
+  }
+  const stats = { buyers: 0, quantity: 0n, totalCost: 0n };
+  const useRandomQuantity = Boolean(quantityRange);
+  const minQuantity = useRandomQuantity ? Math.max(1, Number(quantityRange.min ?? 1)) : quantity;
+  const maxQuantity = useRandomQuantity ? Math.max(minQuantity, Number(quantityRange.max ?? minQuantity)) : minQuantity;
+  const quantitySpan = maxQuantity - minQuantity + 1;
+  const rngFn =
+    useRandomQuantity && quantitySpan > 0
+      ? quantityRng ?? ((bound) => (bound <= 0 ? 0 : Math.floor(Math.random() * bound)))
+      : null;
+  for (const player of players) {
+    const randomOffset = useRandomQuantity ? rngFn(quantitySpan) : 0;
+    const playerQuantity = useRandomQuantity ? minQuantity + randomOffset : quantity;
+    if (playerQuantity <= 0) {
+      continue;
+    }
+    const spent = await executeStrategyMint({
+      player,
+      quantity: playerQuantity,
+      targetLevel,
+      purgeNFT,
+      purgeGame,
+      contributions,
+      referralCodes,
+    });
+    stats.buyers += 1;
+    stats.quantity += BigInt(playerQuantity);
+    stats.totalCost += spent;
+    if (mintCountLedger) {
+      const prevCount = mintCountLedger.get(player.address) ?? 0n;
+      mintCountLedger.set(player.address, prevCount + BigInt(playerQuantity));
+    }
+  }
+  return stats;
+}
+
+async function executeStrategyMint({
+  player,
+  quantity,
+  targetLevel,
+  purgeNFT,
+  purgeGame,
+  contributions,
+  referralCodes,
+}) {
+  const info = await purgeGame.gameInfo();
+  const price = info.price_;
+  const mapCost = (price * BigInt(quantity) * 25n) / 100n;
+  const affiliateCode = referralCodes.get(player.address) ?? ethers.ZeroHash;
+  await recordEarlyPurgeMint(purgeGame, targetLevel, quantity);
+  await (
+    await purgeNFT.connect(player).mintAndPurge(quantity, false, affiliateCode, {
+      value: mapCost,
+    })
+  ).wait();
+  const prev = contributions.get(player.address) ?? 0n;
+  contributions.set(player.address, prev + mapCost);
+  addLevelContribution(targetLevel, player.address, mapCost);
+  return mapCost;
+}
+
+async function runNoBonusMapStrategy({
+  players,
+  purgeGame,
+  purgeNFT,
+  contributions,
+  referralCodes,
+  targetLevel,
+  mintCountLedger,
+  executedLevels,
+  strategy = NO_BONUS_STRATEGY,
+}) {
+  if (!players || players.length === 0) {
+    return null;
+  }
+  if (executedLevels.has(targetLevel)) {
+    return null;
+  }
+  const info = await purgeGame.gameInfo();
+  const phaseValue = typeof info.phase_ === "bigint" ? Number(info.phase_) : Number(info.phase_ ?? 0);
+  const earlyPercent =
+    typeof info.earlyPurgePercent_ === "bigint" ? Number(info.earlyPurgePercent_) : Number(info.earlyPurgePercent_);
+  const threshold = strategy.thresholdPercent ?? 50;
+  if (phaseValue !== 3) {
+    return null;
+  }
+  if (earlyPercent >= threshold) {
+    return null;
+  }
+  let normalizedRange;
+  let rangeRng;
+  if (strategy.quantityRange) {
+    const minQuantity = Math.max(1, Number(strategy.quantityRange.min ?? 1));
+    const maxQuantity = Math.max(minQuantity, Number(strategy.quantityRange.max ?? minQuantity));
+    normalizedRange = { min: minQuantity, max: maxQuantity };
+    let baseSeed = 0x5150n;
+    if (strategy.rngSeed !== undefined) {
+      baseSeed = typeof strategy.rngSeed === "bigint" ? strategy.rngSeed : BigInt(strategy.rngSeed);
+    }
+    const seed = baseSeed ^ BigInt(targetLevel);
+    rangeRng = createDeterministicRng(seed);
+  }
+  const results = await runStrategyMapPurchases({
+    players,
+    purgeGame,
+    purgeNFT,
+    contributions,
+    referralCodes,
+    targetLevel,
+    quantity: strategy.quantity ?? STRATEGY_MAP_QUANTITY,
+    mintCountLedger,
+    quantityRange: normalizedRange,
+    quantityRng: rangeRng,
+  });
+  executedLevels.add(targetLevel);
+  return results;
+}
+
+async function runStakeStrategies({
+  purgecoin,
+  purgeGame,
+  players,
+  strategy,
+}) {
+  if (!players || players.length === 0) {
+    return [];
+  }
+  const stakes = [];
+  const maxPerLevel = strategy.maxPerLevel ?? players.length;
+  const targetLead = strategy.targetLead ?? 25;
+  const burnAmount = strategy.burnAmount ?? 0n;
+  const risk = strategy.risk ?? 3;
+  if (!burnAmount || burnAmount === 0n) {
+    return stakes;
+  }
+  const currentLevel = Number(await purgeGame.level());
+  const targetLevel = currentLevel + targetLead;
+  for (const player of players) {
+    if (stakes.length >= maxPerLevel) break;
+    const balance = await purgecoin.balanceOf(player.address);
+    if (balance < burnAmount) continue;
+    try {
+      await (await purgecoin.connect(player).stake(burnAmount, targetLevel, risk)).wait();
+      stakes.push({
+        player: player.address,
+        burnAmount,
+        targetLevel,
+        risk,
+        level: currentLevel,
+      });
+    } catch (err) {
+      console.warn(`Stake attempt failed for ${player.address}: ${err.message}`);
+    }
+  }
+  return stakes;
+}
+
 function collectCredits(purgeGame, receipts) {
   const iface = purgeGame.interface;
   const ordered = [];
@@ -318,7 +514,6 @@ async function seedContractWithMaps(
   purgeGame,
   purgeNFT,
   players,
-  mintPrice,
   targetWei,
   mapQty = 200,
   referralCodes = new Map(),
@@ -328,7 +523,6 @@ async function seedContractWithMaps(
   if (players.length === 0) throw new Error("No players available for seeding");
   const provider = ethers.provider;
   const gameAddress = await purgeGame.getAddress();
-  const mapCost = (mintPrice * BigInt(mapQty) * 25n) / 100n;
   const contributions = new Map();
   const stats = { buyers: 0, quantity: 0n, totalCost: 0n };
   const exactAmount = options.exactAmount ?? false;
@@ -356,6 +550,9 @@ async function seedContractWithMaps(
 
     const player = players[iterations % players.length];
     iterations += 1;
+    const info = await purgeGame.gameInfo();
+    const currentPrice = info.price_;
+    const mapCost = (currentPrice * BigInt(mapQty) * 25n) / 100n;
     const affiliateCode = referralCodes.get(player.address) ?? ethers.ZeroHash;
     const prev = contributions.get(player.address) ?? 0n;
     contributions.set(player.address, prev + mapCost);
@@ -642,7 +839,6 @@ async function fulfillStageFunding({
   purgeGame,
   purgeNFT,
   players,
-  mintPrice,
   contributions,
   referralCodes = new Map(),
 }) {
@@ -661,7 +857,6 @@ async function fulfillStageFunding({
     purgeGame,
     purgeNFT,
     players,
-    mintPrice,
     remaining,
     undefined,
     referralCodes,
@@ -896,6 +1091,225 @@ async function claimPlayerWinnings(purgeGame, players, realized) {
   return { claimedTotal, claimantCount, perPlayer };
 }
 
+async function completeDailyQuests({
+  purgecoin,
+  purgeNFT,
+  purgeGame,
+  questPlayers,
+  referralCodes,
+  contributions,
+  mintCountLedger,
+  questTargetLevel,
+  coinBank,
+}) {
+  if (!questPlayers || questPlayers.length === 0) {
+    return;
+  }
+  const quests = await purgecoin.getActiveQuests();
+  for (let slot = 0; slot < quests.length; slot += 1) {
+    const quest = quests[slot];
+    if (!quest || quest.day === 0n) continue;
+    for (const player of questPlayers) {
+      await ensureQuestSlotComplete(
+        {
+          purgecoin,
+          purgeNFT,
+          purgeGame,
+          referralCodes,
+          contributions,
+          mintCountLedger,
+          questTargetLevel,
+          coinBank,
+        },
+        player,
+        quest,
+        slot
+      );
+    }
+  }
+}
+
+async function ensureQuestSlotComplete(context, player, quest, slot) {
+  const { purgecoin } = context;
+  const [, , , completed] = await purgecoin.playerQuestStates(player.address);
+  if (completed[slot]) {
+    return;
+  }
+  await performQuestAction(context, player, quest, slot);
+}
+
+async function performQuestAction(context, player, quest, slot) {
+  const {
+    purgecoin,
+    purgeNFT,
+    purgeGame,
+    referralCodes,
+    contributions,
+    mintCountLedger,
+    questTargetLevel,
+    coinBank,
+  } = context;
+  const questType = Number(quest.questType);
+  switch (questType) {
+    case QUEST_TYPES.MINT_ANY: {
+      await performQuestCoinMint({
+        purgeNFT,
+        purgeGame,
+        purgecoin,
+        player,
+        referralCodes,
+        coinBank,
+        quantity: QUEST_COMPLETION_PARAMS.mintQuantity,
+        contributions,
+        targetLevel: questTargetLevel,
+        mintCountLedger,
+        slot,
+      });
+      await purgecoin.harnessQuestHandleMint(player.address, QUEST_COMPLETION_PARAMS.mintQuantity, false);
+      break;
+    }
+    case QUEST_TYPES.MINT_ETH:
+      await performQuestEthMint({
+        purgecoin,
+        player,
+        purgeNFT,
+        purgeGame,
+        contributions,
+        referralCodes,
+        targetLevel: questTargetLevel,
+        mintCountLedger,
+        quantity: QUEST_COMPLETION_PARAMS.mintQuantity,
+        slot,
+      });
+      await purgecoin.harnessQuestHandleMint(player.address, QUEST_COMPLETION_PARAMS.mintQuantity, true);
+      break;
+    case QUEST_TYPES.FLIP:
+      await purgecoin.harnessQuestHandleFlip(player.address, QUEST_COMPLETION_PARAMS.flipAmount);
+      break;
+    case QUEST_TYPES.STAKE: {
+      const mask = Number(quest.stakeMask ?? 0);
+      const riskTarget =
+        (mask & QUEST_STAKE_REQUIRE_RISK) !== 0
+          ? Math.max(Number(quest.stakeRisk), QUEST_COMPLETION_PARAMS.stakeRisk)
+          : QUEST_COMPLETION_PARAMS.stakeRisk;
+      const distanceTarget = QUEST_COMPLETION_PARAMS.stakeDistance;
+      await purgecoin.harnessQuestHandleStake(
+        player.address,
+        QUEST_COMPLETION_PARAMS.stakePrincipal,
+        distanceTarget,
+        riskTarget
+      );
+      break;
+    }
+    case QUEST_TYPES.AFFILIATE:
+      await purgecoin.harnessQuestHandleAffiliate(player.address, QUEST_COMPLETION_PARAMS.affiliateAmount);
+      break;
+    case QUEST_TYPES.PURGE:
+      await purgecoin.harnessQuestHandlePurge(player.address, QUEST_COMPLETION_PARAMS.purgeQuantity);
+      break;
+    case QUEST_TYPES.DECIMATOR:
+      await purgecoin.harnessQuestHandleDecimator(player.address, QUEST_COMPLETION_PARAMS.decimatorAmount);
+      break;
+    default:
+      break;
+  }
+}
+
+async function ensureCoinBalance(purgecoin, funder, player, requiredAmount) {
+  if (!requiredAmount || requiredAmount === 0n) {
+    return;
+  }
+  const current = await purgecoin.balanceOf(player.address);
+  if (current >= requiredAmount) {
+    return;
+  }
+  const delta = requiredAmount - current;
+  await (await purgecoin.connect(funder).transfer(player.address, delta)).wait();
+}
+
+async function performQuestCoinMint({
+  purgeNFT,
+  purgeGame,
+  purgecoin,
+  player,
+  referralCodes,
+  coinBank,
+  quantity,
+  contributions,
+  targetLevel,
+  mintCountLedger,
+  slot,
+}) {
+  const info = await purgeGame.gameInfo();
+  const stateValue = typeof info.gameState_ === "bigint" ? Number(info.gameState_) : Number(info.gameState_);
+  let mintLevelValue = Number(await purgeGame.level());
+  if (stateValue === 3) {
+    mintLevelValue += 1;
+  }
+  const coinUnlocked = await purgeGame.coinMintUnlock(mintLevelValue);
+  if (!coinUnlocked) {
+    await performQuestEthMint({
+      purgecoin,
+      player,
+      purgeNFT,
+      purgeGame,
+      contributions,
+      referralCodes,
+      targetLevel,
+      mintCountLedger,
+      quantity,
+      slot,
+    });
+    return;
+  }
+  const priceUnit = await purgeGame.coinPriceUnit();
+  const baseCost = BigInt(quantity) * (priceUnit / 4n);
+  for (let attempt = 0; attempt < QUEST_MINT_ATTEMPT_LIMIT; attempt += 1) {
+    await ensureCoinBalance(purgecoin, coinBank, player, baseCost);
+    const affiliateCode = referralCodes.get(player.address) ?? ethers.ZeroHash;
+    await (await purgeNFT.connect(player).mintAndPurge(quantity, true, affiliateCode)).wait();
+    const [, , , completed] = await purgecoin.playerQuestStates(player.address);
+    if (completed[slot]) {
+      return;
+    }
+  }
+  throw new Error("Coin quest mint did not complete within attempt limit");
+}
+
+async function performQuestEthMint({
+  purgecoin,
+  player,
+  purgeNFT,
+  purgeGame,
+  contributions,
+  referralCodes,
+  targetLevel,
+  mintCountLedger,
+  quantity,
+  slot,
+}) {
+  for (let attempt = 0; attempt < QUEST_MINT_ATTEMPT_LIMIT; attempt += 1) {
+    await executeStrategyMint({
+      player,
+      quantity,
+      targetLevel,
+      purgeNFT,
+      purgeGame,
+      contributions,
+      referralCodes,
+    });
+    if (mintCountLedger) {
+      const prev = mintCountLedger.get(player.address) ?? 0n;
+      mintCountLedger.set(player.address, prev + BigInt(quantity));
+    }
+    const [, , , completed] = await purgecoin.playerQuestStates(player.address);
+    if (completed[slot]) {
+      return;
+    }
+  }
+  throw new Error("ETH quest mint did not complete within attempt limit");
+}
+
 describe("PurgeGame money flow simulation", function () {
   this.timeout(0);
 
@@ -903,10 +1317,29 @@ describe("PurgeGame money flow simulation", function () {
     const [primaryFunder, secondaryFunder] = await ethers.getSigners();
     const firstBatch = await createWallets(50, primaryFunder, ethers.parseEther("50"));
     const secondBatch = await createWallets(50, secondaryFunder, ethers.parseEther("50"));
-    const players = [...firstBatch, ...secondBatch];
+    const state3MapOnlyPlayers = await createWallets(25, primaryFunder, ethers.parseEther("50"));
+    const questStrategyPlayers = await createWallets(25, secondaryFunder, ethers.parseEther("50"));
+    const noBonusPlayers = await createWallets(
+      NO_BONUS_STRATEGY.playerCount,
+      primaryFunder,
+      ethers.parseEther("50")
+    );
+    const basePlayers = [...firstBatch, ...secondBatch];
+    const strategyPlayers = [...state3MapOnlyPlayers, ...questStrategyPlayers];
+    const players = [...basePlayers, ...strategyPlayers, ...noBonusPlayers];
+    const stageFundingPlayers = basePlayers;
+    const questCompleterPlayers = questStrategyPlayers;
+    const state3MapPlayers = [...state3MapOnlyPlayers, ...questStrategyPlayers];
+    const noBonusStrategyPlayers = noBonusPlayers;
+    const stakingPlayers = basePlayers.slice(0, Math.min(STAKE_STRATEGY.playerCount, basePlayers.length));
+    const groupDefinitions = [
+      { label: "Map-only strategy", players: state3MapOnlyPlayers },
+      { label: "Quest strategy", players: questStrategyPlayers },
+      { label: "No-bonus strategy", players: noBonusStrategyPlayers },
+    ];
 
     const system = await deploySystem();
-    const { purgeGame, purgeNFT, purgeTrophies, purgecoin } = system;
+    const { purgeGame, purgeNFT, purgeTrophies, purgecoin, deployer } = system;
     const purgeGameAddress = await purgeGame.getAddress();
     const purgeTrophiesAddress = await purgeTrophies.getAddress();
 
@@ -915,7 +1348,6 @@ describe("PurgeGame money flow simulation", function () {
       maxBatch: 10,
     });
 
-    const mintPrice = await purgeGame.mintPrice();
     const priceCoinUnit = await purgeGame.coinPriceUnit();
 
     const targetPerLevel = [];
@@ -929,7 +1361,7 @@ describe("PurgeGame money flow simulation", function () {
     for (let i = 0; i < LEVEL_COUNT; i += 1) {
       const levelValue = i + 1;
       const total = targetPerLevel[i];
-      const priorPurgeTarget = (total * 40n) / 100n;
+      const priorPurgeTarget = (total * 30n) / 100n;
       const day1Target = (total * 20n) / 100n;
       const day2Target = total - priorPurgeTarget - day1Target;
       stageFundingPlan.set(levelValue, {
@@ -941,12 +1373,15 @@ describe("PurgeGame money flow simulation", function () {
     const nextLevelValue = LEVEL_COUNT + 1;
     const nextLevelTotal = currentTarget;
     stageFundingPlan.set(nextLevelValue, {
-      priorPurge: { target: (nextLevelTotal * 40n) / 100n, contributed: 0n },
+      priorPurge: { target: (nextLevelTotal * 30n) / 100n, contributed: 0n },
       day1: { target: (nextLevelTotal * 20n) / 100n, contributed: 0n },
-      day2: { target: nextLevelTotal - ((nextLevelTotal * 40n) / 100n) - ((nextLevelTotal * 20n) / 100n), contributed: 0n },
+      day2: { target: nextLevelTotal - ((nextLevelTotal * 30n) / 100n) - ((nextLevelTotal * 20n) / 100n), contributed: 0n },
     });
 
     const contributions = new Map();
+    const strategyMintCounts = new Map();
+    const noBonusExecutedLevels = new Set();
+    const stakeEvents = [];
     const realizedWinnings = new Map();
     resetEarlyPurgeTracker();
     const initialCoinSnapshot = await snapshotPlayerCoinState(purgecoin, players);
@@ -977,8 +1412,7 @@ describe("PurgeGame money flow simulation", function () {
       fundingPlan: stageFundingPlan,
       purgeGame,
       purgeNFT,
-      players,
-      mintPrice,
+      players: stageFundingPlayers,
       contributions,
       referralCodes: referralAssignments,
     });
@@ -995,6 +1429,26 @@ describe("PurgeGame money flow simulation", function () {
 
       await purgeGame.harnessSetState(levelValue, 0, 2);
       await processAllMapMints(purgeGame);
+      const stakeEntries = await runStakeStrategies({
+        purgecoin,
+        purgeGame,
+        players: stakingPlayers,
+        strategy: STAKE_STRATEGY,
+      });
+      if (stakeEntries.length !== 0) {
+        stakeEvents.push(...stakeEntries);
+      }
+      if (levelValue === 1 && state3MapPlayers.length !== 0) {
+        await runStrategyMapPurchases({
+          players: state3MapPlayers,
+          purgeGame,
+          purgeNFT,
+          contributions,
+          referralCodes: referralAssignments,
+          targetLevel: levelValue,
+          mintCountLedger: strategyMintCounts,
+        });
+      }
 
       await fulfillStageFunding({
         stageName: "day1",
@@ -1002,22 +1456,10 @@ describe("PurgeGame money flow simulation", function () {
         fundingPlan: stageFundingPlan,
         purgeGame,
         purgeNFT,
-        players,
-        mintPrice,
+        players: stageFundingPlayers,
         contributions,
         referralCodes: referralAssignments,
       });
-      await processAllMapMints(purgeGame);
-
-      await mintMapsForFutureLevel(
-        purgeGame,
-        purgeNFT,
-        players,
-        contributions,
-        rng,
-        FUTURE_MAP_OPTIONS
-      );
-
       await processAllMapMints(purgeGame);
 
       await fulfillStageFunding({
@@ -1026,22 +1468,10 @@ describe("PurgeGame money flow simulation", function () {
         fundingPlan: stageFundingPlan,
         purgeGame,
         purgeNFT,
-        players,
-        mintPrice,
+        players: stageFundingPlayers,
         contributions,
         referralCodes: referralAssignments,
       });
-      await processAllMapMints(purgeGame);
-
-      await mintMapsForFutureLevel(
-        purgeGame,
-        purgeNFT,
-        players,
-        contributions,
-        rng,
-        FUTURE_MAP_OPTIONS
-      );
-
       await processAllMapMints(purgeGame);
 
       const claimableBefore = await snapshotClaimableEth(purgeGame, players);
@@ -1055,8 +1485,7 @@ describe("PurgeGame money flow simulation", function () {
         const seedResult = await seedContractWithMaps(
           purgeGame,
           purgeNFT,
-          players,
-          mintPrice,
+          stageFundingPlayers,
           targetAbsolute,
           undefined,
           referralAssignments,
@@ -1069,6 +1498,21 @@ describe("PurgeGame money flow simulation", function () {
       expect(preInfo.prizePoolCurrent).to.be.gte(desiredPrize);
       const levelMintPriceWei = preInfo.price_;
       const totalPoolBefore = preInfo.carry_ + preInfo.prizePoolCurrent;
+      await purgeGame.harnessSetState(levelValue, 3, 2);
+      const noBonusStats = await runNoBonusMapStrategy({
+        players: noBonusStrategyPlayers,
+        purgeGame,
+        purgeNFT,
+        contributions,
+        referralCodes: referralAssignments,
+        targetLevel: levelValue,
+        mintCountLedger: strategyMintCounts,
+        executedLevels: noBonusExecutedLevels,
+        strategy: NO_BONUS_STRATEGY,
+      });
+      if (noBonusStats && noBonusStats.totalCost !== 0n) {
+        await processAllMapMints(purgeGame);
+      }
 
       await purgeGame.harnessSetState(levelValue, 4, 2);
       const mapRngWord = randomJackpotWord(`map-${levelValue}`);
@@ -1187,7 +1631,30 @@ describe("PurgeGame money flow simulation", function () {
       await snapshotMoneyBuckets(`Level ${levelValue} after map jackpot`, bucketContext);
 
       await purgeGame.harnessSetState(levelValue, 6, 3);
+      let pendingDailyMapActivity = { buyers: 0, quantity: 0n, totalCost: 0n };
       const nextLevelValue = levelValue + 1;
+      const strategyActivity = await runStrategyMapPurchases({
+        players: state3MapPlayers,
+        purgeGame,
+        purgeNFT,
+        contributions,
+        referralCodes: referralAssignments,
+        targetLevel: nextLevelValue,
+        mintCountLedger: strategyMintCounts,
+      });
+      pendingDailyMapActivity = accumulateDailyMapActivity(pendingDailyMapActivity, strategyActivity);
+      const primeActivity = await primeNextLevelMaps({
+        levelValue,
+        purgeGame,
+        purgeNFT,
+        players: stageFundingPlayers,
+        contributions,
+        referralCodes: referralAssignments,
+        stageFundingPlan,
+      });
+      pendingDailyMapActivity = accumulateDailyMapActivity(pendingDailyMapActivity, primeActivity);
+      await processAllMapMints(purgeGame);
+
       const daySummaries = [];
       let jackpotsExecuted = 0;
       while (jackpotsExecuted < JACKPOT_LEVEL_CAP) {
@@ -1201,25 +1668,12 @@ describe("PurgeGame money flow simulation", function () {
         const carryBefore = infoBefore.carry_;
         const prizePoolBefore = infoBefore.prizePoolCurrent;
 
-        let dailyMapActivity = { buyers: 0, quantity: 0, totalCost: 0n };
-        if (stageFundingPlan.has(nextLevelValue)) {
-          const stageStats = await fulfillStageFunding({
-            stageName: "priorPurge",
-            levelValue: nextLevelValue,
-            fundingPlan: stageFundingPlan,
-            purgeGame,
-            purgeNFT,
-            players,
-            mintPrice,
-            contributions,
-            referralCodes: referralAssignments,
-          });
-          if (stageStats && stageStats.totalCost !== 0n) {
-            dailyMapActivity.buyers += stageStats.buyers;
-            dailyMapActivity.quantity += Number(stageStats.quantity);
-            dailyMapActivity.totalCost += stageStats.totalCost;
-          }
-        }
+        let dailyMapActivity = {
+          buyers: pendingDailyMapActivity.buyers,
+          quantity: Number(pendingDailyMapActivity.quantity),
+          totalCost: pendingDailyMapActivity.totalCost,
+        };
+        pendingDailyMapActivity = { buyers: 0, quantity: 0n, totalCost: 0n };
 
         const keepRunning = await purgeGame.harnessRunDailyJackpot.staticCall(dayRng);
         await (await purgeGame.harnessRunDailyJackpot(dayRng)).wait();
@@ -1249,6 +1703,18 @@ describe("PurgeGame money flow simulation", function () {
           mapBuyers: dailyMapActivity.buyers,
           mapQuantity: dailyMapActivity.quantity,
           mapSpent: dailyMapActivity.totalCost,
+        });
+
+        await completeDailyQuests({
+          purgecoin,
+          purgeNFT,
+          purgeGame,
+          questPlayers: questCompleterPlayers,
+          referralCodes: referralAssignments,
+          contributions,
+          mintCountLedger: strategyMintCounts,
+          questTargetLevel: nextLevelValue,
+          coinBank: deployer,
         });
 
         if (!keepRunning) {
@@ -1342,6 +1808,7 @@ describe("PurgeGame money flow simulation", function () {
     }
 
     const profitRows = [];
+    const playerSummaries = new Map();
     let profitablePlayers = 0;
     let totalSpent = 0n;
     let totalWinnings = totalTrophyDeferred;
@@ -1363,6 +1830,14 @@ describe("PurgeGame money flow simulation", function () {
       const coinAwardTotal =
         coinStateTotal(finalCoinSnapshot.get(player.address)) -
         coinStateTotal(initialCoinSnapshot.get(player.address));
+      playerSummaries.set(player.address, {
+        spent,
+        ethWinnings: winnings,
+        coinValueWei,
+        totalValue: winnings + coinValueWei,
+        netWei: valuedNet,
+        coinAwardTotal,
+      });
       profitRows.push({
         address: shortenAddress(player.address),
         spent: formatEth(spent),
@@ -1411,6 +1886,113 @@ describe("PurgeGame money flow simulation", function () {
       }
     }
     reportEarlyPurgeMintStats();
+    if (stakeEvents.length !== 0) {
+      let totalStakeBurned = 0n;
+      const stakeRows = stakeEvents.map((entry) => {
+        totalStakeBurned += entry.burnAmount;
+        return {
+          level: entry.level,
+          targetLevel: entry.targetLevel,
+          risk: entry.risk,
+          burn: formatCoin(entry.burnAmount),
+          player: shortenAddress(entry.player),
+        };
+      });
+      console.log(
+        `Stake strategy placed ${stakeEvents.length} stakes burning ${formatCoin(totalStakeBurned)} total`
+      );
+      console.table(stakeRows.slice(-10));
+    }
+    if (groupDefinitions.length !== 0) {
+      const cohortRows = [];
+      for (const group of groupDefinitions) {
+        let groupSpent = 0n;
+        let groupValue = 0n;
+        let groupNet = 0n;
+        let groupCoinAwarded = 0n;
+        let groupMintCount = 0n;
+        for (const player of group.players) {
+          const summary = playerSummaries.get(player.address);
+          if (!summary) continue;
+          groupSpent += summary.spent;
+          groupValue += summary.totalValue;
+          groupNet += summary.netWei;
+          groupCoinAwarded += summary.coinAwardTotal;
+          groupMintCount += strategyMintCounts.get(player.address) ?? 0n;
+        }
+        const coinPerMint = groupMintCount === 0n ? 0n : groupCoinAwarded / groupMintCount;
+        const playersDetailed = group.players
+          .map((player) => {
+            const summary = playerSummaries.get(player.address);
+            if (!summary) return null;
+            const questMints = strategyMintCounts.get(player.address) ?? 0n;
+            return {
+              address: player.address,
+              netWei: summary.netWei,
+              spent: summary.spent,
+              totalValue: summary.totalValue,
+              coinAwardTotal: summary.coinAwardTotal,
+              questMints,
+            };
+          })
+          .filter(Boolean);
+        cohortRows.push({
+          group: group.label,
+          players: group.players.length,
+          spent: formatEth(groupSpent),
+          winnings: formatEth(groupValue),
+          net: formatEth(groupNet),
+          coinAwarded: formatCoin(groupCoinAwarded),
+          mapsMinted: groupMintCount.toString(),
+          coinPerMint: groupMintCount === 0n ? "-" : formatCoin(coinPerMint),
+          playersDetailed,
+        });
+      }
+      console.log("Strategy cohort profitability");
+      console.table(
+        cohortRows.map((row) => ({
+          group: row.group,
+          players: row.players,
+          spent: row.spent,
+          winnings: row.winnings,
+          net: row.net,
+          coinAwarded: row.coinAwarded,
+          mapsMinted: row.mapsMinted,
+          coinPerMint: row.coinPerMint,
+        }))
+      );
+      for (const row of cohortRows) {
+        if (!row.playersDetailed || row.playersDetailed.length === 0) continue;
+        const sorted = [...row.playersDetailed].sort((a, b) => {
+          if (a.netWei === b.netWei) return 0;
+          return a.netWei < b.netWei ? 1 : -1;
+        });
+        const top = sorted.slice(0, 3);
+        const bottom = sorted.slice(-3).reverse();
+        console.log(`${row.group} top 3`);
+        console.table(
+          top.map((entry) => ({
+            player: shortenAddress(entry.address),
+            net: formatEth(entry.netWei),
+            spent: formatEth(entry.spent),
+            winnings: formatEth(entry.totalValue),
+            coinAwarded: formatCoin(entry.coinAwardTotal),
+            questMints: entry.questMints.toString(),
+          }))
+        );
+        console.log(`${row.group} bottom 3`);
+        console.table(
+          bottom.map((entry) => ({
+            player: shortenAddress(entry.address),
+            net: formatEth(entry.netWei),
+            spent: formatEth(entry.spent),
+            winnings: formatEth(entry.totalValue),
+            coinAwarded: formatCoin(entry.coinAwardTotal),
+            questMints: entry.questMints.toString(),
+          }))
+        );
+      }
+    }
 
     await snapshotMoneyBuckets("Simulation complete", bucketContext);
   });

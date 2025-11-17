@@ -39,8 +39,14 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         IPurgeGameTrophiesModule trophiesContract
     ) external {
         uint8 percentBefore = earlyPurgePercent;
-        uint8 percentAfter = _currentEarlyPurgePercent();
-        earlyPurgePercent = percentAfter;
+        bool kickoffJackpot = firstEarlyJackpotPending;
+        bool purchasePhaseActive = (gameState == 2 && phase <= 2 && !kickoffJackpot);
+        bool purgePhaseActive = (gameState == 3);
+        uint8 percentAfter = percentBefore;
+        if (purchasePhaseActive) {
+            percentAfter = _currentEarlyPurgePercent();
+            earlyPurgePercent = percentAfter;
+        }
 
         if (isDaily) {
             _handleDailyJackpot(lvl, randWord, coinContract, trophiesContract);
@@ -53,20 +59,29 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
 
         bool coinOnly = percentBefore >= EARLY_PURGE_COIN_ONLY_THRESHOLD;
         uint256 poolWei;
-        if (!coinOnly && gameState == 2 && phase <= 2) {
+        if (!coinOnly && (purchasePhaseActive || purgePhaseActive || kickoffJackpot)) {
             uint256 carryBal = carryOver;
-            uint256 poolBps = 50; // default 0.5%
-            bool initialTrigger = percentBefore == 0;
-            bool thresholdTrigger = percentBefore < EARLY_PURGE_COIN_ONLY_THRESHOLD &&
+            uint256 poolBps = kickoffJackpot ? 300 : 50; // default 0.5% unless first jackpot
+            bool initialTrigger = kickoffJackpot;
+            bool thresholdTrigger = purchasePhaseActive &&
+                percentBefore < EARLY_PURGE_COIN_ONLY_THRESHOLD &&
                 percentAfter >= EARLY_PURGE_COIN_ONLY_THRESHOLD;
+            uint256 boostedBps;
 
-            if (initialTrigger || thresholdTrigger) {
-                poolBps = 400;
-                if (initialTrigger && thresholdTrigger) {
-                    poolBps += 200;
-                }
+            if (initialTrigger) {
+                boostedBps += 300;
             }
+            if (thresholdTrigger) {
+                boostedBps += 300;
+            }
+            if (boostedBps != 0) {
+                poolBps = boostedBps;
+            }
+
             poolWei = (carryBal * poolBps) / 10_000;
+            if (kickoffJackpot) {
+                firstEarlyJackpotPending = false;
+            }
         }
 
         (uint256 coinPool, address biggestFlip) = coinContract.prepareCoinJackpot();
@@ -195,7 +210,6 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         prizePool += remainingPool;
         levelPrizePool += remainingPool;
 
-        earlyPurgePercent = 0;
         _rollQuestForJackpot(coinContract, rngWord, lvl);
 
         uint48 questDay = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
