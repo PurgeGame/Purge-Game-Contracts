@@ -42,7 +42,6 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         bool kickoffJackpot = !firstEarlyJackpotPaid;
         bool purchasePhaseActive = (gameState == 2 && phase <= 2 && !kickoffJackpot);
         bool purgePhaseActive = (gameState == 3);
-        bool purgePhaseFirstJackpot = purgePhaseActive && !firstPurgeJackpotPaid;
         uint8 percentAfter = percentBefore;
         if (purchasePhaseActive) {
             percentAfter = _currentEarlyPurgePercent();
@@ -75,9 +74,6 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
             if (thresholdTrigger) {
                 boostedBps += 300;
             }
-            if (purgePhaseFirstJackpot) {
-                boostedBps += 300;
-            }
             if (boostedBps != 0) {
                 poolBps = boostedBps;
             }
@@ -85,9 +81,6 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
             poolWei = (carryBal * poolBps) / 10_000;
             if (kickoffJackpot) {
                 firstEarlyJackpotPaid = true;
-            }
-            if (purgePhaseFirstJackpot) {
-                firstPurgeJackpotPaid = true;
             }
         }
 
@@ -441,7 +434,13 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         uint24 nextLevel = lvl + 1;
         (uint256 dailyCoinPool, ) = coinContract.prepareCoinJackpot();
         uint256 carryBal = carryOver;
-        uint256 futureEthPool = (carryBal * 50) / 10_000;
+        uint256 extraBps;
+        bool purgeKickoff = !firstPurgeJackpotPaid;
+        if (purgeKickoff) {
+            extraBps += 300;
+            firstPurgeJackpotPaid = true;
+        }
+        uint256 futureEthPool = (carryBal * (extraBps != 0 ? extraBps : 50)) / 10_000;
         if (futureEthPool > carryBal) futureEthPool = carryBal;
 
         uint256 dailyPaidEth = _payFutureDailyJackpot(
