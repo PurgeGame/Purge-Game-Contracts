@@ -374,7 +374,7 @@ contract PurgeGame is PurgeGameStorage {
                     if (traitCountsSeedQueued) {
                         uint32 targetCount = _purchaseTargetCountFromRaw(purchaseCountRaw);
                         if (traitRebuildCursor < targetCount) {
-                            _rebuildTraitCounts(cap);
+                            _rebuildTraitCounts(cap, targetCount);
                             break;
                         }
                         _seedTraitCounts();
@@ -1171,9 +1171,7 @@ contract PurgeGame is PurgeGameStorage {
     /// @notice Rebuild `traitRemaining` by scanning scheduled token traits in capped slices.
     /// @param tokenBudget Max tokens to process this call (0 => default 4,096).
     /// @return finished True when all tokens for the level have been incorporated.
-    function _rebuildTraitCounts(uint32 tokenBudget) private returns (bool finished) {
-        uint32 target = _purchaseTargetCountFromRaw(nft.purchaseCount());
-
+    function _rebuildTraitCounts(uint32 tokenBudget, uint32 target) private returns (bool finished) {
         uint32 cursor = traitRebuildCursor;
         if (cursor >= target) return true;
 
