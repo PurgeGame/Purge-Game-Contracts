@@ -1,6 +1,7 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-toolbox/network-helpers");
+const abiCoder = ethers.AbiCoder.defaultAbiCoder();
 
 async function deploySystem() {
   const [deployer] = await ethers.getSigners();
@@ -88,6 +89,7 @@ async function deploySystem() {
     vrf,
     link,
     deployer,
+    questModule,
   };
 }
 
@@ -123,6 +125,20 @@ const QUEST_TYPES = {
   PURGE: 5,
   DECIMATOR: 6,
 };
+const QUEST_SLOT_COUNT = 2;
+const QUEST_TIER_STREAK_SPAN = 7;
+const QUEST_TIER_MAX_INDEX = 10;
+const QUEST_MIN_MINT = 1;
+const QUEST_MIN_TOKEN = 250;
+const QUEST_PACKED_VALUES = {
+  mintAny: 0x0000000000000000000000080008000800080008000700060005000400030002n,
+  mintEth: 0x0000000000000000000000050005000400040004000300030002000200020001n,
+  flip: 0x0000000000000000000009c409c408fc076c060e04e203e80320028a01f40190n,
+  stakePrincipal: 0x0000000000000000000009c409c40898072105dc04c903e8033902a3020d0190n,
+  stakeDistanceMin: 0x00000000000000000000001900190019001900190019001900190014000f000an,
+  stakeDistanceMax: 0x00000000000000000000004b004b004b004b00460041003c00370032002d0028n,
+  affiliate: 0x00000000000000000000060e060e060e060e060e060e04e203e80320028a01f4n,
+};
 const QUEST_STAKE_REQUIRE_PRINCIPAL = 1;
 const QUEST_STAKE_REQUIRE_DISTANCE = 1 << 1;
 const QUEST_STAKE_REQUIRE_RISK = 1 << 2;
@@ -137,6 +153,9 @@ const QUEST_COMPLETION_PARAMS = {
   decimatorAmount: 10000n * MILLION,
 };
 const QUEST_MINT_ATTEMPT_LIMIT = 8;
+const QUEST_FLIP_ATTEMPT_LIMIT = QUEST_MINT_ATTEMPT_LIMIT * 2;
+const QUEST_STAKE_MATURITY_BUFFER = 10;
+const QUEST_STAKE_DISTANCE_STEP = 10;
 const QUEST_PREFUND_COINS = 5_000n * MILLION;
 const STAKE_STRATEGY = {
   playerCount: 10,
@@ -666,7 +685,6 @@ function mergeContributionMaps(target, additions) {
 }
 
 const levelContributions = new Map();
-const questStakeOffsets = new Map();
 
 function addLevelContribution(level, player, amount) {
   if (!levelContributions.has(level)) {
@@ -1228,6 +1246,7 @@ async function claimPlayerWinnings(purgeGame, players, realized) {
 
 async function completeDailyQuests({
   purgecoin,
+  questModule,
   purgeNFT,
   purgeGame,
   questPlayers,
@@ -1245,14 +1264,13 @@ async function completeDailyQuests({
   if (!questPlayers || questPlayers.length === 0) {
     return;
   }
-  const quests = await purgecoin.getActiveQuests();
-  for (let slot = 0; slot < quests.length; slot += 1) {
-    const quest = quests[slot];
-    if (!quest || quest.day === 0n) continue;
+  const questTiers = await snapshotQuestTiers(questModule, questPlayers);
+  for (let slot = 0; slot < QUEST_SLOT_COUNT; slot += 1) {
     for (const player of questPlayers) {
       await ensureQuestSlotComplete(
         {
           purgecoin,
+          questModule,
           purgeNFT,
           purgeGame,
           referralCodes,
@@ -1265,25 +1283,54 @@ async function completeDailyQuests({
           vrfConsumer,
           questMintOverrides,
           questAffiliateSupporters,
+          questTiers,
         },
         player,
-        quest,
         slot
       );
     }
   }
 }
 
-async function ensureQuestSlotComplete(context, player, quest, slot) {
+async function ensureQuestSlotComplete(context, player, slot) {
   const { purgecoin } = context;
   const [, , , completed] = await purgecoin.playerQuestStates(player.address);
   if (completed[slot]) {
     return;
   }
-  await performQuestAction(context, player, quest, slot);
+  const questData = await resolveQuestSlot(context, slot);
+  if (!questData) {
+    return;
+  }
+  const { quest, questDetail } = questData;
+  await performQuestAction(context, player, quest, slot, questDetail);
 }
 
-async function performQuestAction(context, player, quest, slot) {
+async function resolveQuestSlot(context, slot) {
+  const { purgecoin, questModule } = context;
+  const [quests, questDetails] = await Promise.all([purgecoin.getActiveQuests(), questModule.getQuestDetails()]);
+  if (!quests || quests.length <= slot) return null;
+  const quest = quests[slot];
+  if (!quest || quest.day === 0n) return null;
+  const detail = questDetails?.[slot];
+  if (!detail || detail.day === 0n) {
+    return { quest, questDetail: undefined };
+  }
+  return { quest, questDetail: detail };
+}
+
+async function refreshQuestIfChanged(context, quest, slot) {
+  const next = await resolveQuestSlot(context, slot);
+  if (!next || !next.quest || next.quest.day === 0n) {
+    return { questChanged: true, quest: undefined, questDetail: undefined };
+  }
+  if (!quest || next.quest.day !== quest.day || next.quest.questType !== quest.questType) {
+    return { questChanged: true, quest: next.quest, questDetail: next.questDetail };
+  }
+  return null;
+}
+
+async function performQuestAction(context, player, quest, slot, questDetail) {
   const {
     purgecoin,
     purgeNFT,
@@ -1298,66 +1345,157 @@ async function performQuestAction(context, player, quest, slot) {
     vrfConsumer,
     questMintOverrides,
     questAffiliateSupporters,
+    questTiers,
+    questModule,
   } = context;
-  const questType = Number(quest.questType);
-  switch (questType) {
-    case QUEST_TYPES.MINT_ANY: {
-      await performQuestCoinMint({
-        purgeNFT,
-        purgeGame,
-        purgecoin,
-        player,
-        referralCodes,
-        playerAffiliateCodes,
-        coinBank,
-        quantity: QUEST_COMPLETION_PARAMS.mintQuantity,
-        contributions,
-        targetLevel: questTargetLevel,
-        mintCountLedger,
-        slot,
-        vrf,
-        vrfConsumer,
-        questMintOverrides,
-        questAffiliateSupporters,
-      });
-      break;
+  let activeQuest = quest;
+  let activeQuestDetail = questDetail;
+  const maxRefreshes = 3;
+  for (let refresh = 0; refresh < maxRefreshes; refresh += 1) {
+    if (!activeQuest || activeQuest.day === 0n) {
+      return;
     }
-    case QUEST_TYPES.MINT_ETH:
-      await performQuestEthMint({
-        purgecoin,
-        player,
-        purgeNFT,
-        purgeGame,
-        contributions,
-        referralCodes,
-        playerAffiliateCodes,
-        targetLevel: questTargetLevel,
-        mintCountLedger,
-        quantity: QUEST_COMPLETION_PARAMS.mintQuantity,
-        slot,
-        vrf,
-        vrfConsumer,
-        questMintOverrides,
-        questAffiliateSupporters,
-      });
-      break;
-    case QUEST_TYPES.FLIP:
-      await performQuestFlip(context, player, slot);
-      break;
-    case QUEST_TYPES.STAKE:
-      await performQuestStake(context, player, quest, slot);
-      break;
-    case QUEST_TYPES.AFFILIATE:
-      await performQuestAffiliate(context, player, slot);
-      break;
-    case QUEST_TYPES.PURGE:
-      await performQuestPurge(context, player, slot);
-      break;
-    case QUEST_TYPES.DECIMATOR:
-      await performQuestDecimator(context, player, slot);
-      break;
-    default:
-      break;
+    const questEntropy = activeQuestDetail ? bigNumberToBigInt(activeQuestDetail.entropy) : 0n;
+    const questTier = questTiers.get(player.address) ?? 0;
+    const questType = Number(activeQuest.questType);
+    const questStakeMask = valueToNumber(activeQuestDetail?.stakeMask ?? activeQuest.stakeMask ?? 0);
+    const questStakeRisk = valueToNumber(activeQuestDetail?.stakeRisk ?? activeQuest.stakeRisk ?? 0);
+    switch (questType) {
+      case QUEST_TYPES.MINT_ANY: {
+        const requiredQuantity = questMintAnyTarget(questTier, questEntropy);
+        const quantity = Math.max(requiredQuantity, QUEST_COMPLETION_PARAMS.mintQuantity);
+        const mintResult = await performQuestCoinMint({
+          purgeNFT,
+          purgeGame,
+          purgecoin,
+          player,
+          referralCodes,
+          playerAffiliateCodes,
+          coinBank,
+          quantity,
+          contributions,
+          targetLevel: questTargetLevel,
+          mintCountLedger,
+          slot,
+          vrf,
+          vrfConsumer,
+          questMintOverrides,
+          questAffiliateSupporters,
+          questModule,
+          quest: activeQuest,
+        });
+        if (mintResult?.questChanged) {
+          activeQuest = mintResult.quest;
+          activeQuestDetail = mintResult.questDetail;
+          continue;
+        }
+        return;
+      }
+      case QUEST_TYPES.MINT_ETH: {
+        const requiredEthQuantity = questMintEthTarget(questTier, questEntropy);
+        const ethQuantity = Math.max(requiredEthQuantity, QUEST_COMPLETION_PARAMS.mintQuantity);
+        const ethResult = await performQuestEthMint({
+          purgecoin,
+          player,
+          purgeNFT,
+          purgeGame,
+          contributions,
+          referralCodes,
+          playerAffiliateCodes,
+          targetLevel: questTargetLevel,
+          mintCountLedger,
+          quantity: ethQuantity,
+          slot,
+          vrf,
+          vrfConsumer,
+          questMintOverrides,
+          questAffiliateSupporters,
+          questModule,
+          quest: activeQuest,
+        });
+        if (ethResult?.questChanged) {
+          activeQuest = ethResult.quest;
+          activeQuestDetail = ethResult.questDetail;
+          continue;
+        }
+        return;
+      }
+      case QUEST_TYPES.FLIP: {
+        const requiredTokens = questFlipTargetTokens(questTier, questEntropy);
+        const requiredAmount = BigInt(requiredTokens) * MILLION;
+        const amount =
+          requiredAmount > QUEST_COMPLETION_PARAMS.flipAmount ? requiredAmount : QUEST_COMPLETION_PARAMS.flipAmount;
+        const flipResult = await performQuestFlip(context, player, activeQuest, slot, amount);
+        if (flipResult?.questChanged) {
+          activeQuest = flipResult.quest;
+          activeQuestDetail = flipResult.questDetail;
+          continue;
+        }
+        return;
+      }
+      case QUEST_TYPES.STAKE: {
+        const requiredPrincipal = BigInt(questStakePrincipalTarget(questTier, questEntropy)) * MILLION;
+        const requiredDistance = questStakeDistanceTarget(questTier, questEntropy);
+        const distanceOverride = Number(requiredDistance);
+        let riskOverride = 1;
+        if ((questStakeMask & QUEST_STAKE_REQUIRE_RISK) !== 0) {
+          riskOverride = Math.max(1, questStakeRisk);
+        }
+        const stakeResult = await performQuestStake(context, player, activeQuest, slot, {
+          principalOverride: requiredPrincipal,
+          distanceOverride,
+          riskOverride,
+        });
+        if (stakeResult?.questChanged) {
+          activeQuest = stakeResult.quest;
+          activeQuestDetail = stakeResult.questDetail;
+          continue;
+        }
+        return;
+      }
+      case QUEST_TYPES.AFFILIATE: {
+        const requiredTokens = questAffiliateTargetTokens(questTier, questEntropy);
+        const requiredAmount = BigInt(requiredTokens) * MILLION;
+        const priceUnit = bigNumberToBigInt(await purgeGame.coinPriceUnit());
+        let affiliateQuantity = estimateAffiliateMintQuantity(requiredAmount, priceUnit);
+        affiliateQuantity = Math.max(affiliateQuantity, QUEST_COMPLETION_PARAMS.mintQuantity);
+        const affiliateResult = await performQuestAffiliate(context, player, activeQuest, slot, affiliateQuantity);
+        if (affiliateResult?.questChanged) {
+          activeQuest = affiliateResult.quest;
+          activeQuestDetail = affiliateResult.questDetail;
+          continue;
+        }
+        return;
+      }
+      case QUEST_TYPES.PURGE: {
+        const requiredQuantity = questMintEthTarget(questTier, questEntropy);
+        const quantity = Math.max(requiredQuantity, QUEST_COMPLETION_PARAMS.purgeQuantity);
+        const purgeResult = await performQuestPurge(context, player, activeQuest, slot, quantity);
+        if (purgeResult?.questChanged) {
+          activeQuest = purgeResult.quest;
+          activeQuestDetail = purgeResult.questDetail;
+          continue;
+        }
+        return;
+      }
+      case QUEST_TYPES.DECIMATOR: {
+        const requiredTokens = questDecimatorTargetTokens(questTier, questEntropy);
+        const requiredAmount = BigInt(requiredTokens) * MILLION;
+        const amount =
+          requiredAmount > QUEST_COMPLETION_PARAMS.decimatorAmount
+            ? requiredAmount
+            : QUEST_COMPLETION_PARAMS.decimatorAmount;
+        const decResult = await performQuestDecimator(context, player, activeQuest, slot, amount);
+        if (decResult?.questChanged) {
+          activeQuest = decResult.quest;
+          activeQuestDetail = decResult.questDetail;
+          continue;
+        }
+        return;
+      }
+      default:
+        return;
+    }
   }
 }
 
@@ -1411,6 +1549,109 @@ function buildQuestReferralPlan(questPlayers, referralCodes) {
   return plan;
 }
 
+async function snapshotQuestTiers(questModule, players) {
+  const tiers = new Map();
+  if (!players || players.length === 0) {
+    return tiers;
+  }
+  for (const player of players) {
+    const [streak] = await questModule.playerQuestState(player.address);
+    const numeric = valueToNumber(streak);
+    tiers.set(player.address, computeQuestTier(numeric));
+  }
+  return tiers;
+}
+
+function computeQuestTier(streak) {
+  const tier = Math.floor(streak / QUEST_TIER_STREAK_SPAN);
+  return tier > QUEST_TIER_MAX_INDEX ? QUEST_TIER_MAX_INDEX : tier;
+}
+
+function questPackedValue(packed, tier) {
+  const shift = BigInt(tier) * 16n;
+  return Number((packed >> shift) & 0xffffn);
+}
+
+function questRand(entropy, questType, tier, salt) {
+  if (!entropy || entropy === 0n) return 0n;
+  const encoded = abiCoder.encode(["uint256", "uint8", "uint8", "uint8"], [entropy, questType, tier, salt]);
+  return BigInt(ethers.keccak256(encoded));
+}
+
+function questMintAnyTarget(tier, entropy) {
+  const maxVal = questPackedValue(QUEST_PACKED_VALUES.mintAny, tier);
+  if (maxVal <= QUEST_MIN_MINT) return QUEST_MIN_MINT;
+  const rand = questRand(entropy, QUEST_TYPES.MINT_ANY, tier, 0);
+  return Number(rand % BigInt(maxVal)) + QUEST_MIN_MINT;
+}
+
+function questMintEthTarget(tier, entropy) {
+  if (tier === 0) return QUEST_MIN_MINT;
+  const maxVal = questPackedValue(QUEST_PACKED_VALUES.mintEth, tier);
+  if (maxVal <= QUEST_MIN_MINT) return QUEST_MIN_MINT;
+  const rand = questRand(entropy, QUEST_TYPES.MINT_ETH, tier, 0);
+  return Number(rand % BigInt(maxVal)) + QUEST_MIN_MINT;
+}
+
+function questFlipTargetTokens(tier, entropy) {
+  const maxVal = questPackedValue(QUEST_PACKED_VALUES.flip, tier);
+  const range = BigInt(maxVal - QUEST_MIN_TOKEN + 1);
+  const rand = questRand(entropy, QUEST_TYPES.FLIP, tier, 0);
+  return Number(BigInt(QUEST_MIN_TOKEN) + (rand % range));
+}
+
+function questDecimatorTargetTokens(tier, entropy) {
+  const base = questFlipTargetTokens(tier, entropy);
+  return base * 2;
+}
+
+function questStakePrincipalTarget(tier, entropy) {
+  const maxVal = questPackedValue(QUEST_PACKED_VALUES.stakePrincipal, tier);
+  const range = BigInt(maxVal - QUEST_MIN_TOKEN + 1);
+  const rand = questRand(entropy, QUEST_TYPES.STAKE, tier, 1);
+  return Number(BigInt(QUEST_MIN_TOKEN) + (rand % range));
+}
+
+function questStakeDistanceTarget(tier, entropy) {
+  const minVal = questPackedValue(QUEST_PACKED_VALUES.stakeDistanceMin, tier);
+  const maxVal = questPackedValue(QUEST_PACKED_VALUES.stakeDistanceMax, tier);
+  const range = BigInt(maxVal - minVal + 1);
+  const rand = questRand(entropy, QUEST_TYPES.STAKE, tier, 2);
+  return Number(BigInt(minVal) + (rand % range));
+}
+
+function questAffiliateTargetTokens(tier, entropy) {
+  const maxVal = questPackedValue(QUEST_PACKED_VALUES.affiliate, tier);
+  const range = BigInt(maxVal - QUEST_MIN_TOKEN + 1);
+  const rand = questRand(entropy, QUEST_TYPES.AFFILIATE, tier, 0);
+  return Number(BigInt(QUEST_MIN_TOKEN) + (rand % range));
+}
+
+function estimateAffiliateMintQuantity(targetAmount, priceUnit) {
+  if (priceUnit === 0n) return QUEST_COMPLETION_PARAMS.mintQuantity;
+  const numerator = targetAmount * 10000n;
+  const denominator = priceUnit * 375n;
+  if (denominator === 0n) return QUEST_COMPLETION_PARAMS.mintQuantity;
+  const quotient = (numerator + denominator - 1n) / denominator;
+  const estimated = Number(quotient);
+  return estimated <= 0 ? QUEST_COMPLETION_PARAMS.mintQuantity : estimated;
+}
+
+function bigNumberToBigInt(value) {
+  if (!value) return 0n;
+  if (typeof value === "bigint") return value;
+  if (typeof value === "number") return BigInt(value);
+  if (value.toBigInt) return value.toBigInt();
+  return BigInt(value.toString());
+}
+
+function valueToNumber(value) {
+  if (typeof value === "number") return value;
+  if (typeof value === "bigint") return Number(value);
+  if (!value) return 0;
+  return Number(value);
+}
+
 async function performQuestCoinMint({
   purgeNFT,
   purgeGame,
@@ -1428,6 +1669,8 @@ async function performQuestCoinMint({
   vrfConsumer,
   questMintOverrides,
   questAffiliateSupporters,
+  questModule,
+  quest,
 }) {
   const info = await purgeGame.gameInfo();
   const stateValue = typeof info.gameState_ === "bigint" ? Number(info.gameState_) : Number(info.gameState_);
@@ -1453,12 +1696,18 @@ async function performQuestCoinMint({
       vrfConsumer,
       questMintOverrides,
       questAffiliateSupporters,
+      questModule,
+      quest,
     });
     return;
   }
   const priceUnit = await purgeGame.coinPriceUnit();
   const baseCost = BigInt(quantity) * (priceUnit / 4n);
   for (let attempt = 0; attempt < QUEST_MINT_ATTEMPT_LIMIT; attempt += 1) {
+    const questUpdate = await refreshQuestIfChanged({ purgecoin, questModule }, quest, slot);
+    if (questUpdate) {
+      return questUpdate;
+    }
     await ensureCoinBalance(purgecoin, coinBank, player, baseCost);
     const affiliateCode = referralCodes.get(player.address) ?? ethers.ZeroHash;
     try {
@@ -1493,9 +1742,15 @@ async function performQuestEthMint({
   vrf,
   vrfConsumer,
   questMintOverrides,
+  questModule,
+  quest,
 }) {
   const affiliateOverride = questMintOverrides?.get(player.address);
   for (let attempt = 0; attempt < QUEST_MINT_ATTEMPT_LIMIT; attempt += 1) {
+    const questUpdate = await refreshQuestIfChanged({ purgecoin, questModule }, quest, slot);
+    if (questUpdate) {
+      return questUpdate;
+    }
     try {
       await executeStrategyMint({
         player,
@@ -1527,10 +1782,14 @@ async function performQuestEthMint({
   console.warn(`ETH quest mint did not complete for ${player.address}`);
 }
 
-async function performQuestFlip(context, player, slot) {
+async function performQuestFlip(context, player, quest, slot, overrideAmount) {
   const { purgecoin, coinBank, vrf, vrfConsumer, purgeGame } = context;
-  const amount = QUEST_COMPLETION_PARAMS.flipAmount;
-  for (let attempt = 0; attempt < QUEST_MINT_ATTEMPT_LIMIT; attempt += 1) {
+  const amount = overrideAmount ?? QUEST_COMPLETION_PARAMS.flipAmount;
+  for (let attempt = 0; attempt < QUEST_FLIP_ATTEMPT_LIMIT; attempt += 1) {
+    const questUpdate = await refreshQuestIfChanged(context, quest, slot);
+    if (questUpdate) {
+      return questUpdate;
+    }
     await ensureCoinBalance(purgecoin, coinBank, player, amount);
     if (await purgeGame.rngLocked()) {
       await fulfillPendingVrfRequest(vrf, vrfConsumer);
@@ -1555,18 +1814,28 @@ async function performQuestFlip(context, player, slot) {
   console.warn(`Flip quest did not complete for ${player.address}`);
 }
 
-async function performQuestStake(context, player, quest, slot) {
+async function performQuestStake(context, player, quest, slot, overrides = {}) {
   const { purgecoin, coinBank, questTargetLevel, vrf, vrfConsumer, purgeGame } = context;
-  const principal = QUEST_COMPLETION_PARAMS.stakePrincipal;
+  const principal = overrides.principalOverride ?? QUEST_COMPLETION_PARAMS.stakePrincipal;
   const mask = Number(quest.stakeMask ?? 0);
-  const distanceTarget = QUEST_COMPLETION_PARAMS.stakeDistance;
-  const baseRisk =
-    (mask & QUEST_STAKE_REQUIRE_RISK) !== 0
-      ? Math.max(Number(quest.stakeRisk), QUEST_COMPLETION_PARAMS.stakeRisk)
-      : QUEST_COMPLETION_PARAMS.stakeRisk;
+  const distanceTarget = overrides.distanceOverride ?? QUEST_COMPLETION_PARAMS.stakeDistance;
+  let baseRisk;
+  if (overrides.riskOverride !== undefined) {
+    baseRisk = Number(overrides.riskOverride);
+  } else if ((mask & QUEST_STAKE_REQUIRE_RISK) !== 0) {
+    baseRisk = Number(quest.stakeRisk);
+  } else {
+    baseRisk = 1;
+  }
   const contractMaxRisk = 11;
-  let stakeOffset = questStakeOffsets.get(player.address) ?? 0;
+  if (baseRisk < 1) baseRisk = 1;
+  if (baseRisk > contractMaxRisk) baseRisk = contractMaxRisk;
+  let distanceBonus = 0;
   for (let attempt = 0; attempt < QUEST_MINT_ATTEMPT_LIMIT; attempt += 1) {
+    const questUpdate = await refreshQuestIfChanged(context, quest, slot);
+    if (questUpdate) {
+      return questUpdate;
+    }
     const info = await purgeGame.gameInfo();
     const currentLevel = Number(await purgeGame.level());
     const gameStateValue = Number(info.gameState_ ?? info.gameState ?? 0);
@@ -1574,17 +1843,20 @@ async function performQuestStake(context, player, quest, slot) {
     if (gameStateValue !== 3) {
       effectiveLevel = currentLevel === 0 ? 0 : currentLevel - 1;
     }
-    let targetLevel = questTargetLevel + distanceTarget + stakeOffset;
-    if (targetLevel <= effectiveLevel) {
-      targetLevel = effectiveLevel + distanceTarget;
+    const attemptDistance = distanceTarget + distanceBonus;
+    const baseTargetLevel = Number(questTargetLevel ?? 0) + attemptDistance;
+    const maturityFloor = effectiveLevel + attemptDistance + QUEST_STAKE_MATURITY_BUFFER;
+    const minTarget = Math.max(baseTargetLevel, maturityFloor);
+    const maxTargetLevel = effectiveLevel + 500;
+    if (minTarget > maxTargetLevel) {
+      distanceBonus += QUEST_STAKE_DISTANCE_STEP;
+      continue;
     }
-    if (targetLevel > effectiveLevel + 500) {
-      targetLevel = effectiveLevel + 500;
-    }
+    let candidateTarget = minTarget;
     let riskValue = baseRisk > contractMaxRisk ? contractMaxRisk : baseRisk;
-    const maxRiskForTarget = targetLevel + 1 - effectiveLevel;
+    const maxRiskForTarget = candidateTarget + 1 - effectiveLevel;
     if (maxRiskForTarget <= 0) {
-      await time.increase(DAY_SECONDS);
+      distanceBonus += QUEST_STAKE_DISTANCE_STEP;
       continue;
     }
     if (riskValue > maxRiskForTarget) {
@@ -1593,17 +1865,12 @@ async function performQuestStake(context, player, quest, slot) {
     if (riskValue <= 0) {
       riskValue = 1;
     }
-    const attemptTarget = targetLevel;
-    const attemptRisk = riskValue;
-    const attemptEffective = effectiveLevel;
-    const attemptMaxRisk = maxRiskForTarget;
     await ensureCoinBalance(purgecoin, coinBank, player, principal);
     try {
-      await (await purgecoin.connect(player).stake(principal, targetLevel, riskValue)).wait();
+      await (await purgecoin.connect(player).stake(principal, candidateTarget, riskValue)).wait();
     } catch (err) {
       if (isCustomError(err, "StakeInvalid")) {
-        stakeOffset += distanceTarget;
-        await time.increase(DAY_SECONDS);
+        distanceBonus += QUEST_STAKE_DISTANCE_STEP;
         continue;
       }
       if (isCustomError(err, "BettingPaused")) {
@@ -1613,7 +1880,7 @@ async function performQuestStake(context, player, quest, slot) {
       }
       if (isCustomError(err, "Insufficient")) {
         console.warn(
-          `Stake quest insufficient for ${player.address}: target ${attemptTarget}, effective ${attemptEffective}, maxRisk ${attemptMaxRisk}, risk ${attemptRisk}`
+          `Stake quest insufficient for ${player.address}: target ${candidateTarget}, effective ${effectiveLevel}, maxRisk ${maxRiskForTarget}, risk ${riskValue}`
         );
       }
       throw err;
@@ -1626,7 +1893,7 @@ async function performQuestStake(context, player, quest, slot) {
   console.warn(`Stake quest did not complete for ${player.address}`);
 }
 
-async function performQuestAffiliate(context, player, slot) {
+async function performQuestAffiliate(context, player, quest, slot, quantityOverride) {
   const {
     purgecoin,
     purgeNFT,
@@ -1646,11 +1913,16 @@ async function performQuestAffiliate(context, player, slot) {
     return;
   }
   const helper = questAffiliateSupporters?.get(player.address) ?? coinBank;
+  const quantity = quantityOverride ?? QUEST_COMPLETION_PARAMS.mintQuantity;
   for (let attempt = 0; attempt < QUEST_MINT_ATTEMPT_LIMIT; attempt += 1) {
+    const questUpdate = await refreshQuestIfChanged(context, quest, slot);
+    if (questUpdate) {
+      return questUpdate;
+    }
     try {
       await executeStrategyMint({
         player: helper,
-        quantity: QUEST_COMPLETION_PARAMS.mintQuantity,
+        quantity,
         targetLevel: questTargetLevel,
         purgeNFT,
         purgeGame,
@@ -1668,7 +1940,7 @@ async function performQuestAffiliate(context, player, slot) {
     }
     if (mintCountLedger && helper?.address) {
       const prev = mintCountLedger.get(helper.address) ?? 0n;
-      mintCountLedger.set(helper.address, prev + BigInt(QUEST_COMPLETION_PARAMS.mintQuantity));
+      mintCountLedger.set(helper.address, prev + BigInt(quantity));
     }
     const [, , , completed] = await purgecoin.playerQuestStates(player.address);
     if (completed[slot]) {
@@ -1678,10 +1950,14 @@ async function performQuestAffiliate(context, player, slot) {
   console.warn(`Affiliate quest did not complete for ${player.address}`);
 }
 
-async function performQuestPurge(context, player, slot) {
+async function performQuestPurge(context, player, quest, slot, quantityOverride) {
   const { purgecoin, purgeNFT, purgeGame, referralCodes, contributions, vrf, vrfConsumer } = context;
-  const quantity = QUEST_COMPLETION_PARAMS.purgeQuantity;
+  const quantity = quantityOverride ?? QUEST_COMPLETION_PARAMS.purgeQuantity;
   for (let attempt = 0; attempt < QUEST_MINT_ATTEMPT_LIMIT; attempt += 1) {
+    const questUpdate = await refreshQuestIfChanged(context, quest, slot);
+    if (questUpdate) {
+      return questUpdate;
+    }
     const info = await purgeGame.gameInfo();
     const stateValue = Number(info.gameState_ ?? info.gameState ?? 0);
     if (stateValue !== 3) {
@@ -1733,10 +2009,14 @@ async function performQuestPurge(context, player, slot) {
   console.warn(`Purge quest did not complete for ${player.address}`);
 }
 
-async function performQuestDecimator(context, player, slot) {
+async function performQuestDecimator(context, player, quest, slot, overrideAmount) {
   const { purgecoin, coinBank } = context;
-  const amount = QUEST_COMPLETION_PARAMS.decimatorAmount;
+  const amount = overrideAmount ?? QUEST_COMPLETION_PARAMS.decimatorAmount;
   for (let attempt = 0; attempt < QUEST_MINT_ATTEMPT_LIMIT; attempt += 1) {
+    const questUpdate = await refreshQuestIfChanged(context, quest, slot);
+    if (questUpdate) {
+      return questUpdate;
+    }
     await ensureCoinBalance(purgecoin, coinBank, player, amount);
     try {
       await (await purgecoin.connect(player).decimatorBurn(amount)).wait();
@@ -1784,7 +2064,7 @@ describe("PurgeGame money flow simulation", function () {
     ];
 
     const system = await deploySystem();
-    const { purgeGame, purgeNFT, purgeTrophies, purgecoin, deployer, vrf } = system;
+    const { purgeGame, purgeNFT, purgeTrophies, purgecoin, deployer, vrf, questModule } = system;
     await purgecoin.connect(deployer).setQuestPurgeEnabled(false);
     const advanceOperator = primaryFunder;
     const purgeGameAddress = await purgeGame.getAddress();
@@ -1801,6 +2081,7 @@ describe("PurgeGame money flow simulation", function () {
 
     const priceCoinUnit = await purgeGame.coinPriceUnit();
 
+    await purgecoin.connect(deployer).setQuestPurgeEnabled(false);
     await prefundPlayersWithCoin(purgecoin, deployer, questCompleterPlayers, QUEST_PREFUND_COINS);
 
     const targetPerLevel = [];
@@ -2130,6 +2411,7 @@ describe("PurgeGame money flow simulation", function () {
 
         await completeDailyQuests({
           purgecoin,
+          questModule,
           purgeNFT,
           purgeGame,
           questPlayers: questCompleterPlayers,
