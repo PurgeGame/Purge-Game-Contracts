@@ -162,6 +162,8 @@ contract Purgecoin is PurgeCoinStorage {
         _mint(creator, presaleAmount);
     }
 
+    receive() external payable {}
+
     /// @notice Burn PURGE to increase the caller’s coinflip stake, applying streak bonuses when eligible.
     /// @param amount Amount (6 decimals) to burn; must satisfy the global minimum.
     function depositCoinflip(uint256 amount) external {
@@ -616,10 +618,8 @@ contract Purgecoin is PurgeCoinStorage {
                 earned[affiliateAddr] = newTotal;
                 addFlip(affiliateAddr, totalFlipAward, false);
                 if (address(module) != address(0)) {
-                    (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleAffiliate(
-                        affiliateAddr,
-                        affiliateShare
-                    );
+                    (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module
+                        .handleAffiliate(affiliateAddr, affiliateShare);
                     _questApplyReward(affiliateAddr, reward, hardMode, questType, streak, completed);
                 }
 
@@ -644,10 +644,8 @@ contract Purgecoin is PurgeCoinStorage {
                     earned[upline] = uplineTotal;
                     addFlip(upline, bonus, false);
                     if (address(module) != address(0)) {
-                        (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleAffiliate(
-                            upline,
-                            bonus
-                        );
+                        (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module
+                            .handleAffiliate(upline, bonus);
                         _questApplyReward(upline, reward, hardMode, questType, streak, completed);
                     }
                     _updatePlayerScore(1, upline, uplineTotal);
