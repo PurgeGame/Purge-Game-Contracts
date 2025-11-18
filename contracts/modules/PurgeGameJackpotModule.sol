@@ -20,6 +20,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
     uint8 private constant EARLY_PURGE_COIN_ONLY_THRESHOLD = 50;
     uint8 private constant PURGE_TROPHY_KIND_MAP = 0;
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
+    uint256 private constant DEGENERATE_ENTROPY_CHECK_VALUE = 420;
     uint64 private constant MAP_JACKPOT_SHARES_PACKED =
         (uint64(6000)) | (uint64(1333) << 16) | (uint64(1333) << 32) | (uint64(1334) << 48);
     uint64 private constant DAILY_JACKPOT_SHARES_PACKED = uint64(2000) * 0x0001000100010001;
@@ -172,8 +173,8 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         for (uint256 s; s < 2; ) {
             if (stakePer != 0) {
                 bytes32 stakeEntropy = keccak256(abi.encode(rngWord, lvl, s, "map-stake"));
-                uint64 salt = uint64(uint256(stakeEntropy));
-                address staker = trophiesContract.stakedTrophySample(salt);
+                uint256 rngSeed = uint256(stakeEntropy);
+                address staker = trophiesContract.stakedTrophySample(rngSeed);
                 if (staker != address(0)) {
                     _addClaimableEth(staker, stakePer);
                     stakePaid += stakePer;
@@ -250,9 +251,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
     }
 
     function _addClaimableEth(address beneficiary, uint256 weiAmount) private {
-        unchecked {
-            claimableWinnings[beneficiary] += weiAmount;
-        }
+        claimableWinnings[beneficiary] += weiAmount;
         emit PlayerCredited(beneficiary, weiAmount);
     }
 
@@ -273,7 +272,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
     }
 
     function _mapCarryoverPercent(uint24 lvl, uint256 rngWord) private pure returns (uint256) {
-        if ((rngWord % 1_000_000_000) == TRAIT_ID_TIMEOUT) {
+        if ((rngWord % 1_000_000_000) == DEGENERATE_ENTROPY_CHECK_VALUE) {
             return 20; // 10% fallback when trait entropy is degenerate (returned as times two).
         }
         if (lvl % 100 == 0) {

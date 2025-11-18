@@ -139,7 +139,7 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
                             ++salt;
                         }
                         entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
-                        address w = purgeGameTrophies.stakedTrophySample(uint64(entropy));
+                        address w = purgeGameTrophies.stakedTrophySample(entropy);
                         if (w != address(0)) {
                             tmpW[n] = w;
                             tmpA[n] = prize;

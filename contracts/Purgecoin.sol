@@ -103,7 +103,7 @@ contract Purgecoin is PurgeCoinStorage {
     uint128 private constant ONEK = 1_000_000_000; // 1,000 PURGED (6d)
     uint32 private constant BAF_BATCH = 5000;
     uint256 private constant BUCKET_SIZE = 1500;
-    bytes32 private constant H = 0x0815bfaf2b1567e207818b2763021381926855cfef9a360737b5a8aae60c41b7;
+    bytes32 private constant H = 0x9aeceb0bff1d88815fac67760a5261a814d06dfaedc391fdf4cf62afac3f10b5;
     uint8 private constant STAKE_MAX_LANES = 3;
     uint256 private constant STAKE_LANE_BITS = 86;
     uint256 private constant STAKE_LANE_MASK = (uint256(1) << STAKE_LANE_BITS) - 1;
@@ -618,8 +618,10 @@ contract Purgecoin is PurgeCoinStorage {
                 earned[affiliateAddr] = newTotal;
                 addFlip(affiliateAddr, totalFlipAward, false);
                 if (address(module) != address(0)) {
-                    (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module
-                        .handleAffiliate(affiliateAddr, affiliateShare);
+                    (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleAffiliate(
+                        affiliateAddr,
+                        affiliateShare
+                    );
                     _questApplyReward(affiliateAddr, reward, hardMode, questType, streak, completed);
                 }
 
@@ -644,8 +646,10 @@ contract Purgecoin is PurgeCoinStorage {
                     earned[upline] = uplineTotal;
                     addFlip(upline, bonus, false);
                     if (address(module) != address(0)) {
-                        (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module
-                            .handleAffiliate(upline, bonus);
+                        (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleAffiliate(
+                            upline,
+                            bonus
+                        );
                         _questApplyReward(upline, reward, hardMode, questType, streak, completed);
                     }
                     _updatePlayerScore(1, upline, uplineTotal);
@@ -816,6 +820,13 @@ contract Purgecoin is PurgeCoinStorage {
     function primeMintEthQuest(uint48 day) external onlyPurgeGameContract {
         IPurgeQuestModule module = questModule;
         module.primeMintEthQuest(day);
+    }
+
+    function setQuestPurgeEnabled(bool enabled) external {
+        if (msg.sender != creator) revert OnlyDeployer();
+        IPurgeQuestModule module = questModule;
+        if (address(module) == address(0)) revert Zero();
+        module.setPurgeQuestEnabled(enabled);
     }
 
     function rollDailyQuest(uint48 day, uint256 entropy) external onlyPurgeGameContract {

@@ -135,9 +135,6 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
             uint256 affiliateTrophyShare = baseTimes20 + remainder;
             uint256 legacyAffiliateShare = base * 10;
             address affiliateTrophyRecipient = topAffiliate != address(0) ? topAffiliate : pend.exterminator;
-            if (affiliateTrophyRecipient == address(0)) {
-                affiliateTrophyRecipient = pend.exterminator;
-            }
 
             (, address[6] memory affiliateRecipients) = trophiesContract.processEndLevel{
                 value: deferredWei + affiliateTrophyShare + legacyAffiliateShare

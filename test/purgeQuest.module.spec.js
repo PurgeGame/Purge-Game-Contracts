@@ -255,6 +255,19 @@ describe("PurgeQuestModule", function () {
       expect(Number(questType)).to.equal(QUEST_TYPES.MINT_ANY);
     });
 
+    it("re-rolls duplicate quest slots caused by conversions", async function () {
+      const setup = await loadFixture(deployQuestWithGameFixture);
+      const { questModule, coin } = setup;
+      await expect(questModule.connect(coin).setPurgeQuestEnabled(false)).to.not.be.reverted;
+      for (let i = 0; i < 25; i += 1) {
+        const day = 10 + i;
+        const entropy = BigInt(1000 + i * 7919);
+        await expect(questModule.connect(coin).rollDailyQuest(day, entropy)).to.not.be.reverted;
+        const quests = await questModule.getActiveQuests();
+        expect(Number(quests[0].questType)).to.not.equal(Number(quests[1].questType));
+      }
+    });
+
     it("forces a mint-ETH quest when primed for a day", async function () {
       const setup = await loadFixture(deployQuestWithGameFixture);
       const { questModule, coin } = setup;

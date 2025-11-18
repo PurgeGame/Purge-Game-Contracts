@@ -9,10 +9,21 @@ struct QuestInfo {
     uint8 stakeRisk;
 }
 
+struct QuestDetail {
+    uint48 day;
+    uint8 questType;
+    bool highDifficulty;
+    uint8 stakeMask;
+    uint8 stakeRisk;
+    uint256 entropy;
+}
+
 interface IPurgeQuestModule {
     function wireGame(address game) external;
 
     function primeMintEthQuest(uint48 day) external;
+
+    function setPurgeQuestEnabled(bool enabled) external;
 
     function rollDailyQuest(uint48 day, uint256 entropy)
         external
@@ -48,6 +59,8 @@ interface IPurgeQuestModule {
         returns (uint48 day, uint8 questType, bool highDifficulty, uint8 stakeMask, uint8 stakeRisk);
 
     function getActiveQuests() external view returns (QuestInfo[2] memory quests);
+
+    function getQuestDetails() external view returns (QuestDetail[2] memory quests);
 
     function playerQuestState(address player)
         external

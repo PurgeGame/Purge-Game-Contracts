@@ -97,7 +97,7 @@ contract PurgeGameNFT {
     uint256 private constant _BITMASK_TROPHY_BALANCE = ((uint256(1) << 32) - 1) << _BITPOS_TROPHY_BALANCE;
     uint256 private constant _BITPOS_BALANCE_LEVEL = 224;
     uint256 private constant _BITMASK_BALANCE_LEVEL = ((uint256(1) << 24) - 1) << _BITPOS_BALANCE_LEVEL;
-    uint256 private constant _ADDRESS_DATA_BURN_DELTA = (uint256(1) << _BITPOS_NUMBER_BURNED) - 1;
+    uint256 private constant _BURN_COUNT_INCREMENT_UNIT = (uint256(1) << _BITPOS_NUMBER_BURNED);
 
     bytes32 private constant _TRANSFER_EVENT_SIGNATURE =
         0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef;
@@ -199,27 +199,32 @@ contract PurgeGameNFT {
         if (owner == address(0)) return;
         if (delta == 0 && !setLevel) return;
 
-        uint256 packed = _packedAddressData[owner];
-        uint256 current = (packed & _BITMASK_TROPHY_BALANCE) >> _BITPOS_TROPHY_BALANCE;
-        uint256 updated = current;
+        uint256 packedData = _packedAddressData[owner];
+
+        // Safely update trophyBalance (32-bit field)
+        uint32 currentTrophyBalance = uint32((packedData & _BITMASK_TROPHY_BALANCE) >> _BITPOS_TROPHY_BALANCE);
+        uint32 newTrophyBalance = currentTrophyBalance;
 
         if (delta > 0) {
-            unchecked {
-                updated = current + uint32(delta);
-            }
+            // Check for overflow before addition
+            if (currentTrophyBalance > type(uint32).max - uint32(delta)) revert E(); // More specific error can be used
+            newTrophyBalance = currentTrophyBalance + uint32(delta);
         } else if (delta < 0) {
             uint32 absDelta = uint32(-delta);
-            unchecked {
-                updated = current > absDelta ? current - absDelta : 0;
-            }
+            // Check for underflow
+            if (currentTrophyBalance < absDelta) revert E(); // More specific error can be used
+            newTrophyBalance = currentTrophyBalance - absDelta;
         }
 
-        uint256 cleared = packed & ~(_BITMASK_TROPHY_BALANCE | _BITMASK_BALANCE_LEVEL);
-        uint24 levelValue = setLevel ? lvl : _packedBalanceLevel(packed);
-        _packedAddressData[owner] =
-            cleared |
-            (updated << _BITPOS_TROPHY_BALANCE) |
-            (uint256(levelValue) << _BITPOS_BALANCE_LEVEL);
+        // Safely update balanceLevel (24-bit field)
+        uint24 newBalanceLevel = setLevel ? lvl : uint24((packedData & _BITMASK_BALANCE_LEVEL) >> _BITPOS_BALANCE_LEVEL);
+
+        // Clear old fields and set new ones
+        packedData &= ~(_BITMASK_TROPHY_BALANCE | _BITMASK_BALANCE_LEVEL);
+        packedData |= (uint256(newTrophyBalance) << _BITPOS_TROPHY_BALANCE);
+        packedData |= (uint256(newBalanceLevel) << _BITPOS_BALANCE_LEVEL);
+
+        _packedAddressData[owner] = packedData;
     }
 
     function _mapMinimumQuantity(uint24 lvl) private pure returns (uint32) {
@@ -597,8 +602,9 @@ contract PurgeGameNFT {
         if (packed == 0) {
             unchecked {
                 uint256 curr = tokenId;
-                while (true) {
-                    packed = _packedOwnerships[--curr];
+                while (curr > 0) {
+                    --curr;
+                    packed = _packedOwnerships[curr];
                     if (packed != 0) break;
                 }
             }
@@ -623,8 +629,9 @@ contract PurgeGameNFT {
         if (packed == 0) {
             unchecked {
                 uint256 curr = tokenId;
-                while (true) {
-                    packed = _packedOwnerships[--curr];
+                while (curr > 0) {
+                    --curr;
+                    packed = _packedOwnerships[curr];
                     if (packed != 0) break;
                 }
             }
@@ -796,7 +803,28 @@ contract PurgeGameNFT {
         unchecked {
             _packedOwnerships[startTokenId] = _packOwnershipData(to, quantity == 1 ? _BITMASK_NEXT_INITIALIZED : 0);
 
-            _packedAddressData[to] += quantity * ((1 << _BITPOS_NUMBER_MINTED) | 1);
+            uint256 packedData = _packedAddressData[to];
+            uint256 currentBalance = packedData & _BITMASK_ADDRESS_DATA_ENTRY; // Extract current balance
+            uint256 currentNumberMinted = (packedData >> _BITPOS_NUMBER_MINTED) & _BITMASK_ADDRESS_DATA_ENTRY; // Extract current minted count
+
+            // Safely increment balance
+            uint256 newBalance = currentBalance + quantity;
+            if (newBalance < currentBalance || newBalance > _BITMASK_ADDRESS_DATA_ENTRY) { // Check for overflow or exceeding field capacity
+                revert E(); // Or a more specific error
+            }
+
+            // Safely increment minted count
+            uint256 newNumberMinted = currentNumberMinted + quantity;
+            if (newNumberMinted < currentNumberMinted || newNumberMinted > _BITMASK_ADDRESS_DATA_ENTRY) { // Check for overflow or exceeding field capacity
+                revert E(); // Or a more specific error
+            }
+
+            // Clear old values and set new ones
+            packedData &= ~(_BITMASK_ADDRESS_DATA_ENTRY | (_BITMASK_ADDRESS_DATA_ENTRY << _BITPOS_NUMBER_MINTED));
+            packedData |= newBalance;
+            packedData |= (newNumberMinted << _BITPOS_NUMBER_MINTED);
+
+            _packedAddressData[to] = packedData;
 
             uint256 toMasked = uint256(uint160(to)) & _BITMASK_ADDRESS;
 
@@ -925,7 +953,7 @@ contract PurgeGameNFT {
             }
 
             unchecked {
-                burnDelta += _ADDRESS_DATA_BURN_DELTA;
+                burnDelta += _BURN_COUNT_INCREMENT_UNIT;
                 ++tokenId;
             }
         }
@@ -1029,7 +1057,7 @@ contract PurgeGameNFT {
             if (tokenId < baseLimit) revert InvalidToken();
             bool isTrophy = _purgeToken(owner, tokenId);
             unchecked {
-                burnDelta += _ADDRESS_DATA_BURN_DELTA;
+                burnDelta += _BURN_COUNT_INCREMENT_UNIT;
                 if (isTrophy) {
                     ++trophiesBurned;
                 }
@@ -1068,21 +1096,28 @@ contract PurgeGameNFT {
     }
 
     function _applyPurgeAccounting(address owner, uint256 burnDelta, uint32 trophiesBurned) private {
-        uint256 packedData = _packedAddressData[owner];
-        unchecked {
-            packedData += burnDelta;
+        uint256 currentPackedData = _packedAddressData[owner];
+        uint256 currentNumberBurned = (currentPackedData >> _BITPOS_NUMBER_BURNED) & _BITMASK_ADDRESS_DATA_ENTRY;
+        uint256 incrementAmount = burnDelta >> _BITPOS_NUMBER_BURNED;
+
+        uint256 newNumberBurned = currentNumberBurned + incrementAmount;
+        if (newNumberBurned < currentNumberBurned || newNumberBurned > _BITMASK_ADDRESS_DATA_ENTRY) {
+            revert E(); // Or a more specific error
         }
+
+        currentPackedData = (currentPackedData & ~(_BITMASK_ADDRESS_DATA_ENTRY << _BITPOS_NUMBER_BURNED)); // Clear old burned count
+        currentPackedData |= (newNumberBurned << _BITPOS_NUMBER_BURNED); // Set new burned count
 
         uint24 currentLevel = game.level();
 
         if (trophiesBurned != 0) {
-            uint256 current = (packedData & _BITMASK_TROPHY_BALANCE) >> _BITPOS_TROPHY_BALANCE;
+            uint256 current = (currentPackedData & _BITMASK_TROPHY_BALANCE) >> _BITPOS_TROPHY_BALANCE;
             uint256 updated = current > trophiesBurned ? current - trophiesBurned : 0;
-            packedData = (packedData & ~_BITMASK_TROPHY_BALANCE) | (updated << _BITPOS_TROPHY_BALANCE);
+            currentPackedData = (currentPackedData & ~_BITMASK_TROPHY_BALANCE) | (updated << _BITPOS_TROPHY_BALANCE);
         }
 
-        packedData = (packedData & ~_BITMASK_BALANCE_LEVEL) | (uint256(currentLevel) << _BITPOS_BALANCE_LEVEL);
-        _packedAddressData[owner] = packedData;
+        currentPackedData = (currentPackedData & ~_BITMASK_BALANCE_LEVEL) | (uint256(currentLevel) << _BITPOS_BALANCE_LEVEL);
+        _packedAddressData[owner] = currentPackedData;
     }
 
     function processDormant(uint32 limit) external returns (bool finished, bool worked) {

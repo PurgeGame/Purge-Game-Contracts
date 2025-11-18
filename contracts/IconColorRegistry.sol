@@ -9,6 +9,8 @@ contract IconColorRegistry {
     error NotOwner();
     error RendererSet();
     error NotRenderer();
+    error InvalidTrophyOuterPercentage();
+    error InvalidHexColor();
 
     struct Colors {
         string outline;
@@ -89,7 +91,7 @@ contract IconColorRegistry {
             trophyOuterPct1e6 != 0 &&
             trophyOuterPct1e6 != 1 &&
             (trophyOuterPct1e6 < 50_000 || trophyOuterPct1e6 > 1_000_000)
-        ) revert NotRenderer(); // reuse error for slight savings
+        ) revert InvalidTrophyOuterPercentage(); // reuse error for slight savings
 
         IERC721Lite nftRef = _nft;
         uint256 count = tokenIds.length;
@@ -164,11 +166,19 @@ contract IconColorRegistry {
 
     function _requireHex7(string memory s) private pure returns (string memory) {
         bytes memory b = bytes(s);
-        if (b.length != 7 || b[0] != bytes1("#")) revert NotRenderer();
-        for (uint256 i = 1; i < 7; ++i) {
-            uint8 ch = uint8(b[i]);
-            if ((ch < 48 || ch > 57) && (ch < 97 || ch > 102)) revert NotRenderer();
-        }
+        if (b.length != 7 || b[0] != bytes1("#")) revert InvalidHexColor();
+        uint8 ch = uint8(b[1]);
+        if ((ch < 48 || ch > 57) && (ch < 97 || ch > 102)) revert InvalidHexColor();
+        ch = uint8(b[2]);
+        if ((ch < 48 || ch > 57) && (ch < 97 || ch > 102)) revert InvalidHexColor();
+        ch = uint8(b[3]);
+        if ((ch < 48 || ch > 57) && (ch < 97 || ch > 102)) revert InvalidHexColor();
+        ch = uint8(b[4]);
+        if ((ch < 48 || ch > 57) && (ch < 97 || ch > 102)) revert InvalidHexColor();
+        ch = uint8(b[5]);
+        if ((ch < 48 || ch > 57) && (ch < 97 || ch > 102)) revert InvalidHexColor();
+        ch = uint8(b[6]);
+        if ((ch < 48 || ch > 57) && (ch < 97 || ch > 102)) revert InvalidHexColor();
         return s;
     }
 }

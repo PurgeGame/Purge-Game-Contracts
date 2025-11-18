@@ -73,7 +73,7 @@ interface IPurgeGameTrophies {
 
     function purgeTrophy(uint256 tokenId) external;
 
-    function stakedTrophySample(uint64 salt) external view returns (address owner);
+    function stakedTrophySample(uint256 rngSeed) external view returns (address owner);
 
     function hasTrophy(uint256 tokenId) external view returns (bool);
 
@@ -728,6 +728,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     }
 
     function _refreshMapBonus(address player, uint256[] calldata tokenIds) private {
+        require(tokenIds.length <= 25, "too many tokenIds");
         uint8 expected = mapStakeCount_[player];
         uint256 len = tokenIds.length;
         if (len == 0) {
@@ -765,6 +766,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     }
 
     function _refreshExterminatorStakeBonus(address player, uint256[] calldata tokenIds) private {
+        require(tokenIds.length <= 25, "too many tokenIds");
         uint8 expected = exterminatorStakeCount_[player];
         uint256 len = tokenIds.length;
         if (len == 0) {
@@ -806,6 +808,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     }
 
     function _refreshStakeBonus(address player, uint256[] calldata tokenIds) private {
+        require(tokenIds.length <= 25, "too many tokenIds");
         uint8 expected = stakeStakeCount_[player];
         uint256 len = tokenIds.length;
         if (len == 0) {
@@ -1231,7 +1234,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         }
         if (state.count != 0 && currentLevel > state.lastLevel) {
             uint256 delta = uint256(currentLevel - state.lastLevel) * uint256(state.count);
-            state.pending += delta * BAF_LEVEL_REWARD;
+            state.pending = state.pending + (delta * BAF_LEVEL_REWARD);
         }
         state.lastLevel = currentLevel;
     }
@@ -1440,12 +1443,11 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         coin.bonusCoinflip(sender, 100_000 * COIN_BASE_UNIT, false);
     }
 
-    function stakedTrophySample(uint64 salt) external view override returns (address owner) {
+    function stakedTrophySample(uint256 rngSeed) external view override returns (address owner) {
         uint256 count = stakedTrophyIds.length;
         if (count == 0) return address(0);
-        uint256 mask = type(uint64).max;
-        uint256 rand = uint256(keccak256(abi.encodePacked(salt, count, block.prevrandao)));
-        uint256 idxA = count == 1 ? 0 : (rand & mask) % count;
+        uint256 rand = uint256(keccak256(abi.encodePacked(rngSeed, count, block.timestamp)));
+        uint256 idxA = count == 1 ? 0 : rand % count;
         uint256 idxB = count == 1 ? idxA : (rand >> 64) % count;
         uint256 tokenA = stakedTrophyIds[idxA];
         uint256 tokenB = stakedTrophyIds[idxB];

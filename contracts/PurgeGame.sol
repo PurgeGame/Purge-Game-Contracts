@@ -488,8 +488,8 @@ contract PurgeGame is PurgeGameStorage {
         bool levelNinety = (lvl == 90);
         uint32 endLevelFlag = isSeventhStep ? 1 : 0;
         uint256 priceCoinLocal = priceCoin;
-
         uint16 prevExterminated = lastExterminatedTrait;
+
         uint256 bonusTenths;
         uint256 stakeBonusCoin;
 

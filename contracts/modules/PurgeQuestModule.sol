@@ -60,6 +60,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
     mapping(address => PlayerQuestState) private questPlayerState;
     uint48 private forcedMintEthQuestDay;
     uint48 private purgeQuestCompletedDay;
+    bool private purgeQuestsEnabled = true;
 
     uint256 private constant QUEST_MINT_ANY_PACKED = 0x0000000000000000000000080008000800080008000700060005000400030002;
     uint256 private constant QUEST_MINT_ETH_PACKED = 0x0000000000000000000000050005000400040004000300030002000200020001;
@@ -88,6 +89,27 @@ contract PurgeQuestModule is IPurgeQuestModule {
 
     function primeMintEthQuest(uint48 day) external onlyCoin {
         forcedMintEthQuestDay = day;
+    }
+
+    function setPurgeQuestEnabled(bool enabled) external onlyCoin {
+        purgeQuestsEnabled = enabled;
+    }
+
+    function getQuestDetails() external view override returns (QuestDetail[QUEST_SLOT_COUNT] memory quests) {
+        for (uint8 slot; slot < QUEST_SLOT_COUNT; ) {
+            DailyQuest memory quest = activeQuests[slot];
+            quests[slot] = QuestDetail({
+                day: quest.day,
+                questType: quest.questType,
+                highDifficulty: (quest.flags & QUEST_FLAG_HIGH_DIFFICULTY) != 0,
+                stakeMask: quest.stakeMask,
+                stakeRisk: quest.stakeRisk,
+                entropy: quest.entropy
+            });
+            unchecked {
+                ++slot;
+            }
+        }
     }
 
     function rollDailyQuest(
@@ -122,15 +144,14 @@ contract PurgeQuestModule is IPurgeQuestModule {
             _seedQuest(quests[slot], day, slotEntropy, exclude);
             if (slot == 0 && forceMintEth) {
                 quests[slot].questType = QUEST_TYPE_MINT_ETH;
-            } else if (quests[slot].questType == QUEST_TYPE_PURGE && !purgeAllowed) {
-                quests[slot].questType = QUEST_TYPE_MINT_ETH;
-            } else if (quests[slot].questType == QUEST_TYPE_DECIMATOR && !decAllowed) {
-                quests[slot].questType = QUEST_TYPE_FLIP;
+            } else {
+                _applyQuestTypeConstraints(quests[slot], purgeAllowed, decAllowed);
             }
             unchecked {
                 ++slot;
             }
         }
+        _ensureDistinctQuestTypes(quests, purgeAllowed, decAllowed, day, entropy);
         DailyQuest storage primary = quests[0];
         bool hardMode = (primary.flags & QUEST_FLAG_HIGH_DIFFICULTY) != 0;
         return (true, primary.questType, hardMode, primary.stakeMask, primary.stakeRisk);
@@ -544,8 +565,8 @@ contract PurgeQuestModule is IPurgeQuestModule {
         }
     }
 
-    function _canRollPurgeQuest(uint8 phase) private pure returns (bool) {
-        return phase == 6;
+    function _canRollPurgeQuest(uint8 phase) private view returns (bool) {
+        return purgeQuestsEnabled && phase == 6;
     }
 
     function _canRollDecimatorQuest() private view returns (bool) {
@@ -699,6 +720,64 @@ contract PurgeQuestModule is IPurgeQuestModule {
     function _questRand(uint256 entropy, uint8 questType, uint8 tier, uint8 salt) private pure returns (uint256) {
         if (entropy == 0) return 0;
         return uint256(keccak256(abi.encode(entropy, questType, tier, salt)));
+    }
+
+    function _applyQuestTypeConstraints(
+        DailyQuest storage quest,
+        bool purgeAllowed,
+        bool decAllowed
+    ) private {
+        if (quest.questType == QUEST_TYPE_PURGE && !purgeAllowed) {
+            quest.questType = QUEST_TYPE_MINT_ETH;
+        } else if (quest.questType == QUEST_TYPE_DECIMATOR && !decAllowed) {
+            quest.questType = QUEST_TYPE_FLIP;
+        }
+    }
+
+    function _ensureDistinctQuestTypes(
+        DailyQuest[QUEST_SLOT_COUNT] storage quests,
+        bool purgeAllowed,
+        bool decAllowed,
+        uint48 day,
+        uint256 entropy
+    ) private {
+        if (QUEST_SLOT_COUNT < 2) return;
+        uint8 referenceType = quests[0].questType;
+        if (quests[1].questType != referenceType) return;
+        for (uint8 attempt; attempt < QUEST_TYPE_COUNT * 2; ) {
+            uint256 attemptEntropy = uint256(keccak256(abi.encode(entropy, day, attempt + 1)));
+            _seedQuest(quests[1], day, attemptEntropy, referenceType);
+            _applyQuestTypeConstraints(quests[1], purgeAllowed, decAllowed);
+            if (quests[1].questType != referenceType) {
+                return;
+            }
+            unchecked {
+                ++attempt;
+            }
+        }
+        quests[1].questType = _fallbackQuestType(referenceType, purgeAllowed, decAllowed);
+    }
+
+    function _fallbackQuestType(
+        uint8 exclude,
+        bool purgeAllowed,
+        bool decAllowed
+    ) private pure returns (uint8) {
+        for (uint8 offset = 1; offset < QUEST_TYPE_COUNT; ) {
+            uint8 candidate = uint8((uint256(exclude) + offset) % QUEST_TYPE_COUNT);
+            if (candidate == QUEST_TYPE_PURGE && !purgeAllowed) {
+                candidate = QUEST_TYPE_MINT_ETH;
+            } else if (candidate == QUEST_TYPE_DECIMATOR && !decAllowed) {
+                candidate = QUEST_TYPE_FLIP;
+            }
+            if (candidate != exclude) {
+                return candidate;
+            }
+            unchecked {
+                ++offset;
+            }
+        }
+        return QUEST_TYPE_MINT_ETH;
     }
 
     function _questCompleteForced(

@@ -8,6 +8,33 @@ pragma solidity ^0.8.26;
  */
 abstract contract PurgeGameStorage {
     // -----------------------
+    // Game Progress and State (packed for gas efficiency)
+    // -----------------------
+
+    // Slot 1 (28 bytes)
+    uint48 internal levelStartTime = type(uint48).max;
+    uint48 internal dailyIdx;
+    uint32 internal airdropMapsProcessedCount;
+    uint32 internal airdropIndex;
+    uint32 internal traitRebuildCursor;
+    uint32 internal airdropMultiplier = 1;
+
+    // Slot 2 (15 bytes)
+    uint24 public level = 1;
+    uint16 internal lastExterminatedTrait = 420;
+    uint8 public gameState = 1;
+    uint8 internal jackpotCounter;
+    uint8 internal earlyPurgePercent;
+    uint8 internal phase;
+    bool internal firstEarlyJackpotPaid;
+    bool internal firstPurgeJackpotPaid;
+    bool internal rngLockedFlag;
+    bool internal rngFulfilled = true;
+    bool internal traitCountsSeedQueued;
+    bool internal traitCountsShouldOverwrite;
+    bool internal decimatorHundredReady;
+
+    // -----------------------
     // Price
     // -----------------------
     uint256 internal price = 0.025 ether;
@@ -22,42 +49,14 @@ abstract contract PurgeGameStorage {
     uint256 internal nextPrizePool;
     uint256 internal carryOver;
     uint256 internal decimatorHundredPool;
-    bool internal decimatorHundredReady;
     uint256 internal dailyJackpotBase;
     uint256 internal dailyJackpotPaid;
-
-    // -----------------------
-    // Time / Session Tracking
-    // -----------------------
-    uint48 internal levelStartTime = type(uint48).max;
-    uint48 internal dailyIdx;
-
-    // -----------------------
-    // Game Progress
-    // -----------------------
-    uint24 public level = 1;
-    uint8 public gameState = 1;
-    uint8 internal jackpotCounter;
-    uint8 internal earlyPurgePercent;
-    bool internal firstEarlyJackpotPaid;
-    bool internal firstPurgeJackpotPaid;
-    uint8 internal phase;
-    uint16 internal lastExterminatedTrait = 420;
-    bool internal rngLockedFlag;
-    bool internal rngFulfilled = true;
     uint256 internal rngWordCurrent;
     uint256 internal vrfRequestId;
 
     // -----------------------
     // Minting / Airdrops
     // -----------------------
-    uint32 internal airdropMapsProcessedCount;
-    uint32 internal airdropIndex;
-    uint32 internal traitRebuildCursor;
-    uint32 internal airdropMultiplier = 1;
-    bool internal traitCountsSeedQueued;
-    bool internal traitCountsShouldOverwrite;
-
     address[] internal pendingMapMints;
     mapping(address => uint32) internal playerMapMintsOwed;
 
