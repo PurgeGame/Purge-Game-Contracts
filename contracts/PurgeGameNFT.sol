@@ -469,7 +469,7 @@ contract PurgeGameNFT {
 
         uint256 rakebackMint = coin.payAffiliate(affiliateAmount, affiliateCode, payer, lvl);
 
-        bonusMint = (bonusUnits * priceUnit * pct) / 100;
+        // bonusMint = (bonusUnits * priceUnit * pct) / 100;  <-- REMOVED: Late buyers shouldn't get this self-bonus
         if (rakebackMint != 0) {
             unchecked {
                 bonusMint += rakebackMint;
