@@ -59,8 +59,6 @@ contract PurgeQuestModule is IPurgeQuestModule {
     DailyQuest[QUEST_SLOT_COUNT] private activeQuests;
     mapping(address => PlayerQuestState) private questPlayerState;
     uint48 private forcedMintEthQuestDay;
-    uint48 private purgeQuestCompletedDay;
-    bool private purgeQuestsEnabled = true;
 
     uint256 private constant QUEST_MINT_ANY_PACKED = 0x0000000000000000000000080008000800080008000700060005000400030002;
     uint256 private constant QUEST_MINT_ETH_PACKED = 0x0000000000000000000000050005000400040004000300030002000200020001;
@@ -91,10 +89,6 @@ contract PurgeQuestModule is IPurgeQuestModule {
         forcedMintEthQuestDay = day;
     }
 
-    function setPurgeQuestEnabled(bool enabled) external onlyCoin {
-        purgeQuestsEnabled = enabled;
-    }
-
     function getQuestDetails() external view override returns (QuestDetail[QUEST_SLOT_COUNT] memory quests) {
         for (uint8 slot; slot < QUEST_SLOT_COUNT; ) {
             DailyQuest memory quest = activeQuests[slot];
@@ -119,8 +113,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         if (day == 0) revert InvalidQuestDay();
         if (entropy == 0) revert InvalidEntropy();
         DailyQuest[QUEST_SLOT_COUNT] storage quests = activeQuests;
-        uint8 phase_ = _questPhase();
-        bool purgeAllowed = _canRollPurgeQuest(phase_);
+        bool purgeAllowed = _canRollPurgeQuest();
         bool decAllowed = _canRollDecimatorQuest();
         _normalizeActivePurgeQuestsStorage(quests, purgeAllowed);
         if (_questsCurrent(quests, day)) {
@@ -145,7 +138,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
             if (slot == 0 && forceMintEth) {
                 quests[slot].questType = QUEST_TYPE_MINT_ETH;
             } else {
-                _applyQuestTypeConstraints(quests[slot], purgeAllowed, decAllowed);
+                _applyQuestTypeConstraints(quests, slot, purgeAllowed, decAllowed);
             }
             unchecked {
                 ++slot;
@@ -189,7 +182,12 @@ contract PurgeQuestModule is IPurgeQuestModule {
         }
 
         bool matched;
+        bool aggregatedCompleted;
+        bool aggregatedHardMode;
         uint8 fallbackType = quests[0].questType;
+        uint8 aggregatedQuestType = fallbackType;
+        uint32 aggregatedStreak = state.streak;
+        uint256 aggregatedReward;
         for (uint8 slot; slot < QUEST_SLOT_COUNT; ) {
             DailyQuest memory quest = quests[slot];
             if (quest.day != currentDay) {
@@ -209,12 +207,21 @@ contract PurgeQuestModule is IPurgeQuestModule {
                     tier
                 );
                 if (completed) {
-                    return (reward, hardMode, questType, streak, completed);
+                    aggregatedReward += reward;
+                    aggregatedQuestType = questType;
+                    aggregatedStreak = streak;
+                    aggregatedCompleted = true;
+                    if (hardMode) {
+                        aggregatedHardMode = true;
+                    }
                 }
             }
             unchecked {
                 ++slot;
             }
+        }
+        if (aggregatedCompleted) {
+            return (aggregatedReward, aggregatedHardMode, aggregatedQuestType, aggregatedStreak, true);
         }
         return (0, false, matched ? fallbackType : QUEST_TYPE_MINT_ANY, state.streak, false);
     }
@@ -437,11 +444,8 @@ contract PurgeQuestModule is IPurgeQuestModule {
         override
         returns (uint48 day, uint8 questType, bool highDifficulty, uint8 stakeMask, uint8 stakeRisk)
     {
-        DailyQuest memory quest = activeQuests[0];
-        bool purgeAllowed = _canRollPurgeQuest(_questPhase());
-        if (quest.questType == QUEST_TYPE_PURGE && !purgeAllowed && !_isPurgeQuestLocked(quest.day)) {
-            quest.questType = QUEST_TYPE_MINT_ETH;
-        }
+        DailyQuest[QUEST_SLOT_COUNT] memory local = _materializeActiveQuestsForView();
+        DailyQuest memory quest = local[0];
         return (
             quest.day,
             quest.questType,
@@ -452,26 +456,42 @@ contract PurgeQuestModule is IPurgeQuestModule {
     }
 
     function getActiveQuests() external view override returns (QuestInfo[2] memory quests) {
-        bool purgeChecked;
-        bool convertPurge;
-        for (uint8 slot; slot < QUEST_SLOT_COUNT; ) {
-            DailyQuest memory quest = activeQuests[slot];
-            if (quest.questType == QUEST_TYPE_PURGE) {
-                if (!purgeChecked) {
-                    convertPurge = !_canRollPurgeQuest(_questPhase());
-                    purgeChecked = true;
-                }
-                if (convertPurge && !_isPurgeQuestLocked(quest.day)) {
-                    quest.questType = QUEST_TYPE_MINT_ETH;
-                }
-            }
-            quests[slot] = QuestInfo({
+        DailyQuest[QUEST_SLOT_COUNT] memory local = _materializeActiveQuestsForView();
+        for (uint8 slot2; slot2 < QUEST_SLOT_COUNT; ) {
+            DailyQuest memory quest = local[slot2];
+            quests[slot2] = QuestInfo({
                 day: quest.day,
                 questType: quest.questType,
                 highDifficulty: (quest.flags & QUEST_FLAG_HIGH_DIFFICULTY) != 0,
                 stakeMask: quest.stakeMask,
                 stakeRisk: quest.stakeRisk
             });
+            unchecked {
+                ++slot2;
+            }
+        }
+    }
+
+    function _materializeActiveQuestsForView()
+        private
+        view
+        returns (DailyQuest[QUEST_SLOT_COUNT] memory local)
+    {
+        local = activeQuests;
+        bool purgeAllowed = _canRollPurgeQuest();
+        if (purgeAllowed) return local;
+        for (uint8 slot; slot < QUEST_SLOT_COUNT; ) {
+            if (local[slot].questType == QUEST_TYPE_PURGE) {
+                uint8 otherSlot = slot == 0 ? uint8(1) : uint8(0);
+                if (local[otherSlot].questType == QUEST_TYPE_MINT_ETH) {
+                    local[slot].questType = QUEST_TYPE_STAKE;
+                    (local[slot].stakeMask, local[slot].stakeRisk) = _stakeQuestMaskAndRisk(local[slot].entropy);
+                } else {
+                    local[slot].questType = QUEST_TYPE_MINT_ETH;
+                    local[slot].stakeMask = 0;
+                    local[slot].stakeRisk = 0;
+                }
+            }
             unchecked {
                 ++slot;
             }
@@ -523,41 +543,21 @@ contract PurgeQuestModule is IPurgeQuestModule {
     // Internal helpers
     // ---------------------------------------------------------------------
 
-    function _questPhase() private view returns (uint8 phase_) {
-        IPurgeGame game_ = questGame;
-        if (address(game_) == address(0)) {
-            return 0;
-        }
-        return game_.currentPhase();
-    }
-
-    function _isPurgeQuestLocked(uint48 questDay) private view returns (bool) {
-        return questDay != 0 && questDay == purgeQuestCompletedDay;
-    }
-
     function _normalizeActivePurgeQuests() private {
         DailyQuest[QUEST_SLOT_COUNT] storage quests = activeQuests;
-        bool hasPurge;
-        for (uint8 slot; slot < QUEST_SLOT_COUNT; ) {
-            if (quests[slot].questType == QUEST_TYPE_PURGE) {
-                hasPurge = true;
-                break;
-            }
-            unchecked {
-                ++slot;
-            }
-        }
-        if (!hasPurge) return;
-        bool purgeAllowed = _canRollPurgeQuest(_questPhase());
+        bool purgeAllowed = _canRollPurgeQuest();
         _normalizeActivePurgeQuestsStorage(quests, purgeAllowed);
     }
 
-    function _normalizeActivePurgeQuestsStorage(DailyQuest[QUEST_SLOT_COUNT] storage quests, bool inPurge) private {
-        if (inPurge) return;
+    function _normalizeActivePurgeQuestsStorage(
+        DailyQuest[QUEST_SLOT_COUNT] storage quests,
+        bool purgeAllowed
+    ) private {
+        if (purgeAllowed) return;
         for (uint8 slot; slot < QUEST_SLOT_COUNT; ) {
             DailyQuest storage quest = quests[slot];
-            if (quest.questType == QUEST_TYPE_PURGE && !_isPurgeQuestLocked(quest.day)) {
-                quest.questType = QUEST_TYPE_MINT_ETH;
+            if (quest.questType == QUEST_TYPE_PURGE) {
+                _convertPurgeQuest(quests, slot);
             }
             unchecked {
                 ++slot;
@@ -565,8 +565,26 @@ contract PurgeQuestModule is IPurgeQuestModule {
         }
     }
 
-    function _canRollPurgeQuest(uint8 phase) private view returns (bool) {
-        return purgeQuestsEnabled && phase == 6;
+    function _convertPurgeQuest(DailyQuest[QUEST_SLOT_COUNT] storage quests, uint8 slot) private {
+        DailyQuest storage quest = quests[slot];
+        uint8 otherSlot = slot == 0 ? uint8(1) : uint8(0);
+        DailyQuest storage other = quests[otherSlot];
+        if (other.questType == QUEST_TYPE_MINT_ETH) {
+            quest.questType = QUEST_TYPE_STAKE;
+            (quest.stakeMask, quest.stakeRisk) = _stakeQuestMaskAndRisk(quest.entropy);
+        } else {
+            quest.questType = QUEST_TYPE_MINT_ETH;
+            quest.stakeMask = 0;
+            quest.stakeRisk = 0;
+        }
+    }
+
+    function _canRollPurgeQuest() private view returns (bool) {
+        IPurgeGame game_ = questGame;
+        if (address(game_) == address(0)) {
+            return false;
+        }
+        return game_.gameState() == 3;
     }
 
     function _canRollDecimatorQuest() private view returns (bool) {
@@ -723,12 +741,14 @@ contract PurgeQuestModule is IPurgeQuestModule {
     }
 
     function _applyQuestTypeConstraints(
-        DailyQuest storage quest,
+        DailyQuest[QUEST_SLOT_COUNT] storage quests,
+        uint8 slot,
         bool purgeAllowed,
         bool decAllowed
     ) private {
+        DailyQuest storage quest = quests[slot];
         if (quest.questType == QUEST_TYPE_PURGE && !purgeAllowed) {
-            quest.questType = QUEST_TYPE_MINT_ETH;
+            _convertPurgeQuest(quests, slot);
         } else if (quest.questType == QUEST_TYPE_DECIMATOR && !decAllowed) {
             quest.questType = QUEST_TYPE_FLIP;
         }
@@ -747,7 +767,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         for (uint8 attempt; attempt < QUEST_TYPE_COUNT * 2; ) {
             uint256 attemptEntropy = uint256(keccak256(abi.encode(entropy, day, attempt + 1)));
             _seedQuest(quests[1], day, attemptEntropy, referenceType);
-            _applyQuestTypeConstraints(quests[1], purgeAllowed, decAllowed);
+            _applyQuestTypeConstraints(quests, 1, purgeAllowed, decAllowed);
             if (quests[1].questType != referenceType) {
                 return;
             }
@@ -766,7 +786,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         for (uint8 offset = 1; offset < QUEST_TYPE_COUNT; ) {
             uint8 candidate = uint8((uint256(exclude) + offset) % QUEST_TYPE_COUNT);
             if (candidate == QUEST_TYPE_PURGE && !purgeAllowed) {
-                candidate = QUEST_TYPE_MINT_ETH;
+                candidate = (exclude == QUEST_TYPE_MINT_ETH) ? QUEST_TYPE_STAKE : QUEST_TYPE_MINT_ETH;
             } else if (candidate == QUEST_TYPE_DECIMATOR && !decAllowed) {
                 candidate = QUEST_TYPE_FLIP;
             }
@@ -813,9 +833,6 @@ contract PurgeQuestModule is IPurgeQuestModule {
                 state.lastCompletedDay = uint32(quest.day);
             }
         }
-        if (quest.questType == QUEST_TYPE_PURGE) {
-            purgeQuestCompletedDay = quest.day;
-        }
         bool isHard = (quest.flags & QUEST_FLAG_HIGH_DIFFICULTY) != 0;
         uint256 totalReward = _questTotalReward(newStreak, quest.flags);
         uint256 rewardShare = totalReward / QUEST_SLOT_COUNT;
@@ -829,8 +846,19 @@ contract PurgeQuestModule is IPurgeQuestModule {
             if (bonus > 3000) bonus = 3000;
             totalReward += bonus * MILLION;
         }
-        if ((questFlags & QUEST_FLAG_HIGH_DIFFICULTY) != 0) {
+        if ((questFlags & QUEST_FLAG_HIGH_DIFFICULTY) != 0 && streak >= QUEST_TIER_STREAK_SPAN) {
             totalReward += 100 * MILLION;
+        }
+    }
+
+    function _stakeQuestMaskAndRisk(uint256 entropy) private pure returns (uint8 mask, uint8 risk) {
+        mask = QUEST_STAKE_REQUIRE_DISTANCE;
+        bool requirePrincipal = ((entropy >> 16) & 1) == 0;
+        if (requirePrincipal) {
+            mask |= QUEST_STAKE_REQUIRE_PRINCIPAL;
+        } else {
+            mask |= QUEST_STAKE_REQUIRE_RISK;
+            risk = uint8(2 + uint8((entropy >> 40) % 10));
         }
     }
 
@@ -843,16 +871,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         uint8 mask;
         uint8 risk;
         if (qType == QUEST_TYPE_STAKE) {
-            mask = QUEST_STAKE_REQUIRE_DISTANCE;
-            bool requirePrincipal = ((entropy >> 16) & 1) == 0;
-            if (requirePrincipal) {
-                mask |= QUEST_STAKE_REQUIRE_PRINCIPAL;
-            } else {
-                mask |= QUEST_STAKE_REQUIRE_RISK;
-            }
-            if ((mask & QUEST_STAKE_REQUIRE_RISK) != 0) {
-                risk = uint8(2 + uint8((entropy >> 40) % 10));
-            }
+            (mask, risk) = _stakeQuestMaskAndRisk(entropy);
         }
         quest.day = day;
         quest.questType = qType;
