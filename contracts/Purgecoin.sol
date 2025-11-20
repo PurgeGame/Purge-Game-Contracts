@@ -618,10 +618,8 @@ contract Purgecoin is PurgeCoinStorage {
                 earned[affiliateAddr] = newTotal;
                 addFlip(affiliateAddr, totalFlipAward, false);
                 if (address(module) != address(0)) {
-                    (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleAffiliate(
-                        affiliateAddr,
-                        affiliateShare
-                    );
+                    (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module
+                        .handleAffiliate(affiliateAddr, affiliateShare);
                     _questApplyReward(affiliateAddr, reward, hardMode, questType, streak, completed);
                 }
 
@@ -646,10 +644,8 @@ contract Purgecoin is PurgeCoinStorage {
                     earned[upline] = uplineTotal;
                     addFlip(upline, bonus, false);
                     if (address(module) != address(0)) {
-                        (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleAffiliate(
-                            upline,
-                            bonus
-                        );
+                        (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module
+                            .handleAffiliate(upline, bonus);
                         _questApplyReward(upline, reward, hardMode, questType, streak, completed);
                     }
                     _updatePlayerScore(1, upline, uplineTotal);
@@ -1408,27 +1404,6 @@ contract Purgecoin is PurgeCoinStorage {
         uint256 rate = base > reduction ? base - reduction : 0;
         if (rate < 100) rate = 100;
         return uint16(rate);
-    }
-
-    /// @notice Pick the address with the highest luckbox from a candidate list.
-    /// @param players Candidate addresses (may include address(0)).
-    /// @return best Address with the maximum `playerLuckbox` value among `players` (zero if none).
-    function getTopLuckbox(address[] memory players) internal view returns (address best) {
-        uint256 top;
-        uint256 len = players.length;
-        for (uint256 i; i < len; ) {
-            address p = players[i];
-            if (p != address(0)) {
-                uint256 v = playerLuckbox[p];
-                if (v > top) {
-                    top = v;
-                    best = p;
-                }
-            }
-            unchecked {
-                ++i;
-            }
-        }
     }
 
     function _questApplyReward(
