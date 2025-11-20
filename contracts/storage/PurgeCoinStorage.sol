@@ -112,7 +112,7 @@ abstract contract PurgeCoinStorage {
     address internal bountyOwedTo;
     uint96 public totalPresaleSold;
 
-    uint256 internal nukeStream;
+    uint256 internal coinflipRewardPercent;
 
     BAFState internal bafState;
     BAFScan internal bs;

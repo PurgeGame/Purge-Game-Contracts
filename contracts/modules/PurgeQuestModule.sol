@@ -837,25 +837,31 @@ contract PurgeQuestModule is IPurgeQuestModule {
         }
         bool isHard = (quest.flags & QUEST_FLAG_HIGH_DIFFICULTY) != 0;
         uint32 rewardStreak = streakJustUpdated ? newStreak : state.baseStreak;
-        uint256 totalReward = _questTotalReward(rewardStreak, quest.flags, streakJustUpdated);
-        uint256 rewardShare = totalReward / QUEST_SLOT_COUNT;
+        uint256 baseReward = _questBaseReward(rewardStreak, quest.flags);
+        uint256 rewardShare = baseReward / QUEST_SLOT_COUNT;
+        if (streakJustUpdated) {
+            rewardShare += _questStreakBonus(newStreak);
+        }
         return (rewardShare, isHard, quest.questType, newStreak, true);
     }
 
-    function _questTotalReward(uint32 streak, uint8 questFlags, bool includeStreakBonus)
+    function _questBaseReward(uint32 streak, uint8 questFlags)
         private
         pure
         returns (uint256 totalReward)
     {
         totalReward = 200 * MILLION;
-        if (includeStreakBonus && streak >= 5 && (streak == 5 || (streak % 10) == 0)) {
-            uint256 bonus = uint256(streak) * 100;
-            if (bonus > 3000) bonus = 3000;
-            totalReward += bonus * MILLION;
-        }
         if ((questFlags & QUEST_FLAG_HIGH_DIFFICULTY) != 0 && streak >= QUEST_TIER_STREAK_SPAN) {
             totalReward += 100 * MILLION;
         }
+    }
+
+    function _questStreakBonus(uint32 streak) private pure returns (uint256 bonusReward) {
+        if (streak < 5) return 0;
+        if (streak != 5 && (streak % 10) != 0) return 0;
+        uint256 bonus = uint256(streak) * 100;
+        if (bonus > 3000) bonus = 3000;
+        return bonus * MILLION;
     }
 
     function _stakeQuestMaskAndRisk(uint256 entropy) private pure returns (uint8 mask, uint8 risk) {

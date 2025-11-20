@@ -23,7 +23,6 @@ contract Purgecoin is PurgeCoinStorage {
     event CoinJackpotPaid(uint16 trait, address winner, uint256 amount);
     event BountyOwed(address indexed to, uint256 bountyAmount, uint256 newRecordFlip);
     event BountyPaid(address indexed to, uint256 amount);
-    event FlipNuked(address indexed player, uint32 streak, uint256 amount);
     event DailyQuestRolled(uint48 indexed day, uint8 questType, bool highDifficulty, uint8 stakeMask, uint8 stakeRisk);
     event QuestCompleted(address indexed player, uint8 questType, uint32 streak, uint256 reward, bool hardMode);
 
@@ -103,6 +102,13 @@ contract Purgecoin is PurgeCoinStorage {
     uint128 private constant ONEK = 1_000_000_000; // 1,000 PURGED (6d)
     uint32 private constant BAF_BATCH = 5000;
     uint256 private constant BUCKET_SIZE = 1500;
+    uint16 private constant COINFLIP_EXTRA_MIN_PERCENT = 80;
+    uint16 private constant COINFLIP_EXTRA_MAX_PERCENT = 115;
+    uint16 private constant COINFLIP_EXTRA_RANGE = COINFLIP_EXTRA_MAX_PERCENT - COINFLIP_EXTRA_MIN_PERCENT + 1;
+    uint16 private constant BPS_DENOMINATOR = 10_000;
+    uint32 private constant QUEST_TIER_BONUS_SPAN = 7;
+    uint8 private constant QUEST_TIER_BONUS_MAX = 10;
+    uint16 private constant QUEST_TIER_BONUS_BPS_PER_TIER = 20;
     bytes32 private constant H = 0x9aeceb0bff1d88815fac67760a5261a814d06dfaedc391fdf4cf62afac3f10b5;
     uint8 private constant STAKE_MAX_LANES = 3;
     uint256 private constant STAKE_LANE_BITS = 86;
@@ -921,17 +927,21 @@ contract Purgecoin is PurgeCoinStorage {
         uint48 epoch
     ) external onlyPurgeGameContract returns (bool finished) {
         uint256 word = rngWord;
+        uint16 rewardPercent = uint16(coinflipRewardPercent);
         if (payoutIndex == 0) {
             uint256 seedWord = word;
             if (epoch != 0) {
                 seedWord = uint256(keccak256(abi.encodePacked(word, epoch)));
             }
-            nukeStream = seedWord;
+            rewardPercent = uint16((seedWord % COINFLIP_EXTRA_RANGE) + COINFLIP_EXTRA_MIN_PERCENT);
+            coinflipRewardPercent = rewardPercent;
             if (bonusActive && ((word & 1) == 0)) {
                 unchecked {
                     ++word;
                 }
             }
+        } else if (rewardPercent == 0) {
+            rewardPercent = COINFLIP_EXTRA_MIN_PERCENT;
         }
         // --- Step sizing (bounded work) ----------------------------------------------------
 
@@ -1095,26 +1105,14 @@ contract Purgecoin is PurgeCoinStorage {
                 } else {
                     uint256 workingAmt = amt;
                     if (bonusFlip) workingAmt = (workingAmt * 11) / 10; // keep current rounding semantics
-                    uint256 payout = workingAmt * 2;
+                    uint32 streak = _questStreak(p);
+                    uint256 payout = _coinflipWinAmount(workingAmt, rewardPercent, streak);
                     if (isBafLevel) {
                         coinflipAmount[p] = payout;
                     } else {
-                        uint32 streak = _questStreak(p);
-                        uint16 nukeRate = _nukeRateBps(streak);
-                        bool nuked;
-                        if (nukeRate != 0) {
-                            uint256 sample = uint256(_nextNukeSample());
-                            uint256 threshold = (uint256(nukeRate) * 65536) / 10_000;
-                            nuked = sample < threshold;
-                        }
-                        if (nuked) {
-                            coinflipAmount[p] = 0;
-                            emit FlipNuked(p, streak, payout);
-                        } else {
-                            coinflipAmount[p] = 0;
-                            unchecked {
-                                credit += payout;
-                            }
+                        coinflipAmount[p] = 0;
+                        unchecked {
+                            credit += payout;
                         }
                     }
                 }
@@ -1143,7 +1141,7 @@ contract Purgecoin is PurgeCoinStorage {
             payoutIndex = 0;
 
             scanCursor = SS_IDLE;
-            nukeStream = 0;
+            coinflipRewardPercent = 0;
             if (isBafLevel) {
                 lastBafFlipLevel = level;
             }
@@ -1388,25 +1386,27 @@ contract Purgecoin is PurgeCoinStorage {
         }
     }
 
-    function _nextNukeSample() private returns (uint16) {
-        uint256 state = nukeStream;
-        unchecked {
-            state = (state ^ (state << 13) ^ (state >> 7) ^ (state << 17)) ^ uint256(H);
+    function _coinflipWinAmount(uint256 amount, uint16 rewardPercent, uint32 streak) private pure returns (uint256) {
+        if (amount == 0) return 0;
+        uint16 cappedPercent = rewardPercent;
+        if (cappedPercent < COINFLIP_EXTRA_MIN_PERCENT) {
+            cappedPercent = COINFLIP_EXTRA_MIN_PERCENT;
+        } else if (cappedPercent > COINFLIP_EXTRA_MAX_PERCENT) {
+            cappedPercent = COINFLIP_EXTRA_MAX_PERCENT;
         }
-        if (state == 0) state = uint256(H);
-        nukeStream = state;
-        return uint16(state);
+        uint256 baseBps = uint256(cappedPercent) * 100;
+        uint256 bonusBps = _questTierBonusBps(streak);
+        uint256 payoutBonus = (amount * (baseBps + bonusBps)) / BPS_DENOMINATOR;
+        return amount + payoutBonus;
     }
 
-    function _nukeRateBps(uint32 streak) private pure returns (uint16) {
+    function _questTierBonusBps(uint32 streak) private pure returns (uint256) {
         if (streak == 0) return 0;
-        if (streak == 1) return 500;
-        if (streak == 2) return 400;
-        uint256 base = 350;
-        uint256 reduction = uint256(streak - 3) * 10;
-        uint256 rate = base > reduction ? base - reduction : 0;
-        if (rate < 100) rate = 100;
-        return uint16(rate);
+        uint256 tier = uint256(streak) / QUEST_TIER_BONUS_SPAN;
+        if (tier > QUEST_TIER_BONUS_MAX) {
+            tier = QUEST_TIER_BONUS_MAX;
+        }
+        return tier * QUEST_TIER_BONUS_BPS_PER_TIER;
     }
 
     function _questApplyReward(
