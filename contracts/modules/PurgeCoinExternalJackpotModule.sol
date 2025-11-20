@@ -426,12 +426,15 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
     }
 
     function _playerAt(uint256 idx) internal view returns (address) {
-        return cfPlayers[cfHead + idx];
+        uint256 capacity = cfPlayers.length;
+        if (capacity == 0) return address(0);
+        uint256 physical = (uint256(cfHead) + idx) % capacity;
+        return cfPlayers[physical];
     }
 
     function _srcPlayer(uint8 kind, uint24 lvl, uint256 idx) internal view returns (address) {
         if (kind == 0) {
-            return cfPlayers[cfHead + idx];
+            return _playerAt(idx);
         }
         uint256 bucketIdx = idx / BUCKET_SIZE;
         uint256 offsetInBucket = idx - bucketIdx * BUCKET_SIZE;
