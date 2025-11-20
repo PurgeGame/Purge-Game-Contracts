@@ -347,7 +347,7 @@ contract PurgeGameNFT {
         } else {
             uint8 phase = game.currentPhase();
             bool creditNext = (state == 3 || state == 1);
-            bonus = _processEthPurchase(buyer, quantity * 100, affiliateCode, quantity, targetLevel, false, creditNext);
+            bonus = _processEthPurchase(buyer, quantity * 100, affiliateCode, targetLevel, false, creditNext);
             if (phase == 3 && (targetLevel % 100) > 90) {
                 bonus += (quantity * priceCoinUnit) / 5;
             }
@@ -400,7 +400,6 @@ contract PurgeGameNFT {
                 buyer,
                 scaledQty,
                 affiliateCode,
-                (lvl < 10) ? quantity : 0,
                 lvl,
                 true,
                 creditNext
@@ -422,7 +421,6 @@ contract PurgeGameNFT {
         address payer,
         uint256 scaledQty,
         bytes32 affiliateCode,
-        uint256 bonusUnits,
         uint24 lvl,
         bool mapPurchase,
         bool creditNextPool
@@ -469,7 +467,20 @@ contract PurgeGameNFT {
 
         uint256 rakebackMint = coin.payAffiliate(affiliateAmount, affiliateCode, payer, lvl);
 
-        // bonusMint = (bonusUnits * priceUnit * pct) / 100;  <-- REMOVED: Late buyers shouldn't get this self-bonus
+        if (!mapPurchase) {
+            uint256 epPercent = percentReached;
+            if (epPercent < 20) {
+                uint256 bonusPct = 20 - epPercent;
+                uint256 coinCost = (scaledQty * priceUnit) / 100;
+                uint256 earlyBonus = (coinCost * bonusPct) / 100;
+                if (earlyBonus != 0) {
+                    unchecked {
+                        bonusMint += earlyBonus;
+                    }
+                }
+            }
+        }
+
         if (rakebackMint != 0) {
             unchecked {
                 bonusMint += rakebackMint;
