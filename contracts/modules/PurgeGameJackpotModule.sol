@@ -418,7 +418,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
     ) private {
         uint256 entropyWord = _scrambleJackpotEntropy(randWord, jackpotCounter);
 
-        uint32 winningTraitsPacked = _packWinningTraits(_getRandomTraits(entropyWord));
+        uint32 winningTraitsPacked = _packWinningTraits(_getWinningTraits(entropyWord, dailyPurgeCount));
         uint8 remainingJackpots = JACKPOT_LEVEL_CAP > jackpotCounter ? uint8(JACKPOT_LEVEL_CAP - jackpotCounter) : uint8(1);
         uint256 currentEntropy = entropyWord ^ (uint256(lvl) << 192);
         _payCurrentLevelDailyJackpot(
