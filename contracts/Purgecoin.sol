@@ -912,8 +912,8 @@ contract Purgecoin is PurgeCoinStorage {
     /// @notice Progress coinflip payouts for the current level in bounded slices.
     /// @dev Called by PurgeGame; runs in four phases per settlement:
     ///      1. Optionally propagate stakes when the flip outcome is a win.
-    ///      2. Arm bounty and tenth-player bonuses on the first payout window.
-    ///      3. Pay player flips (plus any tenth-player prizes) in batches.
+    ///      2. Arm bounties on the first payout window.
+    ///      3. Pay player flips in batches.
     ///      4. Perform cleanup and reopen betting.
     /// @param level Current PurgeGame level (used to gate 1/run and propagate stakes).
     /// @param cap   Work cap hint. cap==0 uses defaults; otherwise applies directly.
@@ -1046,7 +1046,7 @@ contract Purgecoin is PurgeCoinStorage {
             }
         }
 
-        // --- Phase 2: bounty payout and tenth-player arming (first window only) -------
+        // --- Phase 2: bounty payout (first window only) -------
         uint256 totalPlayers = _coinflipCount();
 
         // Bounty: convert any owed bounty into a flip credit on the first window.
@@ -1059,43 +1059,15 @@ contract Purgecoin is PurgeCoinStorage {
             emit BountyPaid(to, amt);
         }
 
-        // Every tenth player bonus pool: arm once per round on wins when enough players exist.
-        if (win && payoutIndex == 0 && currentTenthPlayerBonusPool > 0 && totalPlayers >= 10) {
-            uint256 bonusPool = currentTenthPlayerBonusPool;
-            currentTenthPlayerBonusPool = 0;
-            uint32 rem = uint32(totalPlayers / 10); // how many 10th slots exist
-            if (rem != 0) {
-                uint256 prize = bonusPool / rem;
-                tbPrize = prize;
-                tbRemain = rem;
-                tbActive = (prize != 0);
-            } else {
-                _addToBounty(bonusPool);
-                tbActive = false;
-            }
-            tbMod = uint8(word % 10); // wheel offset 0..9
-        }
-
         // --- Phase 3: player payouts (windowed by stepPayout) -----------------------------------
         uint256 start = payoutIndex;
         uint256 end = start + stepPayout;
         if (end > totalPlayers) end = totalPlayers;
 
-        uint8 wheel = uint8(start % 10); // rolling 0..9 index for tenth-player bonus
-
         for (uint256 i = start; i < end; ) {
             address p = _playerAt(i);
 
             uint256 credit; // accumulate bonus + flip payout
-
-            // Tenth-player bonus.
-            if (tbActive && tbRemain != 0 && wheel == tbMod) {
-                credit = tbPrize;
-                unchecked {
-                    --tbRemain;
-                }
-                if (tbRemain == 0) tbActive = false;
-            }
 
             // Flip payout: double on win, zero out stake in all cases.
             uint256 amt = coinflipAmount[p];
@@ -1125,16 +1097,11 @@ contract Purgecoin is PurgeCoinStorage {
 
             unchecked {
                 ++i;
-                wheel = (wheel == 9) ? 0 : (wheel + 1);
             }
         }
         payoutIndex = uint32(end);
         // --- Phase 4: cleanup (single shot) -------------------------------------------
         if (end >= totalPlayers) {
-            tbActive = false;
-            tbRemain = 0;
-            tbPrize = 0;
-            tbMod = 0;
             if (!isBafLevel) {
                 cfHead = cfTail;
             }

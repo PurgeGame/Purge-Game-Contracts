@@ -67,22 +67,15 @@ abstract contract PurgeCoinStorage {
     IPurgeQuestModule internal questModule;
     address internal externalJackpotModule;
 
-    bool internal tbActive;
     bool internal bonusActive;
     uint8 internal extMode;
 
     uint8 internal affiliateLen;
     uint8 internal topLen;
 
-    uint8 internal tbMod;
-    uint32 internal tbRemain;
-    uint256 internal tbPrize;
-
     uint24 internal stakeLevelComplete;
     uint32 internal scanCursor = type(uint32).max;
     uint32 internal payoutIndex;
-
-    uint256 internal currentTenthPlayerBonusPool;
 
     address[] internal cfPlayers;
     uint128 internal cfHead;
