@@ -20,7 +20,6 @@ contract Purgecoin is PurgeCoinStorage {
     event DecimatorBurn(address indexed player, uint256 amountBurned, uint8 bucket);
     event Affiliate(uint256 amount, bytes32 indexed code, address sender);
     event CoinflipFinished(bool result);
-    event CoinJackpotPaid(uint16 trait, address winner, uint256 amount);
     event BountyOwed(address indexed to, uint256 bountyAmount, uint256 newRecordFlip);
     event BountyPaid(address indexed to, uint256 amount);
     event DailyQuestRolled(uint48 indexed day, uint8 questType, bool highDifficulty, uint8 stakeMask, uint8 stakeRisk);
@@ -312,12 +311,6 @@ contract Purgecoin is PurgeCoinStorage {
         uint256 shift = uint256(index) * STAKE_LANE_BITS;
         uint256 mask = STAKE_LANE_MASK << shift;
         return (encoded & ~mask) | (laneValue << shift);
-    }
-
-    function _laneCount(uint256 encoded) private pure returns (uint8 count) {
-        if ((encoded & STAKE_LANE_MASK) != 0) count++;
-        if (((encoded >> STAKE_LANE_BITS) & STAKE_LANE_MASK) != 0) count++;
-        if (((encoded >> (2 * STAKE_LANE_BITS)) & STAKE_LANE_MASK) != 0) count++;
     }
 
     function _ensureCompatible(uint256 encoded, uint8 expectRisk) private pure returns (uint8 lanes) {
@@ -1156,47 +1149,6 @@ contract Purgecoin is PurgeCoinStorage {
 
     function lastBiggestFlip() external view returns (address) {
         return topBettors[0].player;
-    }
-    function _sqrt(uint256 x) private pure returns (uint256 z) {
-        if (x == 0) return 0;
-        z = 1;
-        uint256 y = x;
-        if (y >> 128 > 0) {
-            y >>= 128;
-            z <<= 64;
-        }
-        if (y >> 64 > 0) {
-            y >>= 64;
-            z <<= 32;
-        }
-        if (y >> 32 > 0) {
-            y >>= 32;
-            z <<= 16;
-        }
-        if (y >> 16 > 0) {
-            y >>= 16;
-            z <<= 8;
-        }
-        if (y >> 8 > 0) {
-            y >>= 8;
-            z <<= 4;
-        }
-        if (y >> 4 > 0) {
-            y >>= 4;
-            z <<= 2;
-        }
-        if (y >> 2 > 0) {
-            z <<= 1;
-        }
-        for (uint8 i; i < 7; ) {
-            uint256 next = (z + x / z) >> 1;
-            if (next >= z) break;
-            z = next;
-            unchecked {
-                ++i;
-            }
-        }
-        return z;
     }
     /// @notice Progress an external jackpot: BAF (kind=0) or Decimator (kind=1).
     /// @dev

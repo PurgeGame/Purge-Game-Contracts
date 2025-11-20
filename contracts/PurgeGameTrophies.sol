@@ -127,7 +127,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         uint8 count,
         uint16 mapBonusBps
     );
-    event StakeTrophyAwarded(address indexed to, uint256 indexed tokenId, uint24 level, uint256 principal);
 
     struct StakeParams {
         address player;
