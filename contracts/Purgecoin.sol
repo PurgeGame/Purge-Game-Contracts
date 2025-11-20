@@ -184,6 +184,16 @@ contract Purgecoin is PurgeCoinStorage {
             _questApplyReward(caller, reward, hardMode, questType, streak, completed);
         }
 
+        uint256 luckboxBalance = playerLuckbox[caller];
+        PlayerScore storage record = biggestLuckbox;
+        uint256 wholeCoins = luckboxBalance / MILLION;
+        if (wholeCoins > uint256(record.score)) {
+            record.player = caller;
+            uint256 clamped = wholeCoins;
+            if (clamped > type(uint96).max) clamped = type(uint96).max;
+            record.score = uint96(clamped);
+        }
+
         emit CoinflipDeposit(caller, amount);
     }
 
@@ -816,13 +826,6 @@ contract Purgecoin is PurgeCoinStorage {
     function primeMintEthQuest(uint48 day) external onlyPurgeGameContract {
         IPurgeQuestModule module = questModule;
         module.primeMintEthQuest(day);
-    }
-
-    function setQuestPurgeEnabled(bool enabled) external {
-        if (msg.sender != creator) revert OnlyDeployer();
-        IPurgeQuestModule module = questModule;
-        if (address(module) == address(0)) revert Zero();
-        module.setPurgeQuestEnabled(enabled);
     }
 
     function rollDailyQuest(uint48 day, uint256 entropy) external onlyPurgeGameContract {

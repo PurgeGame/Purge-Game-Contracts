@@ -824,6 +824,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         }
         state.completionMask |= slotMask;
         uint32 newStreak = state.streak;
+        bool streakJustUpdated;
         if ((state.completionMask & QUEST_STATE_STREAK_CREDITED) == 0) {
             uint8 completedSlots = state.completionMask & QUEST_STATE_COMPLETED_SLOTS_MASK;
             if (completedSlots == QUEST_STATE_COMPLETED_SLOTS_MASK) {
@@ -831,17 +832,23 @@ contract PurgeQuestModule is IPurgeQuestModule {
                 newStreak = state.streak + 1;
                 state.streak = newStreak;
                 state.lastCompletedDay = uint32(quest.day);
+                streakJustUpdated = true;
             }
         }
         bool isHard = (quest.flags & QUEST_FLAG_HIGH_DIFFICULTY) != 0;
-        uint256 totalReward = _questTotalReward(newStreak, quest.flags);
+        uint32 rewardStreak = streakJustUpdated ? newStreak : state.baseStreak;
+        uint256 totalReward = _questTotalReward(rewardStreak, quest.flags, streakJustUpdated);
         uint256 rewardShare = totalReward / QUEST_SLOT_COUNT;
         return (rewardShare, isHard, quest.questType, newStreak, true);
     }
 
-    function _questTotalReward(uint32 streak, uint8 questFlags) private pure returns (uint256 totalReward) {
+    function _questTotalReward(uint32 streak, uint8 questFlags, bool includeStreakBonus)
+        private
+        pure
+        returns (uint256 totalReward)
+    {
         totalReward = 200 * MILLION;
-        if (streak >= 5 && (streak == 5 || (streak % 10) == 0)) {
+        if (includeStreakBonus && streak >= 5 && (streak == 5 || (streak % 10) == 0)) {
             uint256 bonus = uint256(streak) * 100;
             if (bonus > 3000) bonus = 3000;
             totalReward += bonus * MILLION;

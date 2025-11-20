@@ -67,8 +67,8 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
 
             if (kind == 0) {
                 uint256 P = poolWei;
-                address[7] memory tmpW;
-                uint256[7] memory tmpA;
+                address[8] memory tmpW;
+                uint256[8] memory tmpA;
                 uint256 n;
                 uint256 credited;
                 uint256 toReturn;
@@ -159,7 +159,20 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
                 uint256 scatter = (P * 2) / 5;
                 uint256 unallocated = P - credited - toReturn - scatter;
                 if (unallocated != 0) {
-                    toReturn += unallocated;
+                    PlayerScore memory luckboxRecord = biggestLuckbox;
+                    address luckboxLeader = luckboxRecord.player;
+                    if (luckboxLeader != address(0) && luckboxRecord.score != 0 && _eligible(luckboxLeader)) {
+                        tmpW[n] = luckboxLeader;
+                        tmpA[n] = unallocated;
+                        unchecked {
+                            ++n;
+                        }
+                        credited += unallocated;
+                        unallocated = 0;
+                    }
+                    if (unallocated != 0) {
+                        toReturn += unallocated;
+                    }
                 }
                 if (limit >= 10 && bs.offset < limit) {
                     uint256 occurrences = 1 + (uint256(limit) - 1 - bs.offset) / 10;

@@ -97,6 +97,7 @@ abstract contract PurgeCoinStorage {
     mapping(uint24 => mapping(address => uint256)) public affiliateCoinEarned;
     mapping(address => bytes32) internal playerReferralCode;
     mapping(address => uint256) public playerLuckbox;
+    PlayerScore public biggestLuckbox;
     PlayerScore[8] public affiliateLeaderboard;
 
     mapping(uint24 => address[]) internal stakeAddr;
