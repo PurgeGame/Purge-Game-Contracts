@@ -103,8 +103,7 @@ contract Purgecoin is PurgeCoinStorage {
     uint32 private constant BAF_BATCH = 5000;
     uint256 private constant BUCKET_SIZE = 1500;
     uint16 private constant COINFLIP_EXTRA_MIN_PERCENT = 80;
-    uint16 private constant COINFLIP_EXTRA_MAX_PERCENT = 115;
-    uint16 private constant COINFLIP_EXTRA_RANGE = COINFLIP_EXTRA_MAX_PERCENT - COINFLIP_EXTRA_MIN_PERCENT + 1;
+    uint16 private constant COINFLIP_EXTRA_RANGE = 35;
     uint16 private constant BPS_DENOMINATOR = 10_000;
     uint32 private constant QUEST_TIER_BONUS_SPAN = 7;
     uint8 private constant QUEST_TIER_BONUS_MAX = 10;
@@ -917,7 +916,7 @@ contract Purgecoin is PurgeCoinStorage {
     ///      4. Perform cleanup and reopen betting.
     /// @param level Current PurgeGame level (used to gate 1/run and propagate stakes).
     /// @param cap   Work cap hint. cap==0 uses defaults; otherwise applies directly.
-    /// @param bonusFlip Apply a 10% bonus to the last flip of the purchase phase.
+    /// @param bonusFlip Adds 5 percentage points to the payout roll for the last flip of the purchase phase.
     /// @return finished True when all payouts and cleanup are complete.
     function processCoinflipPayouts(
         uint24 level,
@@ -934,6 +933,11 @@ contract Purgecoin is PurgeCoinStorage {
                 seedWord = uint256(keccak256(abi.encodePacked(word, epoch)));
             }
             rewardPercent = uint16((seedWord % COINFLIP_EXTRA_RANGE) + COINFLIP_EXTRA_MIN_PERCENT);
+            if (bonusFlip) {
+                unchecked {
+                    rewardPercent += 5;
+                }
+            }
             coinflipRewardPercent = rewardPercent;
             if (bonusActive && ((word & 1) == 0)) {
                 unchecked {
@@ -1076,7 +1080,6 @@ contract Purgecoin is PurgeCoinStorage {
                     coinflipAmount[p] = 0;
                 } else {
                     uint256 workingAmt = amt;
-                    if (bonusFlip) workingAmt = (workingAmt * 11) / 10; // keep current rounding semantics
                     uint32 streak = _questStreak(p);
                     uint256 payout = _coinflipWinAmount(workingAmt, rewardPercent, streak);
                     if (isBafLevel) {
@@ -1355,18 +1358,11 @@ contract Purgecoin is PurgeCoinStorage {
 
     function _coinflipWinAmount(uint256 amount, uint16 rewardPercent, uint32 streak) private pure returns (uint256) {
         if (amount == 0) return 0;
-        uint16 cappedPercent = rewardPercent;
-        if (cappedPercent < COINFLIP_EXTRA_MIN_PERCENT) {
-            cappedPercent = COINFLIP_EXTRA_MIN_PERCENT;
-        } else if (cappedPercent > COINFLIP_EXTRA_MAX_PERCENT) {
-            cappedPercent = COINFLIP_EXTRA_MAX_PERCENT;
-        }
-        uint256 baseBps = uint256(cappedPercent) * 100;
+        uint256 baseBps = uint256(rewardPercent) * 100;
         uint256 bonusBps = _questTierBonusBps(streak);
         uint256 payoutBonus = (amount * (baseBps + bonusBps)) / BPS_DENOMINATOR;
         return amount + payoutBonus;
     }
-
     function _questTierBonusBps(uint32 streak) private pure returns (uint256) {
         if (streak == 0) return 0;
         uint256 tier = uint256(streak) / QUEST_TIER_BONUS_SPAN;
