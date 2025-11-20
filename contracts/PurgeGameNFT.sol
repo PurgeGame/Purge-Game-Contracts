@@ -337,16 +337,17 @@ contract PurgeGameNFT {
         uint256 priceCoinUnit = game.coinPriceUnit();
         _enforceCenturyLuckbox(buyer, targetLevel, priceCoinUnit);
 
-        uint256 bonusCoinReward = (quantity / 10) * priceCoinUnit;
         uint256 bonus;
+        uint256 bonusCoinReward;
 
         if (payInCoin) {
             if (msg.value != 0) revert E();
             if (!game.coinMintUnlock(currentLevel)) revert NotTimeYet();
-            _coinReceive(buyer, uint32(quantity), quantity * priceCoinUnit, targetLevel, bonusCoinReward);
+            _coinReceive(buyer, uint32(quantity), quantity * priceCoinUnit, targetLevel, 0);
         } else {
             uint8 phase = game.currentPhase();
             bool creditNext = (state == 3 || state == 1);
+            bonusCoinReward = (quantity / 10) * priceCoinUnit;
             bonus = _processEthPurchase(buyer, quantity * 100, affiliateCode, targetLevel, false, creditNext);
             if (phase == 3 && (targetLevel % 100) > 90) {
                 bonus += (quantity * priceCoinUnit) / 5;
@@ -393,7 +394,8 @@ contract PurgeGameNFT {
         if (payInCoin) {
             if (msg.value != 0) revert E();
             if (!game.coinMintUnlock(lvl)) revert NotTimeYet();
-            _coinReceive(buyer, uint32(quantity), coinCost - mapRebate, lvl, mapBonus);
+            _coinReceive(buyer, uint32(quantity), coinCost, lvl, 0);
+            bonus = mapRebate;
         } else {
             bool creditNext = (state == 3 || state == 1);
             bonus = _processEthPurchase(
@@ -409,7 +411,10 @@ contract PurgeGameNFT {
             }
         }
 
-        uint256 rebateMint = bonus + mapRebate + mapBonus;
+        uint256 rebateMint = bonus;
+        if (!payInCoin) {
+            rebateMint += mapRebate + mapBonus;
+        }
         if (rebateMint != 0) {
             coin.bonusCoinflip(buyer, rebateMint, true);
         }
