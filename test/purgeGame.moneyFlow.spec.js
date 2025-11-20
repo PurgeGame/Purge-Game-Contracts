@@ -2180,7 +2180,7 @@ describe("PurgeGame money flow simulation", function () {
     const questStrategyPlayers = await createWallets(25, secondaryFunder, ethers.parseEther("50"));
     const basePlayers = [...firstBatch, ...secondBatch];
     const players = [...basePlayers, ...questStrategyPlayers];
-    const questCompleterPlayers = questStrategyPlayers;
+    const questPlayers = questStrategyPlayers;
     const stakingPlayers = basePlayers.slice(0, Math.min(STAKE_STRATEGY.playerCount, basePlayers.length));
 
     const system = await deploySystem();
@@ -2193,16 +2193,16 @@ describe("PurgeGame money flow simulation", function () {
     const { referralAssignments, referralCodes } = await configureReferralChain(purgecoin, players, {
       minBatch: 1,
       maxBatch: 10,
-      roundRobinGroups: [questCompleterPlayers],
+      roundRobinGroups: [questPlayers],
     });
 
     const { mintOverrides: questMintOverrides, affiliateSupporters: questAffiliateSupporters } =
-      buildQuestReferralPlan(questCompleterPlayers, referralCodes);
+      buildQuestReferralPlan(questPlayers, referralCodes);
 
     const priceCoinUnit = await purgeGame.coinPriceUnit();
 
     await purgecoin.connect(deployer).setQuestPurgeEnabled(false);
-    await prefundPlayersWithCoin(purgecoin, deployer, questCompleterPlayers, QUEST_PREFUND_COINS);
+    await prefundPlayersWithCoin(purgecoin, deployer, questPlayers, QUEST_PREFUND_COINS);
 
     const targetPerLevel = [];
     let currentTarget = MAP_PURCHASE_TARGET_WEI;
@@ -2584,7 +2584,7 @@ describe("PurgeGame money flow simulation", function () {
           questModule,
           purgeNFT,
           purgeGame,
-          questPlayers: questCompleterPlayers,
+          questPlayers: questPlayers,
           referralCodes: referralAssignments,
           playerAffiliateCodes: referralCodes,
           contributions,
