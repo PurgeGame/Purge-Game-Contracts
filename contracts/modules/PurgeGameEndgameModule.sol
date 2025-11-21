@@ -170,6 +170,15 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
                     ++i;
                 }
             }
+        } else {
+            trophiesContract.processEndLevel(
+                IPurgeGameTrophies.EndLevelRequest({
+                    exterminator: pend.exterminator,
+                    traitId: lastExterminatedTrait,
+                    level: prevLevelPending,
+                    pool: poolValue
+                })
+            );
         }
 
         delete pendingEndLevel;
