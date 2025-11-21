@@ -858,7 +858,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         totalReward = 200 * MILLION;
         uint8 tier = _questTier(streak);
         if ((questFlags & QUEST_FLAG_HIGH_DIFFICULTY) != 0 && streak >= QUEST_TIER_STREAK_SPAN) {
-            totalReward += 100 * MILLION;
+            totalReward += 50 * MILLION;
         }
         if ((questFlags & QUEST_FLAG_VERY_HIGH_DIFFICULTY) != 0 && tier >= 4) {
             totalReward += 50 * MILLION;
