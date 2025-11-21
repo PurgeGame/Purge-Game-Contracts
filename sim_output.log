@@ -1,0 +1,1478 @@
+Warning: Unused function parameter. Remove or comment out the variable name to silence this warning.
+   --> contracts/PurgeGameNFT.sol:425:9:
+    |
+425 |         uint256 bonusUnits,
+    |         ^^^^^^^^^^^^^^^^^^
+
+
+Warning: Unused function parameter. Remove or comment out the variable name to silence this warning.
+   --> contracts/mocks/JackpotQuestMocks.sol:117:33:
+    |
+117 |     function stakedTrophySample(uint256 rngSeed) external pure override returns (address owner) {
+    |                                 ^^^^^^^^^^^^^^^
+
+
+Warning: Contract code size is 24608 bytes and exceeds 24576 bytes (a limit introduced in Spurious Dragon). This contract may not be deployable on Mainnet. Consider enabling the optimizer (with a low "runs" value!), turning off revert strings, or using libraries.
+ --> contracts/mocks/PurgecoinHarness.sol:6:1:
+  |
+6 | contract PurgecoinHarness is Purgecoin {
+  | ^ (Relevant source part starts here and spans across multiple lines).
+
+
+Compiled 36 Solidity files successfully (evm target: paris).
+
+
+  PurgeGame Strategy Simulation
+
+=== Processing Level 1 ===
+Level 1 Purchase Phase (State 2)
+  Minting for Mint_Day_1 (Pool: 0.0 / 125.0)
+  Minting for Mint_Day_2 (Pool: 4.8125 / 125.0)
+  Minting for Mint_Day_3 (Pool: 9.5 / 125.0)
+  Minting for Mint_Day_4 (Pool: 14.3125 / 125.0)
+  Minting for Mint_Day_5 (Pool: 19.125 / 125.0)
+  Minting for Mint_Day_6 (Pool: 23.9375 / 125.0)
+  Minting for Mint_Day_7 (Pool: 28.75 / 125.0)
+  Minting for Mint_Day_8 (Pool: 33.5625 / 125.0)
+  Minting for Mint_Day_9 (Pool: 38.375 / 125.0)
+  Minting for Mint_Day_10 (Pool: 43.0625 / 125.0)
+  Minting for Mint_Day_11 (Pool: 47.75 / 125.0)
+  Minting for Mint_Day_12 (Pool: 52.4375 / 125.0)
+    !!! PANIC MODE: Scaling mints to 300 (Day 13) !!!
+  Minting for Mint_Day_13 (Pool: 57.125 / 125.0)
+    !!! PANIC MODE: Scaling mints to 300 (Day 14) !!!
+  Minting for Mint_Day_14 (Pool: 66.625 / 125.0)
+    !!! PANIC MODE: Scaling mints to 300 (Day 15) !!!
+  Minting for Mint_Day_15 (Pool: 76.0 / 125.0)
+    !!! PANIC MODE: Scaling mints to 300 (Day 16) !!!
+  Minting for Mint_Day_16 (Pool: 85.5 / 125.0)
+    !!! PANIC MODE: Scaling mints to 300 (Day 17) !!!
+  Minting for Mint_Day_17 (Pool: 95.0 / 125.0)
+    !!! PANIC MODE: Scaling mints to 300 (Day 18) !!!
+  Minting for Mint_Day_18 (Pool: 104.5 / 125.0)
+    !!! PANIC MODE: Scaling mints to 300 (Day 19) !!!
+  Minting for Mint_Day_19 (Pool: 114.0 / 125.0)
+    !!! PANIC MODE: Scaling mints to 300 (Day 20) !!!
+  Minting for Mint_Day_20 (Pool: 123.375 / 125.0)
+  Waiting for phase transition (Day 21, Phase 2)
+  Waiting for phase transition (Day 21, Phase 2)
+  Waiting for phase transition (Day 21, Phase 2)
+  Waiting for phase transition (Day 21, Phase 3)
+  Waiting for phase transition (Day 21, Phase 3)
+  Waiting for phase transition (Day 21, Phase 4)
+  Waiting for phase transition (Day 21, Phase 4)
+  Waiting for phase transition (Day 21, Phase 5)
+Level 1 Purge Phase (State 3)
+  Purge Day 1 (Next Level Mint Day 1)
+    Minting for Mint_Day_1
+    Minting for Mint_Day_1_Single (4 Maps)
+  Purge Day 2 (Next Level Mint Day 2)
+    Minting for Mint_Day_2
+  Purge Day 3 (Next Level Mint Day 3)
+    Minting for Mint_Day_3
+  Purge Day 4 (Next Level Mint Day 4)
+    Minting for Mint_Day_4
+  Purge Day 5 (Next Level Mint Day 5)
+    Minting for Mint_Day_5
+  Purge Day 6 (Next Level Mint Day 6)
+    Minting for Mint_Day_6
+  Purge Day 7 (Next Level Mint Day 7)
+    Minting for Mint_Day_7
+  Purge Day 8 (Next Level Mint Day 8)
+    Minting for Mint_Day_8
+  Purge Day 9 (Next Level Mint Day 9)
+    Minting for Mint_Day_9
+  Purge Day 10 (Next Level Mint Day 10)
+    Minting for Mint_Day_10
+
+=== Processing Level 2 ===
+Level 2 Purchase Phase (State 2)
+  Minting for Mint_Day_11 (Pool: 51.9375 / 132.875)
+  Minting for Mint_Day_12 (Pool: 56.75 / 132.875)
+    !!! PANIC MODE: Scaling mints to 300 (Day 13) !!!
+  Minting for Mint_Day_13 (Pool: 61.4375 / 132.875)
+    !!! PANIC MODE: Scaling mints to 300 (Day 14) !!!
+  Minting for Mint_Day_14 (Pool: 70.8125 / 132.875)
+    !!! PANIC MODE: Scaling mints to 300 (Day 15) !!!
+  Minting for Mint_Day_15 (Pool: 80.3125 / 132.875)
+    !!! PANIC MODE: Scaling mints to 300 (Day 16) !!!
+  Minting for Mint_Day_16 (Pool: 89.6875 / 132.875)
+    !!! PANIC MODE: Scaling mints to 300 (Day 17) !!!
+  Minting for Mint_Day_17 (Pool: 99.0625 / 132.875)
+    !!! PANIC MODE: Scaling mints to 300 (Day 18) !!!
+  Minting for Mint_Day_18 (Pool: 108.4375 / 132.875)
+    !!! PANIC MODE: Scaling mints to 300 (Day 19) !!!
+  Minting for Mint_Day_19 (Pool: 117.9375 / 132.875)
+    !!! PANIC MODE: Scaling mints to 300 (Day 20) !!!
+  Minting for Mint_Day_20 (Pool: 127.3125 / 132.875)
+  Waiting for phase transition (Day 21, Phase 2)
+  Waiting for phase transition (Day 21, Phase 2)
+  Waiting for phase transition (Day 21, Phase 2)
+  Waiting for phase transition (Day 21, Phase 3)
+  Waiting for phase transition (Day 21, Phase 3)
+  Waiting for phase transition (Day 21, Phase 4)
+  Waiting for phase transition (Day 21, Phase 4)
+  Waiting for phase transition (Day 21, Phase 5)
+  Waiting for phase transition (Day 21, Phase 6)
+Level 2 Purge Phase (State 3)
+  Purge Day 1 (Next Level Mint Day 1)
+    Minting for Mint_Day_1
+    Minting for Mint_Day_1_Single (4 Maps)
+  Purge Day 2 (Next Level Mint Day 2)
+    Minting for Mint_Day_2
+  Purge Day 3 (Next Level Mint Day 3)
+    Minting for Mint_Day_3
+  Purge Day 4 (Next Level Mint Day 4)
+    Minting for Mint_Day_4
+  Purge Day 5 (Next Level Mint Day 5)
+    Minting for Mint_Day_5
+  Purge Day 6 (Next Level Mint Day 6)
+    Minting for Mint_Day_6
+  Purge Day 7 (Next Level Mint Day 7)
+    Minting for Mint_Day_7
+  Purge Day 8 (Next Level Mint Day 8)
+    Minting for Mint_Day_8
+  Purge Day 9 (Next Level Mint Day 9)
+    Minting for Mint_Day_9
+  Purge Day 10 (Next Level Mint Day 10)
+    Minting for Mint_Day_10
+  Purge Day 11 (Next Level Mint Day 11)
+    Minting for Mint_Day_11
+
+=== Processing Level 3 ===
+Level 3 Purchase Phase (State 2)
+  Minting for Mint_Day_12 (Pool: 56.5 / 136.8125)
+    !!! PANIC MODE: Scaling mints to 300 (Day 13) !!!
+  Minting for Mint_Day_13 (Pool: 61.1875 / 136.8125)
+    !!! PANIC MODE: Scaling mints to 300 (Day 14) !!!
+  Minting for Mint_Day_14 (Pool: 70.6875 / 136.8125)
+    !!! PANIC MODE: Scaling mints to 300 (Day 15) !!!
+  Minting for Mint_Day_15 (Pool: 80.1875 / 136.8125)
+    !!! PANIC MODE: Scaling mints to 300 (Day 16) !!!
+  Minting for Mint_Day_16 (Pool: 89.6875 / 136.8125)
+    !!! PANIC MODE: Scaling mints to 300 (Day 17) !!!
+  Minting for Mint_Day_17 (Pool: 99.0625 / 136.8125)
+    !!! PANIC MODE: Scaling mints to 300 (Day 18) !!!
+  Minting for Mint_Day_18 (Pool: 108.5625 / 136.8125)
+    !!! PANIC MODE: Scaling mints to 300 (Day 19) !!!
+  Minting for Mint_Day_19 (Pool: 117.9375 / 136.8125)
+    !!! PANIC MODE: Scaling mints to 300 (Day 20) !!!
+  Minting for Mint_Day_20 (Pool: 127.4375 / 136.8125)
+  Waiting for phase transition (Day 21, Phase 2)
+  Waiting for phase transition (Day 21, Phase 2)
+  Waiting for phase transition (Day 21, Phase 2)
+  Waiting for phase transition (Day 21, Phase 3)
+  Waiting for phase transition (Day 21, Phase 3)
+  Waiting for phase transition (Day 21, Phase 4)
+  Waiting for phase transition (Day 21, Phase 4)
+  Waiting for phase transition (Day 21, Phase 5)
+  Waiting for phase transition (Day 21, Phase 6)
+Level 3 Purge Phase (State 3)
+  Purge Day 1 (Next Level Mint Day 1)
+    Minting for Mint_Day_1
+    Minting for Mint_Day_1_Single (4 Maps)
+  Purge Day 2 (Next Level Mint Day 2)
+    Minting for Mint_Day_2
+  Purge Day 3 (Next Level Mint Day 3)
+    Minting for Mint_Day_3
+  Purge Day 4 (Next Level Mint Day 4)
+    Minting for Mint_Day_4
+  Purge Day 5 (Next Level Mint Day 5)
+    Minting for Mint_Day_5
+  Purge Day 6 (Next Level Mint Day 6)
+    Minting for Mint_Day_6
+  Purge Day 7 (Next Level Mint Day 7)
+    Minting for Mint_Day_7
+  Purge Day 8 (Next Level Mint Day 8)
+    Minting for Mint_Day_8
+  Purge Day 9 (Next Level Mint Day 9)
+    Minting for Mint_Day_9
+  Purge Day 10 (Next Level Mint Day 10)
+    Minting for Mint_Day_10
+  Purge Day 11 (Next Level Mint Day 11)
+    Minting for Mint_Day_11
+
+=== Processing Level 4 ===
+Level 4 Purchase Phase (State 2)
+  Minting for Mint_Day_12 (Pool: 56.375 / 137.0625)
+    !!! PANIC MODE: Scaling mints to 300 (Day 13) !!!
+  Minting for Mint_Day_13 (Pool: 61.1875 / 137.0625)
+    !!! PANIC MODE: Scaling mints to 300 (Day 14) !!!
+  Minting for Mint_Day_14 (Pool: 70.5625 / 137.0625)
+    !!! PANIC MODE: Scaling mints to 300 (Day 15) !!!
+  Minting for Mint_Day_15 (Pool: 80.0625 / 137.0625)
+    !!! PANIC MODE: Scaling mints to 300 (Day 16) !!!
+  Minting for Mint_Day_16 (Pool: 89.5625 / 137.0625)
+    !!! PANIC MODE: Scaling mints to 300 (Day 17) !!!
+  Minting for Mint_Day_17 (Pool: 98.9375 / 137.0625)
+    !!! PANIC MODE: Scaling mints to 300 (Day 18) !!!
+  Minting for Mint_Day_18 (Pool: 108.3125 / 137.0625)
+    !!! PANIC MODE: Scaling mints to 300 (Day 19) !!!
+  Minting for Mint_Day_19 (Pool: 117.6875 / 137.0625)
+    !!! PANIC MODE: Scaling mints to 300 (Day 20) !!!
+  Minting for Mint_Day_20 (Pool: 127.0625 / 137.0625)
+    !!! PANIC MODE: Scaling mints to 300 (Day 21) !!!
+  Minting for Mint_Day_21 (Pool: 136.5625 / 137.0625)
+  Waiting for phase transition (Day 22, Phase 2)
+  Waiting for phase transition (Day 22, Phase 2)
+  Waiting for phase transition (Day 22, Phase 2)
+  Waiting for phase transition (Day 22, Phase 3)
+  Waiting for phase transition (Day 22, Phase 3)
+  Waiting for phase transition (Day 22, Phase 4)
+  Waiting for phase transition (Day 22, Phase 4)
+  Waiting for phase transition (Day 22, Phase 5)
+Level 4 Purge Phase (State 3)
+  Purge Day 1 (Next Level Mint Day 1)
+    Minting for Mint_Day_1
+    Minting for Mint_Day_1_Single (4 Maps)
+  Purge Day 2 (Next Level Mint Day 2)
+    Minting for Mint_Day_2
+  Purge Day 3 (Next Level Mint Day 3)
+    Minting for Mint_Day_3
+  Purge Day 4 (Next Level Mint Day 4)
+    Minting for Mint_Day_4
+  Purge Day 5 (Next Level Mint Day 5)
+    Minting for Mint_Day_5
+  Purge Day 6 (Next Level Mint Day 6)
+    Minting for Mint_Day_6
+  Purge Day 7 (Next Level Mint Day 7)
+    Minting for Mint_Day_7
+  Purge Day 8 (Next Level Mint Day 8)
+    Minting for Mint_Day_8
+  Purge Day 9 (Next Level Mint Day 9)
+    Minting for Mint_Day_9
+  Purge Day 10 (Next Level Mint Day 10)
+    Minting for Mint_Day_10
+
+=== Processing Level 5 ===
+Level 5 Purchase Phase (State 2)
+  Minting for Mint_Day_11 (Pool: 52.4375 / 146.0625)
+  Minting for Mint_Day_12 (Pool: 57.25 / 146.0625)
+    !!! PANIC MODE: Scaling mints to 300 (Day 13) !!!
+  Minting for Mint_Day_13 (Pool: 61.9375 / 146.0625)
+    !!! PANIC MODE: Scaling mints to 300 (Day 14) !!!
+  Minting for Mint_Day_14 (Pool: 71.4375 / 146.0625)
+    !!! PANIC MODE: Scaling mints to 300 (Day 15) !!!
+  Minting for Mint_Day_15 (Pool: 80.9375 / 146.0625)
+    !!! PANIC MODE: Scaling mints to 300 (Day 16) !!!
+  Minting for Mint_Day_16 (Pool: 90.4375 / 146.0625)
+    !!! PANIC MODE: Scaling mints to 300 (Day 17) !!!
+  Minting for Mint_Day_17 (Pool: 99.8125 / 146.0625)
+    !!! PANIC MODE: Scaling mints to 300 (Day 18) !!!
+  Minting for Mint_Day_18 (Pool: 109.3125 / 146.0625)
+    !!! PANIC MODE: Scaling mints to 300 (Day 19) !!!
+  Minting for Mint_Day_19 (Pool: 118.6875 / 146.0625)
+    !!! PANIC MODE: Scaling mints to 300 (Day 20) !!!
+  Minting for Mint_Day_20 (Pool: 128.0625 / 146.0625)
+    !!! PANIC MODE: Scaling mints to 300 (Day 21) !!!
+  Minting for Mint_Day_21 (Pool: 137.5625 / 146.0625)
+  Waiting for phase transition (Day 22, Phase 2)
+  Waiting for phase transition (Day 22, Phase 2)
+  Waiting for phase transition (Day 22, Phase 2)
+  Waiting for phase transition (Day 22, Phase 3)
+  Waiting for phase transition (Day 22, Phase 3)
+  Waiting for phase transition (Day 22, Phase 4)
+  Waiting for phase transition (Day 22, Phase 4)
+  Waiting for phase transition (Day 22, Phase 5)
+Level 5 Purge Phase (State 3)
+  Purge Day 1 (Next Level Mint Day 1)
+    Minting for Mint_Day_1
+    Minting for Mint_Day_1_Single (4 Maps)
+  Purge Day 2 (Next Level Mint Day 2)
+    Minting for Mint_Day_2
+  Purge Day 3 (Next Level Mint Day 3)
+    Minting for Mint_Day_3
+  Purge Day 4 (Next Level Mint Day 4)
+    Minting for Mint_Day_4
+  Purge Day 5 (Next Level Mint Day 5)
+    Minting for Mint_Day_5
+  Purge Day 6 (Next Level Mint Day 6)
+    Minting for Mint_Day_6
+  Purge Day 7 (Next Level Mint Day 7)
+    Minting for Mint_Day_7
+  Purge Day 8 (Next Level Mint Day 8)
+    Minting for Mint_Day_8
+  Purge Day 9 (Next Level Mint Day 9)
+    Minting for Mint_Day_9
+  Purge Day 10 (Next Level Mint Day 10)
+    Minting for Mint_Day_10
+
+=== Processing Level 6 ===
+Level 6 Purchase Phase (State 2)
+  Minting for Mint_Day_11 (Pool: 52.3125 / 147.0625)
+  Minting for Mint_Day_12 (Pool: 57.125 / 147.0625)
+    !!! PANIC MODE: Scaling mints to 300 (Day 13) !!!
+  Minting for Mint_Day_13 (Pool: 61.8125 / 147.0625)
+    !!! PANIC MODE: Scaling mints to 300 (Day 14) !!!
+  Minting for Mint_Day_14 (Pool: 71.1875 / 147.0625)
+    !!! PANIC MODE: Scaling mints to 300 (Day 15) !!!
+  Minting for Mint_Day_15 (Pool: 80.5625 / 147.0625)
+    !!! PANIC MODE: Scaling mints to 300 (Day 16) !!!
+  Minting for Mint_Day_16 (Pool: 90.0625 / 147.0625)
+    !!! PANIC MODE: Scaling mints to 300 (Day 17) !!!
+  Minting for Mint_Day_17 (Pool: 99.5625 / 147.0625)
+    !!! PANIC MODE: Scaling mints to 300 (Day 18) !!!
+  Minting for Mint_Day_18 (Pool: 109.0625 / 147.0625)
+    !!! PANIC MODE: Scaling mints to 300 (Day 19) !!!
+  Minting for Mint_Day_19 (Pool: 118.4375 / 147.0625)
+    !!! PANIC MODE: Scaling mints to 300 (Day 20) !!!
+  Minting for Mint_Day_20 (Pool: 127.8125 / 147.0625)
+    !!! PANIC MODE: Scaling mints to 300 (Day 21) !!!
+  Minting for Mint_Day_21 (Pool: 137.3125 / 147.0625)
+    !!! PANIC MODE: Scaling mints to 300 (Day 22) !!!
+  Minting for Mint_Day_22 (Pool: 146.8125 / 147.0625)
+  Waiting for phase transition (Day 23, Phase 2)
+  Waiting for phase transition (Day 23, Phase 2)
+  Waiting for phase transition (Day 23, Phase 2)
+  Waiting for phase transition (Day 23, Phase 3)
+  Waiting for phase transition (Day 23, Phase 3)
+  Waiting for phase transition (Day 23, Phase 4)
+  Waiting for phase transition (Day 23, Phase 4)
+  Waiting for phase transition (Day 23, Phase 5)
+  Waiting for phase transition (Day 23, Phase 6)
+Level 6 Purge Phase (State 3)
+  Purge Day 1 (Next Level Mint Day 1)
+    Minting for Mint_Day_1
+    Minting for Mint_Day_1_Single (4 Maps)
+  Purge Day 2 (Next Level Mint Day 2)
+    Minting for Mint_Day_2
+  Purge Day 3 (Next Level Mint Day 3)
+    Minting for Mint_Day_3
+  Purge Day 4 (Next Level Mint Day 4)
+    Minting for Mint_Day_4
+  Purge Day 5 (Next Level Mint Day 5)
+    Minting for Mint_Day_5
+  Purge Day 6 (Next Level Mint Day 6)
+    Minting for Mint_Day_6
+  Purge Day 7 (Next Level Mint Day 7)
+    Minting for Mint_Day_7
+  Purge Day 8 (Next Level Mint Day 8)
+    Minting for Mint_Day_8
+  Purge Day 9 (Next Level Mint Day 9)
+    Minting for Mint_Day_9
+  Purge Day 10 (Next Level Mint Day 10)
+    Minting for Mint_Day_10
+  Purge Day 11 (Next Level Mint Day 11)
+    Minting for Mint_Day_11
+
+=== Processing Level 7 ===
+Level 7 Purchase Phase (State 2)
+  Minting for Mint_Day_12 (Pool: 56.75 / 156.4375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 13) !!!
+  Minting for Mint_Day_13 (Pool: 61.5625 / 156.4375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 14) !!!
+  Minting for Mint_Day_14 (Pool: 70.9375 / 156.4375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 15) !!!
+  Minting for Mint_Day_15 (Pool: 80.4375 / 156.4375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 16) !!!
+  Minting for Mint_Day_16 (Pool: 89.9375 / 156.4375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 17) !!!
+  Minting for Mint_Day_17 (Pool: 99.4375 / 156.4375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 18) !!!
+  Minting for Mint_Day_18 (Pool: 108.8125 / 156.4375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 19) !!!
+  Minting for Mint_Day_19 (Pool: 118.3125 / 156.4375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 20) !!!
+  Minting for Mint_Day_20 (Pool: 127.6875 / 156.4375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 21) !!!
+  Minting for Mint_Day_21 (Pool: 137.0625 / 156.4375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 22) !!!
+  Minting for Mint_Day_22 (Pool: 146.4375 / 156.4375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 23) !!!
+  Minting for Mint_Day_23 (Pool: 155.9375 / 156.4375)
+  Waiting for phase transition (Day 24, Phase 2)
+  Waiting for phase transition (Day 24, Phase 2)
+  Waiting for phase transition (Day 24, Phase 2)
+  Waiting for phase transition (Day 24, Phase 3)
+  Waiting for phase transition (Day 24, Phase 3)
+  Waiting for phase transition (Day 24, Phase 4)
+  Waiting for phase transition (Day 24, Phase 4)
+  Waiting for phase transition (Day 24, Phase 5)
+Level 7 Purge Phase (State 3)
+  Purge Day 1 (Next Level Mint Day 1)
+    Minting for Mint_Day_1
+    Minting for Mint_Day_1_Single (4 Maps)
+  Purge Day 2 (Next Level Mint Day 2)
+    Minting for Mint_Day_2
+  Purge Day 3 (Next Level Mint Day 3)
+    Minting for Mint_Day_3
+  Purge Day 4 (Next Level Mint Day 4)
+    Minting for Mint_Day_4
+  Purge Day 5 (Next Level Mint Day 5)
+    Minting for Mint_Day_5
+  Purge Day 6 (Next Level Mint Day 6)
+    Minting for Mint_Day_6
+  Purge Day 7 (Next Level Mint Day 7)
+    Minting for Mint_Day_7
+  Purge Day 8 (Next Level Mint Day 8)
+    Minting for Mint_Day_8
+  Purge Day 9 (Next Level Mint Day 9)
+    Minting for Mint_Day_9
+  Purge Day 10 (Next Level Mint Day 10)
+    Minting for Mint_Day_10
+
+=== Processing Level 8 ===
+Level 8 Purchase Phase (State 2)
+  Minting for Mint_Day_11 (Pool: 52.5625 / 165.4375)
+  Minting for Mint_Day_12 (Pool: 57.375 / 165.4375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 13) !!!
+  Minting for Mint_Day_13 (Pool: 62.1875 / 165.4375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 14) !!!
+  Minting for Mint_Day_14 (Pool: 71.6875 / 165.4375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 15) !!!
+  Minting for Mint_Day_15 (Pool: 81.1875 / 165.4375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 16) !!!
+  Minting for Mint_Day_16 (Pool: 90.6875 / 165.4375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 17) !!!
+  Minting for Mint_Day_17 (Pool: 100.0625 / 165.4375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 18) !!!
+  Minting for Mint_Day_18 (Pool: 109.5625 / 165.4375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 19) !!!
+  Minting for Mint_Day_19 (Pool: 118.9375 / 165.4375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 20) !!!
+  Minting for Mint_Day_20 (Pool: 128.3125 / 165.4375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 21) !!!
+  Minting for Mint_Day_21 (Pool: 137.8125 / 165.4375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 22) !!!
+  Minting for Mint_Day_22 (Pool: 147.1875 / 165.4375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 23) !!!
+  Minting for Mint_Day_23 (Pool: 156.6875 / 165.4375)
+  Waiting for phase transition (Day 24, Phase 2)
+  Waiting for phase transition (Day 24, Phase 2)
+  Waiting for phase transition (Day 24, Phase 2)
+  Waiting for phase transition (Day 24, Phase 3)
+  Waiting for phase transition (Day 24, Phase 3)
+  Waiting for phase transition (Day 24, Phase 4)
+  Waiting for phase transition (Day 24, Phase 4)
+  Waiting for phase transition (Day 24, Phase 5)
+Level 8 Purge Phase (State 3)
+  Purge Day 1 (Next Level Mint Day 1)
+    Minting for Mint_Day_1
+    Minting for Mint_Day_1_Single (4 Maps)
+  Purge Day 2 (Next Level Mint Day 2)
+    Minting for Mint_Day_2
+  Purge Day 3 (Next Level Mint Day 3)
+    Minting for Mint_Day_3
+  Purge Day 4 (Next Level Mint Day 4)
+    Minting for Mint_Day_4
+  Purge Day 5 (Next Level Mint Day 5)
+    Minting for Mint_Day_5
+  Purge Day 6 (Next Level Mint Day 6)
+    Minting for Mint_Day_6
+  Purge Day 7 (Next Level Mint Day 7)
+    Minting for Mint_Day_7
+  Purge Day 8 (Next Level Mint Day 8)
+    Minting for Mint_Day_8
+  Purge Day 9 (Next Level Mint Day 9)
+    Minting for Mint_Day_9
+  Purge Day 10 (Next Level Mint Day 10)
+    Minting for Mint_Day_10
+
+=== Processing Level 9 ===
+Level 9 Purchase Phase (State 2)
+  Minting for Mint_Day_11 (Pool: 52.3125 / 166.1875)
+  Minting for Mint_Day_12 (Pool: 57.0 / 166.1875)
+    !!! PANIC MODE: Scaling mints to 300 (Day 13) !!!
+  Minting for Mint_Day_13 (Pool: 61.6875 / 166.1875)
+    !!! PANIC MODE: Scaling mints to 300 (Day 14) !!!
+  Minting for Mint_Day_14 (Pool: 71.1875 / 166.1875)
+    !!! PANIC MODE: Scaling mints to 300 (Day 15) !!!
+  Minting for Mint_Day_15 (Pool: 80.6875 / 166.1875)
+    !!! PANIC MODE: Scaling mints to 300 (Day 16) !!!
+  Minting for Mint_Day_16 (Pool: 90.0625 / 166.1875)
+    !!! PANIC MODE: Scaling mints to 300 (Day 17) !!!
+  Minting for Mint_Day_17 (Pool: 99.5625 / 166.1875)
+    !!! PANIC MODE: Scaling mints to 300 (Day 18) !!!
+  Minting for Mint_Day_18 (Pool: 109.0625 / 166.1875)
+    !!! PANIC MODE: Scaling mints to 300 (Day 19) !!!
+  Minting for Mint_Day_19 (Pool: 118.5625 / 166.1875)
+    !!! PANIC MODE: Scaling mints to 300 (Day 20) !!!
+  Minting for Mint_Day_20 (Pool: 128.0625 / 166.1875)
+    !!! PANIC MODE: Scaling mints to 300 (Day 21) !!!
+  Minting for Mint_Day_21 (Pool: 137.5625 / 166.1875)
+    !!! PANIC MODE: Scaling mints to 300 (Day 22) !!!
+  Minting for Mint_Day_22 (Pool: 146.9375 / 166.1875)
+    !!! PANIC MODE: Scaling mints to 300 (Day 23) !!!
+  Minting for Mint_Day_23 (Pool: 156.3125 / 166.1875)
+    !!! PANIC MODE: Scaling mints to 300 (Day 24) !!!
+  Minting for Mint_Day_24 (Pool: 165.6875 / 166.1875)
+  Waiting for phase transition (Day 25, Phase 2)
+  Waiting for phase transition (Day 25, Phase 2)
+  Waiting for phase transition (Day 25, Phase 2)
+  Waiting for phase transition (Day 25, Phase 3)
+  Waiting for phase transition (Day 25, Phase 3)
+  Waiting for phase transition (Day 25, Phase 4)
+  Waiting for phase transition (Day 25, Phase 4)
+  Waiting for phase transition (Day 25, Phase 5)
+Level 9 Purge Phase (State 3)
+  Purge Day 1 (Next Level Mint Day 1)
+    Minting for Mint_Day_1
+    Minting for Mint_Day_1_Single (4 Maps)
+  Purge Day 2 (Next Level Mint Day 2)
+    Minting for Mint_Day_2
+  Purge Day 3 (Next Level Mint Day 3)
+    Minting for Mint_Day_3
+  Purge Day 4 (Next Level Mint Day 4)
+    Minting for Mint_Day_4
+  Purge Day 5 (Next Level Mint Day 5)
+    Minting for Mint_Day_5
+  Purge Day 6 (Next Level Mint Day 6)
+    Minting for Mint_Day_6
+  Purge Day 7 (Next Level Mint Day 7)
+    Minting for Mint_Day_7
+  Purge Day 8 (Next Level Mint Day 8)
+    Minting for Mint_Day_8
+  Purge Day 9 (Next Level Mint Day 9)
+    Minting for Mint_Day_9
+  Purge Day 10 (Next Level Mint Day 10)
+    Minting for Mint_Day_10
+
+=== Processing Level 10 ===
+Level 10 Purchase Phase (State 2)
+  Minting for Mint_Day_11 (Pool: 56.3125 / 175.0625)
+  Minting for Mint_Day_12 (Pool: 65.6875 / 175.0625)
+    !!! PANIC MODE: Scaling mints to 300 (Day 13) !!!
+  Minting for Mint_Day_13 (Pool: 75.3125 / 175.0625)
+    !!! PANIC MODE: Scaling mints to 300 (Day 14) !!!
+  Minting for Mint_Day_14 (Pool: 94.3125 / 175.0625)
+    !!! PANIC MODE: Scaling mints to 300 (Day 15) !!!
+  Minting for Mint_Day_15 (Pool: 113.0625 / 175.0625)
+    !!! PANIC MODE: Scaling mints to 300 (Day 16) !!!
+  Minting for Mint_Day_16 (Pool: 131.8125 / 175.0625)
+    !!! PANIC MODE: Scaling mints to 300 (Day 17) !!!
+  Minting for Mint_Day_17 (Pool: 150.8125 / 175.0625)
+    !!! PANIC MODE: Scaling mints to 300 (Day 18) !!!
+  Minting for Mint_Day_18 (Pool: 169.8125 / 175.0625)
+  Waiting for phase transition (Day 19, Phase 2)
+  Waiting for phase transition (Day 19, Phase 2)
+  Waiting for phase transition (Day 19, Phase 2)
+  Waiting for phase transition (Day 19, Phase 3)
+  Waiting for phase transition (Day 19, Phase 3)
+  Waiting for phase transition (Day 19, Phase 4)
+  Waiting for phase transition (Day 19, Phase 4)
+  Waiting for phase transition (Day 19, Phase 5)
+Level 10 Purge Phase (State 3)
+  Purge Day 1 (Next Level Mint Day 1)
+    Minting for Mint_Day_1
+    Minting for Mint_Day_1_Single (4 Maps)
+  Purge Day 2 (Next Level Mint Day 2)
+    Minting for Mint_Day_2
+  Purge Day 3 (Next Level Mint Day 3)
+    Minting for Mint_Day_3
+  Purge Day 4 (Next Level Mint Day 4)
+    Minting for Mint_Day_4
+  Purge Day 5 (Next Level Mint Day 5)
+    Minting for Mint_Day_5
+  Purge Day 6 (Next Level Mint Day 6)
+    Minting for Mint_Day_6
+  Purge Day 7 (Next Level Mint Day 7)
+    Minting for Mint_Day_7
+  Purge Day 8 (Next Level Mint Day 8)
+    Minting for Mint_Day_8
+  Purge Day 9 (Next Level Mint Day 9)
+    Minting for Mint_Day_9
+  Purge Day 10 (Next Level Mint Day 10)
+    Minting for Mint_Day_10
+
+=== Processing Level 11 ===
+Level 11 Purchase Phase (State 2)
+  Minting for Mint_Day_11 (Pool: 104.625 / 189.0625)
+  Minting for Mint_Day_12 (Pool: 114.25 / 189.0625)
+    !!! PANIC MODE: Scaling mints to 300 (Day 13) !!!
+  Minting for Mint_Day_13 (Pool: 123.625 / 189.0625)
+    !!! PANIC MODE: Scaling mints to 300 (Day 14) !!!
+  Minting for Mint_Day_14 (Pool: 142.625 / 189.0625)
+    !!! PANIC MODE: Scaling mints to 300 (Day 15) !!!
+  Minting for Mint_Day_15 (Pool: 161.625 / 189.0625)
+    !!! PANIC MODE: Scaling mints to 300 (Day 16) !!!
+  Minting for Mint_Day_16 (Pool: 180.375 / 189.0625)
+  Waiting for phase transition (Day 17, Phase 2)
+  Waiting for phase transition (Day 17, Phase 2)
+  Waiting for phase transition (Day 17, Phase 2)
+  Waiting for phase transition (Day 17, Phase 3)
+  Waiting for phase transition (Day 17, Phase 3)
+  Waiting for phase transition (Day 17, Phase 4)
+  Waiting for phase transition (Day 17, Phase 4)
+  Waiting for phase transition (Day 17, Phase 5)
+Level 11 Purge Phase (State 3)
+  Purge Day 1 (Next Level Mint Day 1)
+    Minting for Mint_Day_1
+    Minting for Mint_Day_1_Single (4 Maps)
+  Purge Day 2 (Next Level Mint Day 2)
+    Minting for Mint_Day_2
+  Purge Day 3 (Next Level Mint Day 3)
+    Minting for Mint_Day_3
+  Purge Day 4 (Next Level Mint Day 4)
+    Minting for Mint_Day_4
+  Purge Day 5 (Next Level Mint Day 5)
+    Minting for Mint_Day_5
+  Purge Day 6 (Next Level Mint Day 6)
+    Minting for Mint_Day_6
+  Purge Day 7 (Next Level Mint Day 7)
+    Minting for Mint_Day_7
+  Purge Day 8 (Next Level Mint Day 8)
+    Minting for Mint_Day_8
+  Purge Day 9 (Next Level Mint Day 9)
+    Minting for Mint_Day_9
+  Purge Day 10 (Next Level Mint Day 10)
+    Minting for Mint_Day_10
+
+=== Processing Level 12 ===
+Level 12 Purchase Phase (State 2)
+  Minting for Mint_Day_11 (Pool: 104.875 / 199.375)
+  Minting for Mint_Day_12 (Pool: 114.5 / 199.375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 13) !!!
+  Minting for Mint_Day_13 (Pool: 124.125 / 199.375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 14) !!!
+  Minting for Mint_Day_14 (Pool: 142.875 / 199.375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 15) !!!
+  Minting for Mint_Day_15 (Pool: 161.875 / 199.375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 16) !!!
+  Minting for Mint_Day_16 (Pool: 180.625 / 199.375)
+  Waiting for phase transition (Day 17, Phase 2)
+  Waiting for phase transition (Day 17, Phase 2)
+  Waiting for phase transition (Day 17, Phase 2)
+  Waiting for phase transition (Day 17, Phase 3)
+  Waiting for phase transition (Day 17, Phase 3)
+  Waiting for phase transition (Day 17, Phase 4)
+  Waiting for phase transition (Day 17, Phase 4)
+  Waiting for phase transition (Day 17, Phase 5)
+Level 12 Purge Phase (State 3)
+  Purge Day 1 (Next Level Mint Day 1)
+    Minting for Mint_Day_1
+    Minting for Mint_Day_1_Single (4 Maps)
+  Purge Day 2 (Next Level Mint Day 2)
+    Minting for Mint_Day_2
+  Purge Day 3 (Next Level Mint Day 3)
+    Minting for Mint_Day_3
+  Purge Day 4 (Next Level Mint Day 4)
+    Minting for Mint_Day_4
+  Purge Day 5 (Next Level Mint Day 5)
+    Minting for Mint_Day_5
+  Purge Day 6 (Next Level Mint Day 6)
+    Minting for Mint_Day_6
+  Purge Day 7 (Next Level Mint Day 7)
+    Minting for Mint_Day_7
+  Purge Day 8 (Next Level Mint Day 8)
+    Minting for Mint_Day_8
+  Purge Day 9 (Next Level Mint Day 9)
+    Minting for Mint_Day_9
+  Purge Day 10 (Next Level Mint Day 10)
+    Minting for Mint_Day_10
+
+=== Processing Level 13 ===
+Level 13 Purchase Phase (State 2)
+  Minting for Mint_Day_11 (Pool: 104.875 / 199.625)
+  Minting for Mint_Day_12 (Pool: 114.5 / 199.625)
+    !!! PANIC MODE: Scaling mints to 300 (Day 13) !!!
+  Minting for Mint_Day_13 (Pool: 124.125 / 199.625)
+    !!! PANIC MODE: Scaling mints to 300 (Day 14) !!!
+  Minting for Mint_Day_14 (Pool: 143.125 / 199.625)
+    !!! PANIC MODE: Scaling mints to 300 (Day 15) !!!
+  Minting for Mint_Day_15 (Pool: 162.125 / 199.625)
+    !!! PANIC MODE: Scaling mints to 300 (Day 16) !!!
+  Minting for Mint_Day_16 (Pool: 180.875 / 199.625)
+  Waiting for phase transition (Day 17, Phase 2)
+  Waiting for phase transition (Day 17, Phase 2)
+  Waiting for phase transition (Day 17, Phase 2)
+  Waiting for phase transition (Day 17, Phase 3)
+  Waiting for phase transition (Day 17, Phase 3)
+  Waiting for phase transition (Day 17, Phase 4)
+  Waiting for phase transition (Day 17, Phase 4)
+  Waiting for phase transition (Day 17, Phase 5)
+Level 13 Purge Phase (State 3)
+  Purge Day 1 (Next Level Mint Day 1)
+    Minting for Mint_Day_1
+    Minting for Mint_Day_1_Single (4 Maps)
+  Purge Day 2 (Next Level Mint Day 2)
+    Minting for Mint_Day_2
+  Purge Day 3 (Next Level Mint Day 3)
+    Minting for Mint_Day_3
+  Purge Day 4 (Next Level Mint Day 4)
+    Minting for Mint_Day_4
+  Purge Day 5 (Next Level Mint Day 5)
+    Minting for Mint_Day_5
+  Purge Day 6 (Next Level Mint Day 6)
+    Minting for Mint_Day_6
+  Purge Day 7 (Next Level Mint Day 7)
+    Minting for Mint_Day_7
+  Purge Day 8 (Next Level Mint Day 8)
+    Minting for Mint_Day_8
+  Purge Day 9 (Next Level Mint Day 9)
+    Minting for Mint_Day_9
+  Purge Day 10 (Next Level Mint Day 10)
+    Minting for Mint_Day_10
+
+=== Processing Level 14 ===
+Level 14 Purchase Phase (State 2)
+  Minting for Mint_Day_11 (Pool: 104.125 / 199.875)
+  Minting for Mint_Day_12 (Pool: 113.75 / 199.875)
+    !!! PANIC MODE: Scaling mints to 300 (Day 13) !!!
+  Minting for Mint_Day_13 (Pool: 123.375 / 199.875)
+    !!! PANIC MODE: Scaling mints to 300 (Day 14) !!!
+  Minting for Mint_Day_14 (Pool: 142.125 / 199.875)
+    !!! PANIC MODE: Scaling mints to 300 (Day 15) !!!
+  Minting for Mint_Day_15 (Pool: 160.875 / 199.875)
+    !!! PANIC MODE: Scaling mints to 300 (Day 16) !!!
+  Minting for Mint_Day_16 (Pool: 179.875 / 199.875)
+    !!! PANIC MODE: Scaling mints to 300 (Day 17) !!!
+  Minting for Mint_Day_17 (Pool: 198.625 / 199.875)
+  Waiting for phase transition (Day 18, Phase 2)
+  Waiting for phase transition (Day 18, Phase 2)
+  Waiting for phase transition (Day 18, Phase 2)
+  Waiting for phase transition (Day 18, Phase 3)
+  Waiting for phase transition (Day 18, Phase 3)
+  Waiting for phase transition (Day 18, Phase 4)
+  Waiting for phase transition (Day 18, Phase 4)
+  Waiting for phase transition (Day 18, Phase 5)
+  Waiting for phase transition (Day 18, Phase 6)
+Level 14 Purge Phase (State 3)
+  Purge Day 1 (Next Level Mint Day 1)
+    Minting for Mint_Day_1
+    Minting for Mint_Day_1_Single (4 Maps)
+  Purge Day 2 (Next Level Mint Day 2)
+    Minting for Mint_Day_2
+  Purge Day 3 (Next Level Mint Day 3)
+    Minting for Mint_Day_3
+  Purge Day 4 (Next Level Mint Day 4)
+    Minting for Mint_Day_4
+  Purge Day 5 (Next Level Mint Day 5)
+    Minting for Mint_Day_5
+  Purge Day 6 (Next Level Mint Day 6)
+    Minting for Mint_Day_6
+  Purge Day 7 (Next Level Mint Day 7)
+    Minting for Mint_Day_7
+  Purge Day 8 (Next Level Mint Day 8)
+    Minting for Mint_Day_8
+  Purge Day 9 (Next Level Mint Day 9)
+    Minting for Mint_Day_9
+  Purge Day 10 (Next Level Mint Day 10)
+    Minting for Mint_Day_10
+  Purge Day 11 (Next Level Mint Day 11)
+    Minting for Mint_Day_11
+
+=== Processing Level 15 ===
+Level 15 Purchase Phase (State 2)
+  Minting for Mint_Day_12 (Pool: 113.5 / 217.375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 13) !!!
+  Minting for Mint_Day_13 (Pool: 123.125 / 217.375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 14) !!!
+  Minting for Mint_Day_14 (Pool: 142.125 / 217.375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 15) !!!
+  Minting for Mint_Day_15 (Pool: 161.125 / 217.375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 16) !!!
+  Minting for Mint_Day_16 (Pool: 180.125 / 217.375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 17) !!!
+  Minting for Mint_Day_17 (Pool: 198.875 / 217.375)
+  Waiting for phase transition (Day 18, Phase 2)
+  Waiting for phase transition (Day 18, Phase 2)
+  Waiting for phase transition (Day 18, Phase 2)
+  Waiting for phase transition (Day 18, Phase 3)
+  Waiting for phase transition (Day 18, Phase 3)
+  Waiting for phase transition (Day 18, Phase 4)
+  Waiting for phase transition (Day 18, Phase 4)
+  Waiting for phase transition (Day 18, Phase 5)
+Level 15 Purge Phase (State 3)
+  Purge Day 1 (Next Level Mint Day 1)
+    Minting for Mint_Day_1
+    Minting for Mint_Day_1_Single (4 Maps)
+  Purge Day 2 (Next Level Mint Day 2)
+    Minting for Mint_Day_2
+  Purge Day 3 (Next Level Mint Day 3)
+    Minting for Mint_Day_3
+  Purge Day 4 (Next Level Mint Day 4)
+    Minting for Mint_Day_4
+  Purge Day 5 (Next Level Mint Day 5)
+    Minting for Mint_Day_5
+  Purge Day 6 (Next Level Mint Day 6)
+    Minting for Mint_Day_6
+  Purge Day 7 (Next Level Mint Day 7)
+    Minting for Mint_Day_7
+  Purge Day 8 (Next Level Mint Day 8)
+    Minting for Mint_Day_8
+  Purge Day 9 (Next Level Mint Day 9)
+    Minting for Mint_Day_9
+  Purge Day 10 (Next Level Mint Day 10)
+    Minting for Mint_Day_10
+
+=== Processing Level 16 ===
+Level 16 Purchase Phase (State 2)
+  Minting for Mint_Day_11 (Pool: 104.125 / 217.875)
+  Minting for Mint_Day_12 (Pool: 113.75 / 217.875)
+    !!! PANIC MODE: Scaling mints to 300 (Day 13) !!!
+  Minting for Mint_Day_13 (Pool: 123.375 / 217.875)
+    !!! PANIC MODE: Scaling mints to 300 (Day 14) !!!
+  Minting for Mint_Day_14 (Pool: 142.125 / 217.875)
+    !!! PANIC MODE: Scaling mints to 300 (Day 15) !!!
+  Minting for Mint_Day_15 (Pool: 160.875 / 217.875)
+    !!! PANIC MODE: Scaling mints to 300 (Day 16) !!!
+  Minting for Mint_Day_16 (Pool: 179.625 / 217.875)
+    !!! PANIC MODE: Scaling mints to 300 (Day 17) !!!
+  Minting for Mint_Day_17 (Pool: 198.375 / 217.875)
+    !!! PANIC MODE: Scaling mints to 300 (Day 18) !!!
+  Minting for Mint_Day_18 (Pool: 217.375 / 217.875)
+  Waiting for phase transition (Day 19, Phase 2)
+  Waiting for phase transition (Day 19, Phase 2)
+  Waiting for phase transition (Day 19, Phase 2)
+  Waiting for phase transition (Day 19, Phase 3)
+  Waiting for phase transition (Day 19, Phase 3)
+  Waiting for phase transition (Day 19, Phase 4)
+  Waiting for phase transition (Day 19, Phase 4)
+  Waiting for phase transition (Day 19, Phase 5)
+Level 16 Purge Phase (State 3)
+  Purge Day 1 (Next Level Mint Day 1)
+    Minting for Mint_Day_1
+    Minting for Mint_Day_1_Single (4 Maps)
+  Purge Day 2 (Next Level Mint Day 2)
+    Minting for Mint_Day_2
+
+=== Processing Level 17 ===
+Level 17 Purchase Phase (State 2)
+  Minting for Mint_Day_3 (Pool: 27.625 / 236.375)
+  Minting for Mint_Day_4 (Pool: 37.25 / 236.375)
+  Minting for Mint_Day_5 (Pool: 46.625 / 236.375)
+  Minting for Mint_Day_6 (Pool: 56.25 / 236.375)
+  Minting for Mint_Day_7 (Pool: 65.875 / 236.375)
+  Minting for Mint_Day_8 (Pool: 75.5 / 236.375)
+  Minting for Mint_Day_9 (Pool: 85.125 / 236.375)
+  Minting for Mint_Day_10 (Pool: 94.75 / 236.375)
+  Minting for Mint_Day_11 (Pool: 104.125 / 236.375)
+  Minting for Mint_Day_12 (Pool: 113.5 / 236.375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 13) !!!
+  Minting for Mint_Day_13 (Pool: 123.125 / 236.375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 14) !!!
+  Minting for Mint_Day_14 (Pool: 142.125 / 236.375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 15) !!!
+  Minting for Mint_Day_15 (Pool: 160.875 / 236.375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 16) !!!
+  Minting for Mint_Day_16 (Pool: 179.875 / 236.375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 17) !!!
+  Minting for Mint_Day_17 (Pool: 198.875 / 236.375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 18) !!!
+  Minting for Mint_Day_18 (Pool: 217.625 / 236.375)
+  Waiting for phase transition (Day 19, Phase 2)
+  Waiting for phase transition (Day 19, Phase 2)
+  Waiting for phase transition (Day 19, Phase 2)
+  Waiting for phase transition (Day 19, Phase 3)
+  Waiting for phase transition (Day 19, Phase 3)
+  Waiting for phase transition (Day 19, Phase 4)
+  Waiting for phase transition (Day 19, Phase 4)
+  Waiting for phase transition (Day 19, Phase 5)
+  Waiting for phase transition (Day 19, Phase 6)
+Level 17 Purge Phase (State 3)
+  Purge Day 1 (Next Level Mint Day 1)
+    Minting for Mint_Day_1
+    Minting for Mint_Day_1_Single (4 Maps)
+  Purge Day 2 (Next Level Mint Day 2)
+    Minting for Mint_Day_2
+  Purge Day 3 (Next Level Mint Day 3)
+    Minting for Mint_Day_3
+  Purge Day 4 (Next Level Mint Day 4)
+    Minting for Mint_Day_4
+  Purge Day 5 (Next Level Mint Day 5)
+    Minting for Mint_Day_5
+  Purge Day 6 (Next Level Mint Day 6)
+    Minting for Mint_Day_6
+  Purge Day 7 (Next Level Mint Day 7)
+    Minting for Mint_Day_7
+  Purge Day 8 (Next Level Mint Day 8)
+    Minting for Mint_Day_8
+  Purge Day 9 (Next Level Mint Day 9)
+    Minting for Mint_Day_9
+  Purge Day 10 (Next Level Mint Day 10)
+    Minting for Mint_Day_10
+  Purge Day 11 (Next Level Mint Day 11)
+    Minting for Mint_Day_11
+
+=== Processing Level 18 ===
+Level 18 Purchase Phase (State 2)
+  Minting for Mint_Day_12 (Pool: 113.5 / 236.375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 13) !!!
+  Minting for Mint_Day_13 (Pool: 122.875 / 236.375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 14) !!!
+  Minting for Mint_Day_14 (Pool: 141.875 / 236.375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 15) !!!
+  Minting for Mint_Day_15 (Pool: 160.875 / 236.375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 16) !!!
+  Minting for Mint_Day_16 (Pool: 179.875 / 236.375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 17) !!!
+  Minting for Mint_Day_17 (Pool: 198.625 / 236.375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 18) !!!
+  Minting for Mint_Day_18 (Pool: 217.625 / 236.375)
+  Waiting for phase transition (Day 19, Phase 2)
+  Waiting for phase transition (Day 19, Phase 2)
+  Waiting for phase transition (Day 19, Phase 2)
+  Waiting for phase transition (Day 19, Phase 3)
+  Waiting for phase transition (Day 19, Phase 3)
+  Waiting for phase transition (Day 19, Phase 4)
+  Waiting for phase transition (Day 19, Phase 4)
+  Waiting for phase transition (Day 19, Phase 5)
+Level 18 Purge Phase (State 3)
+  Purge Day 1 (Next Level Mint Day 1)
+    Minting for Mint_Day_1
+    Minting for Mint_Day_1_Single (4 Maps)
+  Purge Day 2 (Next Level Mint Day 2)
+    Minting for Mint_Day_2
+  Purge Day 3 (Next Level Mint Day 3)
+    Minting for Mint_Day_3
+  Purge Day 4 (Next Level Mint Day 4)
+    Minting for Mint_Day_4
+  Purge Day 5 (Next Level Mint Day 5)
+    Minting for Mint_Day_5
+  Purge Day 6 (Next Level Mint Day 6)
+    Minting for Mint_Day_6
+  Purge Day 7 (Next Level Mint Day 7)
+    Minting for Mint_Day_7
+  Purge Day 8 (Next Level Mint Day 8)
+    Minting for Mint_Day_8
+  Purge Day 9 (Next Level Mint Day 9)
+    Minting for Mint_Day_9
+  Purge Day 10 (Next Level Mint Day 10)
+    Minting for Mint_Day_10
+
+=== Processing Level 19 ===
+Level 19 Purchase Phase (State 2)
+  Minting for Mint_Day_11 (Pool: 103.875 / 236.375)
+  Minting for Mint_Day_12 (Pool: 113.25 / 236.375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 13) !!!
+  Minting for Mint_Day_13 (Pool: 122.625 / 236.375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 14) !!!
+  Minting for Mint_Day_14 (Pool: 141.625 / 236.375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 15) !!!
+  Minting for Mint_Day_15 (Pool: 160.375 / 236.375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 16) !!!
+  Minting for Mint_Day_16 (Pool: 179.125 / 236.375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 17) !!!
+  Minting for Mint_Day_17 (Pool: 198.125 / 236.375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 18) !!!
+  Minting for Mint_Day_18 (Pool: 216.875 / 236.375)
+    !!! PANIC MODE: Scaling mints to 300 (Day 19) !!!
+  Minting for Mint_Day_19 (Pool: 235.625 / 236.375)
+  Waiting for phase transition (Day 20, Phase 2)
+  Waiting for phase transition (Day 20, Phase 2)
+  Waiting for phase transition (Day 20, Phase 2)
+  Waiting for phase transition (Day 20, Phase 3)
+  Waiting for phase transition (Day 20, Phase 3)
+  Waiting for phase transition (Day 20, Phase 4)
+  Waiting for phase transition (Day 20, Phase 4)
+  Waiting for phase transition (Day 20, Phase 5)
+Level 19 Purge Phase (State 3)
+  Purge Day 1 (Next Level Mint Day 1)
+    Minting for Mint_Day_1
+    Minting for Mint_Day_1_Single (4 Maps)
+  Purge Day 2 (Next Level Mint Day 2)
+    Minting for Mint_Day_2
+  Purge Day 3 (Next Level Mint Day 3)
+    Minting for Mint_Day_3
+  Purge Day 4 (Next Level Mint Day 4)
+    Minting for Mint_Day_4
+  Purge Day 5 (Next Level Mint Day 5)
+    Minting for Mint_Day_5
+  Purge Day 6 (Next Level Mint Day 6)
+    Minting for Mint_Day_6
+  Purge Day 7 (Next Level Mint Day 7)
+    Minting for Mint_Day_7
+  Purge Day 8 (Next Level Mint Day 8)
+    Minting for Mint_Day_8
+  Purge Day 9 (Next Level Mint Day 9)
+    Minting for Mint_Day_9
+  Purge Day 10 (Next Level Mint Day 10)
+    Minting for Mint_Day_10
+
+=== Processing Level 20 ===
+Level 20 Purchase Phase (State 2)
+    !!! PREPPING LEVEL 20 BAF ELIGIBILITY !!!
+      BAF Prep failed for 0x10Cd: VM Exception while processing transaction: reverted with custom error 'BettingPaused()'
+      BAF Prep failed for 0xa981: VM Exception while processing transaction: reverted with custom error 'BettingPaused()'
+      BAF Prep failed for 0xe732: VM Exception while processing transaction: reverted with custom error 'BettingPaused()'
+      BAF Prep failed for 0x8A5E: VM Exception while processing transaction: reverted with custom error 'BettingPaused()'
+      BAF Prep failed for 0x2f3F: VM Exception while processing transaction: reverted with custom error 'BettingPaused()'
+  Minting for Mint_Day_11 (Pool: 112.375 / 254.625)
+  Minting for Mint_Day_12 (Pool: 131.625 / 254.625)
+    !!! PANIC MODE: Scaling mints to 300 (Day 13) !!!
+  Minting for Mint_Day_13 (Pool: 150.375 / 254.625)
+    !!! PANIC MODE: Scaling mints to 300 (Day 14) !!!
+  Minting for Mint_Day_14 (Pool: 187.875 / 254.625)
+    !!! PANIC MODE: Scaling mints to 300 (Day 15) !!!
+  Minting for Mint_Day_15 (Pool: 225.875 / 254.625)
+  Waiting for phase transition (Day 16, Phase 2)
+  Waiting for phase transition (Day 16, Phase 2)
+  Waiting for phase transition (Day 16, Phase 3)
+  Waiting for phase transition (Day 16, Phase 3)
+  Waiting for phase transition (Day 16, Phase 4)
+  Waiting for phase transition (Day 16, Phase 5)
+Level 20 Purge Phase (State 3)
+  Purge Day 1 (Next Level Mint Day 1)
+    Minting for Mint_Day_1
+    Minting for Mint_Day_1_Single (4 Maps)
+  Purge Day 2 (Next Level Mint Day 2)
+    Minting for Mint_Day_2
+  Purge Day 3 (Next Level Mint Day 3)
+    Minting for Mint_Day_3
+  Purge Day 4 (Next Level Mint Day 4)
+    Minting for Mint_Day_4
+  Purge Day 5 (Next Level Mint Day 5)
+    Minting for Mint_Day_5
+  Purge Day 6 (Next Level Mint Day 6)
+    Minting for Mint_Day_6
+  Purge Day 7 (Next Level Mint Day 7)
+    Minting for Mint_Day_7
+  Purge Day 8 (Next Level Mint Day 8)
+    Minting for Mint_Day_8
+  Purge Day 9 (Next Level Mint Day 9)
+    Minting for Mint_Day_9
+  Purge Day 10 (Next Level Mint Day 10)
+    Minting for Mint_Day_10
+
+=== Processing Level 21 ===
+Level 21 Purchase Phase (State 2)
+  Minting for Mint_Day_11 (Pool: 209.25 / 263.875)
+  Minting for Mint_Day_12 (Pool: 228.0 / 263.875)
+    !!! PANIC MODE: Scaling mints to 300 (Day 13) !!!
+  Minting for Mint_Day_13 (Pool: 246.75 / 263.875)
+  Waiting for phase transition (Day 14, Phase 2)
+  Waiting for phase transition (Day 14, Phase 2)
+  Waiting for phase transition (Day 14, Phase 2)
+  Waiting for phase transition (Day 14, Phase 3)
+  Waiting for phase transition (Day 14, Phase 3)
+  Waiting for phase transition (Day 14, Phase 4)
+  Waiting for phase transition (Day 14, Phase 4)
+  Waiting for phase transition (Day 14, Phase 5)
+Level 21 Purge Phase (State 3)
+  Purge Day 1 (Next Level Mint Day 1)
+    Minting for Mint_Day_1
+    Minting for Mint_Day_1_Single (4 Maps)
+  Purge Day 2 (Next Level Mint Day 2)
+    Minting for Mint_Day_2
+  Purge Day 3 (Next Level Mint Day 3)
+    Minting for Mint_Day_3
+  Purge Day 4 (Next Level Mint Day 4)
+    Minting for Mint_Day_4
+  Purge Day 5 (Next Level Mint Day 5)
+    Minting for Mint_Day_5
+  Purge Day 6 (Next Level Mint Day 6)
+    Minting for Mint_Day_6
+  Purge Day 7 (Next Level Mint Day 7)
+    Minting for Mint_Day_7
+  Purge Day 8 (Next Level Mint Day 8)
+    Minting for Mint_Day_8
+  Purge Day 9 (Next Level Mint Day 9)
+    Minting for Mint_Day_9
+  Purge Day 10 (Next Level Mint Day 10)
+    Minting for Mint_Day_10
+
+=== Processing Level 22 ===
+Level 22 Purchase Phase (State 2)
+  Minting for Mint_Day_11 (Pool: 209.25 / 284.75)
+  Minting for Mint_Day_12 (Pool: 228.0 / 284.75)
+    !!! PANIC MODE: Scaling mints to 300 (Day 13) !!!
+  Minting for Mint_Day_13 (Pool: 246.75 / 284.75)
+  Waiting for phase transition (Day 14, Phase 2)
+  Waiting for phase transition (Day 14, Phase 2)
+  Waiting for phase transition (Day 14, Phase 2)
+  Waiting for phase transition (Day 14, Phase 3)
+  Waiting for phase transition (Day 14, Phase 3)
+  Waiting for phase transition (Day 14, Phase 4)
+  Waiting for phase transition (Day 14, Phase 4)
+  Waiting for phase transition (Day 14, Phase 5)
+Level 22 Purge Phase (State 3)
+  Purge Day 1 (Next Level Mint Day 1)
+    Minting for Mint_Day_1
+    Minting for Mint_Day_1_Single (4 Maps)
+  Purge Day 2 (Next Level Mint Day 2)
+    Minting for Mint_Day_2
+  Purge Day 3 (Next Level Mint Day 3)
+    Minting for Mint_Day_3
+  Purge Day 4 (Next Level Mint Day 4)
+    Minting for Mint_Day_4
+  Purge Day 5 (Next Level Mint Day 5)
+    Minting for Mint_Day_5
+  Purge Day 6 (Next Level Mint Day 6)
+    Minting for Mint_Day_6
+  Purge Day 7 (Next Level Mint Day 7)
+    Minting for Mint_Day_7
+  Purge Day 8 (Next Level Mint Day 8)
+    Minting for Mint_Day_8
+  Purge Day 9 (Next Level Mint Day 9)
+    Minting for Mint_Day_9
+  Purge Day 10 (Next Level Mint Day 10)
+    Minting for Mint_Day_10
+
+=== Processing Level 23 ===
+Level 23 Purchase Phase (State 2)
+  Minting for Mint_Day_11 (Pool: 209.25 / 285.25)
+  Minting for Mint_Day_12 (Pool: 228.5 / 285.25)
+    !!! PANIC MODE: Scaling mints to 300 (Day 13) !!!
+  Minting for Mint_Day_13 (Pool: 247.25 / 285.25)
+  Waiting for phase transition (Day 14, Phase 2)
+  Waiting for phase transition (Day 14, Phase 2)
+  Waiting for phase transition (Day 14, Phase 2)
+  Waiting for phase transition (Day 14, Phase 3)
+  Waiting for phase transition (Day 14, Phase 3)
+  Waiting for phase transition (Day 14, Phase 4)
+  Waiting for phase transition (Day 14, Phase 4)
+  Waiting for phase transition (Day 14, Phase 5)
+Level 23 Purge Phase (State 3)
+  Purge Day 1 (Next Level Mint Day 1)
+    Minting for Mint_Day_1
+    Minting for Mint_Day_1_Single (4 Maps)
+  Purge Day 2 (Next Level Mint Day 2)
+    Minting for Mint_Day_2
+  Purge Day 3 (Next Level Mint Day 3)
+    Minting for Mint_Day_3
+  Purge Day 4 (Next Level Mint Day 4)
+    Minting for Mint_Day_4
+  Purge Day 5 (Next Level Mint Day 5)
+    Minting for Mint_Day_5
+  Purge Day 6 (Next Level Mint Day 6)
+    Minting for Mint_Day_6
+  Purge Day 7 (Next Level Mint Day 7)
+    Minting for Mint_Day_7
+  Purge Day 8 (Next Level Mint Day 8)
+    Minting for Mint_Day_8
+  Purge Day 9 (Next Level Mint Day 9)
+    Minting for Mint_Day_9
+  Purge Day 10 (Next Level Mint Day 10)
+    Minting for Mint_Day_10
+
+=== Processing Level 24 ===
+Level 24 Purchase Phase (State 2)
+  Minting for Mint_Day_11 (Pool: 209.25 / 285.25)
+  Minting for Mint_Day_12 (Pool: 228.0 / 285.25)
+    !!! PANIC MODE: Scaling mints to 300 (Day 13) !!!
+  Minting for Mint_Day_13 (Pool: 247.25 / 285.25)
+  Waiting for phase transition (Day 14, Phase 2)
+  Waiting for phase transition (Day 14, Phase 2)
+  Waiting for phase transition (Day 14, Phase 2)
+  Waiting for phase transition (Day 14, Phase 3)
+  Waiting for phase transition (Day 14, Phase 3)
+  Waiting for phase transition (Day 14, Phase 4)
+  Waiting for phase transition (Day 14, Phase 4)
+  Waiting for phase transition (Day 14, Phase 5)
+  Waiting for phase transition (Day 14, Phase 6)
+Level 24 Purge Phase (State 3)
+  Purge Day 1 (Next Level Mint Day 1)
+    Minting for Mint_Day_1
+    Minting for Mint_Day_1_Single (4 Maps)
+  Purge Day 2 (Next Level Mint Day 2)
+    Minting for Mint_Day_2
+  Purge Day 3 (Next Level Mint Day 3)
+    Minting for Mint_Day_3
+  Purge Day 4 (Next Level Mint Day 4)
+    Minting for Mint_Day_4
+  Purge Day 5 (Next Level Mint Day 5)
+    Minting for Mint_Day_5
+  Purge Day 6 (Next Level Mint Day 6)
+    Minting for Mint_Day_6
+  Purge Day 7 (Next Level Mint Day 7)
+    Minting for Mint_Day_7
+  Purge Day 8 (Next Level Mint Day 8)
+    Minting for Mint_Day_8
+  Purge Day 9 (Next Level Mint Day 9)
+    Minting for Mint_Day_9
+  Purge Day 10 (Next Level Mint Day 10)
+    Minting for Mint_Day_10
+  Purge Day 11 (Next Level Mint Day 11)
+    Minting for Mint_Day_11
+
+=== Processing Level 25 ===
+Level 25 Purchase Phase (State 2)
+    !!! EXECUTING LEVEL 25 SPECIAL ACTIONS (DECIMATOR & BAF) !!!
+  Minting for Mint_Day_12 (Pool: 227.5 / 285.75)
+    !!! PANIC MODE: Scaling mints to 300 (Day 13) !!!
+  Minting for Mint_Day_13 (Pool: 246.25 / 285.75)
+    !!! PANIC MODE: Scaling mints to 300 (Day 14) !!!
+  Minting for Mint_Day_14 (Pool: 284.25 / 285.75)
+  Waiting for phase transition (Day 15, Phase 2)
+  Waiting for phase transition (Day 15, Phase 2)
+  Waiting for phase transition (Day 15, Phase 2)
+  Waiting for phase transition (Day 15, Phase 3)
+  Waiting for phase transition (Day 15, Phase 3)
+  Waiting for phase transition (Day 15, Phase 4)
+  Waiting for phase transition (Day 15, Phase 4)
+  Waiting for phase transition (Day 15, Phase 5)
+Level 25 Purge Phase (State 3)
+  Purge Day 1 (Next Level Mint Day 1)
+  Purge Day 2 (Next Level Mint Day 1)
+  Purge Day 3 (Next Level Mint Day 1)
+  Purge Day 4 (Next Level Mint Day 1)
+  Purge Day 5 (Next Level Mint Day 1)
+  Purge Day 6 (Next Level Mint Day 1)
+  Purge Day 7 (Next Level Mint Day 1)
+  Purge Day 8 (Next Level Mint Day 1)
+  Purge Day 9 (Next Level Mint Day 1)
+  Purge Day 10 (Next Level Mint Day 1)
+  Purge Day 11 (Next Level Mint Day 1)
+  Purge Day 12 (Next Level Mint Day 1)
+  Purge Day 13 (Next Level Mint Day 1)
+  Purge Day 14 (Next Level Mint Day 1)
+  Purge Day 15 (Next Level Mint Day 1)
+
+=== Processing Level 26 ===
+Level 26 Purge Phase (State 3)
+  Purge Day 1 (Next Level Mint Day 1)
+  Purge Day 2 (Next Level Mint Day 1)
+  Purge Day 3 (Next Level Mint Day 1)
+  Purge Day 4 (Next Level Mint Day 1)
+  Purge Day 5 (Next Level Mint Day 1)
+  Purge Day 6 (Next Level Mint Day 1)
+  Purge Day 7 (Next Level Mint Day 1)
+  Purge Day 8 (Next Level Mint Day 1)
+  Purge Day 9 (Next Level Mint Day 1)
+  Purge Day 10 (Next Level Mint Day 1)
+  Purge Day 11 (Next Level Mint Day 1)
+  Purge Day 12 (Next Level Mint Day 1)
+  Purge Day 13 (Next Level Mint Day 1)
+Global Decimator Burns: {}
+
+
+=== SIMULATION RESULTS (BUCKET TOTALS) ===
+Bucket                    | Spent | Claim | Net   | Tokens | Val @ 80%
+---------------------------------------------------------------------------
+Mint_Day_1                | 234.3750 | 320.0738 | 85.6988 | 1906k  | 238.2091
+Mint_Day_1_Single         | 245.0000 | 168.0353 | -76.9647 | 8545k  | 606.6993
+Mint_Day_2                | 232.5000 | 235.1985 | 2.6985  | 1660k  | 135.5057
+Mint_Day_3                | 234.3750 | 219.1104 | -15.2646 | 1538k  | 107.8083
+Mint_Day_4                | 234.3750 | 254.9547 | 20.5797 | 984k   | 99.3512
+Mint_Day_5                | 234.3750 | 226.6895 | -7.6855 | 1411k  | 105.2223
+Mint_Day_6                | 234.3750 | 222.5297 | -11.8453 | 1409k  | 100.9244
+Mint_Day_7                | 234.3750 | 224.5873 | -9.7877 | 1275k  | 92.2409
+Mint_Day_8                | 234.3750 | 217.6565 | -16.7185 | 1586k  | 110.1931
+Mint_Day_9                | 234.3750 | 243.5309 | 9.1559  | 1079k  | 95.5296
+Mint_Day_10               | 211.8750 | 176.3566 | -35.5184 | 1099k  | 52.4322
+Mint_Day_11               | 238.1250 | 187.5912 | -50.5338 | 1066k  | 34.7991
+Mint_Day_12               | 248.4375 | 205.6955 | -42.7420 | 864k   | 26.3943
+Mint_Day_13               | 496.8750 | 370.2566 | -126.6184 | 2256k  | 53.9035
+Mint_Day_14               | 346.8750 | 294.3827 | -52.4923 | 1717k  | 84.9349
+Mint_Day_15               | 309.3750 | 235.8229 | -73.5521 | 1796k  | 70.1890
+Mint_Day_16               | 271.8750 | 218.4148 | -53.4602 | 1496k  | 66.2278
+Mint_Day_17               | 215.6250 | 158.7290 | -56.8960 | 1598k  | 70.9584
+Mint_Day_18               | 178.1250 | 146.3512 | -31.7738 | 1139k  | 59.4171
+Mint_Day_19               | 103.1250 | 80.5865 | -22.5385 | 632k   | 28.0290
+Mint_Day_20               | 84.3750 | 54.6080 | -29.7670 | 639k   | 21.3690
+Mint_Day_21               | 56.2500 | 67.4976 | 11.2476 | 322k   | 37.0077
+Mint_Day_22               | 37.5000 | 22.4058 | -15.0942 | 314k   | 10.0487
+Mint_Day_23               | 28.1250 | 19.8963 | -8.2287 | 166k   | 5.0844 
+Mint_Day_24               | 9.3750  | 4.9037  | -4.4713 | 0k     | -4.4713
+Quest Completer           | 93.1250 | 110.3065 | 17.1815 | 568k   | 62.6681
+---------------------------------------------------------------------------
+GRAND TOTALS              | 5281.56 | 0.00  | 0.00  | 0k     | 2966.07
+
+
+=== PER-MAP PERFORMANCE (AVERAGES) ===
+Bucket                    | Maps Bought | Tokens/Map | Net ETH/Map | Val/Map
+--------------------------------------------------------------------------------
+Mint_Day_1                | 18750       | 101.67     | 0.00457     | 0.01270
+Mint_Day_1_Single         | 19200       | 445.09     | -0.00401    | 0.03160
+Mint_Day_2                | 18600       | 89.25      | 0.00015     | 0.00729
+Mint_Day_3                | 18750       | 82.05      | -0.00081    | 0.00575
+Mint_Day_4                | 18750       | 52.51      | 0.00110     | 0.00530
+Mint_Day_5                | 18750       | 75.27      | -0.00041    | 0.00561
+Mint_Day_6                | 18750       | 75.18      | -0.00063    | 0.00538
+Mint_Day_7                | 18750       | 68.02      | -0.00052    | 0.00492
+Mint_Day_8                | 18750       | 84.61      | -0.00089    | 0.00588
+Mint_Day_9                | 18750       | 57.58      | 0.00049     | 0.00509
+Mint_Day_10               | 16200       | 67.86      | -0.00219    | 0.00324
+Mint_Day_11               | 17850       | 59.76      | -0.00283    | 0.00195
+Mint_Day_12               | 18750       | 46.09      | -0.00228    | 0.00141
+Mint_Day_13               | 37500       | 60.17      | -0.00338    | 0.00144
+Mint_Day_14               | 31500       | 54.53      | -0.00167    | 0.00270
+Mint_Day_15               | 30000       | 59.89      | -0.00245    | 0.00234
+Mint_Day_16               | 28500       | 52.49      | -0.00188    | 0.00232
+Mint_Day_17               | 24000       | 66.59      | -0.00237    | 0.00296
+Mint_Day_18               | 21000       | 54.28      | -0.00151    | 0.00283
+Mint_Day_19               | 15000       | 42.14      | -0.00150    | 0.00187
+Mint_Day_20               | 13500       | 47.35      | -0.00220    | 0.00158
+Mint_Day_21               | 9000        | 35.78      | 0.00125     | 0.00411
+Mint_Day_22               | 6000        | 52.38      | -0.00252    | 0.00167
+Mint_Day_23               | 4500        | 36.98      | -0.00183    | 0.00113
+Mint_Day_24               | 1500        | 0.00       | -0.00298    | -0.00298
+Quest Completer           | 9160        | 62.07      | 0.00188     | 0.00684
+
+
+=== BAF & DECIMATOR RESULTS (DEBUG) ===
+Bucket                    | BAF ETH | Dec ETH | Total ETH | Dec Coins Burned
+--------------------------------------------------------------------------------
+Mint_Day_1                | 36.4585 | 2.6104  | 39.0689   | 0
+Mint_Day_1_Single         | 6.5407  | 4.8830  | 11.4238   | 0
+Mint_Day_2                | 8.6904  | 9.0515  | 17.7419   | 0
+Mint_Day_3                | 12.4638 | 2.6821  | 15.1459   | 0
+Mint_Day_4                | 16.4134 | 14.1351 | 30.5485   | 0
+Mint_Day_5                | 11.6440 | 12.6590 | 24.3030   | 0
+Mint_Day_6                | 12.6596 | 4.0753  | 16.7350   | 0
+Mint_Day_7                | 10.5319 | 8.0462  | 18.5782   | 0
+Mint_Day_8                | 13.4841 | 5.0591  | 18.5432   | 0
+Mint_Day_9                | 14.2513 | 7.3501  | 21.6014   | 0
+Mint_Day_10               | 11.7554 | 5.6098  | 17.3652   | 0
+Mint_Day_11               | 22.9572 | 3.9289  | 26.8862   | 0
+Mint_Day_12               | 32.2509 | 4.6015  | 36.8524   | 0
+Mint_Day_13               | 20.8129 | 20.0756 | 40.8885   | 0
+Mint_Day_14               | 0.0000  | 12.9988 | 12.9988   | 0
+Quest Completer           | 3.8494  | 9.2020  | 13.0514   | 0
+
+
+=== INDIVIDUAL WINNERS/LOSERS (Every 3rd Bucket + Day 1 Single) ===
+
+--- Mint_Day_1 (Top 3 / Bottom 3) ---
+  Top 3:
+    1. 0xa54D... : Net 27.7165 ETH, Tok 349k, Val@80% 55.6546
+    2. 0x411F... : Net 21.6466 ETH, Tok 386k, Val@80% 52.5938
+    3. 0x9336... : Net 21.4035 ETH, Tok 425k, Val@80% 55.4067
+  Bottom 3:
+    1. 0xfCE2... : Net 6.6237 ETH, Tok 379k, Val@80% 36.9880
+    2. 0xfc29... : Net 8.3086 ETH, Tok 365k, Val@80% 37.5660
+    3. 0x9336... : Net 21.4035 ETH, Tok 425k, Val@80% 55.4067
+
+--- Mint_Day_1_Single (Top 3 / Bottom 3) ---
+  Top 3:
+    1. 0xb32D... : Net 10.0732 ETH, Tok 41k, Val@80% 13.4145
+    2. 0x6BaC... : Net 4.3916 ETH, Tok 41k, Val@80% 7.7500
+    3. 0x6441... : Net 3.5048 ETH, Tok 41k, Val@80% 6.8461
+  Bottom 3:
+    1. 0x8a61... : Net -1.2125 ETH, Tok 41k, Val@80% 2.0819
+    2. 0x4E3d... : Net -1.2070 ETH, Tok 41k, Val@80% 2.0874
+    3. 0x8Bb9... : Net -1.2070 ETH, Tok 41k, Val@80% 2.0874
+
+--- Mint_Day_4 (Top 3 / Bottom 3) ---
+  Top 3:
+    1. 0xe8Cd... : Net 12.9229 ETH, Tok 172k, Val@80% 26.7240
+    2. 0x1991... : Net 11.1846 ETH, Tok 197k, Val@80% 27.0172
+    3. 0xB711... : Net 8.4588 ETH, Tok 195k, Val@80% 24.1137
+  Bottom 3:
+    1. 0x886b... : Net -6.4406 ETH, Tok 214k, Val@80% 10.6864
+    2. 0x9501... : Net -5.5459 ETH, Tok 204k, Val@80% 10.8100
+    3. 0xB711... : Net 8.4588 ETH, Tok 195k, Val@80% 24.1137
+
+--- Mint_Day_7 (Top 3 / Bottom 3) ---
+  Top 3:
+    1. 0x9241... : Net 6.0311 ETH, Tok 257k, Val@80% 26.6616
+    2. 0xd8B7... : Net 5.2907 ETH, Tok 252k, Val@80% 25.5003
+    3. 0x2Ad3... : Net -6.5891 ETH, Tok 257k, Val@80% 13.9979
+  Bottom 3:
+    1. 0x01Fe... : Net -7.4988 ETH, Tok 248k, Val@80% 12.3783
+    2. 0x57d3... : Net -7.0216 ETH, Tok 259k, Val@80% 13.7030
+    3. 0x2Ad3... : Net -6.5891 ETH, Tok 257k, Val@80% 13.9979
+
+--- Mint_Day_10 (Top 3 / Bottom 3) ---
+  Top 3:
+    1. 0x7880... : Net 7.0536 ETH, Tok 260k, Val@80% 27.8914
+    2. 0x93A5... : Net -3.6134 ETH, Tok 66k, Val@80% 1.7440
+    3. 0x940e... : Net -6.0543 ETH, Tok 257k, Val@80% 14.5404
+  Bottom 3:
+    1. 0x2bEE... : Net -19.7880 ETH, Tok 257k, Val@80% 0.8206
+    2. 0xDAf8... : Net -13.1164 ETH, Tok 256k, Val@80% 7.4358
+    3. 0x940e... : Net -6.0543 ETH, Tok 257k, Val@80% 14.5404
+
+--- Mint_Day_13 (Top 3 / Bottom 3) ---
+  Top 3:
+    1. 0xa9C6... : Net -14.8384 ETH, Tok 449k, Val@80% 21.1528
+    2. 0x0246... : Net -16.9468 ETH, Tok 451k, Val@80% 19.1559
+    3. 0x4286... : Net -28.7947 ETH, Tok 440k, Val@80% 6.4671
+  Bottom 3:
+    1. 0xDA02... : Net -36.3703 ETH, Tok 465k, Val@80% 0.8450
+    2. 0xcC26... : Net -29.6681 ETH, Tok 449k, Val@80% 6.2827
+    3. 0x4286... : Net -28.7947 ETH, Tok 440k, Val@80% 6.4671
+
+--- Mint_Day_16 (Top 3 / Bottom 3) ---
+  Top 3:
+    1. 0xB271... : Net -1.6973 ETH, Tok 296k, Val@80% 22.0178
+    2. 0x1Cb8... : Net -8.0039 ETH, Tok 300k, Val@80% 16.0313
+    3. 0x606F... : Net -13.2405 ETH, Tok 297k, Val@80% 10.5875
+  Bottom 3:
+    1. 0x2D96... : Net -15.9564 ETH, Tok 297k, Val@80% 7.8228
+    2. 0x70e4... : Net -14.5621 ETH, Tok 304k, Val@80% 9.7685
+    3. 0x606F... : Net -13.2405 ETH, Tok 297k, Val@80% 10.5875
+
+--- Mint_Day_19 (Top 3 / Bottom 3) ---
+  Top 3:
+    1. 0x97e5... : Net 0.7462 ETH, Tok 125k, Val@80% 10.7953
+    2. 0xAF37... : Net -1.4734 ETH, Tok 127k, Val@80% 8.7438
+    3. 0x6971... : Net -5.4605 ETH, Tok 126k, Val@80% 4.6584
+  Bottom 3:
+    1. 0xa90E... : Net -9.2526 ETH, Tok 126k, Val@80% 0.8400
+    2. 0x352A... : Net -7.0982 ETH, Tok 126k, Val@80% 2.9915
+    3. 0x6971... : Net -5.4605 ETH, Tok 126k, Val@80% 4.6584
+
+--- Mint_Day_22 (Top 3 / Bottom 3) ---
+  Top 3:
+    1. 0x8c4f... : Net -1.8616 ETH, Tok 63k, Val@80% 3.1789
+    2. 0x25E7... : Net -2.5031 ETH, Tok 63k, Val@80% 2.5513
+    3. 0xbb96... : Net -2.9480 ETH, Tok 62k, Val@80% 2.0786
+  Bottom 3:
+    1. 0xF710... : Net -4.1744 ETH, Tok 62k, Val@80% 0.8011
+    2. 0x7ECF... : Net -3.6070 ETH, Tok 63k, Val@80% 1.4388
+    3. 0xbb96... : Net -2.9480 ETH, Tok 62k, Val@80% 2.0786
+
+Results saved to: /home/zak/Dev/Purge Game/purgegame-public/test/simulation_results/sim_results_1763611338060.txt
+    ✔ Simulates gameplay with dynamic daily buckets (191377ms)
+
+
+  1 passing (3m)
+
+························································································································
+|  [32m[1mSolidity and Network Configuration[22m[39m                                                                                  │
+···································|·················|················|················|································
+|  [36mSolidity: 0.8.30[39m                ·  [36mOptim: true[39m    ·  [36mRuns: 2[39m       ·  [36mviaIR: true[39m   ·     [36mBlock: 30,000,000 gas[39m     │
+···································|·················|················|················|································
+|  [32m[1mMethods[22m[39m                                                                                                             │
+···································|·················|················|················|················|···············
+|  [32m[1mContracts / Methods[22m[39m             ·  [1mMin[22m            ·  [1mMax[22m           ·  [1mAvg[22m           ·  [1m# calls[22m       ·  [1musd (avg)[22m   │
+···································|·················|················|················|················|···············
+|  [1mMockVRFCoordinator[22m              ·                                                                                   │
+···································|·················|················|················|················|···············
+|      fulfill                     ·         [36m57,074[39m  ·        [31m57,110[39m  ·        57,102  ·          1004  ·           [32m[90m-[39m[32m[39m  │
+···································|·················|················|················|················|···············
+|  [1mPurgecoin[22m                       ·                                                                                   │
+···································|·················|················|················|················|···············
+|      decimatorBurn               ·         [36m89,011[39m  ·       [31m176,922[39m  ·       102,472  ·            50  ·           [32m[90m-[39m[32m[39m  │
+···································|·················|················|················|················|···············
+|      depositCoinflip             ·         [36m86,621[39m  ·       [31m171,402[39m  ·       124,034  ·          2322  ·           [32m[90m-[39m[32m[39m  │
+···································|·················|················|················|················|···············
+|      setQuestPurgeEnabled        ·              [90m-[39m  ·             [90m-[39m  ·        27,821  ·             1  ·           [32m[90m-[39m[32m[39m  │
+···································|·················|················|················|················|···············
+|      stake                       ·        [36m110,256[39m  ·       [31m175,822[39m  ·       152,156  ·           140  ·           [32m[90m-[39m[32m[39m  │
+···································|·················|················|················|················|···············
+|      transfer                    ·         [36m51,884[39m  ·        [31m51,896[39m  ·        51,894  ·            10  ·           [32m[90m-[39m[32m[39m  │
+···································|·················|················|················|················|···············
+|      wire                        ·              [90m-[39m  ·             [90m-[39m  ·       628,542  ·             2  ·           [32m[90m-[39m[32m[39m  │
+···································|·················|················|················|················|···············
+|  [1mPurgeGame[22m                       ·                                                                                   │
+···································|·················|················|················|················|···············
+|      advanceGame                 ·         [36m39,158[39m  ·    [31m24,321,835[39m  ·     6,405,806  ·          4192  ·           [32m[90m-[39m[32m[39m  │
+···································|·················|················|················|················|···············
+|  [1mPurgeGameNFT[22m                    ·                                                                                   │
+···································|·················|················|················|················|···············
+|      mintAndPurge                ·        [36m141,634[39m  ·       [31m476,974[39m  ·       240,063  ·         18612  ·           [32m[90m-[39m[32m[39m  │
+···································|·················|················|················|················|···············
+|  [32m[1mDeployments[22m[39m                                       ·                                 ·  [1m% of limit[22m    ·              │
+···································|·················|················|················|················|···············
+|  [1mMockLinkToken[22m                   ·              [90m-[39m  ·             [90m-[39m  ·       244,121  ·         0.8 %  ·           [32m[90m-[39m[32m[39m  │
+···································|·················|················|················|················|···············
+|  [1mMockRenderer[22m                    ·              [90m-[39m  ·             [90m-[39m  ·       221,164  ·         0.7 %  ·           [32m[90m-[39m[32m[39m  │
+···································|·················|················|················|················|···············
+|  [1mMockVRFCoordinator[22m              ·              [90m-[39m  ·             [90m-[39m  ·       397,747  ·         1.3 %  ·           [32m[90m-[39m[32m[39m  │
+···································|·················|················|················|················|···············
+|  [1mPurgecoin[22m                       ·              [90m-[39m  ·             [90m-[39m  ·     5,394,067  ·          18 %  ·           [32m[90m-[39m[32m[39m  │
+···································|·················|················|················|················|···············
+|  [1mPurgeCoinExternalJackpotModule[22m  ·              [90m-[39m  ·             [90m-[39m  ·     1,766,364  ·         5.9 %  ·           [32m[90m-[39m[32m[39m  │
+···································|·················|················|················|················|···············
+|  [1mPurgeGame[22m                       ·              [90m-[39m  ·             [90m-[39m  ·     4,452,255  ·        14.8 %  ·           [32m[90m-[39m[32m[39m  │
+···································|·················|················|················|················|···············
+|  [1mPurgeGameEndgameModule[22m          ·              [90m-[39m  ·             [90m-[39m  ·     1,228,905  ·         4.1 %  ·           [32m[90m-[39m[32m[39m  │
+···································|·················|················|················|················|···············
+|  [1mPurgeGameJackpotModule[22m          ·              [90m-[39m  ·             [90m-[39m  ·     2,697,587  ·           9 %  ·           [32m[90m-[39m[32m[39m  │
+···································|·················|················|················|················|···············
+|  [1mPurgeGameNFT[22m                    ·              [90m-[39m  ·             [90m-[39m  ·     4,134,461  ·        13.8 %  ·           [32m[90m-[39m[32m[39m  │
+···································|·················|················|················|················|···············
+|  [1mPurgeGameTrophies[22m               ·              [90m-[39m  ·             [90m-[39m  ·     5,249,076  ·        17.5 %  ·           [32m[90m-[39m[32m[39m  │
+···································|·················|················|················|················|···············
+|  [1mPurgeQuestModule[22m                ·              [90m-[39m  ·             [90m-[39m  ·     2,656,705  ·         8.9 %  ·           [32m[90m-[39m[32m[39m  │
+···································|·················|················|················|················|···············
+|  [32m[1mKey[22m[39m                                                                                                                 │
+························································································································
+|  [35m[1m◯[22m[39m  Execution gas for this method does not include intrinsic gas overhead                                            │
+························································································································
+|  [35m[1m△[22m[39m  Cost was non-zero but below the precision setting for the currency display (see options)                         │
+························································································································
+|  [35mToolchain:[39m  hardhat                                                                                                 │
+························································································································

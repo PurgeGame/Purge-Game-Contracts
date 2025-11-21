@@ -5,11 +5,16 @@ import "../interfaces/IPurgeGame.sol";
 
 contract QuestGameMock is IPurgeGame {
     uint8 private phase;
+    uint8 private state;
     uint24 private currentLevel;
     mapping(address => uint24) private lastEthMintLevel;
 
     function setPhase(uint8 newPhase) external {
         phase = newPhase;
+    }
+
+    function setGameState(uint8 newState) external {
+        state = newState;
     }
 
     function setLevel(uint24 newLevel) external {
@@ -32,8 +37,8 @@ contract QuestGameMock is IPurgeGame {
         return currentLevel;
     }
 
-    function gameState() external pure override returns (uint8) {
-        return 0;
+    function gameState() external view override returns (uint8) {
+        return state;
     }
 
     function currentPhase() external view override returns (uint8) {

@@ -90,7 +90,7 @@ contract PurgecoinHarness is Purgecoin {
             return;
         }
         if (reward != 0) {
-            addFlip(player, reward, false);
+            addFlip(player, reward, false, false, false);
         }
         emit QuestCompleted(player, questType, streak, reward, hardMode);
     }

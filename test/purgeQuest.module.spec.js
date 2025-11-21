@@ -102,6 +102,7 @@ async function deployQuestWithGameFixture() {
   await (
     await setup.game.setEthMintLastLevel(await setup.player.getAddress(), 100)
   ).wait();
+  await (await setup.game.setGameState(3)).wait();
   return setup;
 }
 
@@ -257,8 +258,8 @@ describe("PurgeQuestModule", function () {
 
     it("re-rolls duplicate quest slots caused by conversions", async function () {
       const setup = await loadFixture(deployQuestWithGameFixture);
-      const { questModule, coin } = setup;
-      await expect(questModule.connect(coin).setPurgeQuestEnabled(false)).to.not.be.reverted;
+      const { questModule, coin, game } = setup;
+      await (await game.setGameState(1)).wait();
       for (let i = 0; i < 25; i += 1) {
         const day = 10 + i;
         const entropy = BigInt(1000 + i * 7919);
@@ -285,20 +286,28 @@ describe("PurgeQuestModule", function () {
       const setup = await loadFixture(deployQuestWithGameFixture);
       const { questModule, coin, player, game } = setup;
       const purgeEntropy = findEntropy({ questType: QUEST_TYPES.PURGE });
-      await (await game.setPhase(0)).wait();
+      await (await game.setGameState(1)).wait();
       let quests = await rollDay(questModule, coin, 1, purgeEntropy);
-      expect(Number(quests[0].questType)).to.equal(QUEST_TYPES.MINT_ETH);
-      await (await game.setPhase(6)).wait();
+      const fallbackDay1 =
+        Number(quests[1].questType) === QUEST_TYPES.MINT_ETH
+          ? QUEST_TYPES.STAKE
+          : QUEST_TYPES.MINT_ETH;
+      expect(Number(quests[0].questType)).to.equal(fallbackDay1);
+      await (await game.setGameState(3)).wait();
       quests = await rollDay(questModule, coin, 2, purgeEntropy);
       expect(Number(quests[0].questType)).to.equal(QUEST_TYPES.PURGE);
+      const fallbackConverted =
+        Number(quests[1].questType) === QUEST_TYPES.MINT_ETH
+          ? QUEST_TYPES.STAKE
+          : QUEST_TYPES.MINT_ETH;
       await (
         await questModule
           .connect(coin)
           .handlePurge(await player.getAddress(), LARGE_PURGE)
       ).wait();
-      await (await game.setPhase(0)).wait();
+      await (await game.setGameState(1)).wait();
       const active = await questModule.getActiveQuest();
-      expect(Number(active.questType)).to.equal(QUEST_TYPES.PURGE);
+      expect(Number(active.questType)).to.equal(fallbackConverted);
     });
 
     it("enforces the decimator unlock schedule", async function () {
@@ -380,6 +389,53 @@ describe("PurgeQuestModule", function () {
       ).wait();
       state = await questModule.playerQuestState(await player.getAddress());
       expect(state.completedToday).to.equal(true);
+    });
+
+    it("completes both mint quests when an ETH mint satisfies each target", async function () {
+      const setup = await loadFixture(deployQuestWithGameFixture);
+      const { questModule, coin, player, game } = setup;
+      await ensureMintHistory(game, player);
+
+      let combinedQuests;
+      for (let day = 1; day < 1500; day += 1) {
+        const entropy = BigInt(10_000 + day);
+        await (
+          await questModule.connect(coin).rollDailyQuest(day, entropy)
+        ).wait();
+        const quests = await questModule.getActiveQuests();
+        const slotTypes = quests.map((q) => Number(q.questType));
+        const hasMintAny = slotTypes.includes(QUEST_TYPES.MINT_ANY);
+        const hasMintEth = slotTypes.includes(QUEST_TYPES.MINT_ETH);
+        const bothStandard = quests.every((q) => !q.highDifficulty && q.day === BigInt(day));
+        if (hasMintAny && hasMintEth && bothStandard) {
+          combinedQuests = quests;
+          break;
+        }
+      }
+
+      expect(combinedQuests, "missing Mint Any + Mint ETH day").to.not.equal(
+        undefined
+      );
+
+      const staticResult = await questModule
+        .connect(coin)
+        .handleMint.staticCall(await player.getAddress(), LARGE_MINT, true);
+      expect(staticResult.completed).to.equal(true);
+      expect(staticResult.reward).to.equal(200n * MILLION);
+      expect(staticResult.streak).to.equal(1n);
+
+      await (
+        await questModule
+          .connect(coin)
+          .handleMint(await player.getAddress(), LARGE_MINT, true)
+      ).wait();
+
+      const state = await questModule.playerQuestStates(
+        await player.getAddress()
+      );
+      expect(state.streak).to.equal(1n);
+      expect(state.completed[0]).to.equal(true);
+      expect(state.completed[1]).to.equal(true);
     });
   });
 
@@ -546,25 +602,40 @@ describe("PurgeQuestModule", function () {
     it("pays out larger rewards for high difficulty purge quests and locks the day", async function () {
       const setup = await loadFixture(deployQuestWithGameFixture);
       const { questModule, coin, player, game } = setup;
-      await (await game.setPhase(6)).wait();
+      const warmupEntropy = findEntropy({ questType: QUEST_TYPES.MINT_ANY });
+      for (let day = 1; day <= 6; day += 1) {
+        await completeAllQuestsForDay(setup, day, warmupEntropy);
+      }
+      const warmedState = await questModule.playerQuestState(await player.getAddress());
+      expect(warmedState.streak).to.equal(6n);
+      await (await game.setGameState(3)).wait();
       const entropy = findEntropy({
         questType: QUEST_TYPES.PURGE,
         highDifficulty: true,
       });
-      await rollDay(questModule, coin, 1, entropy);
+      const purgeDay = 7;
+      const quests = await rollDay(questModule, coin, purgeDay, entropy);
+      const otherSlot = Number(quests[0].questType) === QUEST_TYPES.PURGE ? quests[1] : quests[0];
+      if (Number(otherSlot.questType) !== QUEST_TYPES.PURGE) {
+        await completeQuest(questModule, coin, player, otherSlot);
+      }
+      const fallbackConverted =
+        Number(otherSlot.questType) === QUEST_TYPES.MINT_ETH
+          ? QUEST_TYPES.STAKE
+          : QUEST_TYPES.MINT_ETH;
       const res = await questModule
         .connect(coin)
         .handlePurge.staticCall(await player.getAddress(), LARGE_PURGE);
       expect(res.hardMode).to.equal(true);
-      expect(res.reward).to.equal(150n * MILLION);
+      expect(res.reward).to.equal(125n * MILLION);
       await (
         await questModule
           .connect(coin)
           .handlePurge(await player.getAddress(), LARGE_PURGE)
       ).wait();
-      await (await game.setPhase(0)).wait();
+      await (await game.setGameState(1)).wait();
       const info = await questModule.getActiveQuest();
-      expect(Number(info.questType)).to.equal(QUEST_TYPES.PURGE);
+      expect(Number(info.questType)).to.equal(fallbackConverted);
     });
   });
 
@@ -607,31 +678,42 @@ describe("PurgeQuestModule", function () {
       const setup = await loadFixture(deployQuestWithGameFixture);
       const { questModule, coin, player } = setup;
       const entropy = findEntropy({ questType: QUEST_TYPES.MINT_ANY });
-      for (let day = 1; day <= 4; day += 1) {
+      for (let day = 1; day <= 9; day += 1) {
         await completeAllQuestsForDay(setup, day, entropy);
       }
       const hardEntropy = findEntropy({
         questType: QUEST_TYPES.FLIP,
         highDifficulty: true,
       });
-      const quests = await rollDay(questModule, coin, 5, hardEntropy);
+      const targetDay = 10;
+      const quests = await rollDay(questModule, coin, targetDay, hardEntropy);
       const hardQuest = quests[0];
       expect(Number(hardQuest.questType)).to.equal(QUEST_TYPES.FLIP);
       await completeQuest(questModule, coin, player, quests[1]);
       const payout = await questModule
         .connect(coin)
         .handleFlip.staticCall(await player.getAddress(), LARGE_TOKEN_CREDIT);
-      expect(payout.reward).to.equal(400n * MILLION);
+      const streak = 10n;
+      const baseReward = 200n * MILLION;
+      let streakBonusUnits = 0n;
+      if (streak >= 5n && (streak === 5n || streak % 10n === 0n)) {
+        streakBonusUnits = streak * 100n;
+        if (streakBonusUnits > 3000n) streakBonusUnits = 3000n;
+      }
+      const streakBonus = streakBonusUnits * MILLION;
+      const hardBonus = streak >= 7n ? 50n * MILLION : 0n;
+      const expectedReward = (baseReward + hardBonus) / 2n + streakBonus;
+      expect(payout.reward).to.equal(expectedReward);
       expect(payout.hardMode).to.equal(true);
-      expect(payout.streak).to.equal(5n);
+      expect(payout.streak).to.equal(streak);
       await (
         await questModule
           .connect(coin)
           .handleFlip(await player.getAddress(), LARGE_TOKEN_CREDIT)
       ).wait();
       const state = await questModule.playerQuestState(await player.getAddress());
-      expect(state.streak).to.equal(5n);
-      expect(state.lastCompletedDay).to.equal(5n);
+      expect(state.streak).to.equal(streak);
+      expect(state.lastCompletedDay).to.equal(BigInt(targetDay));
     });
   });
 });

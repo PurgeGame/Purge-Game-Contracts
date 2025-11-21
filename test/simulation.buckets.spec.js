@@ -703,72 +703,72 @@ describe("PurgeGame Strategy Simulation", function () {
                                               
                                               decimatorCoins: 0n, // Track Decimator burn amount
 
-                                              stakes: [] // { principal, startLevel, risk, distance }
+                                                                                                                                          stakes: [] // { principal, startLevel, risk, distance }
 
-                                          });
+                                                                                            
 
-                    }
+                                                                                                                                      });
 
-                    return newWallets;
+                                                                                                                }
+
+                                                                                            
+
+                                                                                                                return newWallets;
 
                 }
-  before(async function () {
-    system = await deploySystem();
-    [primaryFunder] = await ethers.getSigners();
+  it("Simulates gameplay with dynamic daily buckets (10 Runs Average)", async function () {
+    const SIMULATION_RUNS = 10;
+    const globalAggregates = {}; 
 
-    // Initialize mint counters
-    for (let i = 1; i <= 26; i++) {
-      mintDayCounters.set(i, 1);
-    }
+    console.log(`Starting ${SIMULATION_RUNS} simulation runs...`);
 
-    // Create persistent Quest Completer bucket
-    const qcName = "Quest Completer";
-    const qcWallets = await getBucket(qcName, 5, ethers.parseEther("100"));
+    for (let run = 1; run <= SIMULATION_RUNS; run++) {
+        console.log(`\n--- Run ${run}/${SIMULATION_RUNS} ---`);
+        
+        // 1. Reset State
+        buckets = new Map();
+        stats = new Map();
+        mintDayCounters = new Map();
+        for (let i = 1; i <= 26; i++) mintDayCounters.set(i, 1);
 
-    // Fund Quest Completers with Tokens
-    const { purgecoin } = system;
-    const funderBalance = await purgecoin.balanceOf(primaryFunder.address);
-    const tokenAmount = ethers.parseUnits("50000", 6);
+        // 2. Setup Chain
+        [primaryFunder] = await ethers.getSigners();
+        await network.provider.send("hardhat_setBalance", [
+            primaryFunder.address, 
+            "0x152D02C7E14AF6800000" // 100,000 ETH
+        ]);
 
-    for (const wallet of qcWallets) {
-      await (await purgecoin.connect(primaryFunder).transfer(wallet.address, tokenAmount)).wait();
-    }
-    
-    // Disable purge quests for the simulation
-    await system.purgecoin.setQuestPurgeEnabled(false);
-  });
+        system = await deploySystem();
+        const { purgeGame, purgeNFT, purgecoin, vrf } = system;
+        const advanceOperator = primaryFunder;
+        const vrfConsumer = await purgeGame.getAddress();
 
-  it("Simulates gameplay with dynamic daily buckets", async function () {
-    const { purgeGame, purgeNFT, purgecoin, vrf } = system;
-    const advanceOperator = primaryFunder;
-    const vrfConsumer = await purgeGame.getAddress();
-
-    let gameLevel = 1; // We track the "Game Level" (the one currently playing or forming) 
-
-    let outputBuffer = ""; // Declared here to be accessible by reporting block
-    const log = (msg) => {
-        console.log(msg);
-        outputBuffer += msg + "\n";
-    };
-    
-    const specialEventsTriggered = new Set();
-    const globalDecimatorBurns = {}; // { address: BigInt }
-
-    // --- Event Tracking ---
-    await purgeGame.addListener("PlayerCredited", (player, amount) => {
-        if (stats.has(player)) {
-            const s = stats.get(player);
-            const val = BigInt(amount);
-            // When gameLevel is 21 in the loop, we are processing the end of Level 20 (BAF)
-            if (gameLevel === 21) {
-                s.bafRewards = (s.bafRewards || 0n) + val;
-            } 
-            // When gameLevel is 26, we are processing end of Level 25 (Decimator)
-            else if (gameLevel === 26) {
-                s.decRewards = (s.decRewards || 0n) + val;
-            }
+        // 3. Setup Quest Completers
+        const qcName = "Quest Completer";
+        const qcWallets = await getBucket(qcName, 5, ethers.parseEther("100"));
+        const tokenAmount = ethers.parseUnits("50000", 6);
+        for (const wallet of qcWallets) {
+            await (await purgecoin.connect(primaryFunder).transfer(wallet.address, tokenAmount)).wait();
         }
-    });
+        // 4. Run Simulation Loop
+        let gameLevel = 1;
+        const specialEventsTriggered = new Set();
+        const globalDecimatorBurns = {}; 
+
+        const log = (msg) => { if(run === 1) console.log(msg); }; // Only log details for run 1
+
+        // --- Event Tracking ---
+        await purgeGame.addListener("PlayerCredited", (player, amount) => {
+            if (stats.has(player)) {
+                const s = stats.get(player);
+                const val = BigInt(amount);
+                if (gameLevel === 21) {
+                    s.bafRewards = (s.bafRewards || 0n) + val;
+                } else if (gameLevel === 26) {
+                    s.decRewards = (s.decRewards || 0n) + val;
+                }
+            }
+        });
 
     // We will simulate up to the start of Level 26 (processing L25) and then process L26 to capture L25 payouts
     try {
@@ -805,54 +805,48 @@ describe("PurgeGame Strategy Simulation", function () {
           const shouldMint = phase <= 2 && (!targetReached || currentMintDay === 1);
 
           // Special Events at Level 20: BAF Prep
-          if (gameLevel === 20 && !specialEventsTriggered.has(20)) {
-              specialEventsTriggered.add(20);
-              log("    !!! PREPPING LEVEL 20 BAF ELIGIBILITY !!!");
-              const qcWallets = await getBucket("Quest Completer");
-              for (const w of qcWallets) {
-                  try {
-                      const flipped = await purgecoin.coinflipAmount(w.address);
-                      const target = 6000n * MILLION;
-                      if (flipped < target) {
-                          const needed = target - flipped;
-                          const bal = await purgecoin.balanceOf(w.address);
-                          if (bal < needed) {
-                              // Fund from primaryFunder
-                              const fundAmt = needed - bal;
-                              await (await purgecoin.connect(primaryFunder).transfer(w.address, fundAmt)).wait();
-                          }
-                          await (await purgecoin.connect(w).depositCoinflip(needed)).wait();
-                          log(`      Player ${w.address.slice(0,6)} forced flip ${ethers.formatUnits(needed, 6)} for BAF`);
-                      }
-                  } catch (e) {
-                      log(`      BAF Prep failed for ${w.address.slice(0,6)}: ${e.message}`);
-                  }
-              }
-          }
+                        // Special Events at Level 20: BAF Prep
+                        /* 
+                        if (gameLevel === 20 && !specialEventsTriggered.has(20)) {
+                            specialEventsTriggered.add(20);
+                            log("    !!! PREPPING LEVEL 20 BAF ELIGIBILITY (ALL PLAYERS) !!!");
+                            for (const [address, data] of stats) {
+                                try {
+                                    const playerWallet = buckets.get(data.bucket).find(w => w.address === address);
+                                    if (!playerWallet) continue;
+                                    const flipped = await purgecoin.coinflipAmount(address);
+                                    const target = 6000n * 1000000n;
+                                    if (flipped < target) {
+                                        const needed = target - flipped;
+                                        const bal = await purgecoin.balanceOf(address);
+                                        if (bal < needed) {
+                                            const fundAmt = needed - bal;
+                                            await (await purgecoin.connect(primaryFunder).transfer(address, fundAmt)).wait();
+                                        }
+                                        await (await purgecoin.connect(playerWallet).depositCoinflip(needed)).wait();
+                                    }
+                                } catch (e) {}
+                            }
+                        }
+                        */
 
           // Special Events at Level 25
           if (gameLevel === 25 && !specialEventsTriggered.has(25)) {
               specialEventsTriggered.add(25);
 
               // Ensure RNG is unlocked before burning
-              if (await purgeGame.rngLocked()) {
-                  // console.log("    RNG Locked at L25 start. Advancing to unlock...");
-                  try {
-                      const tx = await purgeGame.connect(advanceOperator).advanceGame(1500);
-                      await tx.wait();
-                      // If that request triggered ANOTHER rng, fulfill it? 
-                      // But usually we just want to consume the pending one.
-                      // Check again?
-                      if (await purgeGame.rngLocked()) {
-                          // If still locked, try fulfill (maybe it was a request?)
-                          await fulfillPendingVrfRequest(vrf, vrfConsumer);
-                          // And advance again to consume?
-                          // This is getting complex. Let's hope one advance consumes the pending fulfilled one.
-                          await (await purgeGame.connect(advanceOperator).advanceGame(1500)).wait();
+              let rngIsLocked = await purgeGame.rngLocked();
+              if (rngIsLocked) {
+                  log("    RNG Locked at L25 start. Attempting to unlock...");
+                  while (rngIsLocked) {
+                      await runAdvanceGameTick({ purgeGame, vrf, vrfConsumer, operator: advanceOperator, label: `L${gameLevel}-unlock-rng` });
+                      rngIsLocked = await purgeGame.rngLocked();
+                      if (rngIsLocked) {
+                          // This suggests a persistent lock, possibly due to multiple steps in transition
+                          log("    RNG still locked. Advancing another tick.");
                       }
-                  } catch (e) {
-                      // console.log("    Unlock attempt failed:", e.message);
                   }
+                  log("    RNG unlocked for L25 special actions.");
               }
 
               log("    !!! EXECUTING LEVEL 25 SPECIAL ACTIONS (DECIMATOR & BAF) !!!");
@@ -890,15 +884,13 @@ describe("PurgeGame Strategy Simulation", function () {
                       const bal = await purgecoin.balanceOf(address);
                       if (bal > 0n) {
                           const burnAmt = (bal * 80n) / 100n;
-                          if (burnAmt >= 250n * MILLION) {
                               await (await purgecoin.connect(playerWallet).decimatorBurn(burnAmt)).wait();
                               // Record burn
                               data.decimatorCoins += burnAmt;
                               globalDecimatorBurns[address] = (globalDecimatorBurns[address] || 0n) + burnAmt;
                           }
-                      }
                   } catch(e) {
-                      // Ignore errors
+                      console.log("Decimator Burn Error:", e.message);
                   }
                   
                   playerIndex++;
@@ -1154,418 +1146,89 @@ describe("PurgeGame Strategy Simulation", function () {
         log(`\nSimulation stopped early due to error: ${err.message}`);
     }
 
-    // ------------------------------------------------------
-    // Reporting
-    // ------------------------------------------------------
 
-    log("\n\n=== SIMULATION RESULTS (BUCKET TOTALS) ===");
-    log("Bucket".padEnd(25) + " | Spent | Claim | Net   | Tokens | Val @ 80%");
-    log("-".repeat(75));
-
-          const bucketAggregates = {};
-
-          // Fetch dynamic token pricing from contract state at end of sim (Level 11 start)
-          const finalMintPrice = await purgeGame.mintPrice();
-          const finalCoinPrice = await purgeGame.coinPriceUnit();
-          
-          // Value of 1 Token (1e6 units) in ETH = (mintPrice / coinPrice)
-          // actually coinPriceUnit is the raw amount for a full mint.
-          // So ETH per RawUnit = mintPrice / coinPriceUnit.
-          // We want Val @ 80%.
-          
-          const getTokenValueEth = (rawTokenAmount) => {
-              // (rawAmount * mintPrice) / coinPrice * 0.8
-              // We use BigInt for precision then convert to Number
-              const valWei = (rawTokenAmount * finalMintPrice * 80n) / (finalCoinPrice * 100n);
-              return Number(ethers.formatEther(valWei));
-          };
-
-          // Helper to decode trophy data
-          const TROPHY_OWED_MASK = (1n << 128n) - 1n;
-          
-          for (const [address, data] of stats) {
-
-              let claimable = 0n;
-
-              try {
-
-                  const playerWallet = buckets.get(data.bucket).find(w => w.address === address);
-
-                  if (playerWallet) {
-
-                      claimable = await purgeGame.connect(playerWallet).getWinnings();
-
-                      
-
-                      // Check for trophy value
-
-                      if (data.tokenIds && data.tokenIds.length > 0) {
-
-                          for (const tokenId of data.tokenIds) {
-
-                              try {
-
-                                  const rawData = await system.purgeTrophies.trophyData(tokenId);
-
-                                  const owed = rawData & TROPHY_OWED_MASK;
-
-                                  if (owed > 0n) {
-
-                                      claimable += owed;
-
-                                  }
-
-                              } catch (e) {}
-
-                          }
-
-                      }
-
-                  }
-
-              } catch (e) {}
-
-    
-
-                        const totalValue = (claimable > 1n ? claimable - 1n : 0n) + data.ethClaimed;
-
-    
-
-                        let tokenBal = await purgecoin.balanceOf(address);
-
-    
-
-              
-
-    
-
-                        // Calculate Staked Value (Principal + Interest)
-
-    
-
-                        let stakedVal = 0n;
-
-    
-
-                        if (data.stakes) {
-
-    
-
-                            for (const s of data.stakes) {
-
-    
-
-                                const levelsPassed = 11 - s.startLevel; // Sim ends at start of L11
-
-    
-
-                                if (levelsPassed <= 0) {
-
-    
-
-                                    stakedVal += s.principal;
-
-    
-
-                                    continue;
-
-    
-
-                                }
-
-    
-
-                                
-
-    
-
-                                // Calculate Growth Factor
-
-    
-
-                                // stepBps = 100 + cappedDist + 12*(risk-1)
-
-    
-
-                                const cappedDist = s.distance > 200 ? 200 : s.distance;
-
-    
-
-                                const stepBps = 100 + cappedDist + 12 * (s.risk - 1);
-
-    
-
-                                const factorNum = 10000n + BigInt(stepBps);
-
-    
-
-                                const factorDen = 10000n;
-
-    
-
-                                
-
-    
-
-                                // Compounds = levelsPassed / 4 (integer division)
-
-    
-
-                                const compounds = Math.floor(levelsPassed / 4);
-
-    
-
-                                
-
-    
-
-                                let val = s.principal;
-
-    
-
-                                for(let c=0; c<compounds; c++) {
-
-    
-
-                                    val = (val * factorNum) / factorDen;
-
-    
-
-                                }
-
-    
-
-                                
-
-    
-
-                                stakedVal += val;
-
-    
-
-                            }
-
-    
-
-                        }
-
-    
-
-                        tokenBal += stakedVal;
-
-    
-
-              
-
-    
-
-                        if (!bucketAggregates[data.bucket]) {
-
-    
-
-                            bucketAggregates[data.bucket] = { spent: 0n, claimed: 0n, tokens: 0n, mapsPurchased: 0, count: 0, wallets: [] };
-
-    
-
-                        }
-
-      const net = totalValue - data.ethSpent;
-
-      bucketAggregates[data.bucket].spent += data.ethSpent;
-      bucketAggregates[data.bucket].claimed += totalValue;
-      bucketAggregates[data.bucket].tokens += tokenBal;
-      bucketAggregates[data.bucket].mapsPurchased += data.mapsPurchased; // Collect maps
-      bucketAggregates[data.bucket].count++;
-
-      bucketAggregates[data.bucket].wallets.push({
-        address,
-        spent: data.ethSpent,
-        claimed: totalValue,
-        net: net,
-        tokens: tokenBal,
-        maps: data.mapsPurchased
-      });
+    // Harvest Data for this Run
+    for (const [name, wallets] of buckets) {
+        if (!globalAggregates[name]) {
+            globalAggregates[name] = { 
+                spent: 0n, claimed: 0n, tokens: 0n, maps: 0, 
+                bafEth: 0n, decEth: 0n, decCoins: 0n, 
+                count: 0 
+            };
+        }
+        const g = globalAggregates[name];
+        for (const w of wallets) {
+            const s = stats.get(w.address);
+            let claimable = 0n;
+            try {
+                claimable = await purgeGame.connect(w).getWinnings();
+                // Trophies
+                if (s.tokenIds) {
+                    for (const tid of s.tokenIds) {
+                        const raw = await system.purgeTrophies.trophyData(tid);
+                        const owed = raw & ((1n << 128n) - 1n);
+                        if (owed > 0n) claimable += owed;
+                    }
+                }
+            } catch(e) {}
+            
+            const totalValue = (claimable > 1n ? claimable - 1n : 0n) + s.ethClaimed;
+            const currentBal = await purgecoin.balanceOf(w.address);
+            
+            g.spent += s.ethSpent;
+            g.claimed += totalValue;
+            g.tokens += currentBal;
+            g.maps += s.mapsPurchased;
+            g.bafEth += s.bafRewards || 0n;
+            g.decEth += s.decRewards || 0n;
+            g.decCoins += globalDecimatorBurns[w.address] || 0n;
+        }
+        g.count++;
     }
+  } // End of Runs Loop
 
-    const sortedKeys = Object.keys(bucketAggregates).sort((a, b) => {
+  // Final Reporting
+  const sortedKeys = Object.keys(globalAggregates).sort((a, b) => {
       if (a.startsWith("Mint_Day_") && b.startsWith("Mint_Day_")) {
-        const dayA = parseInt(a.replace("Mint_Day_", ""), 10);
-        const dayB = parseInt(b.replace("Mint_Day_", ""), 10);
-        return dayA - dayB;
+          return parseInt(a.replace("Mint_Day_", ""), 10) - parseInt(b.replace("Mint_Day_", ""), 10);
       }
       return a.localeCompare(b);
-    });
-
-    let grandTotalSpent = 0;
-    let grandTotalClaimed = 0;
-    let grandTotalNet = 0;
-    let grandTotalTokens = 0;
-
-    for (const name of sortedKeys) {
-      const agg = bucketAggregates[name];
-
-      // TOTALS per bucket (no division by count)
-      const totSpent = Number(ethers.formatEther(agg.spent));
-      const totClaimed = Number(ethers.formatEther(agg.claimed));
-      const netEth = totClaimed - totSpent;
-          
-          const rawTokens = agg.tokens;
-          const tokensFloat = Number(ethers.formatUnits(rawTokens, 6));
-          const tokensK = Math.floor(tokensFloat / 1000);
-          
-          const tokenValueEth = getTokenValueEth(rawTokens);
-          const totalValue = netEth + tokenValueEth;
-
-          grandTotalSpent += totSpent;
-      
-                const s_spent = totSpent.toFixed(4).padEnd(7);
-                const s_claim = totClaimed.toFixed(4).padEnd(7);
-                const s_net = netEth.toFixed(4).padEnd(7);
-                const s_tok = `${tokensK}k`.padEnd(6);
-                          const s_val = totalValue.toFixed(4).padEnd(7);
-                
-                          log(`${name.padEnd(25)} | ${s_spent} | ${s_claim} | ${s_net} | ${s_tok} | ${s_val}`);
-                      }
-                      
-                      log("-".repeat(75));
-                      const t_spent = grandTotalSpent.toFixed(2).padEnd(5);            const t_claim = grandTotalClaimed.toFixed(2).padEnd(5);
-            const t_net = grandTotalNet.toFixed(2).padEnd(5);
-            const t_tok = `${Math.floor(grandTotalTokens / 1000)}k`.padEnd(6);
-            
-            // Approximate grand total val using same ratio on total tokens
-                  const grandTotalTokenVal = getTokenValueEth(Object.values(bucketAggregates).reduce((acc, b) => acc + b.tokens, 0n));
-                  const grandTotalVal = (grandTotalNet + grandTotalTokenVal).toFixed(2).padEnd(6);
-                  
-                  log(`${"GRAND TOTALS".padEnd(25)} | ${t_spent} | ${t_claim} | ${t_net} | ${t_tok} | ${grandTotalVal}`);
-            
-                  log("\n\n=== PER-MAP PERFORMANCE (AVERAGES) ===");
-                  log("Bucket".padEnd(25) + " | Maps Bought | Tokens/Map | Net ETH/Map | Val/Map");
-                  log("-".repeat(80));      
-            for (const name of sortedKeys) {
-                const agg = bucketAggregates[name];
-                const count = BigInt(agg.count);
-                const totalMaps = agg.mapsPurchased || 0; // Total maps bought by bucket
-                if (totalMaps === 0) continue;
-      
-                const rawTokens = agg.tokens;
-                const tokensFloat = Number(ethers.formatUnits(rawTokens, 6));
-                const totSpent = Number(ethers.formatEther(agg.spent));
-                const totClaimed = Number(ethers.formatEther(agg.claimed));
-                const netEth = totClaimed - totSpent;
-                
-                const tokenValueEth = getTokenValueEth(rawTokens);
-                const totalValue = netEth + tokenValueEth;
-      
-                // Averages per map
-                const tokensPerMap = (tokensFloat / totalMaps).toFixed(2);
-                          const netPerMap = (netEth / totalMaps).toFixed(5);
-                          const valPerMap = (totalValue / totalMaps).toFixed(5);
-                
-                                  log(`${name.padEnd(25)} | ${totalMaps.toString().padEnd(11)} | ${tokensPerMap.padEnd(10)} | ${netPerMap.padEnd(11)} | ${valPerMap}`);
-                              }
-                          
-                              // log("\nNOTE ON TOKEN ACCUMULATION:");
-                              // log("Later buckets (Purchase Phase) receive more tokens per map because they benefit from the");
-                              // log("Airdrop Multiplier, which multiplies the number of NFTs minted (and thus purge rewards)");
-                              // log("based on the total purchase count at the end of the phase. Early buckets (Purge Phase)");
-                              // log("mint 1:1 immediately and do not receive this multiplier.");                
-                    log("\n\n=== BAF & DECIMATOR RESULTS (DEBUG) ===");
-    log("Bucket".padEnd(25) + " | BAF ETH | Dec ETH | Total ETH | Dec Coins Burned");
-    log("-".repeat(80));
-
-    for (const name of sortedKeys) {
-        const agg = bucketAggregates[name];
-        let bafTotal = 0n;
-        let decTotal = 0n;
-        let decCoinsTotal = 0n;
-
-        for (const w of agg.wallets) {
-            const s = stats.get(w.address);
-            if (s.bafRewards) bafTotal += s.bafRewards;
-            if (s.decRewards) decTotal += s.decRewards;
-            if (globalDecimatorBurns[w.address]) decCoinsTotal += globalDecimatorBurns[w.address];
-        }
-        
-        console.log(`Debug ${name}: decCoinsTotal=${decCoinsTotal}`);
-
-        if (bafTotal > 0n || decTotal > 0n || decCoinsTotal > 0n) {
-            const s_baf = Number(ethers.formatEther(bafTotal)).toFixed(4).padEnd(7);
-            const s_dec = Number(ethers.formatEther(decTotal)).toFixed(4).padEnd(7);
-            const s_tot = Number(ethers.formatEther(bafTotal + decTotal)).toFixed(4).padEnd(9);
-            
-            // Simple format: Millions or Thousands
-            const units = Number(ethers.formatUnits(decCoinsTotal, 6)); // token count
-            let s_coins = "0";
-            if (units >= 1000000) {
-                s_coins = (units / 1000000).toFixed(2) + "M";
-            } else if (units >= 1000) {
-                s_coins = (units / 1000).toFixed(0) + "k";
-            } else if (units > 0) {
-                s_coins = units.toFixed(0);
-            }
-
-            log(`${name.padEnd(25)} | ${s_baf} | ${s_dec} | ${s_tot} | ${s_coins}`);
-        }
-    }
-
-    log("\n\n=== INDIVIDUAL WINNERS/LOSERS (Every 3rd Bucket + Day 1 Single) ===");
-    for (let i = 0; i < sortedKeys.length; i++) {
-      const name = sortedKeys[i];
-
-      // Logic: Include "Mint_Day_1_Single" OR "Mint_Day_X" where X % 3 == 1
-      let shouldReport = false;
-      if (name === "Mint_Day_1_Single") {
-        shouldReport = true;
-      } else if (name.startsWith("Mint_Day_")) {
-        const dayNum = parseInt(name.replace("Mint_Day_", ""), 10);
-        if (!isNaN(dayNum) && dayNum % 3 === 1) {
-          shouldReport = true;
-        }
-      }
-
-      if (shouldReport) {
-        log(`\n--- ${name} (Top 3 / Bottom 3) ---`);
-        const wallets = bucketAggregates[name].wallets;
-
-        // Sort by Net ETH Descending
-        wallets.sort((a, b) => {
-          const netA = Number(ethers.formatEther(a.net));
-          const netB = Number(ethers.formatEther(b.net));
-          return netB - netA;
-        });
-
-        const top3 = wallets.slice(0, 3);
-        const bottom3 = wallets.slice(-3).reverse(); // Lowest first
-
-              const printWallet = (w, idx) => {
-                  const n = Number(ethers.formatEther(w.net));
-                  const rawTok = Number(ethers.formatUnits(w.tokens, 6));
-                  // const val80 = n + (rawTok * TOKEN_MINT_VALUE_ETH * 0.8); // Old static
-                  const val80 = n + getTokenValueEth(w.tokens);
-                  
-                  const s_net = n.toFixed(4);
-                  const s_tok = (Math.floor(rawTok)).toString(); // exact tokens if small, or k if large? Let's use raw integer for precision or k if > 1000
-                  const s_tok_fmt = rawTok > 1000 ? (Math.floor(rawTok/1000) + "k") : Math.floor(rawTok);
-                  const s_val = val80.toFixed(4);
-                  
-                  log(`    ${idx+1}. ${w.address.slice(0,6)}... : Net ${s_net} ETH, Tok ${s_tok_fmt}, Val@80% ${s_val}`);
-              };
-
-        log("  Top 3:");
-        top3.forEach(printWallet);
-
-        log("  Bottom 3:");
-        bottom3.forEach(printWallet);
-      }
-    }
-    
-    // Write results to file
-    const resultDir = path.join(__dirname, "simulation_results");
-    if (!fs.existsSync(resultDir)){
-        fs.mkdirSync(resultDir);
-    }
-    const filename = path.join(resultDir, `sim_results_${Date.now()}.txt`);
-    fs.writeFileSync(filename, outputBuffer);
-    console.log(`\nResults saved to: ${filename}`);
   });
+
+  const { purgeGame: finalPurgeGame } = system; 
+  const finalMintPrice = await finalPurgeGame.mintPrice();
+  const finalCoinPrice = await finalPurgeGame.coinPriceUnit();
+  const getTokenValueEth = (rawTokenAmount) => {
+      return Number(ethers.formatEther((rawTokenAmount * finalMintPrice * 80n) / (finalCoinPrice * 100n)));
+  };
+  const divBigInt = (val, div) => Number(ethers.formatEther(val)) / div;
+
+  console.log(`\n\n=== AVERAGED SIMULATION RESULTS (${SIMULATION_RUNS} RUNS) ===`);
+  console.log("Bucket".padEnd(25) + " | Avg Spent | Avg Claim | Avg Net | Avg Tokens | Avg Val | BAF ETH | Dec ETH | Dec Coins");
+  console.log("-".repeat(110));
+
+  for (const name of sortedKeys) {
+      const g = globalAggregates[name];
+      const runs = SIMULATION_RUNS;
+      
+      const avgSpent = divBigInt(g.spent, runs).toFixed(2);
+      const avgClaim = divBigInt(g.claimed, runs).toFixed(2);
+      const avgNet = (divBigInt(g.claimed, runs) - divBigInt(g.spent, runs)).toFixed(2);
+      
+      const avgTokensRaw = Number(ethers.formatUnits(g.tokens, 6)) / runs;
+      const avgTokensFmt = avgTokensRaw > 1000000 ? (avgTokensRaw/1000000).toFixed(2) + "M" : (avgTokensRaw/1000).toFixed(0) + "k";
+      
+      const avgTokenValEth = getTokenValueEth(g.tokens / BigInt(runs));
+      const avgVal = (Number(avgNet) + avgTokenValEth).toFixed(2);
+
+      const avgBaf = divBigInt(g.bafEth, runs).toFixed(2);
+      const avgDec = divBigInt(g.decEth, runs).toFixed(2);
+      
+      const avgDecCoinsRaw = Number(ethers.formatUnits(g.decCoins, 6)) / runs;
+      const avgDecCoinsFmt = avgDecCoinsRaw > 1000000 ? (avgDecCoinsRaw/1000000).toFixed(2) + "M" : (avgDecCoinsRaw/1000).toFixed(0) + "k";
+
+      console.log(`${name.padEnd(25)} | ${avgSpent.padEnd(9)} | ${avgClaim.padEnd(9)} | ${avgNet.padEnd(7)} | ${avgTokensFmt.padEnd(10)} | ${avgVal.padEnd(7)} | ${avgBaf.padEnd(7)} | ${avgDec.padEnd(7)} | ${avgDecCoinsFmt}`);
+  }
+  console.log("\nSimulation Complete.");
+});
 });

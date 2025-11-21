@@ -497,6 +497,9 @@ contract Purgecoin is PurgeCoinStorage {
         uint256 levelBps = 100 + cappedDist;
         uint256 riskBps = 12 * uint256(risk - 1);
         uint256 stepBps = levelBps + riskBps; // per-level growth in bps
+        if (stepBps > 250) {
+            stepBps = 250;
+        }
 
         uint256 boostedPrincipal = burnAmt;
         if (distance != 0) {

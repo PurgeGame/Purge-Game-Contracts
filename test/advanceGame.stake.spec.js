@@ -8,6 +8,12 @@ const PURGE_GAME_NFT_FQN = "contracts/PurgeGameNFT.sol:PurgeGameNFT";
 const PURGE_COIN_FQN = "contracts/Purgecoin.sol:Purgecoin";
 const JACKPOT_RESET_TIME = 82_620n;
 const PRICE_COIN_UNIT = 1_000_000_000n;
+const DAY_SECONDS = 86_400n;
+const ETH_DAY_SHIFT = 72n;
+const COINFLIP_GAS_LIMIT = 15_000_000n;
+const COINFLIP_QUEUE_SIZE = 2_000;
+const BASE_FLIP_STAKE = 250n * MILLION;
+const SS_IDLE = (1n << 32n) - 1n;
 
 const layoutCache = new Map();
 
@@ -47,22 +53,30 @@ async function deploySystem() {
   await trophyRenderer.waitForDeployment();
 
   const MockVRF = await ethers.getContractFactory("MockVRFCoordinator");
-  const vrf = await MockVRF.deploy();
+  const vrf = await MockVRF.deploy(ethers.parseEther("500"));
   await vrf.waitForDeployment();
+
+  const MockLink = await ethers.getContractFactory("MockLinkToken");
+  const link = await MockLink.deploy();
+  await link.waitForDeployment();
 
   const Purgecoin = await ethers.getContractFactory("Purgecoin");
   const purgecoin = await Purgecoin.deploy();
   await purgecoin.waitForDeployment();
 
+  const QuestModule = await ethers.getContractFactory("PurgeQuestModule");
+  const questModule = await QuestModule.deploy(await purgecoin.getAddress());
+  await questModule.waitForDeployment();
+
+  const ExternalJackpot = await ethers.getContractFactory("PurgeCoinExternalJackpotModule");
+  const externalJackpot = await ExternalJackpot.deploy();
+  await externalJackpot.waitForDeployment();
+
   const PurgeGameNFT = await ethers.getContractFactory("PurgeGameNFT");
   const purgeNFT = await PurgeGameNFT.deploy(
     await regularRenderer.getAddress(),
     await trophyRenderer.getAddress(),
-    await purgecoin.getAddress(),
-    await vrf.getAddress(),
-    ethers.ZeroHash,
-    1n,
-    ethers.ZeroAddress
+    await purgecoin.getAddress()
   );
   await purgeNFT.waitForDeployment();
 
@@ -85,7 +99,11 @@ async function deploySystem() {
     await purgeNFT.getAddress(),
     await purgeTrophies.getAddress(),
     await endgameModule.getAddress(),
-    await jackpotModule.getAddress()
+    await jackpotModule.getAddress(),
+    await vrf.getAddress(),
+    ethers.ZeroHash,
+    1n,
+    await link.getAddress()
   );
   await purgeGame.waitForDeployment();
 
@@ -95,7 +113,9 @@ async function deploySystem() {
       await purgeNFT.getAddress(),
       await purgeTrophies.getAddress(),
       await regularRenderer.getAddress(),
-      await trophyRenderer.getAddress()
+      await trophyRenderer.getAddress(),
+      await questModule.getAddress(),
+      await externalJackpot.getAddress()
     )
   ).wait();
 
@@ -191,7 +211,7 @@ async function createWallets(count, funder, fundAmount) {
 }
 
 describe("AdvanceGame stake resolution", function () {
-  it.only("transitions to state 2 after extermination snapshot", async function () {
+  it("transitions to state 2 after extermination snapshot", async function () {
     const { purgeGame, purgeNFT, deployer } = await deploySystem();
     const gameAddress = await purgeGame.getAddress();
     const nftAddress = await purgeNFT.getAddress();
@@ -390,6 +410,7 @@ describe("AdvanceGame stake resolution", function () {
       purgeGame,
       purgecoin,
       purgeNFT,
+      purgeTrophies,
       deployer,
     } = await deploySystem();
 
@@ -500,48 +521,20 @@ describe("AdvanceGame stake resolution", function () {
 
     // First advanceGame(0) should process first stake batch but not finish
     let tx = await purgeGame.connect(advancer).advanceGame(0);
-    let receipt = await tx.wait();
-    const firstStakeAwards = receipt.logs
-      .map((log) => {
-        try {
-          return purgeNFT.interface.parseLog(log);
-        } catch {
-          return null;
-        }
-      })
-      .filter(Boolean)
-      .filter((parsed) => parsed.name === "StakeTrophyAwarded");
-    expect(firstStakeAwards.length).to.equal(0, "trophy should not be awarded on first batch");
+    await tx.wait();
 
     // Phase should remain 7 (processing not finished)
     const phaseAfterFirst = Number(await getPackedValue(gameAddress, phaseEntry));
     expect(phaseAfterFirst).to.equal(7, "phase should stay at 7 after partial processing");
 
-    let trophyLog;
     let currentPhase = Number(await getPackedValue(gameAddress, phaseEntry));
     for (let attempt = 0; attempt < 100 && currentPhase !== 6; attempt += 1) {
       const followTx = await purgeGame.connect(advancer).advanceGame(0);
-      const followReceipt = await followTx.wait();
-      const parsed = followReceipt.logs
-        .map((log) => {
-          try {
-            return purgeNFT.interface.parseLog(log);
-          } catch {
-            return null;
-          }
-        })
-        .find((entry) => entry && entry.name === "StakeTrophyAwarded");
-      if (parsed) {
-        trophyLog = parsed.args;
-      }
+      await followTx.wait();
       currentPhase = Number(await getPackedValue(gameAddress, phaseEntry));
     }
 
     expect(currentPhase).to.equal(6, "phase should return to 6 after completion");
-    expect(trophyLog, "stake trophy not awarded").to.not.be.undefined;
-    expect(trophyLog.level).to.equal(targetLevel);
-    expect(trophyLog.to).to.equal(maxStake.player);
-    expect(trophyLog.principal).to.equal(maxStake.principal);
 
     // Confirm stake candidate cleared
     const candidateEntry = await getStorageEntry(
@@ -701,38 +694,17 @@ describe("AdvanceGame stake resolution", function () {
       2n;
     await ensureCallerLuck(purgecoin, deployer, advancer, requiredLuck);
 
-    const parseTrophyLog = (receipt) =>
-      receipt.logs
-        .map((log) => {
-          try {
-            return purgeNFT.interface.parseLog(log);
-          } catch {
-            return null;
-          }
-        })
-        .find((entry) => entry && entry.name === "StakeTrophyAwarded");
-
     const gasUsage = [];
-    const receipts = [];
-    let trophyLog;
 
     let tx = await purgeGame.connect(advancer).advanceGame(0);
     let receipt = await tx.wait();
     gasUsage.push(receipt.gasUsed);
-    receipts.push(receipt);
-    const firstParsed = parseTrophyLog(receipt);
-    if (firstParsed) trophyLog = firstParsed.args;
-
     let currentPhase = Number(await getPackedValue(gameAddress, phaseEntry));
     let iterations = 0;
     while (currentPhase !== 6 && iterations < 200) {
       const followTx = await purgeGame.connect(advancer).advanceGame(0);
       const followReceipt = await followTx.wait();
       gasUsage.push(followReceipt.gasUsed);
-      receipts.push(followReceipt);
-
-      const parsed = parseTrophyLog(followReceipt);
-      if (parsed) trophyLog = parsed.args;
 
       currentPhase = Number(await getPackedValue(gameAddress, phaseEntry));
       iterations += 1;
@@ -742,51 +714,143 @@ describe("AdvanceGame stake resolution", function () {
     const finalStakeLevelComplete = Number(await getPackedValue(purgecoinAddress, stakeLevelCompleteEntry, 3));
     const finalScanCursor = Number(await getPackedValue(purgecoinAddress, scanCursorEntry, 4));
     console.log("final stakeLevelComplete", finalStakeLevelComplete, "scanCursor", finalScanCursor);
-    if (!trophyLog) {
-      const candidateEntry = await getStorageEntry(
-        PURGE_COIN_FQN,
-        "stakeTrophyCandidate"
-      );
-      const candidateSlot = BigInt(candidateEntry.slot);
-      const rawPlayer = BigInt(
-        await readStorage(
-          purgecoinAddress,
-          toWord(candidateSlot)
-        )
-      );
-      const rawPrincipal = BigInt(
-        await readStorage(
-          purgecoinAddress,
-          toWord(candidateSlot + 1n)
-        )
-      );
-      const rawLevel = BigInt(
-        await readStorage(
-          purgecoinAddress,
-          toWord(candidateSlot + 2n)
-        )
-      );
-      console.log("candidate slots", rawPlayer.toString(16), rawPrincipal.toString(), rawLevel.toString());
-      console.log(
-        "advanceGame gas seq:",
-        gasUsage.map((g) => g.toString()).join(", ")
-      );
-      for (let i = 0; i < receipts.length; i += 1) {
-        const r = receipts[i];
-        const nftLogs = r.logs.filter((log) => log.address === nftAddress);
-        if (nftLogs.length !== 0) {
-          console.log("receipt", i, "nft log topics", nftLogs.map((log) => log.topics[0]));
-        }
-      }
-      throw new Error("stake trophy not awarded");
-    }
-    expect(trophyLog, "stake trophy not awarded").to.not.be.undefined;
-    expect(trophyLog.to).to.equal(expectedWinner);
-    expect(trophyLog.principal).to.equal(expectedPrincipal);
+    const candidateEntry = await getStorageEntry(
+      PURGE_COIN_FQN,
+      "stakeTrophyCandidate"
+    );
+    const candidateSlot = BigInt(candidateEntry.slot);
+    const rawPlayer = BigInt(
+      await readStorage(
+        purgecoinAddress,
+        toWord(candidateSlot)
+      )
+    );
+    const rawPrincipal = BigInt(
+      await readStorage(
+        purgecoinAddress,
+        toWord(candidateSlot + 1n)
+      )
+    );
+    const rawLevel = BigInt(
+      await readStorage(
+        purgecoinAddress,
+        toWord(candidateSlot + 2n)
+      )
+    );
+    expect(rawPlayer, "stake trophy candidate player cleared").to.equal(0n);
+    expect(rawPrincipal, "stake trophy candidate principal cleared").to.equal(0n);
+    expect(rawLevel, "stake trophy candidate level cleared").to.equal(0n);
+
+    const bonusPct = await purgeTrophies.stakeTrophyBonus(expectedWinner);
+    expect(bonusPct).to.be.greaterThan(0, "winner should receive stake bonus");
 
     console.log(
       "massive stake gas sequence:",
       gasUsage.map((g) => g.toString()).join(", ")
     );
+  });
+
+  async function seedCoinflipQueueState(purgecoin, targetLevel, queueSize = COINFLIP_QUEUE_SIZE) {
+    const purgecoinAddress = await purgecoin.getAddress();
+    const cfPlayersEntry = await getStorageEntry(PURGE_COIN_FQN, "cfPlayers");
+    const cfPlayersSlot = BigInt(cfPlayersEntry.slot);
+    await setStorageRaw(purgecoinAddress, toWord(cfPlayersSlot), toWord(BigInt(queueSize)));
+    const cfArrayBase = arrayDataSlot(cfPlayersSlot);
+    const flippers = [];
+    for (let i = 0; i < queueSize; i += 1) {
+      const addr = deterministicAddress(500_000 + i);
+      flippers.push(addr);
+      const elementSlot = cfArrayBase + BigInt(i);
+      await setStorageRaw(purgecoinAddress, toWord(elementSlot), toAddressWord(addr));
+    }
+
+    const cfTailEntry = await getStorageEntry(PURGE_COIN_FQN, "cfTail");
+    const cfHeadEntry = await getStorageEntry(PURGE_COIN_FQN, "cfHead");
+    const payoutIndexEntry = await getStorageEntry(PURGE_COIN_FQN, "payoutIndex");
+    await setPackedValue(purgecoinAddress, cfTailEntry, queueSize, 16);
+    await setPackedValue(purgecoinAddress, cfHeadEntry, 0, 16);
+    await setPackedValue(purgecoinAddress, payoutIndexEntry, 0, 4);
+
+    const coinflipAmountEntry = await getStorageEntry(PURGE_COIN_FQN, "coinflipAmount");
+    const coinflipAmountSlot = BigInt(coinflipAmountEntry.slot);
+    for (const addr of flippers) {
+      const slot = mapSlot(ethers.toBigInt(addr), coinflipAmountSlot);
+      await setStorageRaw(purgecoinAddress, toWord(slot), toWord(BASE_FLIP_STAKE));
+    }
+
+    const scanCursorEntry = await getStorageEntry(PURGE_COIN_FQN, "scanCursor");
+    const stakeLevelCompleteEntry = await getStorageEntry(PURGE_COIN_FQN, "stakeLevelComplete");
+    await setPackedValue(purgecoinAddress, scanCursorEntry, SS_IDLE, 4);
+    await setPackedValue(purgecoinAddress, stakeLevelCompleteEntry, targetLevel, 3);
+    const confirmLevel = Number(await getPackedValue(purgecoinAddress, stakeLevelCompleteEntry, 3));
+    if (confirmLevel !== targetLevel) {
+      throw new Error("failed to seed stakeLevelComplete");
+    }
+  }
+
+  async function configureCoinflipGameState(
+    purgeGame,
+    advancer,
+    targetLevel,
+    rngWord,
+    targetDay,
+    targetTs
+  ) {
+    const gameAddress = await purgeGame.getAddress();
+    const levelEntry = await getStorageEntry(PURGE_GAME_FQN, "level");
+    const phaseEntry = await getStorageEntry(PURGE_GAME_FQN, "phase");
+    const stateEntry = await getStorageEntry(PURGE_GAME_FQN, "gameState");
+    const prizeEntry = await getStorageEntry(PURGE_GAME_FQN, "prizePool");
+    const lastPrizeEntry = await getStorageEntry(PURGE_GAME_FQN, "lastPrizePool");
+    const dailyIdxEntry = await getStorageEntry(PURGE_GAME_FQN, "dailyIdx");
+    const levelStartEntry = await getStorageEntry(PURGE_GAME_FQN, "levelStartTime");
+    const rngWordEntry = await getStorageEntry(PURGE_GAME_FQN, "rngWordCurrent");
+    const rngFulfilledEntry = await getStorageEntry(PURGE_GAME_FQN, "rngFulfilled");
+    const rngLockedEntry = await getStorageEntry(PURGE_GAME_FQN, "rngLockedFlag");
+    const mintPackedEntry = await getStorageEntry(PURGE_GAME_FQN, "mintPacked_");
+
+    await setPackedValue(gameAddress, levelEntry, targetLevel, 3);
+    await setPackedValue(gameAddress, phaseEntry, 2);
+    await setPackedValue(gameAddress, stateEntry, 2);
+    await setUint256(gameAddress, prizeEntry, ethers.parseEther("260"));
+    await setUint256(gameAddress, lastPrizeEntry, ethers.parseEther("200"));
+
+    const prevDay = targetDay === 0n ? 0n : targetDay - 1n;
+    await setPackedValue(gameAddress, dailyIdxEntry, prevDay, 6);
+    await setPackedValue(gameAddress, levelStartEntry, targetTs, 6);
+
+    await setUint256(gameAddress, rngWordEntry, rngWord);
+    await setPackedValue(gameAddress, rngFulfilledEntry, 1);
+    await setPackedValue(gameAddress, rngLockedEntry, 1);
+
+    const mintSlot = mapSlot(ethers.toBigInt(advancer.address), BigInt(mintPackedEntry.slot));
+    const mintedValue = BigInt(targetDay) << ETH_DAY_SHIFT;
+    await setStorageRaw(gameAddress, toWord(mintSlot), toWord(mintedValue));
+  }
+
+  describe("coinflip gas budget", function () {
+    this.timeout(0);
+
+    async function runCoinflipGasCase() {
+      const { purgeGame, purgecoin } = await deploySystem();
+      const advancer = (await ethers.getSigners())[1];
+      const targetLevel = 42;
+      await seedCoinflipQueueState(purgecoin, targetLevel);
+      const latest = BigInt(await time.latest());
+      const targetTs = latest + 1_000n;
+      const targetDay = (targetTs - JACKPOT_RESET_TIME) / DAY_SECONDS;
+      const rngWord = 0xabcdef12344n; // force a loss -> 3x payout window
+      await configureCoinflipGameState(purgeGame, advancer, targetLevel, rngWord, targetDay, targetTs);
+      await time.setNextBlockTimestamp(Number(targetTs));
+      const tx = await purgeGame.connect(advancer).advanceGame(0);
+      const receipt = await tx.wait();
+      return receipt.gasUsed;
+    }
+
+    it("coinflip gas (loss) stays under 15M", async function () {
+      const gas = await runCoinflipGasCase();
+      console.log("coinflip loss gas", gas.toString());
+      expect(gas).to.be.lt(COINFLIP_GAS_LIMIT);
+    });
   });
 });

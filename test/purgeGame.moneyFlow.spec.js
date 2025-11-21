@@ -2185,7 +2185,6 @@ describe("PurgeGame money flow simulation", function () {
 
     const system = await deploySystem();
     const { purgeGame, purgeNFT, purgeTrophies, purgecoin, deployer, vrf, questModule } = system;
-    await purgecoin.connect(deployer).setQuestPurgeEnabled(false);
     const advanceOperator = primaryFunder;
     const purgeGameAddress = await purgeGame.getAddress();
     const purgeTrophiesAddress = await purgeTrophies.getAddress();
@@ -2201,7 +2200,6 @@ describe("PurgeGame money flow simulation", function () {
 
     const priceCoinUnit = await purgeGame.coinPriceUnit();
 
-    await purgecoin.connect(deployer).setQuestPurgeEnabled(false);
     await prefundPlayersWithCoin(purgecoin, deployer, questPlayers, QUEST_PREFUND_COINS);
 
     const targetPerLevel = [];

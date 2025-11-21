@@ -1,0 +1,266 @@
+
+=== Processing Level 1 ===
+Level 1 Purchase Phase (State 2)
+
+=== Processing Level 2 ===
+Level 2 Purchase Phase (State 2)
+
+=== Processing Level 3 ===
+Level 3 Purchase Phase (State 2)
+
+=== Processing Level 4 ===
+Level 4 Purchase Phase (State 2)
+
+=== Processing Level 5 ===
+Level 5 Purchase Phase (State 2)
+
+=== Processing Level 6 ===
+Level 6 Purchase Phase (State 2)
+
+=== Processing Level 7 ===
+Level 7 Purchase Phase (State 2)
+
+=== Processing Level 8 ===
+Level 8 Purchase Phase (State 2)
+
+=== Processing Level 9 ===
+Level 9 Purchase Phase (State 2)
+
+=== Processing Level 10 ===
+Level 10 Purchase Phase (State 2)
+
+=== Processing Level 11 ===
+Level 11 Purchase Phase (State 2)
+
+=== Processing Level 12 ===
+Level 12 Purchase Phase (State 2)
+
+=== Processing Level 13 ===
+Level 13 Purchase Phase (State 2)
+
+=== Processing Level 14 ===
+Level 14 Purchase Phase (State 2)
+
+=== Processing Level 15 ===
+Level 15 Purchase Phase (State 2)
+
+=== Processing Level 16 ===
+Level 16 Purchase Phase (State 2)
+
+=== Processing Level 17 ===
+Level 17 Purchase Phase (State 2)
+
+=== Processing Level 18 ===
+Level 18 Purchase Phase (State 2)
+
+=== Processing Level 19 ===
+Level 19 Purchase Phase (State 2)
+
+=== Processing Level 20 ===
+Level 20 Purchase Phase (State 2)
+    !!! PREPPING LEVEL 20 BAF ELIGIBILITY !!!
+      BAF Prep failed for 0x2679: VM Exception while processing transaction: reverted with custom error 'BettingPaused()'
+      BAF Prep failed for 0x0C05: VM Exception while processing transaction: reverted with custom error 'BettingPaused()'
+      BAF Prep failed for 0xf79F: VM Exception while processing transaction: reverted with custom error 'BettingPaused()'
+      BAF Prep failed for 0xE3aD: VM Exception while processing transaction: reverted with custom error 'BettingPaused()'
+      BAF Prep failed for 0x050D: VM Exception while processing transaction: reverted with custom error 'BettingPaused()'
+
+=== Processing Level 21 ===
+Level 21 Purchase Phase (State 2)
+
+=== Processing Level 22 ===
+Level 22 Purchase Phase (State 2)
+
+=== Processing Level 23 ===
+Level 23 Purchase Phase (State 2)
+
+=== Processing Level 24 ===
+Level 24 Purchase Phase (State 2)
+
+=== Processing Level 25 ===
+Level 25 Purchase Phase (State 2)
+    !!! EXECUTING LEVEL 25 SPECIAL ACTIONS (DECIMATOR & BAF) !!!
+
+=== Processing Level 26 ===
+
+
+=== SIMULATION RESULTS (BUCKET TOTALS) ===
+Bucket                    | Spent | Claim | Net   | Tokens | Val @ 80%
+---------------------------------------------------------------------------
+Mint_Day_1                | 234.3750 | 273.0994 | 38.7244 | 1901k  | 190.8664
+Mint_Day_1_Single         | 245.0000 | 184.6712 | -60.3288 | 9743k  | 719.1349
+Mint_Day_2                | 232.5000 | 236.8822 | 4.3822  | 1478k  | 122.6269
+Mint_Day_3                | 234.3750 | 261.0484 | 26.6734 | 1389k  | 137.8718
+Mint_Day_4                | 234.3750 | 226.4842 | -7.8908 | 1514k  | 113.2687
+Mint_Day_5                | 234.3750 | 248.3084 | 13.9334 | 1939k  | 169.1205
+Mint_Day_6                | 234.3750 | 231.3423 | -3.0327 | 1712k  | 133.9563
+Mint_Day_7                | 234.3750 | 226.4576 | -7.9174 | 1432k  | 106.7209
+Mint_Day_8                | 234.3750 | 245.1045 | 10.7295 | 1469k  | 128.3234
+Mint_Day_9                | 234.3750 | 195.6368 | -38.7382 | 1248k  | 61.1631
+Mint_Day_10               | 209.0625 | 221.8505 | 12.7880 | 1151k  | 104.9174
+Mint_Day_11               | 240.9375 | 170.1793 | -70.7582 | 1216k  | 26.5458
+Mint_Day_12               | 248.4375 | 196.4065 | -52.0310 | 1388k  | 59.0208
+Mint_Day_13               | 496.8750 | 399.0432 | -97.8318 | 2710k  | 118.9816
+Mint_Day_14               | 496.8750 | 402.4405 | -94.4345 | 2349k  | 93.5317
+Mint_Day_15               | 496.8750 | 387.1464 | -109.7286 | 2344k  | 77.8371
+Mint_Day_16               | 459.3750 | 331.5990 | -127.7760 | 2255k  | 52.6363
+Mint_Day_17               | 403.1250 | 262.8968 | -140.2282 | 1660k  | -7.3506
+Mint_Day_18               | 271.8750 | 224.6110 | -47.2640 | 1139k  | 43.8817
+Mint_Day_19               | 178.1250 | 127.6920 | -50.4330 | 509k   | -9.6469
+Mint_Day_20               | 140.6250 | 125.4235 | -15.2015 | 954k   | 61.1308
+Mint_Day_21               | 93.7500 | 70.3760 | -23.3740 | 1100k  | 64.6506
+Mint_Day_22               | 56.2500 | 47.6558 | -8.5942 | 317k   | 16.7749
+Mint_Day_23               | 28.1250 | 21.3828 | -6.7422 | 307k   | 17.8535
+Mint_Day_24               | 18.7500 | 13.7147 | -5.0353 | 321k   | 20.6871
+Quest Completer           | 100.1250 | 136.5004 | 36.3754 | 1151k  | 128.5344
+---------------------------------------------------------------------------
+GRAND TOTALS              | 6291.69 | 0.00  | 0.00  | 0k     | 3576.77
+
+
+=== PER-MAP PERFORMANCE (AVERAGES) ===
+Bucket                    | Maps Bought | Tokens/Map | Net ETH/Map | Val/Map
+--------------------------------------------------------------------------------
+Mint_Day_1                | 18750       | 101.43     | 0.00207     | 0.01018
+Mint_Day_1_Single         | 19200       | 507.46     | -0.00314    | 0.03745
+Mint_Day_2                | 18600       | 79.47      | 0.00024     | 0.00659
+Mint_Day_3                | 18750       | 74.13      | 0.00142     | 0.00735
+Mint_Day_4                | 18750       | 80.77      | -0.00042    | 0.00604
+Mint_Day_5                | 18750       | 103.46     | 0.00074     | 0.00902
+Mint_Day_6                | 18750       | 91.33      | -0.00016    | 0.00714
+Mint_Day_7                | 18750       | 76.43      | -0.00042    | 0.00569
+Mint_Day_8                | 18750       | 78.40      | 0.00057     | 0.00684
+Mint_Day_9                | 18750       | 66.60      | -0.00207    | 0.00326
+Mint_Day_10               | 15900       | 72.43      | 0.00080     | 0.00660
+Mint_Day_11               | 18150       | 67.01      | -0.00390    | 0.00146
+Mint_Day_12               | 18750       | 74.03      | -0.00277    | 0.00315
+Mint_Day_13               | 37500       | 72.27      | -0.00261    | 0.00317
+Mint_Day_14               | 37500       | 62.66      | -0.00252    | 0.00249
+Mint_Day_15               | 37500       | 62.52      | -0.00293    | 0.00208
+Mint_Day_16               | 36000       | 62.64      | -0.00355    | 0.00146
+Mint_Day_17               | 33000       | 50.33      | -0.00425    | -0.00022
+Mint_Day_18               | 27000       | 42.20      | -0.00175    | 0.00163
+Mint_Day_19               | 21000       | 24.28      | -0.00240    | -0.00046
+Mint_Day_20               | 18000       | 53.01      | -0.00084    | 0.00340
+Mint_Day_21               | 12000       | 91.69      | -0.00195    | 0.00539
+Mint_Day_22               | 7500        | 42.28      | -0.00115    | 0.00224
+Mint_Day_23               | 4500        | 68.32      | -0.00150    | 0.00397
+Mint_Day_24               | 3000        | 107.18     | -0.00168    | 0.00690
+Quest Completer           | 9180        | 125.49     | 0.00396     | 0.01400
+
+
+=== BAF & DECIMATOR RESULTS (DEBUG) ===
+Bucket                    | BAF ETH | Dec ETH | Total ETH | Dec Coins Burned
+--------------------------------------------------------------------------------
+Mint_Day_1                | 35.5630 | 3.8753  | 39.4383   | 0
+Mint_Day_1_Single         | 7.0328  | 25.0812 | 32.1140   | 0
+Mint_Day_2                | 10.3734 | 13.3504 | 23.7238   | 0
+Mint_Day_3                | 26.2313 | 14.1963 | 40.4276   | 0
+Mint_Day_4                | 12.2403 | 5.1736  | 17.4139   | 0
+Mint_Day_5                | 14.0330 | 11.8144 | 25.8474   | 0
+Mint_Day_6                | 19.0297 | 9.1128  | 28.1426   | 0
+Mint_Day_7                | 13.1207 | 1.3901  | 14.5108   | 0
+Mint_Day_8                | 22.7046 | 6.8326  | 29.5372   | 0
+Mint_Day_9                | 21.8973 | 4.6999  | 26.5972   | 0
+Mint_Day_10               | 26.9768 | 11.0161 | 37.9929   | 0
+Mint_Day_11               | 12.0817 | 5.0441  | 17.1258   | 0
+Mint_Day_12               | 8.1813  | 3.6851  | 11.8665   | 0
+Mint_Day_13               | 30.6651 | 10.0145 | 40.6795   | 0
+Mint_Day_14               | 28.8430 | 16.6831 | 45.5261   | 0
+Mint_Day_15               | 27.8337 | 10.8079 | 38.6416   | 0
+Mint_Day_16               | 0.0000  | 17.7568 | 17.7568   | 0
+Mint_Day_17               | 0.0000  | 15.9143 | 15.9143   | 0
+Mint_Day_18               | 0.0000  | 7.7096  | 7.7096    | 0
+Quest Completer           | 4.2976  | 8.4189  | 12.7165   | 0
+
+
+=== INDIVIDUAL WINNERS/LOSERS (Every 3rd Bucket + Day 1 Single) ===
+
+--- Mint_Day_1 (Top 3 / Bottom 3) ---
+  Top 3:
+    1. 0x9fa7... : Net 19.8152 ETH, Tok 456k, Val@80% 56.3524
+    2. 0xF6ab... : Net 16.0457 ETH, Tok 393k, Val@80% 47.5193
+    3. 0xf289... : Net 6.0998 ETH, Tok 340k, Val@80% 33.3414
+  Bottom 3:
+    1. 0x67A9... : Net -7.1996 ETH, Tok 375k, Val@80% 22.8228
+    2. 0xa81D... : Net 3.9633 ETH, Tok 335k, Val@80% 30.8305
+    3. 0xf289... : Net 6.0998 ETH, Tok 340k, Val@80% 33.3414
+
+--- Mint_Day_1_Single (Top 3 / Bottom 3) ---
+  Top 3:
+    1. 0x66Bd... : Net 18.6784 ETH, Tok 48k, Val@80% 22.5835
+    2. 0x64CB... : Net 6.3798 ETH, Tok 47k, Val@80% 10.1910
+    3. 0x4502... : Net 4.8194 ETH, Tok 48k, Val@80% 8.6903
+  Bottom 3:
+    1. 0x45C2... : Net -1.2250 ETH, Tok 48k, Val@80% 2.6161
+    2. 0x788B... : Net -1.2019 ETH, Tok 47k, Val@80% 2.5837
+    3. 0xac84... : Net -1.2000 ETH, Tok 47k, Val@80% 2.6368
+
+--- Mint_Day_4 (Top 3 / Bottom 3) ---
+  Top 3:
+    1. 0x81BE... : Net 15.3609 ETH, Tok 278k, Val@80% 37.6770
+    2. 0xaE2c... : Net -1.1046 ETH, Tok 323k, Val@80% 24.7776
+    3. 0x1477... : Net -2.2279 ETH, Tok 304k, Val@80% 22.1044
+  Bottom 3:
+    1. 0x1083... : Net -11.2860 ETH, Tok 307k, Val@80% 13.3047
+    2. 0x70Dd... : Net -8.6333 ETH, Tok 300k, Val@80% 15.4050
+    3. 0x1477... : Net -2.2279 ETH, Tok 304k, Val@80% 22.1044
+
+--- Mint_Day_7 (Top 3 / Bottom 3) ---
+  Top 3:
+    1. 0x386C... : Net 15.9278 ETH, Tok 293k, Val@80% 39.4190
+    2. 0x23E9... : Net 14.3364 ETH, Tok 274k, Val@80% 36.2621
+    3. 0x1142... : Net -10.3594 ETH, Tok 297k, Val@80% 13.4210
+  Bottom 3:
+    1. 0x823e... : Net -16.3546 ETH, Tok 295k, Val@80% 7.2576
+    2. 0xE13C... : Net -11.4676 ETH, Tok 272k, Val@80% 10.3612
+    3. 0x1142... : Net -10.3594 ETH, Tok 297k, Val@80% 13.4210
+
+--- Mint_Day_10 (Top 3 / Bottom 3) ---
+  Top 3:
+    1. 0xd884... : Net 36.3317 ETH, Tok 270k, Val@80% 58.0105
+    2. 0x9A5B... : Net 4.2972 ETH, Tok 273k, Val@80% 26.2146
+    3. 0x32D3... : Net -3.9013 ETH, Tok 44k, Val@80% -0.3669
+  Bottom 3:
+    1. 0x11fB... : Net -17.6506 ETH, Tok 282k, Val@80% 4.9403
+    2. 0xd4f3... : Net -6.2890 ETH, Tok 280k, Val@80% 16.1190
+    3. 0x32D3... : Net -3.9013 ETH, Tok 44k, Val@80% -0.3669
+
+--- Mint_Day_13 (Top 3 / Bottom 3) ---
+  Top 3:
+    1. 0x6C08... : Net 0.3098 ETH, Tok 536k, Val@80% 43.2054
+    2. 0x6dDD... : Net -16.2303 ETH, Tok 535k, Val@80% 26.6229
+    3. 0xB619... : Net -23.0585 ETH, Tok 570k, Val@80% 22.5939
+  Bottom 3:
+    1. 0x0734... : Net -33.9239 ETH, Tok 536k, Val@80% 8.9762
+    2. 0x4EAa... : Net -24.9289 ETH, Tok 531k, Val@80% 17.5832
+    3. 0xB619... : Net -23.0585 ETH, Tok 570k, Val@80% 22.5939
+
+--- Mint_Day_16 (Top 3 / Bottom 3) ---
+  Top 3:
+    1. 0x6dA7... : Net -9.1376 ETH, Tok 450k, Val@80% 26.9057
+    2. 0x0542... : Net -10.7807 ETH, Tok 453k, Val@80% 25.5080
+    3. 0x51E4... : Net -27.4016 ETH, Tok 452k, Val@80% 8.8335
+  Bottom 3:
+    1. 0x12cE... : Net -43.7061 ETH, Tok 449k, Val@80% -7.7240
+    2. 0xc99f... : Net -36.7501 ETH, Tok 448k, Val@80% -0.8869
+    3. 0x51E4... : Net -27.4016 ETH, Tok 452k, Val@80% 8.8335
+
+--- Mint_Day_19 (Top 3 / Bottom 3) ---
+  Top 3:
+    1. 0xADa0... : Net -5.1880 ETH, Tok 98k, Val@80% 2.6960
+    2. 0x7aA2... : Net -10.5211 ETH, Tok 107k, Val@80% -1.8935
+    3. 0x08bD... : Net -10.6061 ETH, Tok 95k, Val@80% -2.9346
+  Bottom 3:
+    1. 0x64C9... : Net -12.5706 ETH, Tok 110k, Val@80% -3.7365
+    2. 0x3Ea6... : Net -11.5472 ETH, Tok 97k, Val@80% -3.7783
+    3. 0x08bD... : Net -10.6061 ETH, Tok 95k, Val@80% -2.9346
+
+--- Mint_Day_22 (Top 3 / Bottom 3) ---
+  Top 3:
+    1. 0x929c... : Net 1.8065 ETH, Tok 66k, Val@80% 7.1361
+    2. 0x0A38... : Net -1.9943 ETH, Tok 62k, Val@80% 3.0356
+    3. 0x63A0... : Net -2.0289 ETH, Tok 62k, Val@80% 2.9701
+  Bottom 3:
+    1. 0x27d9... : Net -4.2375 ETH, Tok 62k, Val@80% 0.7785
+    2. 0xD97a... : Net -2.1399 ETH, Tok 62k, Val@80% 2.8548
+    3. 0x63A0... : Net -2.0289 ETH, Tok 62k, Val@80% 2.9701
