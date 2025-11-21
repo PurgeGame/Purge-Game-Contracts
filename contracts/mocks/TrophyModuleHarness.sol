@@ -88,6 +88,10 @@ contract TrophyCoinHarness is IPurgecoinMinimal {
         burns.push(Burn({target: target, amount: amount}));
     }
 
+    function burnBaf(address trophies, uint24 level) external {
+        IPurgeGameTrophies(trophies).burnBafPlaceholder(level);
+    }
+
     function burnCount() external view returns (uint256) {
         return burns.length;
     }

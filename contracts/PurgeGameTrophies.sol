@@ -1020,8 +1020,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         address[] memory leaders = coin.getLeaderboardAddresses(1);
         bool hasAffiliates = leaders.length != 0;
         address[6] memory selectedRecipients = _selectAffiliateRecipients(randomWord);
-        uint256 affiliateRefund;
-
         if (hasAffiliates) {
             uint256 payout = ctx.affiliateShare;
             if (payout > available) {
@@ -1045,7 +1043,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         } else {
             ctx.affiliateShare = 0;
             legacyAffiliateShare = 0;
-            affiliateRefund = 0;
             _eraseTrophy(affiliateTokenId, PURGE_TROPHY_KIND_AFFILIATE, true);
         }
 
@@ -1554,64 +1551,21 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             uint256 span = len - 2;
             uint256 rand = randomWord;
             uint256 mask = type(uint64).max;
-            uint256 remaining = span;
             uint256 slotSeed;
 
-            if (len <= 256) {
-                uint256 usedMask = 3; // bits 0 and 1 consumed
-                for (uint8 slot = 2; slot < 6; ) {
-                    if (remaining == 0) {
-                        recipients[slot] = top;
-                        ++slot;
-                        continue;
-                    }
-                    if (rand == 0) {
-                        ++slotSeed;
-                        rand = uint256(keccak256(abi.encode(randomWord, slotSeed, slot)));
-                    }
-                    uint256 idx = 2 + ((rand & mask) % span);
-                    rand >>= 64;
-                    if (idx >= len) idx = len - 1;
-                    uint256 bit = uint256(1) << idx;
-                    if (usedMask & bit != 0) {
-                        continue;
-                    }
-                    usedMask |= bit;
-                    recipients[slot] = leaders[idx];
-                    --remaining;
-                    ++slot;
-                }
-            } else {
-                bool[] memory used = new bool[](len);
-                used[0] = true;
-                used[1] = true;
-                for (uint8 slot = 2; slot < 6; ) {
-                    if (remaining == 0) {
-                        recipients[slot] = top;
-                        ++slot;
-                        continue;
-                    }
-                    if (rand == 0) {
-                        ++slotSeed;
-                        rand = uint256(keccak256(abi.encode(randomWord, slotSeed, slot)));
-                    }
-                    uint256 idx = 2 + ((rand & mask) % span);
-                    rand >>= 64;
-                    if (idx >= len) idx = len - 1;
-                    if (used[idx]) {
-                        continue;
-                    }
-                    used[idx] = true;
-                    recipients[slot] = leaders[idx];
-                    --remaining;
-                    ++slot;
-                }
-            }
-
             for (uint8 slot = 2; slot < 6; ) {
-                if (recipients[slot] == address(0)) {
-                    recipients[slot] = top;
+                if (rand == 0) {
+                    ++slotSeed;
+                    rand = uint256(keccak256(abi.encode(randomWord, slotSeed, slot)));
                 }
+                uint256 idx = 2 + ((rand & mask) % span);
+                rand >>= 64;
+                if (idx >= len) idx = len - 1;
+                address pick = leaders[idx];
+                if (pick == address(0)) {
+                    pick = top;
+                }
+                recipients[slot] = pick;
                 ++slot;
             }
         }

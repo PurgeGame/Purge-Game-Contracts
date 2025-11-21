@@ -265,4 +265,36 @@ describe("PurgeGameTrophies assignment and funds", function () {
     expect(info & TROPHY_OWED_MASK).to.equal(0n);
     expect(await nft.ownerOf(placeholders.baf)).to.equal(player.address);
   });
+
+  it("burns affiliate trophy and skips payouts when no leaderboard addresses exist", async function () {
+    const { game, nft, trophies } = await deployHarness(6);
+    const [, exterminator] = await ethers.getSigners();
+
+    const placeholders = await findPlaceholders(trophies, nft, 6);
+    const req = {
+      exterminator: exterminator.address,
+      traitId: 777,
+      level: 6,
+      pool: 5_000n,
+    };
+
+    const supplyBefore = await nft.trophySupply();
+    await game.processEndLevel(await trophies.getAddress(), req, { value: 0 });
+
+    expect(await nft.ownerOf(placeholders.level)).to.equal(exterminator.address);
+    expect(await trophies.trophyData(placeholders.affiliate)).to.equal(0n);
+    expect(await nft.trophySupply()).to.equal(supplyBefore - 1n);
+  });
+
+  it("burns BAF trophy placeholder on flop loss", async function () {
+    const { coin, nft, trophies } = await deployHarness(20);
+    const placeholders = await findPlaceholders(trophies, nft, 20);
+    const supplyBefore = await nft.trophySupply();
+    expect(placeholders.baf).to.not.equal(undefined);
+
+    await coin.burnBaf(await trophies.getAddress(), 20);
+
+    expect(await trophies.trophyData(placeholders.baf)).to.equal(0n);
+    expect(await nft.trophySupply()).to.equal(supplyBefore - 1n);
+  });
 });
