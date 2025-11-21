@@ -20,6 +20,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
     uint8 private constant QUEST_TYPE_DECIMATOR = 6;
     uint8 private constant QUEST_TYPE_COUNT = 7;
     uint8 private constant QUEST_FLAG_HIGH_DIFFICULTY = 1 << 0;
+    uint8 private constant QUEST_FLAG_VERY_HIGH_DIFFICULTY = 1 << 1;
     uint8 private constant QUEST_STAKE_REQUIRE_PRINCIPAL = 1 << 0;
     uint8 private constant QUEST_STAKE_REQUIRE_DISTANCE = 1 << 1;
     uint8 private constant QUEST_STAKE_REQUIRE_RISK = 1 << 2;
@@ -29,6 +30,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
     uint8 private constant QUEST_STATE_COMPLETED_SLOTS_MASK = (uint8(1) << QUEST_SLOT_COUNT) - 1;
     uint8 private constant QUEST_STATE_STREAK_CREDITED = 1 << 7;
     uint16 private constant QUEST_MIN_TOKEN = 250;
+    uint16 private constant QUEST_MIN_FLIP_STAKE_TOKEN = 1_000;
     uint16 private constant QUEST_MIN_MINT = 1;
     uint24 private constant DECIMATOR_SPECIAL_LEVEL = 100;
 
@@ -62,9 +64,9 @@ contract PurgeQuestModule is IPurgeQuestModule {
 
     uint256 private constant QUEST_MINT_ANY_PACKED = 0x0000000000000000000000080008000800080008000700060005000400030002;
     uint256 private constant QUEST_MINT_ETH_PACKED = 0x0000000000000000000000050005000400040004000300030002000200020001;
-    uint256 private constant QUEST_FLIP_PACKED = 0x0000000000000000000009c409c408fc076c060e04e203e80320028a01f40190;
+    uint256 private constant QUEST_FLIP_PACKED = 0x000000000000000000000dac0ce40c1c0b540a8c09c408fc0834076c06a405dc;
     uint256 private constant QUEST_STAKE_PRINCIPAL_PACKED =
-        0x0000000000000000000009c409c40898072105dc04c903e8033902a3020d0190;
+        0x000000000000000000000dac0ce40c1c0b540a8c09c408fc0834076c06a405dc;
     uint256 private constant QUEST_AFFILIATE_PACKED =
         0x00000000000000000000060e060e060e060e060e060e04e203e80320028a01f4;
     uint256 private constant QUEST_STAKE_DISTANCE_MIN_PACKED =
@@ -672,13 +674,23 @@ contract PurgeQuestModule is IPurgeQuestModule {
         return uint16((packed >> (tier * 16)) & 0xFFFF);
     }
 
+    function _questLinearTarget(uint32 minVal, uint32 maxVal, uint16 difficulty) private pure returns (uint32) {
+        if (maxVal <= minVal) {
+            return minVal;
+        }
+        uint32 range = maxVal - minVal;
+        uint32 target = minVal;
+        target += uint32((uint256(difficulty) * (uint256(range) + 1)) / 1024);
+        if (target > maxVal) {
+            target = maxVal;
+        }
+        return target;
+    }
+
     function _questMintAnyTarget(uint8 tier, uint256 entropy) private pure returns (uint32) {
         uint16 maxVal = _questPackedValue(QUEST_MINT_ANY_PACKED, tier);
-        if (maxVal <= QUEST_MIN_MINT) {
-            return QUEST_MIN_MINT;
-        }
-        uint256 rand = _questRand(entropy, QUEST_TYPE_MINT_ANY, tier, 0);
-        return uint32(rand % maxVal) + QUEST_MIN_MINT;
+        uint16 difficulty = uint16(entropy & 0x3FF);
+        return _questLinearTarget(QUEST_MIN_MINT, uint32(maxVal), difficulty);
     }
 
     function _questMintEthTarget(uint8 tier, uint256 entropy) private pure returns (uint32) {
@@ -686,11 +698,8 @@ contract PurgeQuestModule is IPurgeQuestModule {
             return QUEST_MIN_MINT;
         }
         uint16 maxVal = _questPackedValue(QUEST_MINT_ETH_PACKED, tier);
-        if (maxVal <= QUEST_MIN_MINT) {
-            return QUEST_MIN_MINT;
-        }
-        uint256 rand = _questRand(entropy, QUEST_TYPE_MINT_ETH, tier, 0);
-        return uint32(rand % maxVal) + QUEST_MIN_MINT;
+        uint16 difficulty = uint16(entropy & 0x3FF);
+        return _questLinearTarget(QUEST_MIN_MINT, uint32(maxVal), difficulty);
     }
 
     function _questPurgeTarget(uint8 tier, uint256 entropy) private pure returns (uint32) {
@@ -699,9 +708,8 @@ contract PurgeQuestModule is IPurgeQuestModule {
 
     function _questFlipTargetTokens(uint8 tier, uint256 entropy) private pure returns (uint32) {
         uint16 maxVal = _questPackedValue(QUEST_FLIP_PACKED, tier);
-        uint256 range = uint256(maxVal) - QUEST_MIN_TOKEN + 1;
-        uint256 rand = _questRand(entropy, QUEST_TYPE_FLIP, tier, 0);
-        return uint32(uint256(QUEST_MIN_TOKEN) + (rand % range));
+        uint16 difficulty = uint16(entropy & 0x3FF);
+        return _questLinearTarget(QUEST_MIN_FLIP_STAKE_TOKEN, uint32(maxVal), difficulty);
     }
 
     function _questDecimatorTargetTokens(uint8 tier, uint256 entropy) private pure returns (uint32) {
@@ -715,24 +723,21 @@ contract PurgeQuestModule is IPurgeQuestModule {
 
     function _questStakePrincipalTarget(uint8 tier, uint256 entropy) private pure returns (uint32) {
         uint16 maxVal = _questPackedValue(QUEST_STAKE_PRINCIPAL_PACKED, tier);
-        uint256 range = uint256(maxVal) - QUEST_MIN_TOKEN + 1;
-        uint256 rand = _questRand(entropy, QUEST_TYPE_STAKE, tier, 1);
-        return uint32(uint256(QUEST_MIN_TOKEN) + (rand % range));
+        uint16 difficulty = uint16(entropy & 0x3FF);
+        return _questLinearTarget(QUEST_MIN_FLIP_STAKE_TOKEN, uint32(maxVal), difficulty);
     }
 
     function _questStakeDistanceTarget(uint8 tier, uint256 entropy) private pure returns (uint16) {
         uint16 minVal = _questPackedValue(QUEST_STAKE_DISTANCE_MIN_PACKED, tier);
         uint16 maxVal = _questPackedValue(QUEST_STAKE_DISTANCE_MAX_PACKED, tier);
-        uint256 range = uint256(maxVal) - minVal + 1;
-        uint256 rand = _questRand(entropy, QUEST_TYPE_STAKE, tier, 2);
-        return uint16(uint256(minVal) + (rand % range));
+        uint16 difficulty = uint16(entropy & 0x3FF);
+        return uint16(_questLinearTarget(minVal, uint32(maxVal), difficulty));
     }
 
     function _questAffiliateTargetTokens(uint8 tier, uint256 entropy) private pure returns (uint32) {
         uint16 maxVal = _questPackedValue(QUEST_AFFILIATE_PACKED, tier);
-        uint256 range = uint256(maxVal) - QUEST_MIN_TOKEN + 1;
-        uint256 rand = _questRand(entropy, QUEST_TYPE_AFFILIATE, tier, 0);
-        return uint32(uint256(QUEST_MIN_TOKEN) + (rand % range));
+        uint16 difficulty = uint16(entropy & 0x3FF);
+        return _questLinearTarget(QUEST_MIN_TOKEN, uint32(maxVal), difficulty);
     }
 
     function _questRand(uint256 entropy, uint8 questType, uint8 tier, uint8 salt) private pure returns (uint256) {
@@ -851,8 +856,12 @@ contract PurgeQuestModule is IPurgeQuestModule {
         returns (uint256 totalReward)
     {
         totalReward = 200 * MILLION;
+        uint8 tier = _questTier(streak);
         if ((questFlags & QUEST_FLAG_HIGH_DIFFICULTY) != 0 && streak >= QUEST_TIER_STREAK_SPAN) {
             totalReward += 100 * MILLION;
+        }
+        if ((questFlags & QUEST_FLAG_VERY_HIGH_DIFFICULTY) != 0 && tier >= 4) {
+            totalReward += 50 * MILLION;
         }
     }
 
@@ -880,7 +889,15 @@ contract PurgeQuestModule is IPurgeQuestModule {
         if (excludeType != type(uint8).max && qType == excludeType) {
             qType = uint8((qType + 1 + uint8(entropy % (QUEST_TYPE_COUNT - 1))) % QUEST_TYPE_COUNT);
         }
-        uint8 flags = (uint16(entropy & 0x3FF) >= 900) ? QUEST_FLAG_HIGH_DIFFICULTY : 0;
+        uint16 difficulty = uint16(entropy & 0x3FF);
+        uint8 flags;
+        if (difficulty >= 900) {
+            flags = QUEST_FLAG_HIGH_DIFFICULTY | QUEST_FLAG_VERY_HIGH_DIFFICULTY;
+        } else if (difficulty >= 800) {
+            flags = QUEST_FLAG_HIGH_DIFFICULTY;
+        } else {
+            flags = 0;
+        }
         uint8 mask;
         uint8 risk;
         if (qType == QUEST_TYPE_STAKE) {
