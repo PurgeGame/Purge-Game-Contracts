@@ -1300,7 +1300,7 @@ contract PurgeGame is PurgeGameStorage {
         uint24 lvl = uint24(baseKey >> 224); // level is encoded into the base key
 
         uint256 levelSlot;
-        assembly {
+        assembly ("memory-safe") {
             mstore(0x00, lvl)
             mstore(0x20, traitPurgeTicket.slot)
             levelSlot := keccak256(0x00, 0x40)
@@ -1311,7 +1311,7 @@ contract PurgeGame is PurgeGameStorage {
             uint8 traitId = touchedTraits[u];
             uint32 occurrences = counts[traitId];
 
-            assembly {
+            assembly ("memory-safe") {
                 let elem := add(levelSlot, traitId)
                 let len := sload(elem)
                 sstore(elem, add(len, occurrences))
