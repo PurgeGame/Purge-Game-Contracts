@@ -942,12 +942,14 @@ contract Purgecoin is PurgeCoinStorage {
         }
         // --- Step sizing (bounded work) ----------------------------------------------------
 
-        uint32 stepPayout = (cap == 0) ? 420 : cap;
+        uint32 stepPayout = (cap == 0) ? 600 : cap;
         uint32 stepStake = (cap == 0) ? 200 : cap;
 
         bool isBafLevel = _isBafLevel(level);
         bool win = (word & 1) == 1;
-        if (!win) stepPayout <<= 2; // 4x work on losses to clear backlog faster
+        if (!win) {
+            stepPayout *= 3;
+        }
         // --- Phase 1: stake propagation (only processed on wins) --------
         if (payoutIndex == 0 && stakeLevelComplete < level) {
             uint24 settleLevel = level - 1;
