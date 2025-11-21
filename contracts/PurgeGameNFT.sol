@@ -342,7 +342,6 @@ contract PurgeGameNFT {
 
         if (payInCoin) {
             if (msg.value != 0) revert E();
-            if (!game.coinMintUnlock(currentLevel)) revert NotTimeYet();
             _coinReceive(buyer, uint32(quantity), quantity * priceCoinUnit, targetLevel, 0);
         } else {
             uint8 phase = game.currentPhase();
