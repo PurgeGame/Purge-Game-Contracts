@@ -118,6 +118,7 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         uint24 prevLevelPending = pend.level;
         uint256 poolValue = pend.sidePool;
         address topAffiliate = coinContract.getTopAffiliate();
+        bool hasAffiliates = topAffiliate != address(0);
 
         if (traitWin) {
             uint256 exterminatorShare = (prevLevelPending % 10 == 4 && prevLevelPending != 4)
@@ -136,9 +137,9 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
             uint256 legacyAffiliateShare = base * 10;
             address affiliateTrophyRecipient = topAffiliate != address(0) ? topAffiliate : pend.exterminator;
 
-            (, address[6] memory affiliateRecipients) = trophiesContract.processEndLevel{
-                value: deferredWei + affiliateTrophyShare + legacyAffiliateShare
-            }(
+            uint256 processValue = deferredWei + (hasAffiliates ? affiliateTrophyShare + legacyAffiliateShare : 0);
+
+            (, address[6] memory affiliateRecipients) = trophiesContract.processEndLevel{value: processValue}(
                 IPurgeGameTrophies.EndLevelRequest({
                     exterminator: pend.exterminator,
                     traitId: lastExterminatedTrait,
@@ -146,28 +147,30 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
                     pool: poolValue
                 })
             );
-            for (uint8 i; i < 6; ) {
-                address recipient = affiliateRecipients[i];
-                if (recipient == address(0)) {
-                    recipient = affiliateTrophyRecipient;
-                }
-                uint256 amount;
-                if (i < 2) {
-                    amount = baseTimes20;
-                } else if (i == 2) {
-                    amount = base * 10;
-                } else if (i == 3) {
-                    amount = base * 8;
-                } else if (i == 4) {
-                    amount = base * 7;
-                } else {
-                    amount = base * 5;
-                }
-                if (amount != 0) {
-                    _addClaimableEth(recipient, amount);
-                }
-                unchecked {
-                    ++i;
+            if (hasAffiliates) {
+                for (uint8 i; i < 6; ) {
+                    address recipient = affiliateRecipients[i];
+                    if (recipient == address(0)) {
+                        recipient = affiliateTrophyRecipient;
+                    }
+                    uint256 amount;
+                    if (i < 2) {
+                        amount = baseTimes20;
+                    } else if (i == 2) {
+                        amount = base * 10;
+                    } else if (i == 3) {
+                        amount = base * 8;
+                    } else if (i == 4) {
+                        amount = base * 7;
+                    } else {
+                        amount = base * 5;
+                    }
+                    if (amount != 0) {
+                        _addClaimableEth(recipient, amount);
+                    }
+                    unchecked {
+                        ++i;
+                    }
                 }
             }
         } else {

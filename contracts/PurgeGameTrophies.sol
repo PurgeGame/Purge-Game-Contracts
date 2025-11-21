@@ -1010,27 +1010,47 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         ctx.base = ctx.sharedPool / 100;
         ctx.stakerRewardPool = ctx.base * 10;
         ctx.affiliateShare = ctx.sharedPool - ctx.base * 80;
-        ctx.deferredAward = msg.value;
+        uint256 legacyAffiliateShare = ctx.base * 10;
+        uint256 available = msg.value;
+        if (ctx.stakerRewardPool > available) {
+            ctx.stakerRewardPool = available;
+        }
+        available -= ctx.stakerRewardPool;
 
-        if (ctx.deferredAward < ctx.affiliateShare + ctx.stakerRewardPool) revert InvalidToken();
-        ctx.deferredAward -= ctx.affiliateShare + ctx.stakerRewardPool;
+        address[] memory leaders = coin.getLeaderboardAddresses(1);
+        bool hasAffiliates = leaders.length != 0;
+        address[6] memory selectedRecipients = _selectAffiliateRecipients(randomWord);
+        uint256 affiliateRefund;
 
-        _awardTrophyInternal(req.exterminator, PURGE_TROPHY_KIND_LEVEL, ctx.traitData, ctx.deferredAward, levelTokenId);
+        if (hasAffiliates) {
+            uint256 payout = ctx.affiliateShare;
+            if (payout > available) {
+                payout = available;
+            }
+            available -= payout;
+            recipients = selectedRecipients;
+            address winner = selectedRecipients[0];
+            if (winner == address(0)) {
+                winner = req.exterminator;
+                recipients[0] = winner;
+            }
 
-        recipients = _selectAffiliateRecipients(randomWord);
-        address winner = recipients[0];
-        if (winner == address(0)) {
-            winner = req.exterminator;
-            recipients[0] = winner;
+            _awardTrophyInternal(
+                winner,
+                PURGE_TROPHY_KIND_AFFILIATE,
+                (uint256(0xFFFE) << 152) | ctx.levelBits | TROPHY_FLAG_AFFILIATE,
+                payout,
+                affiliateTokenId
+            );
+        } else {
+            ctx.affiliateShare = 0;
+            legacyAffiliateShare = 0;
+            affiliateRefund = 0;
+            _eraseTrophy(affiliateTokenId, PURGE_TROPHY_KIND_AFFILIATE, true);
         }
 
-        _awardTrophyInternal(
-            winner,
-            PURGE_TROPHY_KIND_AFFILIATE,
-            (uint256(0xFFFE) << 152) | ctx.levelBits | TROPHY_FLAG_AFFILIATE,
-            ctx.affiliateShare,
-            affiliateTokenId
-        );
+        ctx.deferredAward = available;
+        _awardTrophyInternal(req.exterminator, PURGE_TROPHY_KIND_LEVEL, ctx.traitData, ctx.deferredAward, levelTokenId);
 
         ctx.trophyCount = stakedTrophyIds.length;
         if (ctx.stakerRewardPool != 0 && ctx.trophyCount != 0) {
