@@ -117,7 +117,6 @@ contract Purgecoin is PurgeCoinStorage {
     uint256 private constant STAKE_LANE_RISK_SHIFT = STAKE_LANE_PRINCIPAL_BITS;
     uint256 private constant STAKE_LANE_RISK_MASK = ((uint256(1) << STAKE_LANE_RISK_BITS) - 1) << STAKE_LANE_RISK_SHIFT;
     uint256 private constant STAKE_PRINCIPAL_FACTOR = MILLION;
-    uint256 private constant STAKE_MAX_PRINCIPAL = STAKE_LANE_PRINCIPAL_MASK * STAKE_PRINCIPAL_FACTOR;
     uint256 private constant TROPHY_BASE_LEVEL_SHIFT = 128;
     uint256 private constant TROPHY_FLAG_STAKE = uint256(1) << 202;
     uint256 private constant PRESALE_SUPPLY_TOKENS = 4_000_000;
@@ -533,10 +532,25 @@ contract Purgecoin is PurgeCoinStorage {
 
         // Encode and place the stake lane
         uint256 principalRounded = boostedPrincipal - (boostedPrincipal % STAKE_PRINCIPAL_FACTOR);
-        if (principalRounded > STAKE_MAX_PRINCIPAL) {
-            principalRounded = STAKE_MAX_PRINCIPAL;
-        }
         if (principalRounded == 0) principalRounded = STAKE_PRINCIPAL_FACTOR;
+        IPurgeQuestModule module = questModule;
+        if (address(module) != address(0)) {
+            (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleStake(
+                sender,
+                principalRounded,
+                distance,
+                risk
+            );
+            uint256 questReward = _questApplyReward(sender, reward, hardMode, questType, streak, completed);
+            if (questReward != 0) {
+                uint256 bonus = questReward - (questReward % STAKE_PRINCIPAL_FACTOR);
+                if (bonus != 0) {
+                    uint256 updated = principalRounded + bonus;
+                    principalRounded = updated;
+                }
+            }
+        }
+
         uint256 newLane = _encodeStakeLane(principalRounded, risk);
 
         uint256 existingAtPlace = stakeAmt[placeLevel][sender];
@@ -548,19 +562,6 @@ contract Purgecoin is PurgeCoinStorage {
         }
 
         emit StakeCreated(sender, targetLevel, risk, principalRounded);
-
-        if (address(questModule) != address(0)) {
-            (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = questModule.handleStake(
-                sender,
-                principalRounded,
-                distance,
-                risk
-            );
-            uint256 questReward = _questApplyReward(sender, reward, hardMode, questType, streak, completed);
-            if (questReward != 0) {
-                addFlip(sender, questReward, false, false, false);
-            }
-        }
     }
 
     /// @notice Return the recorded referrer for `player` (zero address if none).
