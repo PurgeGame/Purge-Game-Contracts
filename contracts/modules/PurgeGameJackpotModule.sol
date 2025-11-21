@@ -421,14 +421,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         uint32 winningTraitsPacked = _packWinningTraits(_getWinningTraits(entropyWord, dailyPurgeCount));
         uint8 remainingJackpots = JACKPOT_LEVEL_CAP > jackpotCounter ? uint8(JACKPOT_LEVEL_CAP - jackpotCounter) : uint8(1);
         uint256 currentEntropy = entropyWord ^ (uint256(lvl) << 192);
-        _payCurrentLevelDailyJackpot(
-            lvl,
-            currentEntropy,
-            winningTraitsPacked,
-            remainingJackpots,
-            coinContract,
-            trophiesContract
-        );
+        _payCurrentLevelDailyJackpot(lvl, currentEntropy, winningTraitsPacked, remainingJackpots, coinContract, trophiesContract);
 
         uint24 nextLevel = lvl + 1;
         (uint256 dailyCoinPool, ) = coinContract.prepareCoinJackpot();

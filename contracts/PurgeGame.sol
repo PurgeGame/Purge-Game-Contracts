@@ -415,23 +415,8 @@ contract PurgeGame is PurgeGameStorage {
                     if (!batchesFinished) break;
                 }
 
-                uint8 remaining = jackpotCounter >= JACKPOT_LEVEL_CAP ? 0 : uint8(JACKPOT_LEVEL_CAP - jackpotCounter);
-                bool mapOnlyLevel = (lvl % 20) == 16; // Non map-only levels should only run one jackpot per day
-                uint8 perDayCap = mapOnlyLevel ? JACKPOTS_PER_DAY : 1;
-                uint8 toPay = remaining > perDayCap ? perDayCap : remaining;
-
-                bool keepGoing = true;
-                for (uint8 i; i < toPay; ) {
-                    payDailyJackpot(true, lvl, rngWord);
-                    if (!_handleJackpotLevelCap() || gameState != 3) {
-                        keepGoing = false;
-                        break;
-                    }
-                    unchecked {
-                        ++i;
-                    }
-                }
-                if (!keepGoing || gameState != 3) break;
+                payDailyJackpot(true, lvl, rngWord);
+                if (!_handleJackpotLevelCap() || gameState != 3) break;
                 dailyIdx = day;
                 _unlockRng();
                 break;
