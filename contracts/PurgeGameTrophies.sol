@@ -937,7 +937,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
 
         uint256 tokenId = _placeholderTokenId(level, kind);
 
-
         _awardTrophyInternal(to, kind, data, deferredWei, tokenId);
     }
 
@@ -1134,18 +1133,31 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             uint32 offsetEnd = ctx.currentLevel - start;
 
             uint256 span = uint256(offsetEnd - offsetStart + 1);
-            uint256 periodSize = COIN_DRIP_STEPS;
-            uint256 blocksEnd = uint256(offsetEnd) / periodSize;
-            uint256 blocksStart = uint256(offsetStart) / periodSize;
-            uint256 remEnd = uint256(offsetEnd) % periodSize;
-            uint256 remStart = uint256(offsetStart) % periodSize;
 
-            uint256 prefixEnd = ((blocksEnd * (blocksEnd - 1)) / 2) * periodSize + blocksEnd * (remEnd + 1);
-            uint256 prefixStart = ((blocksStart * (blocksStart - 1)) / 2) * periodSize + blocksStart * (remStart + 1);
+            uint256 prefixEnd = _getDecimatorCumulativeExtra(offsetEnd);
+            uint256 prefixStart = offsetStart == 0 ? 0 : _getDecimatorCumulativeExtra(offsetStart - 1);
 
             ctx.coinAmount = COIN_EMISSION_UNIT * (span + (prefixEnd - prefixStart));
             ctx.coinClaimed = true;
             ctx.updatedLast = ctx.currentLevel;
+        }
+    }
+
+    function _getDecimatorCumulativeExtra(uint32 index) private pure returns (uint256) {
+        uint256 periodSize = COIN_DRIP_STEPS;
+        uint256 capBlock = 4;
+        uint256 capIndex = 49;
+
+        if (index <= capIndex) {
+            uint256 blocks = uint256(index) / periodSize;
+            uint256 rem = uint256(index) % periodSize;
+            return ((blocks * (blocks - 1)) / 2) * periodSize + blocks * (rem + 1);
+        } else {
+            uint256 blocks = uint256(capIndex) / periodSize;
+            uint256 rem = uint256(capIndex) % periodSize;
+            uint256 base = ((blocks * (blocks - 1)) / 2) * periodSize + blocks * (rem + 1);
+
+            return base + (uint256(index) - capIndex) * capBlock;
         }
     }
 
@@ -1425,7 +1437,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         return mapStakeBonusPct_[player];
     }
 
-
     function purgeTrophy(uint256 tokenId) external override {
         if (_isTrophyStaked(tokenId)) revert TrophyStakeViolation(_STAKE_ERR_TRANSFER_BLOCKED);
         if (trophyData_[tokenId] == 0) revert InvalidToken();
@@ -1445,7 +1456,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     function stakedTrophySample(uint256 rngSeed) external view override returns (address owner) {
         uint256 count = stakedTrophyIds.length;
         if (count == 0) return address(0);
-        uint256 rand = uint256(keccak256(abi.encodePacked(rngSeed, count, block.timestamp)));
+        uint256 rand = uint256(keccak256(abi.encodePacked(rngSeed, count)));
         uint256 idxA = count == 1 ? 0 : rand % count;
         uint256 idxB = count == 1 ? idxA : (rand >> 64) % count;
         uint256 tokenA = stakedTrophyIds[idxA];
