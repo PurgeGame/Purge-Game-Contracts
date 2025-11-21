@@ -178,15 +178,18 @@ contract Purgecoin is PurgeCoinStorage {
 
         _burn(caller, amount);
 
-        addFlip(caller, amount, true);
-
-        if (address(questModule) != address(0)) {
-            (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = questModule.handleFlip(
+        IPurgeQuestModule module = questModule;
+        uint256 questReward;
+        if (address(module) != address(0)) {
+            (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleFlip(
                 caller,
                 amount
             );
-            _questApplyReward(caller, reward, hardMode, questType, streak, completed);
+            questReward = _questApplyReward(caller, reward, hardMode, questType, streak, completed);
         }
+
+        uint256 creditedFlip = amount + questReward;
+        addFlip(caller, creditedFlip, true, true, false);
 
         uint256 luckboxBalance = playerLuckbox[caller];
         PlayerScore storage record = biggestLuckbox;
@@ -238,7 +241,10 @@ contract Purgecoin is PurgeCoinStorage {
                 caller,
                 amount
             );
-            _questApplyReward(caller, reward, hardMode, questType, streak, completed);
+            uint256 questReward = _questApplyReward(caller, reward, hardMode, questType, streak, completed);
+            if (questReward != 0) {
+                addFlip(caller, questReward, false, false, false);
+            }
         }
 
         emit DecimatorBurn(caller, amount, e.bucket);
@@ -480,6 +486,10 @@ contract Purgecoin is PurgeCoinStorage {
             }
         }
 
+        if (playerLuckbox[sender] == 0) {
+            playerLuckbox[sender] = 1;
+        }
+
         // Burn principal
         _burn(sender, burnAmt);
 
@@ -546,7 +556,10 @@ contract Purgecoin is PurgeCoinStorage {
                 distance,
                 risk
             );
-            _questApplyReward(sender, reward, hardMode, questType, streak, completed);
+            uint256 questReward = _questApplyReward(sender, reward, hardMode, questType, streak, completed);
+            if (questReward != 0) {
+                addFlip(sender, questReward, false, false, false);
+            }
         }
     }
 
@@ -622,14 +635,17 @@ contract Purgecoin is PurgeCoinStorage {
 
             if (affiliateShare != 0) {
                 uint256 newTotal = earned[affiliateAddr] + affiliateShare;
-                uint256 totalFlipAward = affiliateShare;
                 earned[affiliateAddr] = newTotal;
-                addFlip(affiliateAddr, totalFlipAward, false);
+
+                uint256 questReward;
                 if (address(module) != address(0)) {
                     (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module
                         .handleAffiliate(affiliateAddr, affiliateShare);
-                    _questApplyReward(affiliateAddr, reward, hardMode, questType, streak, completed);
+                    questReward = _questApplyReward(affiliateAddr, reward, hardMode, questType, streak, completed);
                 }
+
+                uint256 totalFlipAward = affiliateShare + questReward;
+                addFlip(affiliateAddr, totalFlipAward, false, false, false);
 
                 _updatePlayerScore(1, affiliateAddr, newTotal);
             }
@@ -650,12 +666,13 @@ contract Purgecoin is PurgeCoinStorage {
                     }
                     uplineTotal += bonus;
                     earned[upline] = uplineTotal;
-                    addFlip(upline, bonus, false);
+                    uint256 questReward;
                     if (address(module) != address(0)) {
                         (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module
                             .handleAffiliate(upline, bonus);
-                        _questApplyReward(upline, reward, hardMode, questType, streak, completed);
+                        questReward = _questApplyReward(upline, reward, hardMode, questType, streak, completed);
                     }
+                    addFlip(upline, bonus + questReward, false, false, false);
                     _updatePlayerScore(1, upline, uplineTotal);
                 }
             }
@@ -812,7 +829,7 @@ contract Purgecoin is PurgeCoinStorage {
             if (!rngReady) {
                 _mint(player, amount);
             } else {
-                addFlip(player, amount, false);
+                addFlip(player, amount, false, false, false);
             }
         }
     }
@@ -851,7 +868,10 @@ contract Purgecoin is PurgeCoinStorage {
             quantity,
             paidWithEth
         );
-        _questApplyReward(player, reward, hardMode, questType, streak, completed);
+        uint256 questReward = _questApplyReward(player, reward, hardMode, questType, streak, completed);
+        if (questReward != 0) {
+            addFlip(player, questReward, false, false, false);
+        }
     }
 
     function notifyQuestPurge(address player, uint32 quantity) external onlyGameplayContracts {
@@ -860,7 +880,10 @@ contract Purgecoin is PurgeCoinStorage {
             player,
             quantity
         );
-        _questApplyReward(player, reward, hardMode, questType, streak, completed);
+        uint256 questReward = _questApplyReward(player, reward, hardMode, questType, streak, completed);
+        if (questReward != 0) {
+            addFlip(player, questReward, false, false, false);
+        }
     }
 
     function getActiveQuest()
@@ -942,8 +965,8 @@ contract Purgecoin is PurgeCoinStorage {
         }
         // --- Step sizing (bounded work) ----------------------------------------------------
 
-        uint32 stepPayout = (cap == 0) ? 600 : cap;
-        uint32 stepStake = (cap == 0) ? 200 : cap;
+        uint32 stepPayout = (cap == 0) ? 420 : cap;
+        uint32 stepStake = (cap == 0) ? 200 : (cap > 200 ? 200 : cap);
 
         bool isBafLevel = _isBafLevel(level);
         bool win = (word & 1) == 1;
@@ -1000,7 +1023,7 @@ contract Purgecoin is PurgeCoinStorage {
                                     if (riskFactor <= 1) {
                                         _recordStakeTrophyCandidate(settleLevel, player, principalRounded);
                                         if (principalRounded != 0) {
-                                            addFlip(player, principalRounded, false);
+                                            addFlip(player, principalRounded, false, false, true);
                                         }
                                     } else {
                                         uint24 nextL = settleLevel + 1;
@@ -1054,7 +1077,7 @@ contract Purgecoin is PurgeCoinStorage {
             uint256 amt = currentBounty;
             bountyOwedTo = address(0);
             currentBounty = 0;
-            addFlip(to, amt, false);
+            addFlip(to, amt, false, false, false);
             emit BountyPaid(to, amt);
         }
 
@@ -1275,25 +1298,38 @@ contract Purgecoin is PurgeCoinStorage {
     }
 
     /// @notice Increase a player's pending coinflip stake and possibly arm a bounty.
-    /// @param player           Target player.
-    /// @param coinflipDeposit  Amount to add to their current pending flip stake.
-    /// @param canArmBounty     If true, a sufficiently large deposit may arm a bounty.
-    function addFlip(address player, uint256 coinflipDeposit, bool canArmBounty) internal {
+    /// @param player               Target player.
+    /// @param coinflipDeposit      Amount to add to their current pending flip stake.
+    /// @param canArmBounty         If true, a sufficiently large deposit may arm a bounty.
+    /// @param bountyEligible       If true, this deposit can arm the bounty (entire amount is considered).
+    /// @param skipLuckboxCheck     If true, do not initialize `playerLuckbox` when zero.
+    function addFlip(
+        address player,
+        uint256 coinflipDeposit,
+        bool canArmBounty,
+        bool bountyEligible,
+        bool skipLuckboxCheck
+    ) internal {
         uint256 prevStake = coinflipAmount[player];
         if (prevStake == 0) _pushPlayer(player);
 
         uint256 newStake = prevStake + coinflipDeposit;
+        uint256 eligibleStake = bountyEligible ? newStake : prevStake;
 
         coinflipAmount[player] = newStake;
+        if (!skipLuckboxCheck && playerLuckbox[player] == 0) {
+            playerLuckbox[player] = 1;
+        }
         _updatePlayerScore(2, player, newStake);
 
         uint256 record = biggestFlipEver;
-        if (newStake > record && topBettors[0].player == player) {
+        address leader = topBettors[0].player;
+        if (newStake > record && leader == player) {
             biggestFlipEver = uint128(newStake);
 
-            if (canArmBounty) {
+            if (canArmBounty && bountyEligible) {
                 uint256 threshold = (bountyOwedTo != address(0)) ? (record + record / 100) : record;
-                if (newStake >= threshold) {
+                if (eligibleStake >= threshold) {
                     bountyOwedTo = player;
                     emit BountyOwed(player, currentBounty, newStake);
                 }
@@ -1333,12 +1369,10 @@ contract Purgecoin is PurgeCoinStorage {
         uint8 questType,
         uint32 streak,
         bool completed
-    ) private {
-        if (!completed || player == address(0)) return;
-        if (reward != 0) {
-            addFlip(player, reward, false);
-        }
+    ) private returns (uint256) {
+        if (!completed || player == address(0)) return 0;
         emit QuestCompleted(player, questType, streak, reward, hardMode);
+        return reward;
     }
 
     function _questStreak(address player) private view returns (uint32) {

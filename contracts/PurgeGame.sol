@@ -83,7 +83,6 @@ contract PurgeGame is PurgeGameStorage {
     // Game Constants
     // -----------------------
     uint48 private constant JACKPOT_RESET_TIME = 82620; // Offset anchor for "daily" windows
-    uint32 private constant DEFAULT_PAYOUTS_PER_TX = 420; // Keeps participant payouts safely under ~15M gas
     uint32 private constant WRITES_BUDGET_SAFE = 800; // Keeps map batching within the ~15M gas budget
     uint32 private constant TRAIT_REBUILD_TOKENS_PER_TX = 1800; // Max tokens processed per trait rebuild slice
     uint64 private constant MAP_LCG_MULT = 0x5851F42D4C957F2D; // LCG multiplier for map RNG slices
