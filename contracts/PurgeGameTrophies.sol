@@ -1065,6 +1065,22 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         uint256 affiliateTokenId,
         uint256 randomWord
     ) private returns (address mapImmediateRecipient, address[6] memory recipients) {
+        bool affiliateOnly = req.traitId == TRAIT_ID_TIMEOUT && req.exterminator != address(0) && req.pool != 0;
+
+        if (affiliateOnly) {
+            _eraseTrophy(levelTokenId, PURGE_TROPHY_KIND_LEVEL, true);
+            uint256 valueIn = msg.value;
+            if (valueIn < req.pool) revert InvalidToken();
+            _awardTrophyInternal(
+                req.exterminator,
+                PURGE_TROPHY_KIND_AFFILIATE,
+                (uint256(0xFFFE) << 152) | (uint256(req.level) << TROPHY_BASE_LEVEL_SHIFT) | TROPHY_FLAG_AFFILIATE,
+                req.pool,
+                affiliateTokenId
+            );
+            return (address(0), recipients);
+        }
+
         MapTimeoutContext memory ctx;
         ctx.mapUnit = req.pool / 20;
         mapImmediateRecipient = address(uint160(nft.packedOwnershipOf(mapTokenId)));

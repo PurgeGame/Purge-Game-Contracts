@@ -171,14 +171,26 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
                 }
             }
         } else {
-            trophiesContract.processEndLevel(
+            uint256 affiliateShare = (poolValue * 20) / 100;
+            address affiliateRecipient = topAffiliate;
+            uint256 poolForProcess = (affiliateShare != 0 && affiliateRecipient != address(0)) ? affiliateShare : 0;
+
+            trophiesContract.processEndLevel{value: poolForProcess}(
                 IPurgeGameTrophies.EndLevelRequest({
-                    exterminator: pend.exterminator,
+                    exterminator: affiliateRecipient,
                     traitId: lastExterminatedTrait,
                     level: prevLevelPending,
-                    pool: poolValue
+                    pool: poolForProcess
                 })
             );
+
+            uint256 remaining = poolValue;
+            if (poolForProcess != 0 && remaining >= poolForProcess) {
+                remaining -= poolForProcess;
+            }
+            if (remaining != 0) {
+                carryOver += remaining;
+            }
         }
 
         delete pendingEndLevel;
