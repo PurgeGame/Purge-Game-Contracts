@@ -10,7 +10,10 @@ interface IIcons32 {
     function vbH(uint256 i) external view returns (uint16);
     function data(uint256 i) external view returns (string memory);
     function diamond() external view returns (string memory);
-    function symbol(uint256 quadrant, uint8 idx) external view returns (string memory);
+    function symbol(
+        uint256 quadrant,
+        uint8 idx
+    ) external view returns (string memory);
 }
 
 interface IColorRegistry {
@@ -32,12 +35,24 @@ interface IColorRegistry {
         uint32 trophyOuterPct1e6
     ) external returns (bool);
 
-    function setTopAffiliateColor(address user, uint256 tokenId, string calldata trophyHex) external returns (bool);
+    function setTopAffiliateColor(
+        address user,
+        uint256 tokenId,
+        string calldata trophyHex
+    ) external returns (bool);
 
-    function tokenColor(uint256 tokenId, uint8 channel) external view returns (string memory);
-    function addressColor(address user, uint8 channel) external view returns (string memory);
+    function tokenColor(
+        uint256 tokenId,
+        uint8 channel
+    ) external view returns (string memory);
+    function addressColor(
+        address user,
+        uint8 channel
+    ) external view returns (string memory);
     function trophyOuter(uint256 tokenId) external view returns (uint32);
-    function topAffiliateColor(uint256 tokenId) external view returns (string memory);
+    function topAffiliateColor(
+        uint256 tokenId
+    ) external view returns (string memory);
 }
 
 interface IERC721Lite {
@@ -61,7 +76,8 @@ contract IconRendererTrophy32 {
     uint256 private constant BAF_TROPHY_FLAG = uint256(1) << 203;
     uint256 private constant DECIMATOR_TROPHY_FLAG = uint256(1) << 204;
     uint256 private constant TROPHY_STAKE_LEVEL_SHIFT = 205;
-    uint256 private constant TROPHY_STAKE_LEVEL_MASK = uint256(0xFFFFFF) << TROPHY_STAKE_LEVEL_SHIFT;
+    uint256 private constant TROPHY_STAKE_LEVEL_MASK =
+        uint256(0xFFFFFF) << TROPHY_STAKE_LEVEL_SHIFT;
     uint256 private constant TROPHY_OWED_MASK = (uint256(1) << 128) - 1;
     uint16 private constant BAF_TRAIT_SENTINEL = 0xFFFA;
     uint16 private constant DECIMATOR_TRAIT_SENTINEL = 0xFFFB;
@@ -71,13 +87,26 @@ contract IconRendererTrophy32 {
         "M511.717 490.424l-85.333-136.533c-1.559-2.495-4.294-4.011-7.236-4.011H94.88c-2.942 0-5.677 1.516-7.236 4.011L2.311 490.424c-3.552 5.684 0.534 13.056 7.236 13.056H504.48c6.703 0 10.789-7.372 7.237-13.056zM24.943 486.414L99.61 366.947h314.807l74.667 119.467H24.943zM188.747 179.214c-2.942 0-5.677 1.516-7.236 4.011L96.177 319.758c-3.552 5.684 0.534 13.056 7.236 13.056h307.2c6.702 0 10.789-7.372 7.236-13.056l-45.173-72.277h73.146c3.789 14.723 17.152 25.6 33.058 25.6 18.853 0 34.133-15.281 34.133-34.133s-15.281-34.133-34.133-34.133c-15.906 0-29.269 10.877-33.058 25.6H362.01l-29.493-47.189c-1.559-2.495-4.294-4.011-7.236-4.011H188.747zM478.88 221.88c9.427 0 17.067 7.64 17.067 17.067 0 9.427-7.64 17.067-17.067 17.067s-17.067-7.64-17.067-17.067c0-9.427 7.64-17.067 17.067-17.067zM395.217 315.747H118.81l74.667-119.467h127.074l74.666 119.467zM94.88 145.08c15.906 0 29.269-10.877 33.058-25.6h74.961l-13.437 30.713c-2.467 5.638 1.664 11.954 7.818 11.954h119.467c6.154 0 10.284-6.316 7.818-11.954L264.832 13.66c-2.983-6.817-12.653-6.817-15.636 0l-38.83 88.754H127.938c-3.789-14.723-17.152-25.6-33.058-25.6-18.853 0-34.133 15.281-34.133 34.133 0 18.852 15.281 34.133 34.133 34.133zM257.014 38.37l46.686 106.71h-93.371l46.685-106.71zM94.88 93.88c9.427 0 17.067 7.64 17.067 17.067 0 9.427-7.64 17.067-17.067 17.067-9.427 0-17.067-7.64-17.067-17.067 0-9.427 7.64-17.067 17.067-17.067z";
     uint16 private constant DECIMATOR_SYMBOL_VB = 512;
     uint16 private constant BAF_FLIP_VB = 130;
-    uint24[8] private BASE_COLOR = [0xf409cd, 0x7c2bff, 0x30d100, 0xed0e11, 0x1317f7, 0xf7931a, 0x5e5e5e, 0xab8d3f];
+    uint24[8] private BASE_COLOR = [
+        0xf409cd,
+        0x7c2bff,
+        0x30d100,
+        0xed0e11,
+        0x1317f7,
+        0xf7931a,
+        0x5e5e5e,
+        0xab8d3f
+    ];
     string private constant STAKE_BADGE_HEX = "#4d2b1f";
     uint32 private constant STATUS_FLAG_SECOND_EXTERMINATION = 1 << 2;
-    string private constant STAKE_STATUS_TRANSFORM = "matrix(0.02548 0 0 0.02548 -10.583 -10.500)";
-    string private constant ETH_STATUS_TRANSFORM = "matrix(0.00800 0 0 0.00800 -3.131 -5.100)";
-    string private constant MAP_CORNER_TRANSFORM = "matrix(0.51 0 0 0.51 -6.12 -6.12)";
-    string private constant FLAME_CORNER_TRANSFORM = "matrix(0.02810 0 0 0.02810 -12.03 -9.082)";
+    string private constant STAKE_STATUS_TRANSFORM =
+        "matrix(0.02548 0 0 0.02548 -10.583 -10.500)";
+    string private constant ETH_STATUS_TRANSFORM =
+        "matrix(0.00800 0 0 0.00800 -3.131 -5.100)";
+    string private constant MAP_CORNER_TRANSFORM =
+        "matrix(0.51 0 0 0.51 -6.12 -6.12)";
+    string private constant FLAME_CORNER_TRANSFORM =
+        "matrix(0.02810 0 0 0.02810 -12.03 -9.082)";
     int16[8] private BASE_VARIANT_BIAS = [
         int16(-14),
         int16(-6),
@@ -93,7 +122,8 @@ contract IconRendererTrophy32 {
     uint32 private constant TOP_AFFILIATE_FIT_1e6 = (760_000 * 936) / 1_000;
     int256 private constant VIEWBOX_HEIGHT_1E6 = 120 * 1_000_000;
     int256 private constant TOP_AFFILIATE_SHIFT_DOWN_1E6 = 3_200_000;
-    int256 private constant TOP_AFFILIATE_UPWARD_1E6 = (VIEWBOX_HEIGHT_1E6 * 4) / 100; // 4% of total height
+    int256 private constant TOP_AFFILIATE_UPWARD_1E6 =
+        (VIEWBOX_HEIGHT_1E6 * 4) / 100; // 4% of total height
 
     IPurgedRead private immutable coin;
     IIcons32 private immutable icons;
@@ -104,7 +134,12 @@ contract IconRendererTrophy32 {
 
     error E();
 
-    constructor(address coin_, address icons_, address registry_, address assets_) {
+    constructor(
+        address coin_,
+        address icons_,
+        address registry_,
+        address assets_
+    ) {
         coin = IPurgedRead(coin_);
         icons = IIcons32(icons_);
         registry = IColorRegistry(registry_);
@@ -118,7 +153,14 @@ contract IconRendererTrophy32 {
         string calldata diamondHex,
         string calldata squareHex
     ) external returns (bool) {
-        return registry.setMyColors(msg.sender, outlineHex, flameHex, diamondHex, squareHex);
+        return
+            registry.setMyColors(
+                msg.sender,
+                outlineHex,
+                flameHex,
+                diamondHex,
+                squareHex
+            );
     }
 
     function setCustomColorsForMany(
@@ -141,7 +183,10 @@ contract IconRendererTrophy32 {
             );
     }
 
-    function setTopAffiliateColor(uint256 tokenId, string calldata trophyHex) external returns (bool) {
+    function setTopAffiliateColor(
+        uint256 tokenId,
+        string calldata trophyHex
+    ) external returns (bool) {
         return registry.setTopAffiliateColor(msg.sender, tokenId, trophyHex);
     }
 
@@ -151,7 +196,11 @@ contract IconRendererTrophy32 {
         nft = IERC721Lite(nft_);
     }
 
-    function tokenURI(uint256 tokenId, uint256 data, uint32[4] calldata extras) external view returns (string memory) {
+    function tokenURI(
+        uint256 tokenId,
+        uint256 data,
+        uint32[4] calldata extras
+    ) external view returns (string memory) {
         if ((data >> 128) == 0) revert("renderer:notTrophy");
 
         uint24 lvl = uint24((data >> 128) & 0xFFFFFF);
@@ -161,19 +210,27 @@ contract IconRendererTrophy32 {
         bool isStake = (data & STAKE_TROPHY_FLAG) != 0;
         bool isBaf = (data & BAF_TROPHY_FLAG) != 0;
         bool isDec = (data & DECIMATOR_TROPHY_FLAG) != 0;
-        bool isExtermination = !isMap && !isAffiliate && !isStake && !isBaf && !isDec;
+        bool isExtermination = !isMap &&
+            !isAffiliate &&
+            !isStake &&
+            !isBaf &&
+            !isDec;
         uint32 statusFlags = extras[0];
         uint256 ethAttachment = data & TROPHY_OWED_MASK;
         if ((statusFlags & 2) == 0 && ethAttachment != 0) {
             statusFlags |= 2;
         }
         bool hasEthAttachment = ethAttachment != 0;
-        uint24 stakedLevel = uint24((data & TROPHY_STAKE_LEVEL_MASK) >> TROPHY_STAKE_LEVEL_SHIFT);
+        uint24 stakedLevel = uint24(
+            (data & TROPHY_STAKE_LEVEL_MASK) >> TROPHY_STAKE_LEVEL_SHIFT
+        );
         bool hasStakedLevel = stakedLevel != 0;
         string memory stakedDurationStr;
         string memory stakeAttrValue = "No";
         if (hasStakedLevel) {
-            uint256 duration = uint256(lvl) >= uint256(stakedLevel) ? uint256(lvl) - uint256(stakedLevel) : 0;
+            uint256 duration = uint256(lvl) >= uint256(stakedLevel)
+                ? uint256(lvl) - uint256(stakedLevel)
+                : 0;
             stakedDurationStr = duration.toString();
             stakeAttrValue = string.concat(stakedDurationStr, " Levels");
         }
@@ -206,26 +263,61 @@ contract IconRendererTrophy32 {
             if (lvl == 0) {
                 desc = string.concat("Reserved Purge Game ", trophyLabel, ".");
             } else {
-                desc = string.concat("Reserved for level ", lvlStr, " ", trophyLabel, ".");
+                desc = string.concat(
+                    "Reserved for level ",
+                    lvlStr,
+                    " ",
+                    trophyLabel,
+                    "."
+                );
             }
         } else if (isAffiliate && exTr == 0xFFFE) {
-            desc = string.concat("Awarded to the top affiliate for level ", lvlStr, ".");
+            desc = string.concat(
+                "Awarded to the top affiliate for level ",
+                lvlStr,
+                "."
+            );
         } else if (isStake && exTr == 0xFFFD) {
-            desc = string.concat("Awarded for level ", lvlStr, " largest stake maturation.");
+            desc = string.concat(
+                "Awarded for level ",
+                lvlStr,
+                " largest stake maturation."
+            );
         } else if (isBaf && exTr == BAF_TRAIT_SENTINEL) {
-            desc = string.concat("Awarded to the biggest coinflipper in the level ", lvlStr, " BAF.");
+            desc = string.concat(
+                "Awarded to the biggest coinflipper in the level ",
+                lvlStr,
+                " BAF."
+            );
         } else if (isDec && exTr == DECIMATOR_TRAIT_SENTINEL) {
-            desc = string.concat("Awarded to the biggest winner in the level ", lvlStr, " Decimator.");
+            desc = string.concat(
+                "Awarded to the biggest winner in the level ",
+                lvlStr,
+                " Decimator."
+            );
         } else {
             desc = string.concat("Awarded for level ", lvlStr);
-            desc = string.concat(desc, isMap ? " MAP Jackpot." : " Extermination victory.");
+            desc = string.concat(
+                desc,
+                isMap ? " MAP Jackpot." : " Extermination victory."
+            );
         }
 
         if (hasEthAttachment) {
-            desc = string.concat(desc, "\\n", _formatEthAmount(ethAttachment), " ETH claimable.");
+            desc = string.concat(
+                desc,
+                "\\n",
+                _formatEthAmount(ethAttachment),
+                " ETH claimable."
+            );
         }
         if (hasStakedLevel) {
-            desc = string.concat(desc, "\\nStaked for ", stakedDurationStr, " levels.");
+            desc = string.concat(
+                desc,
+                "\\nStaked for ",
+                stakedDurationStr,
+                " levels."
+            );
         }
 
         bool includeTraitAttr;
@@ -253,12 +345,38 @@ contract IconRendererTrophy32 {
             )
         );
         if (includeTraitAttr) {
-            attrs = string(abi.encodePacked(attrs, ',{"trait_type":"', traitType, '","value":"', traitValue, '"}'));
+            attrs = string(
+                abi.encodePacked(
+                    attrs,
+                    ',{"trait_type":"',
+                    traitType,
+                    '","value":"',
+                    traitValue,
+                    '"}'
+                )
+            );
         }
-        attrs = string(abi.encodePacked(attrs, ',{"trait_type":"Staked","value":"', stakeAttrValue, '"}'));
+        attrs = string(
+            abi.encodePacked(
+                attrs,
+                ',{"trait_type":"Staked","value":"',
+                stakeAttrValue,
+                '"}'
+            )
+        );
         attrs = string(abi.encodePacked(attrs, "]"));
 
-        string memory img = _trophySvg(tokenId, exTr, isMap, isAffiliate, isStake, isBaf, isDec, statusFlags, lvl);
+        string memory img = _trophySvg(
+            tokenId,
+            exTr,
+            isMap,
+            isAffiliate,
+            isStake,
+            isBaf,
+            isDec,
+            statusFlags,
+            lvl
+        );
         return _pack(tokenId, true, img, lvl, desc, trophyType, attrs);
     }
 
@@ -266,13 +384,19 @@ contract IconRendererTrophy32 {
     // Internal helpers
     // ---------------------------------------------------------------------
 
-    function _readExterminatedTrait(uint256 data) private pure returns (uint16) {
+    function _readExterminatedTrait(
+        uint256 data
+    ) private pure returns (uint16) {
         uint16 ex16 = uint16((data >> 152) & 0xFFFF);
         if (ex16 >= 0xFFFA) return ex16;
         return uint16(uint8(ex16));
     }
 
-    function _resolve(uint256 tokenId, uint8 k, string memory defColor) private view returns (string memory) {
+    function _resolve(
+        uint256 tokenId,
+        uint8 k,
+        string memory defColor
+    ) private view returns (string memory) {
         string memory s = registry.tokenColor(tokenId, k);
         if (bytes(s).length != 0) return s;
 
@@ -306,12 +430,16 @@ contract IconRendererTrophy32 {
     ) private view returns (string memory) {
         uint32 innerSide = _innerSquareSide();
         string memory diamondPath = icons.diamond();
-        bool isExtermination = !isMap && !isAffiliate && !isStake && !isBaf && !isDec;
+        bool isExtermination = !isMap &&
+            !isAffiliate &&
+            !isStake &&
+            !isBaf &&
+            !isDec;
         bool placeholderTrait = exterminatedTrait == 0xFFFF;
-        if (placeholderTrait && isAffiliate && !isStake) {
-            exterminatedTrait = 0xFFFE;
-            placeholderTrait = false;
-        }
+        // if (placeholderTrait && isAffiliate && !isStake) {
+        //     exterminatedTrait = 0xFFFE;
+        //     placeholderTrait = false;
+        // }
 
         if (placeholderTrait || isStake) {
             uint8 ringIdx;
@@ -328,15 +456,24 @@ contract IconRendererTrophy32 {
             } else {
                 ringIdx = 3;
             }
-            string memory borderColor = _resolve(tokenId, 0, _borderColor(tokenId, 0, uint8(1) << ringIdx, lvl));
+            string memory borderColor = _resolve(
+                tokenId,
+                0,
+                _borderColor(tokenId, 0, uint8(1) << ringIdx, lvl)
+            );
 
             uint32 pct = registry.trophyOuter(tokenId);
-            uint32 diameter = (pct <= 1) ? 88 : uint32((uint256(innerSide) * pct) / 1_000_000);
+            uint32 diameter = (pct <= 1)
+                ? 88
+                : uint32((uint256(innerSide) * pct) / 1_000_000);
             uint32 rOut = diameter / 2;
             uint32 rMid = uint32((uint256(rOut) * RATIO_MID_1e6) / 1_000_000);
             uint32 rIn = uint32((uint256(rOut) * RATIO_IN_1e6) / 1_000_000);
 
-            string memory head = _svgHeader(borderColor, _resolve(tokenId, 3, "#d9d9d9"));
+            string memory head = _svgHeader(
+                borderColor,
+                _resolve(tokenId, 3, "#d9d9d9")
+            );
             string memory ringColor = _paletteColor(ringIdx, lvl);
             string memory placeholderFlameColor = _resolve(tokenId, 1, "#111");
             string memory rings = _rings(
@@ -358,14 +495,33 @@ contract IconRendererTrophy32 {
                 )
             );
 
-            string memory centerGlyph = _centerGlyph(isMap, isAffiliate, isStake, placeholderFlameColor, diamondPath);
-            string memory body = string(abi.encodePacked(rings, clip, centerGlyph));
-            return _composeSvg(head, body, isMap, isExtermination, placeholderFlameColor, diamondPath, statusFlags);
+            string memory centerGlyph = _centerGlyph(
+                isMap,
+                isAffiliate,
+                isStake,
+                placeholderFlameColor,
+                ringColor,
+                diamondPath
+            );
+            string memory body = string(
+                abi.encodePacked(rings, clip, centerGlyph)
+            );
+            return
+                _composeSvg(
+                    head,
+                    body,
+                    isMap,
+                    isExtermination,
+                    placeholderFlameColor,
+                    diamondPath,
+                    statusFlags
+                );
         }
 
         bool isTopAffiliate = isAffiliate && exterminatedTrait == 0xFFFE;
         bool isBafAward = isBaf && exterminatedTrait == BAF_TRAIT_SENTINEL;
-        bool isDecAward = isDec && exterminatedTrait == DECIMATOR_TRAIT_SENTINEL;
+        bool isDecAward = isDec &&
+            exterminatedTrait == DECIMATOR_TRAIT_SENTINEL;
         uint8 six = uint8(exterminatedTrait) & 0x3F;
         uint8 dataQ = uint8(exterminatedTrait) >> 6;
         if (isBafAward) {
@@ -386,7 +542,9 @@ contract IconRendererTrophy32 {
             if (isTopAffiliate) {
                 string memory custom = registry.topAffiliateColor(tokenId);
                 hasCustomAffiliateColor = bytes(custom).length != 0;
-                ringOuterColor = hasCustomAffiliateColor ? custom : defaultColor;
+                ringOuterColor = hasCustomAffiliateColor
+                    ? custom
+                    : defaultColor;
                 symbolColor = ringOuterColor;
             } else {
                 ringOuterColor = defaultColor;
@@ -398,14 +556,20 @@ contract IconRendererTrophy32 {
         if (isTopAffiliate && hasCustomAffiliateColor) {
             border = _resolve(tokenId, 0, ringOuterColor);
         } else {
-            border = _resolve(tokenId, 0, _borderColor(tokenId, uint32(six), uint8(1) << colIdx, lvl));
+            border = _resolve(
+                tokenId,
+                0,
+                _borderColor(tokenId, uint32(six), uint8(1) << colIdx, lvl)
+            );
         }
 
         string memory flameColor = _resolve(tokenId, 1, "#111");
         string memory squareFill = _resolve(tokenId, 3, "#d9d9d9");
 
         uint32 pct2 = registry.trophyOuter(tokenId);
-        uint32 rOut2 = (pct2 <= 1) ? 38 : uint32((uint256(innerSide) * pct2) / 2_000_000);
+        uint32 rOut2 = (pct2 <= 1)
+            ? 44
+            : uint32((uint256(innerSide) * pct2) / 2_000_000);
         uint32 rMid2 = uint32((uint256(rOut2) * RATIO_MID_1e6) / 1_000_000);
         uint32 rIn2 = uint32((uint256(rOut2) * RATIO_IN_1e6) / 1_000_000);
         if (isBafAward) {
@@ -416,7 +580,13 @@ contract IconRendererTrophy32 {
             int256 offsetX = -center + adjustX;
             int256 offsetY = -center + adjustY;
             string memory anim = string(
-                abi.encodePacked("<g transform='", _mat6(scale, offsetX, offsetY), "'>", assets.bafFlipSymbol(), "</g>")
+                abi.encodePacked(
+                    "<g transform='",
+                    _mat6(scale, offsetX, offsetY),
+                    "'>",
+                    assets.bafFlipSymbol(),
+                    "</g>"
+                )
             );
 
             return
@@ -441,7 +611,9 @@ contract IconRendererTrophy32 {
             w = DECIMATOR_SYMBOL_VB;
             h = DECIMATOR_SYMBOL_VB;
         } else {
-            uint256 iconIndex = isTopAffiliate ? 32 : (uint256(dataQ) * 8 + uint256(symIdx));
+            uint256 iconIndex = isTopAffiliate
+                ? 32
+                : (uint256(dataQ) * 8 + uint256(symIdx));
             iconPath = icons.data(iconIndex);
             w = icons.vbW(iconIndex);
             h = icons.vbH(iconIndex);
@@ -449,16 +621,37 @@ contract IconRendererTrophy32 {
         uint16 m = w > h ? w : h;
         if (m == 0) m = 1;
 
-        uint32 fitSym1e6 = _symbolFitScale(isTopAffiliate, isDecAward, dataQ, symIdx);
+        uint32 fitSym1e6 = _symbolFitScale(
+            isTopAffiliate,
+            isDecAward,
+            dataQ,
+            symIdx
+        );
         uint32 sSym1e6 = uint32((uint256(2) * rIn2 * fitSym1e6) / m);
 
-        (int256 txm, int256 tyn) = _symbolTranslate(w, h, sSym1e6, isTopAffiliate);
+        (int256 txm, int256 tyn) = _symbolTranslate(
+            w,
+            h,
+            sSym1e6,
+            isTopAffiliate
+        );
 
-        bool solidFill = (!isTopAffiliate && dataQ == 0 && (symIdx == 1 || symIdx == 5));
+        bool solidFill = (!isTopAffiliate &&
+            dataQ == 0 &&
+            (symIdx == 1 || symIdx == 5));
 
         string memory ringsAndSymbol = string(
             abi.encodePacked(
-                _rings(ringOuterColor, flameColor, innerFill, rOut2, rMid2, rIn2, 0, 0),
+                _rings(
+                    ringOuterColor,
+                    flameColor,
+                    innerFill,
+                    rOut2,
+                    rMid2,
+                    rIn2,
+                    0,
+                    0
+                ),
                 "<defs><clipPath id='ct2'><circle cx='0' cy='0' r='",
                 uint256(rIn2).toString(),
                 "'/></clipPath></defs>",
@@ -478,10 +671,19 @@ contract IconRendererTrophy32 {
             )
         );
 
-        bool doubleExtermination = (statusFlags & STATUS_FLAG_SECOND_EXTERMINATION) != 0;
-        bool invertTrophy = !isMap && !isTopAffiliate && (doubleExtermination || lvl == 90);
+        bool doubleExtermination = (statusFlags &
+            STATUS_FLAG_SECOND_EXTERMINATION) != 0;
+        bool invertTrophy = !isMap &&
+            !isTopAffiliate &&
+            (doubleExtermination || lvl == 90);
         if (invertTrophy) {
-            ringsAndSymbol = string(abi.encodePacked('<g filter="url(#inv)">', ringsAndSymbol, "</g>"));
+            ringsAndSymbol = string(
+                abi.encodePacked(
+                    '<g filter="url(#inv)">',
+                    ringsAndSymbol,
+                    "</g>"
+                )
+            );
         }
 
         return
@@ -496,7 +698,10 @@ contract IconRendererTrophy32 {
             );
     }
 
-    function _svgHeader(string memory borderColor, string memory squareFill) private pure returns (string memory) {
+    function _svgHeader(
+        string memory borderColor,
+        string memory squareFill
+    ) private pure returns (string memory) {
         return
             string(
                 abi.encodePacked(
@@ -521,7 +726,8 @@ contract IconRendererTrophy32 {
         bool isMap,
         bool isAffiliate,
         bool isStake,
-        string memory flameFill,
+        string memory defaultFillColor,
+        string memory outerRingColor,
         string memory flamePath
     ) private view returns (string memory) {
         if (isMap) {
@@ -530,7 +736,7 @@ contract IconRendererTrophy32 {
                     abi.encodePacked(
                         '<g clip-path="url(#ct)">',
                         '<path fill="',
-                        flameFill,
+                        defaultFillColor,
                         '" transform="matrix(1.9125 0 0 1.9125 -22.95 -22.95)" d="',
                         MAP_BADGE_PATH,
                         '"/>',
@@ -545,8 +751,8 @@ contract IconRendererTrophy32 {
                     abi.encodePacked(
                         '<g clip-path="url(#ct)">',
                         '<path fill="',
-                        flameFill,
-                        '" transform="matrix(0.075 0 0 0.075 -19.2 -33.75)" d="',
+                        outerRingColor,
+                        '" transform="matrix(0.075 0 0 0.075 -19.2 -21.0)" d="',
                         AFFILIATE_BADGE_PATH,
                         '"/>',
                         "</g>"
@@ -575,7 +781,7 @@ contract IconRendererTrophy32 {
                 abi.encodePacked(
                     '<g clip-path="url(#ct)">',
                     '<path fill="',
-                    flameFill,
+                    defaultFillColor,
                     '" transform="matrix(0.13 0 0 0.13 -56 -41)" d="',
                     flamePath,
                     '"/>',
@@ -625,7 +831,10 @@ contract IconRendererTrophy32 {
         return "";
     }
 
-    function _statusIcons(bool isCurrentlyStaked, bool hasEthAttachment) private view returns (string memory) {
+    function _statusIcons(
+        bool isCurrentlyStaked,
+        bool hasEthAttachment
+    ) private view returns (string memory) {
         if (!isCurrentlyStaked && !hasEthAttachment) return "";
 
         string memory markup;
@@ -682,7 +891,12 @@ contract IconRendererTrophy32 {
                     header,
                     mainLayer,
                     _statusIcons(staked, hasEth),
-                    _cornerGlyph(isMap, showCornerFlame, flameColor, diamondPath),
+                    _cornerGlyph(
+                        isMap,
+                        showCornerFlame,
+                        flameColor,
+                        diamondPath
+                    ),
                     _svgFooter()
                 )
             );
@@ -744,7 +958,9 @@ contract IconRendererTrophy32 {
         uint8 excludeMask,
         uint24 level
     ) private view returns (string memory) {
-        uint8 initial = uint8(uint256(keccak256(abi.encodePacked(tokenId, traits))) % 8);
+        uint8 initial = uint8(
+            uint256(keccak256(abi.encodePacked(tokenId, traits))) % 8
+        );
 
         for (uint8 i; i < 8; ) {
             uint8 idx = uint8(initial + i) & 7;
@@ -758,12 +974,18 @@ contract IconRendererTrophy32 {
         return _paletteColor(0, level);
     }
 
-    function _paletteColor(uint8 idx, uint24 level) private view returns (string memory) {
+    function _paletteColor(
+        uint8 idx,
+        uint24 level
+    ) private view returns (string memory) {
         uint24 rgb = _paletteColorRGB(idx, level);
         return _rgbToHex(rgb);
     }
 
-    function _paletteColorRGB(uint8 idx, uint24 level) private view returns (uint24) {
+    function _paletteColorRGB(
+        uint8 idx,
+        uint24 level
+    ) private view returns (uint24) {
         uint24 cycle = level % 10;
         uint24 base = BASE_COLOR[idx];
         uint8 r = uint8(base >> 16);
@@ -783,7 +1005,10 @@ contract IconRendererTrophy32 {
         return (uint24(r2) << 16) | (uint24(g2) << 8) | uint24(b2);
     }
 
-    function _toneChannel(uint8 value, int16 delta) private pure returns (uint8) {
+    function _toneChannel(
+        uint8 value,
+        int16 delta
+    ) private pure returns (uint8) {
         if (delta == 0) return value;
         if (delta > 0) {
             uint16 span = 255 - value;
@@ -831,13 +1056,17 @@ contract IconRendererTrophy32 {
         return "Dice";
     }
 
-    function _symbolTitle(uint8 quadrant, uint8 symbolIdx) private view returns (string memory) {
+    function _symbolTitle(
+        uint8 quadrant,
+        uint8 symbolIdx
+    ) private view returns (string memory) {
         if (quadrant < 3) {
             string memory externalName = icons.symbol(quadrant, symbolIdx);
             if (bytes(externalName).length != 0) {
                 return externalName;
             }
-            return string.concat("Symbol ", (uint256(symbolIdx) + 1).toString());
+            return
+                string.concat("Symbol ", (uint256(symbolIdx) + 1).toString());
         }
 
         return string.concat("Dice ", (uint256(symbolIdx) + 1).toString());
@@ -853,11 +1082,27 @@ contract IconRendererTrophy32 {
 
     // All Zodiac symbols except Alpha (indexes 1-7) should shrink slightly.
     function _isZodiacShrinkTarget(uint8 symIdx) private pure returns (bool) {
-        return symIdx == 1 || symIdx == 2 || symIdx == 3 || symIdx == 4 || symIdx == 5 || symIdx == 6 || symIdx == 7;
+        return
+            symIdx == 1 ||
+            symIdx == 2 ||
+            symIdx == 3 ||
+            symIdx == 4 ||
+            symIdx == 5 ||
+            symIdx == 6 ||
+            symIdx == 7;
     }
 
-    function _traitLabel(uint8 quadrant, uint8 colorIdx, uint8 symbolIdx) private view returns (string memory) {
-        return string.concat(_colorTitle(colorIdx), " ", _symbolTitle(quadrant, symbolIdx));
+    function _traitLabel(
+        uint8 quadrant,
+        uint8 colorIdx,
+        uint8 symbolIdx
+    ) private view returns (string memory) {
+        return
+            string.concat(
+                _colorTitle(colorIdx),
+                " ",
+                _symbolTitle(quadrant, symbolIdx)
+            );
     }
 
     function _pack(
@@ -871,10 +1116,24 @@ contract IconRendererTrophy32 {
     ) private pure returns (string memory) {
         string memory lvlStr = (level == 0) ? "TBD" : level.toString();
         string memory nm = isTrophy
-            ? string.concat("Purge Game Level ", lvlStr, " ", trophyType, " Trophy")
-            : string.concat("Purge Game Level ", lvlStr, " #", tokenId.toString());
+            ? string.concat(
+                "Purge Game Level ",
+                lvlStr,
+                " ",
+                trophyType,
+                " Trophy"
+            )
+            : string.concat(
+                "Purge Game Level ",
+                lvlStr,
+                " #",
+                tokenId.toString()
+            );
 
-        string memory imgData = string.concat("data:image/svg+xml;base64,", Base64.encode(bytes(svg)));
+        string memory imgData = string.concat(
+            "data:image/svg+xml;base64,",
+            Base64.encode(bytes(svg))
+        );
 
         string memory j = string.concat('{"name":"', nm);
         j = string.concat(j, '","description":"', desc);
@@ -885,17 +1144,24 @@ contract IconRendererTrophy32 {
             j = string.concat(j, "[]}");
         }
 
-        return string.concat("data:application/json;base64,", Base64.encode(bytes(j)));
+        return
+            string.concat(
+                "data:application/json;base64,",
+                Base64.encode(bytes(j))
+            );
     }
 
-    function _formatEthAmount(uint256 weiAmount) private pure returns (string memory) {
+    function _formatEthAmount(
+        uint256 weiAmount
+    ) private pure returns (string memory) {
         if (weiAmount == 0) return "0";
         uint256 whole = weiAmount / 1 ether;
         uint256 remainder = weiAmount % 1 ether;
         if (remainder == 0) {
             return whole.toString();
         }
-        uint256 milli = (remainder + 500_000_000_000_000) / 1_000_000_000_000_000;
+        uint256 milli = (remainder + 500_000_000_000_000) /
+            1_000_000_000_000_000;
         if (milli == 1000) {
             unchecked {
                 ++whole;
@@ -930,11 +1196,28 @@ contract IconRendererTrophy32 {
         return 98;
     }
 
-    function _mat6(uint32 s1e6, int256 tx1e6, int256 ty1e6) private pure returns (string memory) {
+    function _mat6(
+        uint32 s1e6,
+        int256 tx1e6,
+        int256 ty1e6
+    ) private pure returns (string memory) {
         string memory s = _dec6(uint256(s1e6));
         string memory txn = _dec6s(tx1e6);
         string memory tyn = _dec6s(ty1e6);
-        return string(abi.encodePacked("matrix(", s, " 0 0 ", s, " ", txn, " ", tyn, ")"));
+        return
+            string(
+                abi.encodePacked(
+                    "matrix(",
+                    s,
+                    " 0 0 ",
+                    s,
+                    " ",
+                    txn,
+                    " ",
+                    tyn,
+                    ")"
+                )
+            );
     }
 
     function _dec6(uint256 x) private pure returns (string memory) {

@@ -322,7 +322,7 @@ describe("Endgame Trophy Mechanics", function () {
         method: "hardhat_impersonateAccount",
         params: [gameAddress],
     });
-    await (await deployer.sendTransaction({ to: gameAddress, value: ethers.parseEther("1") })).wait();
+    await (await deployer.sendTransaction({ to: gameAddress, value: ethers.parseEther("20") })).wait();
     const gameSigner = await ethers.getSigner(gameAddress);
     await purgeTrophies.connect(gameSigner).prepareNextLevel(10);
 
