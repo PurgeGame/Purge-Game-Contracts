@@ -1107,7 +1107,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         ctx.valueIn = msg.value;
         ctx.affiliateWinner = req.exterminator;
 
-        if (ctx.affiliateWinner != address(0) && ctx.mapUnit != 0) {
+        if (ctx.affiliateWinner != address(0)) {
             _awardTrophyInternal(
                 ctx.affiliateWinner,
                 PURGE_TROPHY_KIND_AFFILIATE,
@@ -1117,6 +1117,8 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             );
             if (ctx.valueIn < ctx.mapUnit) revert InvalidToken();
             ctx.valueIn -= ctx.mapUnit;
+        } else {
+            _eraseTrophy(affiliateTokenId, PURGE_TROPHY_KIND_AFFILIATE, true);
         }
 
         for (uint8 k; k < 6; ) {

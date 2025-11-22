@@ -174,9 +174,8 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
                 }
             }
         } else {
-            uint256 affiliateShare = (poolValue * 20) / 100;
+            uint256 poolForProcess = (poolValue * 20) / 100;
             address affiliateRecipient = topAffiliate;
-            uint256 poolForProcess = (affiliateShare != 0 && affiliateRecipient != address(0)) ? affiliateShare : 0;
 
             trophiesContract.processEndLevel{value: poolForProcess}(
                 IPurgeGameTrophies.EndLevelRequest({
@@ -187,13 +186,8 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
                 })
             );
 
-            uint256 remaining = poolValue;
-            if (poolForProcess != 0 && remaining >= poolForProcess) {
-                remaining -= poolForProcess;
-            }
-            if (remaining != 0) {
-                carryOver += remaining;
-            }
+            uint256 remaining = poolValue - poolForProcess;
+            if (remaining != 0) carryOver += remaining;
         }
 
         delete pendingEndLevel;
