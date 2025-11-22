@@ -529,7 +529,7 @@ contract Purgecoin is PurgeCoinStorage {
         }
 
         uint8 stakeTrophyBoost = purgeGameTrophies.stakeTrophyBonus(sender);
-        if (stakeTrophyBoost != 0) {
+        if (stakeTrophyBoost != 0 && distance >= 20) {
             boostedPrincipal += (boostedPrincipal * stakeTrophyBoost) / 100;
         }
 
