@@ -235,23 +235,53 @@ contract PurgeGame is PurgeGameStorage {
         return uint24((mintPacked_[player] >> ETH_LEVEL_STREAK_SHIFT) & MINT_MASK_24);
     }
 
+    /// @notice Record a mint, funded either by ETH (`msg.value`) or the caller's claimable balance.
+    /// @dev For ETH paths, `msg.value` must equal `costWei`. For claimable paths, `msg.value` must be 0
+    ///      and `costWei` is deducted from `claimableWinnings`, leaving the remainder (plus sentinel).
     function recordMint(
         address player,
         uint24 lvl,
         bool creditNext,
-        bool coinMint
+        bool coinMint,
+        uint256 costWei
     ) external payable returns (uint256 coinReward) {
         if (msg.sender != address(nft)) revert E();
+
         if (coinMint) {
             if (creditNext || msg.value != 0) revert E();
-        } else {
+            return _recordMintData(player, lvl, true);
+        }
+
+        uint256 payment = msg.value;
+        if (payment == 0 && costWei != 0) {
+            uint256 claimable = claimableWinnings[player];
+            if (claimable <= 1) revert E();
+
+            uint256 available;
+            unchecked {
+                available = claimable - 1;
+            }
+            if (available < costWei) revert E();
+
+            unchecked {
+                claimableWinnings[player] = (available - costWei) + 1;
+            }
+
             if (creditNext) {
-                nextPrizePool += msg.value;
+                nextPrizePool += costWei;
             } else {
-                prizePool += msg.value;
+                prizePool += costWei;
+            }
+        } else {
+            if (payment != costWei) revert E();
+            if (creditNext) {
+                nextPrizePool += payment;
+            } else {
+                prizePool += payment;
             }
         }
-        return _recordMintData(player, lvl, coinMint);
+
+        coinReward = _recordMintData(player, lvl, false);
     }
 
     /// @notice Advances the game state machine. Anyone can call, but standard flows
@@ -715,6 +745,46 @@ contract PurgeGame is PurgeGameStorage {
 
     function getWinnings() external view returns (uint256) {
         return claimableWinnings[msg.sender];
+    }
+
+    /// @notice Spend claimable ETH to purchase either NFTs or MAPs using the full available balance.
+    /// @param mapPurchase If true, purchase MAPs; otherwise purchase NFTs.
+    function purchaseWithClaimable(bool mapPurchase) external {
+        address buyer = msg.sender;
+        uint256 claimable = claimableWinnings[buyer];
+        if (claimable <= 1) revert E();
+
+        uint256 available;
+        unchecked {
+            available = claimable - 1;
+        }
+
+        uint256 priceWei = price;
+        if (priceWei == 0) revert E();
+
+        if (!mapPurchase) {
+            uint256 qty = available / priceWei;
+            if (qty == 0) revert E();
+            nft.purchaseWithClaimable(buyer, qty, priceWei);
+        } else {
+            uint24 lvl = level;
+            if (gameState == 3) {
+                unchecked {
+                    ++lvl;
+                }
+            }
+            uint256 qty = (available * 4) / priceWei;
+            uint32 minQty = _mapMinimumQuantity(lvl);
+            if (qty < minQty) revert E();
+            nft.mintAndPurgeWithClaimable(buyer, qty, priceWei);
+        }
+    }
+
+    function _mapMinimumQuantity(uint24 lvl) private pure returns (uint32) {
+        uint24 mod = lvl % 100;
+        if (mod >= 60) return 1;
+        if (mod >= 40) return 2;
+        return 4;
     }
 
     // --- Credits & jackpot helpers ------------------------------------------------------------------

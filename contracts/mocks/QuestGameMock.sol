@@ -79,7 +79,8 @@ contract QuestGameMock is IPurgeGame {
         address /*player*/,
         uint24 /*lvl*/,
         bool /*creditNext*/,
-        bool /*coinMint*/
+        bool /*coinMint*/,
+        uint256 /*costWei*/
     ) external payable override returns (uint256 coinReward) {
         coinReward = 0;
     }
@@ -110,4 +111,6 @@ contract QuestGameMock is IPurgeGame {
     }
 
     function releaseRngLock() external pure override {}
+
+    function purchaseWithClaimable(bool /*mapPurchase*/) external pure override {}
 }

@@ -32,7 +32,8 @@ interface IPurgeGame {
         address player,
         uint24 lvl,
         bool creditNext,
-        bool coinMint
+        bool coinMint,
+        uint256 costWei
     ) external payable returns (uint256 coinReward);
 
     function getJackpotWinners(
@@ -51,4 +52,6 @@ interface IPurgeGame {
     function isRngFulfilled() external view returns (bool);
 
     function releaseRngLock() external;
+
+    function purchaseWithClaimable(bool mapPurchase) external;
 }

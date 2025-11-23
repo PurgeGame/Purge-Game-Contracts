@@ -46,6 +46,8 @@ interface IPurgeGameNFT {
     function tokensOwed(address player) external view returns (uint32);
     function processDormant(uint32 maxCount) external returns (bool finished, bool worked);
     function clearPlaceholderPadding(uint256 startTokenId, uint256 endTokenId) external;
+    function purchaseWithClaimable(address buyer, uint256 quantity, uint256 priceWei) external;
+    function mintAndPurgeWithClaimable(address buyer, uint256 quantity, uint256 priceWei) external;
 }
 
 contract PurgeGameNFT {
@@ -145,6 +147,8 @@ contract PurgeGameNFT {
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
     uint256 private constant COIN_BASE_UNIT = 1_000_000; // 1 PURGED (6 decimals)
     uint256 private constant COIN_EMISSION_UNIT = 1_000 * COIN_BASE_UNIT; // 1000 PURGED (6 decimals)
+    uint256 private constant CLAIMABLE_BONUS_DIVISOR = 10; // 10% of token coin cost
+    uint256 private constant CLAIMABLE_MAP_BONUS_DIVISOR = 40; // 10% of per-map coin cost (priceUnit/4)
     uint256 private constant TROPHY_FLAG_MAP = uint256(1) << 200;
     uint256 private constant TROPHY_FLAG_AFFILIATE = uint256(1) << 201;
     uint256 private constant TROPHY_FLAG_STAKE = uint256(1) << 202;
@@ -217,7 +221,9 @@ contract PurgeGameNFT {
         }
 
         // Safely update balanceLevel (24-bit field)
-        uint24 newBalanceLevel = setLevel ? lvl : uint24((packedData & _BITMASK_BALANCE_LEVEL) >> _BITPOS_BALANCE_LEVEL);
+        uint24 newBalanceLevel = setLevel
+            ? lvl
+            : uint24((packedData & _BITMASK_BALANCE_LEVEL) >> _BITPOS_BALANCE_LEVEL);
 
         // Clear old fields and set new ones
         packedData &= ~(_BITMASK_TROPHY_BALANCE | _BITMASK_BALANCE_LEVEL);
@@ -233,6 +239,7 @@ contract PurgeGameNFT {
         if (mod >= 40) return 2;
         return 4;
     }
+
 
     constructor(address regularRenderer_, address trophyRenderer_, address coin_) {
         regularRenderer = ITokenRenderer(regularRenderer_);
@@ -323,9 +330,23 @@ contract PurgeGameNFT {
     // ---------------------------------------------------------------------
 
     function purchase(uint256 quantity, bool payInCoin, bytes32 affiliateCode) external payable {
-        if (quantity == 0 || quantity > 5000) revert InvalidQuantity();
+        _purchase(msg.sender, quantity, payInCoin, affiliateCode, false, 0);
+    }
 
-        address buyer = msg.sender;
+    function purchaseWithClaimable(address buyer, uint256 quantity, uint256 priceWei) external onlyGame {
+        _purchase(buyer, quantity, false, bytes32(0), true, priceWei);
+    }
+
+    function _purchase(
+        address buyer,
+        uint256 quantity,
+        bool payInCoin,
+        bytes32 affiliateCode,
+        bool useClaimable,
+        uint256 priceWeiHint
+    ) private {
+        if (quantity == 0 || quantity > type(uint32).max) revert InvalidQuantity();
+
         uint24 currentLevel = game.level();
         uint8 state = game.gameState();
         bool queueNext = state == 3;
@@ -334,6 +355,7 @@ contract PurgeGameNFT {
         if ((targetLevel % 20) == 16) revert NotTimeYet();
         if (game.rngLocked()) revert RngNotReady();
 
+        uint256 priceWei = priceWeiHint == 0 ? game.mintPrice() : priceWeiHint;
         uint256 priceCoinUnit = game.coinPriceUnit();
         _enforceCenturyLuckbox(buyer, targetLevel, priceCoinUnit);
 
@@ -347,9 +369,26 @@ contract PurgeGameNFT {
             uint8 phase = game.currentPhase();
             bool creditNext = (state == 3 || state == 1);
             bonusCoinReward = (quantity / 10) * priceCoinUnit;
-            bonus = _processEthPurchase(buyer, quantity * 100, affiliateCode, targetLevel, false, creditNext);
+            uint256 expectedWei = priceWei * quantity;
+            bonus = _processEthPurchase(
+                buyer,
+                quantity * 100,
+                affiliateCode,
+                targetLevel,
+                false,
+                creditNext,
+                useClaimable,
+                expectedWei,
+                priceCoinUnit
+            );
             if (phase == 3 && (targetLevel % 100) > 90) {
                 bonus += (quantity * priceCoinUnit) / 5;
+            }
+        }
+
+        if (useClaimable) {
+            unchecked {
+                bonus += (quantity * priceCoinUnit) / CLAIMABLE_BONUS_DIVISOR;
             }
         }
 
@@ -367,7 +406,25 @@ contract PurgeGameNFT {
     }
 
     function mintAndPurge(uint256 quantity, bool payInCoin, bytes32 affiliateCode) external payable {
-        address buyer = msg.sender;
+        _mintAndPurge(msg.sender, quantity, payInCoin, affiliateCode, false, 0);
+    }
+
+    function mintAndPurgeWithClaimable(
+        address buyer,
+        uint256 quantity,
+        uint256 priceWei
+    ) external onlyGame {
+        _mintAndPurge(buyer, quantity, false, bytes32(0), true, priceWei);
+    }
+
+    function _mintAndPurge(
+        address buyer,
+        uint256 quantity,
+        bool payInCoin,
+        bytes32 affiliateCode,
+        bool useClaimable,
+        uint256 priceWeiHint
+    ) private {
         uint256 priceUnit = game.coinPriceUnit();
         uint8 phase = game.currentPhase();
         uint8 state = game.gameState();
@@ -378,17 +435,20 @@ contract PurgeGameNFT {
             }
         }
         uint32 minQuantity = _mapMinimumQuantity(lvl);
-        if (quantity < minQuantity || quantity > 10000) revert InvalidQuantity();
+        if (quantity < minQuantity || quantity > type(uint32).max) revert InvalidQuantity();
         if (game.rngLocked()) revert RngNotReady();
 
         _enforceCenturyLuckbox(buyer, lvl, priceUnit);
 
+        uint256 priceWei = priceWeiHint == 0 ? game.mintPrice() : priceWeiHint;
         uint256 coinCost = quantity * (priceUnit / 4);
         uint256 scaledQty = quantity * 25;
         uint256 mapRebate = (quantity / 4) * (priceUnit / 10);
         uint256 mapBonus = (quantity / 40) * priceUnit;
+        uint256 expectedWei = (priceWei * quantity) / 4;
 
         uint256 bonus;
+        uint256 claimableBonus;
 
         if (payInCoin) {
             if (msg.value != 0) revert E();
@@ -403,16 +463,27 @@ contract PurgeGameNFT {
                 affiliateCode,
                 lvl,
                 true,
-                creditNext
+                creditNext,
+                useClaimable,
+                expectedWei,
+                priceUnit
             );
             if (phase == 3 && (lvl % 100) > 90) {
                 bonus += coinCost / 5;
+            }
+            if (useClaimable) {
+                unchecked {
+                    claimableBonus = (quantity * priceUnit) / CLAIMABLE_MAP_BONUS_DIVISOR;
+                }
             }
         }
 
         uint256 rebateMint = bonus;
         if (!payInCoin) {
             rebateMint += mapRebate + mapBonus;
+        }
+        if (claimableBonus != 0) {
+            rebateMint += claimableBonus;
         }
         if (rebateMint != 0) {
             coin.bonusCoinflip(buyer, rebateMint, true);
@@ -427,10 +498,11 @@ contract PurgeGameNFT {
         bytes32 affiliateCode,
         uint24 lvl,
         bool mapPurchase,
-        bool creditNextPool
+        bool creditNextPool,
+        bool useClaimable,
+        uint256 expectedWei,
+        uint256 priceUnit
     ) private returns (uint256 bonusMint) {
-        uint256 expectedWei = (game.mintPrice() * scaledQty) / 100;
-
         if (mapPurchase) {
             uint8 mapDiscount = address(trophyModule) == address(0) ? 0 : trophyModule.mapStakeDiscount(payer);
             if (mapDiscount != 0) {
@@ -447,11 +519,20 @@ contract PurgeGameNFT {
             }
         }
 
-        if (msg.value != expectedWei) revert E();
+        if (useClaimable) {
+            if (msg.value != 0) revert E();
+        } else if (msg.value != expectedWei) {
+            revert E();
+        }
 
         uint32 mintedQuantity = mapPurchase ? uint32(scaledQty / 25) : uint32(scaledQty / 100);
 
-        uint256 streakBonus = game.recordMint{value: expectedWei}(payer, lvl, creditNextPool, false);
+        uint256 streakBonus;
+        if (useClaimable) {
+            streakBonus = game.recordMint(payer, lvl, creditNextPool, false, expectedWei);
+        } else {
+            streakBonus = game.recordMint{value: expectedWei}(payer, lvl, creditNextPool, false, expectedWei);
+        }
 
         if (mintedQuantity != 0) {
             coin.notifyQuestMint(payer, mintedQuantity, true);
@@ -503,7 +584,7 @@ contract PurgeGameNFT {
         else if (stepMod == 18) amount = (amount * 9) / 10;
         if (discount != 0) amount -= discount;
         coin.burnCoin(payer, amount);
-        game.recordMint(payer, lvl, false, true);
+        game.recordMint(payer, lvl, false, true, 0);
         if (quantity != 0) {
             coin.notifyQuestMint(payer, quantity, false);
         }
@@ -824,13 +905,15 @@ contract PurgeGameNFT {
 
             // Safely increment balance
             uint256 newBalance = currentBalance + quantity;
-            if (newBalance < currentBalance || newBalance > _BITMASK_ADDRESS_DATA_ENTRY) { // Check for overflow or exceeding field capacity
+            if (newBalance < currentBalance || newBalance > _BITMASK_ADDRESS_DATA_ENTRY) {
+                // Check for overflow or exceeding field capacity
                 revert E(); // Or a more specific error
             }
 
             // Safely increment minted count
             uint256 newNumberMinted = currentNumberMinted + quantity;
-            if (newNumberMinted < currentNumberMinted || newNumberMinted > _BITMASK_ADDRESS_DATA_ENTRY) { // Check for overflow or exceeding field capacity
+            if (newNumberMinted < currentNumberMinted || newNumberMinted > _BITMASK_ADDRESS_DATA_ENTRY) {
+                // Check for overflow or exceeding field capacity
                 revert E(); // Or a more specific error
             }
 
@@ -1131,7 +1214,9 @@ contract PurgeGameNFT {
             currentPackedData = (currentPackedData & ~_BITMASK_TROPHY_BALANCE) | (updated << _BITPOS_TROPHY_BALANCE);
         }
 
-        currentPackedData = (currentPackedData & ~_BITMASK_BALANCE_LEVEL) | (uint256(currentLevel) << _BITPOS_BALANCE_LEVEL);
+        currentPackedData =
+            (currentPackedData & ~_BITMASK_BALANCE_LEVEL) |
+            (uint256(currentLevel) << _BITPOS_BALANCE_LEVEL);
         _packedAddressData[owner] = currentPackedData;
     }
 
