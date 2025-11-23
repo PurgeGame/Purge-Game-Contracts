@@ -1082,11 +1082,17 @@ contract Purgecoin is PurgeCoinStorage {
         // Bounty: convert any owed bounty into a flip credit on the first window.
         if (totalPlayers != 0 && payoutIndex == 0 && bountyOwedTo != address(0) && currentBounty > 0) {
             address to = bountyOwedTo;
-            uint256 amt = currentBounty;
+            uint256 slice = currentBounty >> 1; // pay/delete half of the bounty pool
+            if (slice != 0) {
+                unchecked {
+                    currentBounty -= uint128(slice);
+                }
+                if (win) {
+                    addFlip(to, slice, false, false, false);
+                    emit BountyPaid(to, slice);
+                }
+            }
             bountyOwedTo = address(0);
-            currentBounty = 0;
-            addFlip(to, amt, false, false, false);
-            emit BountyPaid(to, amt);
         }
 
         // --- Phase 3: player payouts (windowed by stepPayout) -----------------------------------
@@ -1141,6 +1147,12 @@ contract Purgecoin is PurgeCoinStorage {
             if (isBafLevel) {
                 lastBafFlipLevel = level;
             }
+
+            uint256 priceUnit = purgeGame.coinPriceUnit();
+            if (priceUnit != 0) {
+                _addToBounty(priceUnit);
+            }
+
             emit CoinflipFinished(win);
             return true;
         }
