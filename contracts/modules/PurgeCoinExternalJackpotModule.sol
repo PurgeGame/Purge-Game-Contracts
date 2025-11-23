@@ -21,7 +21,6 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
     uint32 private constant BAF_BATCH = 5000;
     uint256 private constant BUCKET_SIZE = 1500;
     uint32 private constant SS_IDLE = type(uint32).max;
-    uint32 private constant SS_DONE = type(uint32).max - 1;
     uint8 private constant PURGE_TROPHY_KIND_BAF = 4;
     uint8 private constant PURGE_TROPHY_KIND_DECIMATOR = 5;
     uint16 private constant BAF_TRAIT_SENTINEL = 0xFFFA;

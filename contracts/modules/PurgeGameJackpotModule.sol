@@ -14,12 +14,9 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
     event Jackpot(uint256 traits);
 
     uint48 private constant JACKPOT_RESET_TIME = 82620;
-    uint8 private constant JACKPOT_KIND_DAILY = 4;
     uint8 private constant JACKPOT_LEVEL_CAP = 10;
-    uint8 private constant JACKPOT_KIND_MAP = 9;
     uint8 private constant EARLY_PURGE_COIN_ONLY_THRESHOLD = 50;
     uint8 private constant PURGE_TROPHY_KIND_MAP = 0;
-    uint16 private constant TRAIT_ID_TIMEOUT = 420;
     uint256 private constant DEGENERATE_ENTROPY_CHECK_VALUE = 420;
     uint64 private constant MAP_JACKPOT_SHARES_PACKED =
         (uint64(6000)) | (uint64(1333) << 16) | (uint64(1333) << 32) | (uint64(1334) << 48);
@@ -29,8 +26,6 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
     bytes32 private constant CARRYOVER_3D6_SALT = keccak256("carryover-3d6");
     bytes32 private constant CARRYOVER_3D4_SALT = keccak256("carryover-3d4");
     uint256 private constant TROPHY_FLAG_MAP = uint256(1) << 200;
-    uint256 private constant MINT_MASK_24 = (uint256(1) << 24) - 1;
-    uint256 private constant ETH_LAST_LEVEL_SHIFT = 0;
 
     function payDailyJackpot(
         bool isDaily,

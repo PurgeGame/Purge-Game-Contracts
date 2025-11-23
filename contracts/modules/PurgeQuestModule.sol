@@ -740,11 +740,6 @@ contract PurgeQuestModule is IPurgeQuestModule {
         return _questLinearTarget(QUEST_MIN_TOKEN, uint32(maxVal), difficulty);
     }
 
-    function _questRand(uint256 entropy, uint8 questType, uint8 tier, uint8 salt) private pure returns (uint256) {
-        if (entropy == 0) return 0;
-        return uint256(keccak256(abi.encode(entropy, questType, tier, salt)));
-    }
-
     function _applyQuestTypeConstraints(
         DailyQuest[QUEST_SLOT_COUNT] storage quests,
         uint8 slot,

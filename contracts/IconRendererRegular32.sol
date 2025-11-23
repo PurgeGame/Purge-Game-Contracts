@@ -659,13 +659,6 @@ contract IconRendererRegular32 {
     // ---------------- Helpers ------------------------------------------------------------------------
 
     /// @dev Utility: replicate a single palette index into a 4‑tuple (used by border resolver).
-    function _repeat4(uint8 v) private pure returns (uint8[4] memory a) {
-        a[0] = v;
-        a[1] = v;
-        a[2] = v;
-        a[3] = v;
-    }
-
     /// @dev Compose a global 0..255 trait id.
     function _traitId(uint8 dataQ, uint8 colIdx, uint8 symIdx) private pure returns (uint8) {
         return ((colIdx << 3) | symIdx) + (dataQ << 6);

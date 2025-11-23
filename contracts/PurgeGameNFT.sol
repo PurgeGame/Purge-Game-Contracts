@@ -85,7 +85,6 @@ contract PurgeGameNFT {
     uint256 private constant _BITPOS_NUMBER_BURNED = 128;
     uint256 private constant _BITPOS_START_TIMESTAMP = 160;
     uint256 private constant _BITMASK_BURNED = 1 << 224;
-    uint256 private constant _BITPOS_NEXT_INITIALIZED = 225;
     uint256 private constant _BITMASK_NEXT_INITIALIZED = 1 << 225;
     uint256 private constant _BITMASK_ADDRESS = (1 << 160) - 1;
     uint256 private constant _BITPOS_TROPHY_KIND = 232;
@@ -142,7 +141,6 @@ contract PurgeGameNFT {
     uint32 private constant MINT_AIRDROP_PLAYER_BATCH_SIZE = 210; // Max unique recipients per airdrop batch
     uint32 private constant MINT_AIRDROP_TOKEN_CAP = 3_000; // Max tokens distributed per airdrop batch
 
-    uint16 private constant TRAIT_ID_TIMEOUT = 420;
     uint256 private constant CLAIMABLE_BONUS_DIVISOR = 10; // 10% of token coin cost
     uint256 private constant CLAIMABLE_MAP_BONUS_DIVISOR = 40; // 10% of per-map coin cost (priceUnit/4)
     uint256 private constant TROPHY_FLAG_MAP = uint256(1) << 200;
@@ -152,35 +150,14 @@ contract PurgeGameNFT {
     uint256 private constant TROPHY_FLAG_DECIMATOR = uint256(1) << 204;
     uint256 private constant TROPHY_OWED_MASK = (uint256(1) << 128) - 1;
     uint256 private constant TROPHY_BASE_LEVEL_SHIFT = 128;
-    uint256 private constant TROPHY_BASE_LEVEL_MASK = uint256(0xFFFFFF) << TROPHY_BASE_LEVEL_SHIFT;
     uint256 private constant TROPHY_LAST_CLAIM_SHIFT = 168;
-    uint256 private constant TROPHY_LAST_CLAIM_MASK = uint256(0xFFFFFF) << TROPHY_LAST_CLAIM_SHIFT;
 
     uint8 private constant _STAKE_ERR_TRANSFER_BLOCKED = 1;
-    uint8 private constant _STAKE_ERR_NOT_LEVEL = 2;
-    uint8 private constant _STAKE_ERR_ALREADY_STAKED = 3;
-    uint8 private constant _STAKE_ERR_NOT_STAKED = 4;
-    uint8 private constant _STAKE_ERR_LOCKED = 5;
-    uint8 private constant _STAKE_ERR_NOT_MAP = 6;
-    uint8 private constant _STAKE_ERR_NOT_AFFILIATE = 7;
-    uint8 private constant _STAKE_ERR_NOT_STAKE = 8;
-    uint8 private constant EXTERMINATOR_STAKE_MAX = 20;
-    uint8 private constant MAP_STAKE_MAX = 20;
-    uint8 private constant AFFILIATE_STAKE_MAX = 20;
-    uint8 private constant STAKE_TROPHY_MAX = 20;
-    uint16 private constant BAF_TRAIT_SENTINEL = 0xFFFA;
-    uint16 private constant DECIMATOR_TRAIT_SENTINEL = 0xFFFB;
-    uint16 private constant STAKE_TRAIT_SENTINEL = 0xFFFD;
-    uint24 private constant STAKE_PREVIEW_START_LEVEL = 12;
     uint256 private constant LUCKBOX_BYPASS_THRESHOLD = 100_000 * 1_000_000;
     uint32 private constant DORMANT_EMIT_BATCH = 3500;
 
     function _currentBaseTokenId() private view returns (uint256) {
         return uint256(uint128(basePointers));
-    }
-
-    function _previousBaseTokenId() private view returns (uint256) {
-        return basePointers >> 128;
     }
 
     function _setBasePointers(uint256 previousBase, uint256 currentBase) private {

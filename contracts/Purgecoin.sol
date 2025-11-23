@@ -98,8 +98,6 @@ contract Purgecoin is PurgeCoinStorage {
     uint256 private constant MILLION = 1e6; // token has 6 decimals
     uint256 private constant MIN = 100 * MILLION; // min burn / min flip (100 PURGED)
     uint8 private constant MAX_RISK = 11; // staking risk 1..11
-    uint128 private constant ONEK = 1_000_000_000; // 1,000 PURGED (6d)
-    uint32 private constant BAF_BATCH = 5000;
     uint256 private constant BUCKET_SIZE = 1500;
     uint16 private constant COINFLIP_EXTRA_MIN_PERCENT = 80;
     uint16 private constant COINFLIP_EXTRA_RANGE = 35;

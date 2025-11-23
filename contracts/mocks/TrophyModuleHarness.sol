@@ -8,6 +8,7 @@ contract TrophyGameHarness is IPurgeGameMinimal {
     uint8 private _gameState = 3;
     bool private rngLockedFlag;
     uint256 private rngWord;
+    uint256 private _coinPriceUnit = 1_000_000;
     uint256 public totalReceived;
 
     function setLevel(uint24 newLevel) external {
@@ -26,6 +27,10 @@ contract TrophyGameHarness is IPurgeGameMinimal {
         rngWord = word;
     }
 
+    function setCoinPriceUnit(uint256 priceUnit) external {
+        _coinPriceUnit = priceUnit;
+    }
+
     function level() external view override returns (uint24) {
         return _level;
     }
@@ -40,6 +45,10 @@ contract TrophyGameHarness is IPurgeGameMinimal {
 
     function currentRngWord() external view override returns (uint256) {
         return rngWord;
+    }
+
+    function coinPriceUnit() external view override returns (uint256) {
+        return _coinPriceUnit;
     }
 
     function processEndLevel(

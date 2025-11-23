@@ -218,13 +218,9 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     uint256 private constant TROPHY_LAST_CLAIM_MASK = uint256(0xFFFFFF) << TROPHY_LAST_CLAIM_SHIFT;
 
     uint8 private constant _STAKE_ERR_TRANSFER_BLOCKED = 1;
-    uint8 private constant _STAKE_ERR_NOT_LEVEL = 2;
     uint8 private constant _STAKE_ERR_ALREADY_STAKED = 3;
     uint8 private constant _STAKE_ERR_NOT_STAKED = 4;
     uint8 private constant _STAKE_ERR_LOCKED = 5;
-    uint8 private constant _STAKE_ERR_NOT_MAP = 6;
-    uint8 private constant _STAKE_ERR_NOT_AFFILIATE = 7;
-    uint8 private constant _STAKE_ERR_NOT_STAKE = 8;
 
     uint8 private constant MAP_STAKE_MAX = 20;
     uint8 private constant EXTERMINATOR_STAKE_MAX = 20;
