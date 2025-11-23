@@ -582,8 +582,8 @@ contract Purgecoin is PurgeCoinStorage {
     /// - `amount` earns a 60% bonus on levels `level % 25 == 1`.
     /// - Direct ref gets a coinflip credit equal to `amount` (plus stake bonus), but the configured rakeback%
     ///   is diverted to the buyer as flip credit.
-    /// - Their upline (if any and already active this level) receives a 20% bonus coinflip credit of the same
-    ///   (post-doubling) amount.
+    /// - Their upline (if any) receives a 20% bonus coinflip credit of the same (post-doubling) amount.
+    /// - A second upline (if any) receives another 20% credit of the upline’s bonus.
     function payAffiliate(
         uint256 amount,
         bytes32 code,
@@ -626,59 +626,65 @@ contract Purgecoin is PurgeCoinStorage {
         mapping(address => uint256) storage earned = affiliateCoinEarned[lvl];
         IPurgeQuestModule module = questModule;
         IPurgeGameTrophies trophies = purgeGameTrophies;
-        // Pay direct affiliate (skip sentinels)
-        if (affiliateAddr != address(0)) {
-            uint256 payout = baseAmount;
-            uint8 stakeBonus = trophies.affiliateStakeBonus(affiliateAddr);
-            if (stakeBonus != 0) {
-                payout += (payout * stakeBonus) / 100;
-            }
-
-            uint256 rakebackShare = (payout * uint256(rakebackPct)) / 100;
-            uint256 affiliateShare = payout - rakebackShare;
-
-            if (affiliateShare != 0) {
-                uint256 newTotal = earned[affiliateAddr] + affiliateShare;
-                earned[affiliateAddr] = newTotal;
-
-                uint256 questReward;
-                if (address(module) != address(0)) {
-                    (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module
-                        .handleAffiliate(affiliateAddr, affiliateShare);
-                    questReward = _questApplyReward(affiliateAddr, reward, hardMode, questType, streak, completed);
-                }
-
-                uint256 totalFlipAward = affiliateShare + questReward;
-                addFlip(affiliateAddr, totalFlipAward, false, false, false);
-
-                _updatePlayerScore(1, affiliateAddr, newTotal);
-            }
-
-            playerRakeback = rakebackShare;
+        // Pay direct affiliate
+        uint256 payout = baseAmount;
+        uint8 stakeBonus = trophies.affiliateStakeBonus(affiliateAddr);
+        if (stakeBonus != 0) {
+            payout += (payout * stakeBonus) / 100;
         }
 
-        // Upline bonus (20%) only if upline is active this level
+        uint256 rakebackShare = (payout * uint256(rakebackPct)) / 100;
+        uint256 affiliateShare = payout - rakebackShare;
+
+        uint256 newTotal = earned[affiliateAddr] + affiliateShare;
+        earned[affiliateAddr] = newTotal;
+
+        (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleAffiliate(
+            affiliateAddr,
+            affiliateShare
+        );
+        uint256 questReward = _questApplyReward(affiliateAddr, reward, hardMode, questType, streak, completed);
+
+        uint256 totalFlipAward = affiliateShare + questReward;
+        addFlip(affiliateAddr, totalFlipAward, false, false, false);
+
+        _updatePlayerScore(1, affiliateAddr, newTotal);
+
+        playerRakeback = rakebackShare;
+
+        // Upline bonus (20%)
         address upline = _referrerAddress(affiliateAddr);
         if (upline != address(0) && upline != sender) {
-            uint256 uplineTotal = earned[upline];
-            if (uplineTotal != 0) {
-                uint256 bonus = baseAmount / 5;
-                if (bonus != 0) {
-                    uint8 stakeBonusUpline = trophies.affiliateStakeBonus(upline);
-                    if (stakeBonusUpline != 0) {
-                        bonus += (bonus * stakeBonusUpline) / 100;
-                    }
-                    uplineTotal += bonus;
-                    earned[upline] = uplineTotal;
-                    uint256 questReward;
-                    if (address(module) != address(0)) {
-                        (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module
-                            .handleAffiliate(upline, bonus);
-                        questReward = _questApplyReward(upline, reward, hardMode, questType, streak, completed);
-                    }
-                    addFlip(upline, bonus + questReward, false, false, false);
-                    _updatePlayerScore(1, upline, uplineTotal);
+            uint256 bonus = baseAmount / 5;
+            uint8 stakeBonusUpline = trophies.affiliateStakeBonus(upline);
+            if (stakeBonusUpline != 0) {
+                bonus += (bonus * stakeBonusUpline) / 100;
+            }
+            (uint256 rewardUpline, bool hardModeUpline, uint8 questTypeUpline, uint32 streakUpline, bool completedUpline) = module
+                .handleAffiliate(upline, bonus);
+            uint256 questRewardUpline = _questApplyReward(upline, rewardUpline, hardModeUpline, questTypeUpline, streakUpline, completedUpline);
+            uint256 uplineTotal = earned[upline] + bonus;
+            earned[upline] = uplineTotal;
+            addFlip(upline, bonus + questRewardUpline, false, false, false);
+            _updatePlayerScore(1, upline, uplineTotal);
+
+            // Second upline bonus (20%)
+            address upline2 = _referrerAddress(upline);
+            if (upline2 != address(0)) {
+                uint256 bonus2 = bonus / 5;
+                uint8 stakeBonusUpline2 = trophies.affiliateStakeBonus(upline2);
+                if (stakeBonusUpline2 != 0) {
+                    bonus2 += (bonus2 * stakeBonusUpline2) / 100;
                 }
+                (uint256 reward2, bool hardMode2, uint8 questType2, uint32 streak2, bool completed2) = module.handleAffiliate(
+                    upline2,
+                    bonus2
+                );
+                uint256 questReward2 = _questApplyReward(upline2, reward2, hardMode2, questType2, streak2, completed2);
+                uint256 upline2Total = earned[upline2] + bonus2;
+                earned[upline2] = upline2Total;
+                addFlip(upline2, bonus2 + questReward2, false, false, false);
+                _updatePlayerScore(1, upline2, upline2Total);
             }
         }
 
