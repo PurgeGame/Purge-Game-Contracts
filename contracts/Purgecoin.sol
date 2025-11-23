@@ -99,8 +99,8 @@ contract Purgecoin is PurgeCoinStorage {
     uint256 private constant MIN = 100 * MILLION; // min burn / min flip (100 PURGED)
     uint8 private constant MAX_RISK = 11; // staking risk 1..11
     uint256 private constant BUCKET_SIZE = 1500;
-    uint16 private constant COINFLIP_EXTRA_MIN_PERCENT = 80;
-    uint16 private constant COINFLIP_EXTRA_RANGE = 36;
+    uint16 private constant COINFLIP_EXTRA_MIN_PERCENT = 78;
+    uint16 private constant COINFLIP_EXTRA_RANGE = 38;
     uint16 private constant BPS_DENOMINATOR = 10_000;
     uint32 private constant QUEST_TIER_BONUS_SPAN = 7;
     uint8 private constant QUEST_TIER_BONUS_MAX = 10;
@@ -658,9 +658,21 @@ contract Purgecoin is PurgeCoinStorage {
             if (stakeBonusUpline != 0) {
                 bonus += (bonus * stakeBonusUpline) / 100;
             }
-            (uint256 rewardUpline, bool hardModeUpline, uint8 questTypeUpline, uint32 streakUpline, bool completedUpline) = module
-                .handleAffiliate(upline, bonus);
-            uint256 questRewardUpline = _questApplyReward(upline, rewardUpline, hardModeUpline, questTypeUpline, streakUpline, completedUpline);
+            (
+                uint256 rewardUpline,
+                bool hardModeUpline,
+                uint8 questTypeUpline,
+                uint32 streakUpline,
+                bool completedUpline
+            ) = module.handleAffiliate(upline, bonus);
+            uint256 questRewardUpline = _questApplyReward(
+                upline,
+                rewardUpline,
+                hardModeUpline,
+                questTypeUpline,
+                streakUpline,
+                completedUpline
+            );
             uint256 uplineTotal = earned[upline] + bonus;
             earned[upline] = uplineTotal;
             addFlip(upline, bonus + questRewardUpline, false, false, false);
@@ -674,10 +686,8 @@ contract Purgecoin is PurgeCoinStorage {
                 if (stakeBonusUpline2 != 0) {
                     bonus2 += (bonus2 * stakeBonusUpline2) / 100;
                 }
-                (uint256 reward2, bool hardMode2, uint8 questType2, uint32 streak2, bool completed2) = module.handleAffiliate(
-                    upline2,
-                    bonus2
-                );
+                (uint256 reward2, bool hardMode2, uint8 questType2, uint32 streak2, bool completed2) = module
+                    .handleAffiliate(upline2, bonus2);
                 uint256 questReward2 = _questApplyReward(upline2, reward2, hardMode2, questType2, streak2, completed2);
                 uint256 upline2Total = earned[upline2] + bonus2;
                 earned[upline2] = upline2Total;
@@ -940,7 +950,7 @@ contract Purgecoin is PurgeCoinStorage {
     ///      4. Perform cleanup and reopen betting.
     /// @param level Current PurgeGame level (used to gate 1/run and propagate stakes).
     /// @param cap   Work cap hint. cap==0 uses defaults; otherwise applies directly.
-    /// @param bonusFlip Adds 5 percentage points to the payout roll for the last flip of the purchase phase.
+    /// @param bonusFlip Adds 6 percentage points to the payout roll for the last flip of the purchase phase.
     /// @return finished True when all payouts and cleanup are complete.
     function processCoinflipPayouts(
         uint24 level,
@@ -957,10 +967,17 @@ contract Purgecoin is PurgeCoinStorage {
             if (epoch != 0) {
                 seedWord = uint256(keccak256(abi.encodePacked(word, epoch)));
             }
-            rewardPercent = uint16((seedWord % COINFLIP_EXTRA_RANGE) + COINFLIP_EXTRA_MIN_PERCENT);
+            uint256 roll = seedWord % 20; // ~5% each for the low/high outliers
+            if (roll == 0) {
+                rewardPercent = 50;
+            } else if (roll == 1) {
+                rewardPercent = 150;
+            } else {
+                rewardPercent = uint16((seedWord % COINFLIP_EXTRA_RANGE) + COINFLIP_EXTRA_MIN_PERCENT);
+            }
             if (bonusFlip) {
                 unchecked {
-                    rewardPercent += 5;
+                    rewardPercent += 7;
                 }
             }
             coinflipRewardPercent = rewardPercent;
