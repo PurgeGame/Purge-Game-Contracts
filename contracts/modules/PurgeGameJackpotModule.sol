@@ -80,11 +80,10 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
             }
         }
 
-        (uint256 coinPool, address biggestFlip) = coinContract.prepareCoinJackpot();
+        (uint256 coinPool, ) = coinContract.prepareCoinJackpot();
         uint256 paidWei;
-        uint256 coinRemainder;
         if (poolWei != 0 || coinPool != 0) {
-            (paidWei, , coinRemainder) = _runJackpot(
+            (paidWei, , ) = _runJackpot(
                 lvl,
                 poolWei,
                 coinPool,
@@ -97,47 +96,6 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
                 0,
                 0
             );
-        }
-
-        if (coinRemainder != 0) {
-            address[] memory topBettors = coinContract.getLeaderboardAddresses(2);
-            address thirdFlip = topBettors.length > 2 ? topBettors[2] : address(0);
-            address fourthFlip = topBettors.length > 3 ? topBettors[3] : address(0);
-            uint256 biggestShare = coinRemainder / 2;
-            uint256 secondaryShare = coinRemainder / 4;
-            uint256 bountyShare = coinRemainder - biggestShare - secondaryShare;
-            uint256 bountyOverflow;
-
-            if (biggestShare != 0) {
-                if (biggestFlip != address(0)) {
-                    coinContract.bonusCoinflip(biggestFlip, biggestShare, true);
-                } else {
-                    bountyOverflow += biggestShare;
-                }
-            }
-
-            if (secondaryShare != 0) {
-                address candidate;
-                if (thirdFlip != address(0) && fourthFlip != address(0)) {
-                    uint256 selector = uint256(keccak256(abi.encode(entropyWord, lvl, jackpotCounter)));
-                    candidate = (selector & 1) == 0 ? thirdFlip : fourthFlip;
-                } else if (thirdFlip != address(0)) {
-                    candidate = thirdFlip;
-                } else if (fourthFlip != address(0)) {
-                    candidate = fourthFlip;
-                }
-
-                if (candidate != address(0)) {
-                    coinContract.bonusCoinflip(candidate, secondaryShare, true);
-                } else {
-                    bountyOverflow += secondaryShare;
-                }
-            }
-
-            bountyOverflow += bountyShare;
-            if (bountyOverflow != 0) {
-                coinContract.addToBounty(bountyOverflow);
-            }
         }
 
         coinContract.resetCoinflipLeaderboard();
@@ -402,7 +360,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
             );
         }
 
-        coinRemainder = coinPool > totalPaidCoin ? coinPool - totalPaidCoin : 0;
+        coinRemainder = 0;
     }
 
     function _handleDailyJackpot(
@@ -529,9 +487,8 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
     ) private returns (uint256 paidEth) {
         if (futureEthPool == 0 && dailyCoinPool == 0) return 0;
 
-        uint256 coinRemainder;
         uint256 nextEntropy = _entropyStep(entropyWord) ^ (uint256(nextLevel) << 192);
-        (paidEth, , coinRemainder) = _runJackpot(
+        (paidEth, , ) = _runJackpot(
             nextLevel,
             futureEthPool,
             dailyCoinPool,
@@ -544,31 +501,6 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
             0,
             0
         );
-
-        if (coinRemainder != 0) {
-            bool distributedRemainder;
-            for (uint8 traitIdx; traitIdx < 4 && !distributedRemainder; ) {
-                address[] memory fallbackWinners = _randTraitTicket(
-                    traitPurgeTicket[nextLevel],
-                    entropyWord,
-                    _traitFromPacked(winningTraitsPacked, traitIdx),
-                    1,
-                    uint8(240 + traitIdx)
-                );
-                if (fallbackWinners.length != 0) {
-                    address candidate = fallbackWinners[0];
-                    if (_creditJackpot(coinContract, true, candidate, coinRemainder)) {
-                        distributedRemainder = true;
-                    }
-                }
-                unchecked {
-                    ++traitIdx;
-                }
-            }
-            if (!distributedRemainder) {
-                coinContract.addToBounty(coinRemainder);
-            }
-        }
     }
 
     function _runJackpotEth(
