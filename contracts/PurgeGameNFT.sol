@@ -1197,13 +1197,20 @@ contract PurgeGameNFT {
         uint256 currentNumberBurned = (currentPackedData >> _BITPOS_NUMBER_BURNED) & _BITMASK_ADDRESS_DATA_ENTRY;
         uint256 incrementAmount = burnDelta >> _BITPOS_NUMBER_BURNED;
 
+        uint256 currentBalance = currentPackedData & _BITMASK_ADDRESS_DATA_ENTRY;
+        if (incrementAmount > currentBalance) revert E();
+        uint256 newBalance = currentBalance - incrementAmount;
+
         uint256 newNumberBurned = currentNumberBurned + incrementAmount;
         if (newNumberBurned < currentNumberBurned || newNumberBurned > _BITMASK_ADDRESS_DATA_ENTRY) {
             revert E(); // Or a more specific error
         }
 
-        currentPackedData = (currentPackedData & ~(_BITMASK_ADDRESS_DATA_ENTRY << _BITPOS_NUMBER_BURNED)); // Clear old burned count
-        currentPackedData |= (newNumberBurned << _BITPOS_NUMBER_BURNED); // Set new burned count
+        currentPackedData =
+            (currentPackedData &
+                ~(_BITMASK_ADDRESS_DATA_ENTRY | (_BITMASK_ADDRESS_DATA_ENTRY << _BITPOS_NUMBER_BURNED))) |
+            newBalance |
+            (newNumberBurned << _BITPOS_NUMBER_BURNED);
 
         uint24 currentLevel = game.level();
 
