@@ -313,16 +313,22 @@ contract PurgeGame is PurgeGameStorage {
                 uint32 lastEthDay = uint32((mintData >> ETH_DAY_SHIFT) & MINT_MASK_32);
                 if ((lastEthDay < minAllowedDay || ((lastEthDay > currentDay) && cap == 0))) revert MustMintToday();
             }
+
+            // Allow dormant cleanup bounty even before the daily gate unlocks. If no work is done,
+            // we continue to normal gating and will revert via rngAndTimeGate when not time yet.
+            if (_gameState == 1) {
+                (, bool dormantWorked) = nft.processDormant(cap);
+                if (dormantWorked) {
+                    break;
+                }
+            }
+
             uint256 rngWord = rngAndTimeGate(day);
             if (rngWord == 1) {
                 break;
             }
             // --- State 1 - Pregame ---
             if (_gameState == 1) {
-                (, bool dormantWorked) = nft.processDormant(cap);
-                if (dormantWorked) {
-                    break;
-                }
                 _runEndgameModule(lvl, cap, day, rngWord); // handles payouts, wipes, endgame dist, and jackpots
                 if (!firstEarlyJackpotPaid && pendingEndLevel.level == 0) {
                     payDailyJackpot(false, level, rngWord);
