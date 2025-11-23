@@ -91,7 +91,7 @@ contract PurgeGame is PurgeGameStorage {
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
     uint8 private constant EARLY_PURGE_UNLOCK_PERCENT = 30; // 30% early-purge threshold gate
     uint256 private constant COIN_BASE_UNIT = 1_000_000; // 1 PURGED (6 decimals)
-    uint256 private constant LUCK_PER_LINK = 220 * COIN_BASE_UNIT; // flip credit per LINK before multiplier
+    uint16 private constant LUCK_PER_LINK_PERCENT = 22; // flip credit per LINK before multiplier (as % of priceCoin)
     uint32 private constant VRF_CALLBACK_GAS_LIMIT = 200_000;
     uint16 private constant VRF_REQUEST_CONFIRMATIONS = 10;
 
@@ -813,6 +813,7 @@ contract PurgeGame is PurgeGameStorage {
         if (coinMint) {
             data = _applyMintDay(prevData, day, COIN_DAY_SHIFT, MINT_MASK_32, COIN_DAY_STREAK_SHIFT, MINT_MASK_20);
         } else {
+            uint256 priceCoinLocal = priceCoin;
             uint24 prevLevel = uint24((prevData >> ETH_LAST_LEVEL_SHIFT) & MINT_MASK_24);
             uint24 total = uint24((prevData >> ETH_LEVEL_COUNT_SHIFT) & MINT_MASK_24);
             uint24 streak = uint24((prevData >> ETH_LEVEL_STREAK_SHIFT) & MINT_MASK_24);
@@ -846,16 +847,17 @@ contract PurgeGame is PurgeGameStorage {
             data = _setPacked(data, ETH_LEVEL_COUNT_SHIFT, MINT_MASK_24, total);
             data = _setPacked(data, ETH_LEVEL_STREAK_SHIFT, MINT_MASK_24, streak);
 
+            uint256 rewardUnit = priceCoinLocal / 10;
             uint256 streakReward;
             if (streak >= 2) {
                 uint256 capped = streak >= 61 ? 60 : uint256(streak - 1);
-                streakReward = capped * 100 * COIN_BASE_UNIT;
+                streakReward = capped * rewardUnit;
             }
 
             uint256 totalReward;
             if (total >= 2) {
                 uint256 cappedTotal = total >= 61 ? 60 : uint256(total - 1);
-                totalReward = (cappedTotal * 100 * COIN_BASE_UNIT * 30) / 100;
+                totalReward = (cappedTotal * rewardUnit * 30) / 100;
             }
 
             if (streakReward != 0 || totalReward != 0) {
@@ -865,12 +867,12 @@ contract PurgeGame is PurgeGameStorage {
             }
 
             if (streak == lvl && lvl >= 20 && (lvl % 10 == 0)) {
-                uint256 milestoneBonus = (uint256(lvl) / 2) * 1000 * COIN_BASE_UNIT;
+                uint256 milestoneBonus = (uint256(lvl) / 2) * priceCoinLocal;
                 coinReward += milestoneBonus;
             }
 
             if (total >= 20 && (total % 10 == 0)) {
-                uint256 totalMilestone = (uint256(total) / 2) * 1000 * COIN_BASE_UNIT;
+                uint256 totalMilestone = (uint256(total) / 2) * priceCoinLocal;
                 coinReward += (totalMilestone * 30) / 100;
             }
         }
@@ -1165,7 +1167,8 @@ contract PurgeGame is PurgeGameStorage {
         (uint96 bal, , , , ) = vrfCoordinator.getSubscription(vrfSubscriptionId);
         uint16 mult = _tierMultPermille(uint256(bal));
         if (mult == 0) return;
-        uint256 baseCredit = (amount * LUCK_PER_LINK) / 1 ether;
+        uint256 luckPerLink = (priceCoin * LUCK_PER_LINK_PERCENT) / 100;
+        uint256 baseCredit = (amount * luckPerLink) / 1 ether;
         uint256 credit = (baseCredit * mult) / 1000;
         if (credit != 0) {
             coin.bonusCoinflip(from, credit, true);

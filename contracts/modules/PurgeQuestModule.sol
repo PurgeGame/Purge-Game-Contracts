@@ -850,27 +850,26 @@ contract PurgeQuestModule is IPurgeQuestModule {
         return (rewardShare, isHard, quest.questType, newStreak, true);
     }
 
-    function _questBaseReward(uint32 streak, uint8 questFlags)
-        private
-        pure
-        returns (uint256 totalReward)
-    {
-        totalReward = 200 * MILLION;
+    function _questBaseReward(uint32 streak, uint8 questFlags) private view returns (uint256 totalReward) {
+        uint256 priceUnit = questGame.coinPriceUnit();
+        totalReward = priceUnit / 5; // 20% of mint coin cost
         uint8 tier = _questTier(streak);
         if ((questFlags & QUEST_FLAG_HIGH_DIFFICULTY) != 0 && streak >= QUEST_TIER_STREAK_SPAN) {
-            totalReward += 50 * MILLION;
+            totalReward += priceUnit / 20; // +5% for high difficulty
         }
         if ((questFlags & QUEST_FLAG_VERY_HIGH_DIFFICULTY) != 0 && tier >= 4) {
-            totalReward += 50 * MILLION;
+            totalReward += priceUnit / 20; // +5% for very high difficulty in upper tiers
         }
     }
 
-    function _questStreakBonus(uint32 streak) private pure returns (uint256 bonusReward) {
+    function _questStreakBonus(uint32 streak) private view returns (uint256 bonusReward) {
         if (streak < 5) return 0;
         if (streak != 5 && (streak % 10) != 0) return 0;
-        uint256 bonus = uint256(streak) * 100;
-        if (bonus > 3000) bonus = 3000;
-        return bonus * MILLION;
+        uint256 priceUnit = questGame.coinPriceUnit();
+        uint256 bonus = uint256(streak) * (priceUnit / 10); // 10% of mint coin cost per streak unit
+        uint256 maxBonus = priceUnit * 3; // Cap at 3x mint coin cost
+        if (bonus > maxBonus) bonus = maxBonus;
+        return bonus;
     }
 
     function _stakeQuestMaskAndRisk(uint256 entropy) private pure returns (uint8 mask, uint8 risk) {

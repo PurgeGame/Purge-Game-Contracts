@@ -91,6 +91,7 @@ interface IPurgeGameMinimal {
     function gameState() external view returns (uint8);
     function rngLocked() external view returns (bool);
     function currentRngWord() external view returns (uint256);
+    function coinPriceUnit() external view returns (uint256);
 }
 
 interface IPurgecoinMinimal {
@@ -201,6 +202,9 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     uint32 private constant COIN_DRIP_STEPS = 10;
     uint256 private constant COIN_BASE_UNIT = 1_000_000;
     uint256 private constant COIN_EMISSION_UNIT = 1_000 * COIN_BASE_UNIT;
+    uint8 private constant BAF_LEVEL_REWARD_DIVISOR = 10; // priceCoin / 10
+    uint8 private constant BAF_DAILY_CAP_MULTIPLIER = 2; // priceCoin * 2
+    uint16 private constant PURGE_TROPHY_REWARD_MULTIPLIER = 100; // priceCoin * 100
     uint24 private constant DECIMATOR_SPECIAL_LEVEL = 100;
     uint256 private constant TROPHY_FLAG_MAP = uint256(1) << 200;
     uint256 private constant TROPHY_FLAG_AFFILIATE = uint256(1) << 201;
@@ -228,8 +232,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     uint8 private constant AFFILIATE_STAKE_MAX = 20;
     uint8 private constant STAKE_TROPHY_MAX = 20;
     uint8 private constant EXTERMINATOR_STAKE_COIN_CAP = 25;
-    uint256 private constant BAF_LEVEL_REWARD = 100 * COIN_BASE_UNIT;
-    uint256 private constant BAF_DAILY_CAP = 2_000 * COIN_BASE_UNIT;
 
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
     uint16 private constant DECIMATOR_TRAIT_SENTINEL = 0xFFFB;
@@ -295,6 +297,22 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     // ---------------------------------------------------------------------
     // Internal helpers
     // ---------------------------------------------------------------------
+
+    function _priceCoinUnit() private view returns (uint256) {
+        return game.coinPriceUnit();
+    }
+
+    function _bafLevelReward() private view returns (uint256) {
+        return _priceCoinUnit() / BAF_LEVEL_REWARD_DIVISOR;
+    }
+
+    function _bafDailyCap() private view returns (uint256) {
+        return _priceCoinUnit() * BAF_DAILY_CAP_MULTIPLIER;
+    }
+
+    function _purgeTrophyReward() private view returns (uint256) {
+        return _priceCoinUnit() * PURGE_TROPHY_REWARD_MULTIPLIER;
+    }
 
     function _placeholderTokenId(uint24 level, uint8 kind) private view returns (uint256) {
         (uint256 previousBase, uint256 currentBase) = nft.getBasePointers();
@@ -1220,8 +1238,10 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         uint256 pending = state.pending;
         if (pending == 0) revert ClaimNotReady();
 
-        uint256 dailyRemaining = BAF_DAILY_CAP - uint256(state.claimedToday);
-        if (dailyRemaining == 0) revert ClaimNotReady();
+        uint256 dailyCap = _bafDailyCap();
+        uint256 claimedToday = uint256(state.claimedToday);
+        if (claimedToday >= dailyCap) revert ClaimNotReady();
+        uint256 dailyRemaining = dailyCap - claimedToday;
 
         uint256 payout = pending;
         if (payout > dailyRemaining) {
@@ -1290,7 +1310,10 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         }
         if (state.count != 0 && currentLevel > state.lastLevel) {
             uint256 delta = uint256(currentLevel - state.lastLevel) * uint256(state.count);
-            state.pending = state.pending + (delta * BAF_LEVEL_REWARD);
+            uint256 rewardPerLevel = _bafLevelReward();
+            if (rewardPerLevel != 0) {
+                state.pending = state.pending + (delta * rewardPerLevel);
+            }
         }
         state.lastLevel = currentLevel;
     }
@@ -1494,7 +1517,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         uint8 kind = _kindFromInfo(info);
         _eraseTrophy(tokenId, kind, true);
 
-        coin.bonusCoinflip(sender, 100_000 * COIN_BASE_UNIT, false);
+        coin.bonusCoinflip(sender, _purgeTrophyReward(), false);
     }
 
     function stakedTrophySample(uint256 rngSeed) external view override returns (address owner) {
