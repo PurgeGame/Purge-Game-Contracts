@@ -295,6 +295,9 @@ contract PurgeGameNFT {
     }
 
     function tokenURI(uint256 tokenId) external view returns (string memory) {
+        // Revert for nonexistent or burned tokens (keeps ERC721-consistent surface for indexers).
+        _packedOwnershipOf(tokenId);
+
         uint256 info = address(trophyModule) == address(0) ? 0 : trophyModule.trophyData(tokenId);
         if (info != 0) {
             uint32[4] memory extras;
