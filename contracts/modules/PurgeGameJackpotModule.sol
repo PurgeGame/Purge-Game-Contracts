@@ -80,7 +80,10 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
             }
         }
 
-        (uint256 coinPool, ) = coinContract.prepareCoinJackpot();
+        uint256 coinPool;
+        if (purchasePhaseActive) {
+            (coinPool, ) = coinContract.prepareCoinJackpot();
+        }
         uint256 paidWei;
         if (poolWei != 0 || coinPool != 0) {
             (paidWei, , ) = _runJackpot(
