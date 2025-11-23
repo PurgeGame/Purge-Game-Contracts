@@ -61,7 +61,7 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
             bool bafPending = prevLevel != 0 && (prevLevel % 20) == 0 && (prevLevel % 100) != 0;
             bool gateCoinflip = !bafPending && (_phase >= 3 || (lvl % 20) != 0);
             if (gateCoinflip && coinContract.coinflipWorkPending(lvl)) {
-                coinContract.processCoinflipPayouts(lvl, cap, false, rngWord, day);
+                coinContract.processCoinflipPayouts(lvl, cap, false, rngWord, day, priceCoin);
                 return;
             }
             phase = 0;

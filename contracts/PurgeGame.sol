@@ -345,12 +345,12 @@ contract PurgeGame is PurgeGameStorage {
                     bool flipsPending = coinContract.coinflipWorkPending(lvl);
                     if (_phase == 2 && prizePool >= lastPrizePool) {
                         if (flipsPending) {
-                            coinContract.processCoinflipPayouts(lvl, cap, true, rngWord, day);
+                            coinContract.processCoinflipPayouts(lvl, cap, true, rngWord, day, priceCoin);
                             break;
                         }
                         advanceToAirdrop = true;
                     } else if (flipsPending) {
-                        coinContract.processCoinflipPayouts(lvl, cap, false, rngWord, day);
+                        coinContract.processCoinflipPayouts(lvl, cap, false, rngWord, day, priceCoin);
                         break;
                     }
 
@@ -383,7 +383,7 @@ contract PurgeGame is PurgeGameStorage {
 
                 if (_phase == 4) {
                     if (coinContract.coinflipWorkPending(lvl)) {
-                        coinContract.processCoinflipPayouts(lvl, cap, false, rngWord, day);
+                        coinContract.processCoinflipPayouts(lvl, cap, false, rngWord, day, priceCoin);
                         break;
                     }
                     uint256 mapEffectiveWei = _calcPrizePoolForJackpot(lvl, rngWord);
@@ -439,7 +439,7 @@ contract PurgeGame is PurgeGameStorage {
                 // Purge begins only after phase 6 is latched during purchase finalization.
                 uint24 coinflipLevel = uint24(lvl + (jackpotCounter >= 9 ? 1 : 0));
                 if (coinContract.coinflipWorkPending(coinflipLevel)) {
-                    coinContract.processCoinflipPayouts(coinflipLevel, cap, false, rngWord, day);
+                    coinContract.processCoinflipPayouts(coinflipLevel, cap, false, rngWord, day, priceCoin);
                     break;
                 }
 
@@ -459,7 +459,7 @@ contract PurgeGame is PurgeGameStorage {
             // --- State 0 ---
             if (_gameState == 0) {
                 if (coinContract.coinflipWorkPending(lvl)) {
-                    coinContract.processCoinflipPayouts(lvl, cap, false, rngWord, day);
+                    coinContract.processCoinflipPayouts(lvl, cap, false, rngWord, day, priceCoin);
                     break;
                 }
             }
@@ -765,11 +765,12 @@ contract PurgeGame is PurgeGameStorage {
 
         uint256 priceWei = price;
         if (priceWei == 0) revert E();
+        uint256 priceCoinLocal = priceCoin;
 
         if (!mapPurchase) {
             uint256 qty = available / priceWei;
             if (qty == 0) revert E();
-            nft.purchaseWithClaimable(buyer, qty, priceWei);
+            nft.purchaseWithClaimable(buyer, qty, priceWei, priceCoinLocal);
         } else {
             uint24 lvl = level;
             if (gameState == 3) {
@@ -780,7 +781,7 @@ contract PurgeGame is PurgeGameStorage {
             uint256 qty = (available * 4) / priceWei;
             uint32 minQty = _mapMinimumQuantity(lvl);
             if (qty < minQty) revert E();
-            nft.mintAndPurgeWithClaimable(buyer, qty, priceWei);
+            nft.mintAndPurgeWithClaimable(buyer, qty, priceWei, priceCoinLocal);
         }
     }
 

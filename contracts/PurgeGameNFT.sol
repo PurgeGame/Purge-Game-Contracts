@@ -45,8 +45,8 @@ interface IPurgeGameNFT {
     function tokensOwed(address player) external view returns (uint32);
     function processDormant(uint32 maxCount) external returns (bool finished, bool worked);
     function clearPlaceholderPadding(uint256 startTokenId, uint256 endTokenId) external;
-    function purchaseWithClaimable(address buyer, uint256 quantity, uint256 priceWei) external;
-    function mintAndPurgeWithClaimable(address buyer, uint256 quantity, uint256 priceWei) external;
+    function purchaseWithClaimable(address buyer, uint256 quantity, uint256 priceWei, uint256 priceCoinUnit) external;
+    function mintAndPurgeWithClaimable(address buyer, uint256 quantity, uint256 priceWei, uint256 priceCoinUnit) external;
 }
 
 contract PurgeGameNFT {
@@ -306,11 +306,16 @@ contract PurgeGameNFT {
     // ---------------------------------------------------------------------
 
     function purchase(uint256 quantity, bool payInCoin, bytes32 affiliateCode) external payable {
-        _purchase(msg.sender, quantity, payInCoin, affiliateCode, false, 0);
+        _purchase(msg.sender, quantity, payInCoin, affiliateCode, false, 0, 0);
     }
 
-    function purchaseWithClaimable(address buyer, uint256 quantity, uint256 priceWei) external onlyGame {
-        _purchase(buyer, quantity, false, bytes32(0), true, priceWei);
+    function purchaseWithClaimable(
+        address buyer,
+        uint256 quantity,
+        uint256 priceWei,
+        uint256 priceCoinUnit
+    ) external onlyGame {
+        _purchase(buyer, quantity, false, bytes32(0), true, priceWei, priceCoinUnit);
     }
 
     function _purchase(
@@ -319,7 +324,8 @@ contract PurgeGameNFT {
         bool payInCoin,
         bytes32 affiliateCode,
         bool useClaimable,
-        uint256 priceWeiHint
+        uint256 priceWeiHint,
+        uint256 priceCoinUnitHint
     ) private {
         if (quantity == 0 || quantity > type(uint32).max) revert InvalidQuantity();
 
@@ -332,7 +338,7 @@ contract PurgeGameNFT {
         if (game.rngLocked()) revert RngNotReady();
 
         uint256 priceWei = priceWeiHint == 0 ? game.mintPrice() : priceWeiHint;
-        uint256 priceCoinUnit = game.coinPriceUnit();
+        uint256 priceCoinUnit = priceCoinUnitHint == 0 ? game.coinPriceUnit() : priceCoinUnitHint;
         _enforceCenturyLuckbox(buyer, targetLevel, priceCoinUnit);
 
         uint256 bonus;
@@ -382,15 +388,16 @@ contract PurgeGameNFT {
     }
 
     function mintAndPurge(uint256 quantity, bool payInCoin, bytes32 affiliateCode) external payable {
-        _mintAndPurge(msg.sender, quantity, payInCoin, affiliateCode, false, 0);
+        _mintAndPurge(msg.sender, quantity, payInCoin, affiliateCode, false, 0, 0);
     }
 
     function mintAndPurgeWithClaimable(
         address buyer,
         uint256 quantity,
-        uint256 priceWei
+        uint256 priceWei,
+        uint256 priceCoinUnit
     ) external onlyGame {
-        _mintAndPurge(buyer, quantity, false, bytes32(0), true, priceWei);
+        _mintAndPurge(buyer, quantity, false, bytes32(0), true, priceWei, priceCoinUnit);
     }
 
     function _mintAndPurge(
@@ -399,9 +406,10 @@ contract PurgeGameNFT {
         bool payInCoin,
         bytes32 affiliateCode,
         bool useClaimable,
-        uint256 priceWeiHint
+        uint256 priceWeiHint,
+        uint256 priceCoinUnitHint
     ) private {
-        uint256 priceUnit = game.coinPriceUnit();
+        uint256 priceUnit = priceCoinUnitHint == 0 ? game.coinPriceUnit() : priceCoinUnitHint;
         uint8 phase = game.currentPhase();
         uint8 state = game.gameState();
         uint24 lvl = game.level();

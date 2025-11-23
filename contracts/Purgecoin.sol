@@ -947,7 +947,8 @@ contract Purgecoin is PurgeCoinStorage {
         uint32 cap,
         bool bonusFlip,
         uint256 rngWord,
-        uint48 epoch
+        uint48 epoch,
+        uint256 priceCoinUnit
     ) external onlyPurgeGameContract returns (bool finished) {
         uint256 word = rngWord;
         uint16 rewardPercent = uint16(coinflipRewardPercent);
@@ -1148,9 +1149,8 @@ contract Purgecoin is PurgeCoinStorage {
                 lastBafFlipLevel = level;
             }
 
-            uint256 priceUnit = purgeGame.coinPriceUnit();
-            if (priceUnit != 0) {
-                _addToBounty(priceUnit);
+            if (priceCoinUnit != 0) {
+                _addToBounty(priceCoinUnit);
             }
 
             emit CoinflipFinished(win);

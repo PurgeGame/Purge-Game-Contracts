@@ -11,7 +11,8 @@ interface IPurgeCoinModule {
         uint32 cap,
         bool bonusFlip,
         uint256 rngWord,
-        uint48 epoch
+        uint48 epoch,
+        uint256 priceCoinUnit
     ) external returns (bool);
 
     function runExternalJackpot(

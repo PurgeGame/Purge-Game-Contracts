@@ -31,7 +31,8 @@ contract JackpotCoinModuleMock is IPurgeCoinModule {
         uint32,
         bool,
         uint256,
-        uint48
+        uint48,
+        uint256
     ) external pure override returns (bool) {
         return false;
     }
