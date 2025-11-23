@@ -100,7 +100,7 @@ contract Purgecoin is PurgeCoinStorage {
     uint8 private constant MAX_RISK = 11; // staking risk 1..11
     uint256 private constant BUCKET_SIZE = 1500;
     uint16 private constant COINFLIP_EXTRA_MIN_PERCENT = 80;
-    uint16 private constant COINFLIP_EXTRA_RANGE = 35;
+    uint16 private constant COINFLIP_EXTRA_RANGE = 36;
     uint16 private constant BPS_DENOMINATOR = 10_000;
     uint32 private constant QUEST_TIER_BONUS_SPAN = 7;
     uint8 private constant QUEST_TIER_BONUS_MAX = 10;
