@@ -181,7 +181,8 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         IPurgeCoinModule coinContract
     ) external returns (uint256 effectiveWei) {
         uint256 totalWei = carryOver + prizePool;
-        uint256 burnieAmount = (totalWei * 5 * priceCoin) / 1 ether;
+        // Burn 10% of the ETH pool, denominated in PURGE using the current mint conversion (priceCoin / price).
+        uint256 burnieAmount = (totalWei * priceCoin) / (10 * price);
         coinContract.burnie(burnieAmount);
 
         uint256 savePctTimes2 = _mapCarryoverPercent(lvl, rngWord);
@@ -375,9 +376,18 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         uint256 entropyWord = _scrambleJackpotEntropy(randWord, jackpotCounter);
 
         uint32 winningTraitsPacked = _packWinningTraits(_getWinningTraits(entropyWord, dailyPurgeCount));
-        uint8 remainingJackpots = JACKPOT_LEVEL_CAP > jackpotCounter ? uint8(JACKPOT_LEVEL_CAP - jackpotCounter) : uint8(1);
+        uint8 remainingJackpots = JACKPOT_LEVEL_CAP > jackpotCounter
+            ? uint8(JACKPOT_LEVEL_CAP - jackpotCounter)
+            : uint8(1);
         uint256 currentEntropy = entropyWord ^ (uint256(lvl) << 192);
-        _payCurrentLevelDailyJackpot(lvl, currentEntropy, winningTraitsPacked, remainingJackpots, coinContract, trophiesContract);
+        _payCurrentLevelDailyJackpot(
+            lvl,
+            currentEntropy,
+            winningTraitsPacked,
+            remainingJackpots,
+            coinContract,
+            trophiesContract
+        );
 
         uint24 nextLevel = lvl + 1;
         (uint256 dailyCoinPool, ) = coinContract.prepareCoinJackpot();
@@ -698,7 +708,6 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
                 ++i;
             }
         }
-
     }
 
     function _scrambleJackpotEntropy(uint256 entropy, uint256 salt) private pure returns (uint256) {
@@ -718,9 +727,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
 
     function _rollQuestForJackpot(IPurgeCoinModule coinContract, uint256 entropySource, uint24 questLevel) private {
         uint48 questDay = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
-        uint256 questEntropy = uint256(
-            keccak256(abi.encode(entropySource, questLevel, jackpotCounter, "daily-quest"))
-        );
+        uint256 questEntropy = uint256(keccak256(abi.encode(entropySource, questLevel, jackpotCounter, "daily-quest")));
         coinContract.rollDailyQuest(questDay, questEntropy);
     }
 
@@ -740,11 +747,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
     }
 
     function _packWinningTraits(uint8[4] memory traits) private pure returns (uint32 packed) {
-        packed =
-            uint32(traits[0]) |
-            (uint32(traits[1]) << 8) |
-            (uint32(traits[2]) << 16) |
-            (uint32(traits[3]) << 24);
+        packed = uint32(traits[0]) | (uint32(traits[1]) << 8) | (uint32(traits[2]) << 16) | (uint32(traits[3]) << 24);
     }
 
     function _unpackWinningTraits(uint32 packed) private pure returns (uint8[4] memory traits) {
@@ -853,5 +856,4 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         if (pct > type(uint8).max) return type(uint8).max;
         return uint8(pct);
     }
-
 }
