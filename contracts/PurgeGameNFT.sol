@@ -783,9 +783,13 @@ contract PurgeGameNFT {
 
         if (tokenId < _currentIndex) {
             uint256 packed;
-            while ((packed = _packedOwnerships[tokenId]) == 0) {
+            uint256 curr = tokenId;
+            while ((packed = _packedOwnerships[curr]) == 0) {
+                if (curr == 0) {
+                    return false;
+                }
                 unchecked {
-                    --tokenId;
+                    --curr;
                 }
             }
             return packed & _BITMASK_BURNED == 0;
@@ -1324,6 +1328,11 @@ contract PurgeGameNFT {
 
     function _moduleTransfer(address from, address to, uint256 tokenId) private {
         uint256 prevOwnershipPacked = _packedOwnershipOf(tokenId);
+        if (to == address(0)) revert Zero();
+        unchecked {
+            --_packedAddressData[from];
+            ++_packedAddressData[to];
+        }
         uint256 preserved = prevOwnershipPacked &
             (_BITMASK_TROPHY_KIND | _BITMASK_TROPHY_STAKED | _BITMASK_TROPHY_ACTIVE);
         _packedOwnerships[tokenId] = _packOwnershipData(to, preserved | _BITMASK_NEXT_INITIALIZED);
