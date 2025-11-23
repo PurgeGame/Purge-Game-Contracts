@@ -136,6 +136,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         bool targetExterminator;
         bool targetStake;
         bool targetBaf;
+        bool targetDec;
         bool pureExterminatorTrophy;
         uint24 trophyBaseLevel;
         uint24 trophyLevelValue;
@@ -466,6 +467,10 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
                 ++i;
             }
         }
+        uint8 cap = _exterminatorStakeDiscountCap(exterminatorStakeCount_[player]);
+        if (best > cap) {
+            best = cap;
+        }
         exterminatorStakeBonusPct_[player] = best;
     }
 
@@ -473,18 +478,14 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         if (count == 0) return 0;
         if (count == 1) return 7;
         if (count == 2) return 12;
-        if (count == 3) return 15;
-        if (count == 4) return 20;
-        return 25;
+        return 15;
     }
 
     function _exterminatorStakeDiscountCap(uint8 count) private pure returns (uint8) {
         if (count == 0) return 0;
         if (count == 1) return 5;
-        if (count == 2) return 10;
-        if (count == 3) return 15;
-        if (count == 4) return 20;
-        return 25;
+        if (count == 2) return 8;
+        return 10;
     }
 
     function _stakeBonusCap(uint8 count) private pure returns (uint8) {
@@ -601,6 +602,11 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             discountPct = 0;
             data.kind = 5;
             data.count = current;
+        } else if (params.targetDec) {
+            // Decimator trophies stake purely to enable drip claims; no discounts or counters.
+            discountPct = 0;
+            data.kind = 6;
+            data.count = 0;
         } else {
             uint8 current = stakeStakeCount_[params.player];
             if (current >= STAKE_TROPHY_MAX) revert StakeInvalid();
@@ -695,6 +701,10 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             state.count = current;
             data.kind = 5;
             data.count = current;
+        } else if (params.targetDec) {
+            // Decimator trophies have no counters or discounts; just remove stake state.
+            data.kind = 6;
+            data.count = 0;
         } else {
             uint8 current = stakeStakeCount_[params.player];
             if (current == 0) revert StakeInvalid();
@@ -1384,8 +1394,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
 
         uint8 storedKind = _kindFromInfo(info);
         bool isBafTrophy = (info & TROPHY_FLAG_BAF) != 0;
-        bool isDecTrophy = (info & TROPHY_FLAG_DECIMATOR) != 0;
-        if (isDecTrophy) revert StakeInvalid();
 
         StakeParams memory params;
         params.player = sender;
@@ -1395,6 +1403,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         params.targetAffiliate = storedKind == PURGE_TROPHY_KIND_AFFILIATE;
         params.targetBaf = isBafTrophy;
         params.targetExterminator = storedKind == PURGE_TROPHY_KIND_LEVEL && !isBafTrophy;
+        params.targetDec = storedKind == PURGE_TROPHY_KIND_DECIMATOR;
 
         if (stake && sender.code.length != 0) revert StakeInvalid();
 
