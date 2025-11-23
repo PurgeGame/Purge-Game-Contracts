@@ -1502,16 +1502,22 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
 
     function purgeTrophy(uint256 tokenId) external override {
         if (_isTrophyStaked(tokenId)) revert TrophyStakeViolation(_STAKE_ERR_TRANSFER_BLOCKED);
-        if (trophyData_[tokenId] == 0) revert InvalidToken();
+        uint256 info = trophyData_[tokenId];
+        if (info == 0) revert InvalidToken();
 
         address sender = msg.sender;
         if (address(uint160(nft.packedOwnershipOf(tokenId))) != sender) revert Unauthorized();
 
         nft.clearApproval(tokenId);
 
-        uint256 info = trophyData_[tokenId];
+        uint256 owed = info & TROPHY_OWED_MASK;
         uint8 kind = _kindFromInfo(info);
         _eraseTrophy(tokenId, kind, true);
+
+        if (owed != 0) {
+            (bool ok, ) = payable(gameAddress).call{value: owed}("");
+            if (!ok) revert TransferFailed();
+        }
 
         coin.bonusCoinflip(sender, _purgeTrophyReward(), false);
     }
