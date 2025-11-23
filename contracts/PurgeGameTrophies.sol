@@ -201,7 +201,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     // ---------------------------------------------------------------------
     uint32 private constant COIN_DRIP_STEPS = 10;
     uint256 private constant COIN_BASE_UNIT = 1_000_000;
-    uint256 private constant COIN_EMISSION_UNIT = 1_000 * COIN_BASE_UNIT;
     uint8 private constant BAF_LEVEL_REWARD_DIVISOR = 10; // priceCoin / 10
     uint8 private constant BAF_DAILY_CAP_MULTIPLIER = 2; // priceCoin * 2
     uint16 private constant PURGE_TROPHY_REWARD_MULTIPLIER = 100; // priceCoin * 100
@@ -1200,7 +1199,8 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             uint256 prefixEnd = _getDecimatorCumulativeExtra(offsetEnd);
             uint256 prefixStart = offsetStart == 0 ? 0 : _getDecimatorCumulativeExtra(offsetStart - 1);
 
-            ctx.coinAmount = COIN_EMISSION_UNIT * (span + (prefixEnd - prefixStart));
+            uint256 emissionUnit = _priceCoinUnit();
+            ctx.coinAmount = emissionUnit * (span + (prefixEnd - prefixStart));
             ctx.coinClaimed = true;
             ctx.updatedLast = ctx.currentLevel;
         }

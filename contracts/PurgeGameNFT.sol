@@ -142,10 +142,7 @@ contract PurgeGameNFT {
     uint32 private constant MINT_AIRDROP_PLAYER_BATCH_SIZE = 210; // Max unique recipients per airdrop batch
     uint32 private constant MINT_AIRDROP_TOKEN_CAP = 3_000; // Max tokens distributed per airdrop batch
 
-    uint32 private constant COIN_DRIP_STEPS = 10; // Base vesting window before coin drip starts
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
-    uint256 private constant COIN_BASE_UNIT = 1_000_000; // 1 PURGED (6 decimals)
-    uint256 private constant COIN_EMISSION_UNIT = 1_000 * COIN_BASE_UNIT; // 1000 PURGED (6 decimals)
     uint256 private constant CLAIMABLE_BONUS_DIVISOR = 10; // 10% of token coin cost
     uint256 private constant CLAIMABLE_MAP_BONUS_DIVISOR = 40; // 10% of per-map coin cost (priceUnit/4)
     uint256 private constant TROPHY_FLAG_MAP = uint256(1) << 200;
