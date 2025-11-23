@@ -538,7 +538,6 @@ contract PurgeGameNFT {
             coin.notifyQuestMint(payer, mintedQuantity, true);
         }
 
-        uint256 priceUnit = game.coinPriceUnit();
         // scaledQty tracks fractional mint units (map purchases use quarter-price increments),
         // so normalize by 100 to align affiliate rewards with the effective ETH mints.
         uint256 affiliateBaseUnits = (scaledQty * priceUnit) / 100;
