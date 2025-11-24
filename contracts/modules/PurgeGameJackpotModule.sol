@@ -26,6 +26,17 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
     bytes32 private constant CARRYOVER_BONUS_TAG = keccak256("carryover_bonus");
     bytes32 private constant CARRYOVER_3D6_SALT = keccak256("carryover-3d6");
     bytes32 private constant CARRYOVER_3D4_SALT = keccak256("carryover-3d4");
+    // Sums to 9300 bps (~93% of the post-MAP pool across 10 jackpots), roughly 2x growth from first to last.
+    uint16 private constant DAILY_JACKPOT_BPS_0 = 620;
+    uint16 private constant DAILY_JACKPOT_BPS_1 = 688;
+    uint16 private constant DAILY_JACKPOT_BPS_2 = 757;
+    uint16 private constant DAILY_JACKPOT_BPS_3 = 826;
+    uint16 private constant DAILY_JACKPOT_BPS_4 = 895;
+    uint16 private constant DAILY_JACKPOT_BPS_5 = 964;
+    uint16 private constant DAILY_JACKPOT_BPS_6 = 1033;
+    uint16 private constant DAILY_JACKPOT_BPS_7 = 1102;
+    uint16 private constant DAILY_JACKPOT_BPS_8 = 1171;
+    uint16 private constant DAILY_JACKPOT_BPS_9 = 1244;
     uint256 private constant TROPHY_FLAG_MAP = uint256(1) << 200;
 
     struct JackpotParams {
@@ -93,7 +104,12 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
             if (remainingJackpots == 0) {
                 remainingJackpots = 1;
             }
-            uint256 budget = currentPrizePool / remainingJackpots;
+            uint8 jackpotIndex = jackpotCounter < JACKPOT_LEVEL_CAP ? jackpotCounter : (JACKPOT_LEVEL_CAP - 1);
+            uint256 base = dailyJackpotBase;
+            if (base == 0) {
+                base = currentPrizePool;
+            }
+            uint256 budget = (base * _dailyJackpotBps(jackpotIndex)) / 10_000;
             if (budget != 0 && budget > currentPrizePool) {
                 budget = currentPrizePool;
             }
@@ -250,6 +266,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
 
         lastPrizePool = currentPrizePool;
         currentPrizePool = mainWei;
+        dailyJackpotBase = mainWei;
 
         effectiveWei = mapWei;
     }
@@ -359,6 +376,19 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
 
     function _mapJackpotPercent(uint24 lvl) private pure returns (uint256) {
         return (lvl % 20 == 16) ? 30 : 17;
+    }
+
+    function _dailyJackpotBps(uint8 idx) private pure returns (uint16) {
+        if (idx == 0) return DAILY_JACKPOT_BPS_0;
+        if (idx == 1) return DAILY_JACKPOT_BPS_1;
+        if (idx == 2) return DAILY_JACKPOT_BPS_2;
+        if (idx == 3) return DAILY_JACKPOT_BPS_3;
+        if (idx == 4) return DAILY_JACKPOT_BPS_4;
+        if (idx == 5) return DAILY_JACKPOT_BPS_5;
+        if (idx == 6) return DAILY_JACKPOT_BPS_6;
+        if (idx == 7) return DAILY_JACKPOT_BPS_7;
+        if (idx == 8) return DAILY_JACKPOT_BPS_8;
+        return DAILY_JACKPOT_BPS_9;
     }
 
     function _executeStandardJackpot(
