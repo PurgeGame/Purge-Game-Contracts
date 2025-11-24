@@ -413,7 +413,6 @@ contract PurgeGame is PurgeGameStorage {
                     }
                     uint256 mapEffectiveWei = _calcPrizePoolForJackpot(lvl, rngWord);
                     if (payMapJackpot(lvl, rngWord, mapEffectiveWei)) {
-                        firstPurgeBonusPending = true;
                         phase = 5;
                     }
                     break;
@@ -749,7 +748,6 @@ contract PurgeGame is PurgeGameStorage {
         }
 
         gameState = 1;
-        firstPurgeBonusPending = false;
     }
 
     /// @notice Delegatecall into the endgame module to resolve slow settlement paths.

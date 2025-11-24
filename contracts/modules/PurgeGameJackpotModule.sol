@@ -100,11 +100,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         }
 
         if (isDaily) {
-            bool applyFirstPurgeBonus = firstPurgeBonusPending;
-            if (applyFirstPurgeBonus) {
-                firstPurgeBonusPending = false;
-            }
-            _handleDailyJackpot(lvl, entropyWord, coinContract, trophiesContract, applyFirstPurgeBonus);
+            _handleDailyJackpot(lvl, entropyWord, coinContract, trophiesContract);
         }
 
         if ((randWord & 1) == 1) {
@@ -365,8 +361,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         uint24 lvl,
         uint256 entropyWord,
         IPurgeCoinModule coinContract,
-        IPurgeGameTrophiesModule trophiesContract,
-        bool applyFirstPurgeBonus
+        IPurgeGameTrophiesModule trophiesContract
     ) private {
         uint32 winningTraitsPacked = _packWinningTraits(_getWinningTraits(entropyWord, dailyPurgeCount));
         uint8 remainingJackpots = jackpotCounter >= JACKPOT_LEVEL_CAP
@@ -385,6 +380,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         uint24 nextLevel = lvl + 1;
         uint256 dailyCoinPool = priceCoin * 10;
         uint256 carryBal = carryOver;
+        bool applyFirstPurgeBonus = (jackpotCounter == 0); // first purge-phase jackpot of the level
         uint256 futurePoolBps = applyFirstPurgeBonus ? 300 : 100; // 3% on first purge, else 1%
         if (jackpotCounter == 1) {
             futurePoolBps += 100; // +1% boost on the second daily jackpot

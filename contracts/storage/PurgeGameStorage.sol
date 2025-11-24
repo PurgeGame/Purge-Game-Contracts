@@ -26,7 +26,6 @@ abstract contract PurgeGameStorage {
     uint8 internal jackpotCounter;
     uint8 internal earlyPurgePercent;
     uint8 internal phase;
-    bool internal firstPurgeBonusPending;
     bool internal rngLockedFlag;
     bool internal rngFulfilled = true;
     bool internal traitCountsSeedQueued;
