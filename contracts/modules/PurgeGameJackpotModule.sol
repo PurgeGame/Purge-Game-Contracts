@@ -69,6 +69,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
 
         if (!isDaily) {
             uint256 poolWei;
+            uint256 coinPool = priceCoin * 10;
             if (!coinOnly) {
                 uint256 carryBal = carryOver;
                 uint256 poolBps = boostTrigger ? 200 : 50; // default 0.5%, 2% when EP boost triggers
@@ -79,33 +80,23 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
                 }
             }
 
-            uint256 paidWei;
-            if (poolWei != 0) {
-                JackpotParams memory jp = JackpotParams({
-                    lvl: lvl,
-                    ethPool: poolWei,
-                    coinPool: 0,
-                    mapTrophy: false,
-                    entropy: entropyWord ^ (uint256(lvl) << 192),
-                    winningTraitsPacked: winningTraitsPacked,
-                    traitShareBpsPacked: DAILY_JACKPOT_SHARES_PACKED,
-                    coinContract: coinContract,
-                    trophiesContract: trophiesContract,
-                    mapStakeSiphon: 0,
-                    mapTrophyBonus: 0
-                });
-                (paidWei, ) = _runJackpot(jp);
-            }
-
-            coinContract.resetCoinflipLeaderboard();
-            _rollQuestForJackpot(coinContract, entropyWord, lvl, false);
-
-            uint48 currentDay = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
-            dailyIdx = currentDay;
+            JackpotParams memory jp = JackpotParams({
+                lvl: lvl,
+                ethPool: poolWei,
+                coinPool: coinPool,
+                mapTrophy: false,
+                entropy: entropyWord ^ (uint256(lvl) << 192),
+                winningTraitsPacked: winningTraitsPacked,
+                traitShareBpsPacked: DAILY_JACKPOT_SHARES_PACKED,
+                coinContract: coinContract,
+                trophiesContract: trophiesContract,
+                mapStakeSiphon: 0,
+                mapTrophyBonus: 0
+            });
+            uint256 paidWei = _runJackpot(jp);
 
             uint256 carry = carryOver;
             carryOver = paidWei > carry ? 0 : carry - paidWei;
-            return;
         }
 
         if (isDaily) {
@@ -113,9 +104,14 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
             if (applyFirstPurgeBonus) {
                 firstPurgeBonusPending = false;
             }
-            _handleDailyJackpot(lvl, randWord, coinContract, trophiesContract, applyFirstPurgeBonus);
-            return;
+            _handleDailyJackpot(lvl, entropyWord, coinContract, trophiesContract, applyFirstPurgeBonus);
         }
+
+        if ((randWord & 1) == 1) {
+            coinContract.rewardTopFlipBonus(priceCoin);
+        }
+        coinContract.resetCoinflipLeaderboard();
+        _rollQuestForJackpot(coinContract, entropyWord, false);
     }
 
     function payMapJackpot(
@@ -165,7 +161,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
             mapStakeSiphon: stakeTotal,
             mapTrophyBonus: mapTrophyFallback
         });
-        (paidWeiMap, ) = _runJackpot(jp);
+        paidWeiMap = _runJackpot(jp);
 
         uint256 distributedEth = paidWeiMap + stakePaid;
         if (distributedEth > effectiveWei) {
@@ -175,7 +171,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         prizePool += remainingPool;
         levelPrizePool += remainingPool;
 
-        _rollQuestForJackpot(coinContract, rngWord, lvl, true);
+        _rollQuestForJackpot(coinContract, rngWord, true);
 
         uint48 questDay = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
         coinContract.primeMintEthQuest(questDay + 1);
@@ -322,9 +318,9 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         return (lvl % 20 == 16) ? 30 : 17;
     }
 
-    function _runJackpot(JackpotParams memory jp) private returns (uint256 totalPaidEth, uint256 totalPaidCoin) {
+    function _runJackpot(JackpotParams memory jp) private returns (uint256 totalPaidEth) {
         if (jp.ethPool == 0 && jp.coinPool == 0) {
-            return (0, 0);
+            return 0;
         }
 
         uint8 band = uint8((jp.lvl % 100) / 20) + 1;
@@ -333,7 +329,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
 
         if (jp.ethPool != 0) {
             uint16[4] memory bucketCounts = _traitBucketCounts(band, jp.entropy);
-            (totalPaidEth, , ) = _runJackpotEth(
+            totalPaidEth = _runJackpotEth(
                 jp.mapTrophy,
                 jp.lvl,
                 jp.ethPool,
@@ -351,7 +347,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         if (jp.coinPool != 0) {
             // Do not scale coin jackpots by level; use base bucket counts.
             uint16[4] memory bucketCounts = _traitBucketCounts(1, jp.entropy);
-            totalPaidCoin = _runJackpotCoin(
+            _runJackpotCoin(
                 jp.lvl,
                 jp.coinPool,
                 jp.entropy ^ uint256(COIN_JACKPOT_TAG),
@@ -362,22 +358,20 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
             );
         }
 
-        return (totalPaidEth, totalPaidCoin);
+        return totalPaidEth;
     }
 
     function _handleDailyJackpot(
         uint24 lvl,
-        uint256 randWord,
+        uint256 entropyWord,
         IPurgeCoinModule coinContract,
         IPurgeGameTrophiesModule trophiesContract,
         bool applyFirstPurgeBonus
     ) private {
-        uint256 entropyWord = _scrambleJackpotEntropy(randWord, jackpotCounter);
-
         uint32 winningTraitsPacked = _packWinningTraits(_getWinningTraits(entropyWord, dailyPurgeCount));
-        uint8 remainingJackpots = JACKPOT_LEVEL_CAP > jackpotCounter
-            ? uint8(JACKPOT_LEVEL_CAP - jackpotCounter)
-            : uint8(1);
+        uint8 remainingJackpots = jackpotCounter >= JACKPOT_LEVEL_CAP
+            ? uint8(1)
+            : uint8(JACKPOT_LEVEL_CAP - jackpotCounter);
         uint256 currentEntropy = entropyWord ^ (uint256(lvl) << 192);
         _payCurrentLevelDailyJackpot(
             lvl,
@@ -389,7 +383,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         );
 
         uint24 nextLevel = lvl + 1;
-        (uint256 dailyCoinPool, ) = coinContract.prepareCoinJackpot();
+        uint256 dailyCoinPool = priceCoin * 10;
         uint256 carryBal = carryOver;
         uint256 futureEthPool = (carryBal * (applyFirstPurgeBonus ? 400 : 100)) / 10_000; // 4% on first purge, else 1%
         if (futureEthPool > carryBal) futureEthPool = carryBal;
@@ -397,18 +391,16 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
             futureEthPool = (futureEthPool * _carryJackpotScaleBps(nextLevel)) / 10_000;
         }
 
+        uint256 nextEntropy = _entropyStep(entropyWord) ^ (uint256(nextLevel) << 192);
         uint256 dailyPaidEth = _payFutureDailyJackpot(
             nextLevel,
-            entropyWord,
+            nextEntropy,
             winningTraitsPacked,
             futureEthPool,
             dailyCoinPool,
             coinContract,
             trophiesContract
         );
-
-        coinContract.resetCoinflipLeaderboard();
-        _rollQuestForJackpot(coinContract, entropyWord, nextLevel, false);
 
         if (dailyPaidEth != 0) {
             uint256 carryAfter = carryOver;
@@ -464,7 +456,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
             mapStakeSiphon: 0,
             mapTrophyBonus: 0
         });
-        (uint256 paid, ) = _runJackpot(jp);
+        uint256 paid = _runJackpot(jp);
         if (paid == 0) return;
         uint256 poolBal = prizePool;
         prizePool = paid > poolBal ? 0 : poolBal - paid;
@@ -488,7 +480,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
 
     function _payFutureDailyJackpot(
         uint24 nextLevel,
-        uint256 entropyWord,
+        uint256 entropy,
         uint32 winningTraitsPacked,
         uint256 futureEthPool,
         uint256 dailyCoinPool,
@@ -497,13 +489,12 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
     ) private returns (uint256 paidEth) {
         if (futureEthPool == 0 && dailyCoinPool == 0) return 0;
 
-        uint256 nextEntropy = _entropyStep(entropyWord) ^ (uint256(nextLevel) << 192);
         JackpotParams memory jp = JackpotParams({
             lvl: nextLevel,
             ethPool: futureEthPool,
             coinPool: dailyCoinPool,
             mapTrophy: false,
-            entropy: nextEntropy,
+            entropy: entropy,
             winningTraitsPacked: winningTraitsPacked,
             traitShareBpsPacked: DAILY_JACKPOT_SHARES_PACKED,
             coinContract: coinContract,
@@ -511,7 +502,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
             mapStakeSiphon: 0,
             mapTrophyBonus: 0
         });
-        (paidEth, ) = _runJackpot(jp);
+        paidEth = _runJackpot(jp);
     }
 
     function _runJackpotEth(
@@ -526,9 +517,10 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         IPurgeGameTrophiesModule trophiesContract,
         uint256 mapStakeSiphon,
         uint256 mapTrophyBonus
-    ) private returns (uint256 totalPaidEth, uint256 entropyCursor, bool trophyGiven) {
+    ) private returns (uint256 totalPaidEth) {
         uint256 ethDistributed;
-        entropyCursor = entropy;
+        uint256 entropyCursor = entropy;
+        bool trophyGiven;
 
         int8 trophyIndex = -1;
         if (mapTrophy) {
@@ -726,11 +718,10 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
     function _rollQuestForJackpot(
         IPurgeCoinModule coinContract,
         uint256 entropySource,
-        uint24 questLevel,
         bool forceMintEthAndPurge
     ) private {
         uint48 questDay = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
-        uint256 questEntropy = uint256(keccak256(abi.encode(entropySource, questLevel, jackpotCounter, "daily-quest")));
+        uint256 questEntropy = entropySource;
         if (forceMintEthAndPurge) {
             coinContract.rollDailyQuestWithOverrides(questDay, questEntropy, true, true);
         } else {

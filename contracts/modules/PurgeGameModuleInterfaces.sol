@@ -25,14 +25,14 @@ interface IPurgeCoinModule {
         external
         returns (bool finished, address[] memory winners, uint256[] memory amounts, uint256 returnAmountWei);
 
-    function prepareCoinJackpot() external returns (uint256 poolAmount, address biggestFlip);
-
     function getLeaderboardAddresses(uint8 which) external view returns (address[] memory);
     function getTopAffiliate() external view returns (address);
 
     function bonusCoinflip(address player, uint256 amount, bool rngReady) external;
 
     function addToBounty(uint256 amount) external;
+
+    function rewardTopFlipBonus(uint256 amount) external;
 
     function resetCoinflipLeaderboard() external;
 

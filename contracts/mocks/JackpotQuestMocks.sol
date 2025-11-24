@@ -4,8 +4,6 @@ pragma solidity ^0.8.26;
 import "../modules/PurgeGameModuleInterfaces.sol";
 
 contract JackpotCoinModuleMock is IPurgeCoinModule {
-    uint256 public configuredPool;
-    address public configuredBiggestFlip;
     address[] private leaderboard;
 
     uint48 public lastRollDay;
@@ -14,11 +12,6 @@ contract JackpotCoinModuleMock is IPurgeCoinModule {
     bool public lastRollForceMint;
     bool public lastRollForcePurge;
     uint48 public lastPrimeDay;
-
-    function setCoinJackpot(uint256 amount, address biggestFlip) external {
-        configuredPool = amount;
-        configuredBiggestFlip = biggestFlip;
-    }
 
     function setLeaderboard(address[] calldata addrs) external {
         leaderboard = addrs;
@@ -57,12 +50,6 @@ contract JackpotCoinModuleMock is IPurgeCoinModule {
         returnAmountWei = 0;
     }
 
-    function prepareCoinJackpot() external override returns (uint256 poolAmount, address biggestFlip) {
-        poolAmount = configuredPool;
-        configuredPool = 0;
-        biggestFlip = configuredBiggestFlip;
-    }
-
     function getLeaderboardAddresses(uint8) external view override returns (address[] memory) {
         address[] memory copy = new address[](leaderboard.length);
         for (uint256 i; i < leaderboard.length; ) {
@@ -81,6 +68,8 @@ contract JackpotCoinModuleMock is IPurgeCoinModule {
     function bonusCoinflip(address, uint256, bool) external pure override {}
 
     function addToBounty(uint256) external pure override {}
+
+    function rewardTopFlipBonus(uint256) external pure override {}
 
     function resetCoinflipLeaderboard() external pure override {}
 

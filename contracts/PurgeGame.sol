@@ -418,6 +418,10 @@ contract PurgeGame is PurgeGameStorage {
                 levelStartTime = ts;
                 uint32 mintedCount = _purchaseTargetCountFromRaw(nft.purchaseCount());
                 nft.finalizePurchasePhase(mintedCount, rngWordCurrent);
+                if ((rngWordCurrent & 1) == 1) {
+                    coinContract.rewardTopFlipBonus(priceCoin);
+                }
+                coinContract.resetCoinflipLeaderboard();
                 dailyIdx = day;
                 traitRebuildCursor = 0;
                 airdropMultiplier = 1;

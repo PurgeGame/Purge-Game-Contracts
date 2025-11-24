@@ -1212,19 +1212,16 @@ contract Purgecoin is PurgeCoinStorage {
         return true;
     }
 
-    function prepareCoinJackpot()
-        external
-        view
-        onlyPurgeGameContract
-        returns (uint256 poolAmount, address biggestFlip)
-    {
-        poolAmount = 10_000 * MILLION;
-        biggestFlip = topBettors[0].player;
-    }
-
     function addToBounty(uint256 amount) external onlyPurgeGameContract {
         if (amount == 0) return;
         _addToBounty(amount);
+    }
+
+    function rewardTopFlipBonus(uint256 amount) external onlyPurgeGameContract {
+        address top = topBettors[0].player;
+        if (top == address(0)) return;
+
+        addFlip(top, amount, false, false, true);
     }
 
     function lastBiggestFlip() external view returns (address) {

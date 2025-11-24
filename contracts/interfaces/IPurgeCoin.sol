@@ -23,9 +23,9 @@ interface IPurgeCoin {
 
     function coinflipWorkPending(uint24 level) external view returns (bool);
 
-    function prepareCoinJackpot() external view returns (uint256 poolAmount, address biggestFlip);
-
     function addToBounty(uint256 amount) external;
+
+    function rewardTopFlipBonus(uint256 amount) external;
 
     function lastBiggestFlip() external view returns (address);
 
