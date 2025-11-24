@@ -525,12 +525,12 @@ contract PurgeGameNFT {
         // scaledQty tracks fractional mint units (map purchases use quarter-price increments),
         // so normalize by 100 to align affiliate rewards with the effective ETH mints.
         uint256 affiliateBaseUnits = (scaledQty * priceUnit) / 100;
-        uint256 affiliateAmount = (affiliateBaseUnits * 15) / 100;
-
         uint8 percentReached = game.getEarlyPurgePercent();
-        uint256 pct = percentReached >= 50 ? 25 : 0;
-        unchecked {
-            affiliateAmount += (affiliateAmount * pct) / 100;
+        bool affiliateBonus = percentReached >= 50 || (lvl % 25) == 1;
+
+        uint256 affiliateAmount = (affiliateBaseUnits * 15) / 100;
+        if (affiliateBonus) {
+            affiliateAmount += (affiliateAmount * 60) / 100;
         }
 
         uint256 rakebackMint = coin.payAffiliate(affiliateAmount, affiliateCode, payer, lvl);

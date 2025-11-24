@@ -577,7 +577,7 @@ contract Purgecoin is PurgeCoinStorage {
     /// - Else if `code` resolves to a valid owner different from `sender`: bind it and use it.
     /// - Else: lock the sender to disallow future attempts.
     /// Payout rules:
-    /// - `amount` earns a 60% bonus on levels `level % 25 == 1`.
+    /// - Caller can pre-apply any purchase bonus (e.g., early-purge or level checkpoint) to `amount`.
     /// - Direct ref gets a coinflip credit equal to `amount` (plus stake bonus), but the configured rakeback%
     ///   is diverted to the buyer as flip credit.
     /// - Their upline (if any) receives a 20% bonus coinflip credit of the same (post-doubling) amount.
@@ -617,9 +617,6 @@ contract Purgecoin is PurgeCoinStorage {
         uint8 rakebackPct = info.rakeback;
 
         uint256 baseAmount = amount;
-        if (lvl % 25 == 1) {
-            baseAmount += (amount * 60) / 100;
-        }
 
         mapping(address => uint256) storage earned = affiliateCoinEarned[lvl];
         IPurgeQuestModule module = questModule;
