@@ -385,7 +385,11 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         uint24 nextLevel = lvl + 1;
         uint256 dailyCoinPool = priceCoin * 10;
         uint256 carryBal = carryOver;
-        uint256 futureEthPool = (carryBal * (applyFirstPurgeBonus ? 400 : 100)) / 10_000; // 4% on first purge, else 1%
+        uint256 futurePoolBps = applyFirstPurgeBonus ? 300 : 100; // 3% on first purge, else 1%
+        if (jackpotCounter == 1) {
+            futurePoolBps += 100; // +1% boost on the second daily jackpot
+        }
+        uint256 futureEthPool = (carryBal * futurePoolBps) / 10_000;
         if (futureEthPool > carryBal) futureEthPool = carryBal;
         if (futureEthPool != 0) {
             futureEthPool = (futureEthPool * _carryJackpotScaleBps(nextLevel)) / 10_000;
