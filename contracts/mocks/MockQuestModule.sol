@@ -34,22 +34,16 @@ contract MockQuestModule is IPurgeQuestModule {
     function handleDecimator(address, uint256) external override returns (uint256, bool, uint8, uint32, bool) {
         return (0, false, 0, 0, false);
     }
-    function getActiveQuest() external pure override returns (uint48, uint8, bool, uint8, uint8) {
-        return (0, 0, false, 0, 0);
-    }
     function getActiveQuests() external pure override returns (QuestInfo[2] memory) {
         QuestInfo[2] memory q;
         return q;
-    }
-    function playerQuestState(address) external pure override returns (uint32, uint32, uint128, bool) {
-        return (0, 0, 0, false);
     }
     function playerQuestStates(address) external pure override returns (uint32, uint32, uint128[2] memory, bool[2] memory) {
         uint128[2] memory p;
         bool[2] memory c;
         return (0, 0, p, c);
     }
-    function getQuestDetails() external pure override returns (QuestDetail[2] memory quests) {
-        return quests;
+    function getPlayerQuestView(address) external pure override returns (PlayerQuestView memory viewData) {
+        return viewData;
     }
 }

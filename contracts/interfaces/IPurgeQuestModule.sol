@@ -1,21 +1,28 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+struct QuestRequirements {
+    uint32 mints; // Number of mints/purges required (whole NFTs)
+    uint256 tokenAmount; // PURGE base units (6 decimals) for token-denominated quests or stake principal
+    uint16 stakeDistance; // Minimum stake distance when required
+    uint8 stakeRisk; // Minimum stake risk when required
+}
+
 struct QuestInfo {
     uint48 day;
     uint8 questType;
     bool highDifficulty;
     uint8 stakeMask;
     uint8 stakeRisk;
+    QuestRequirements requirements;
 }
 
-struct QuestDetail {
-    uint48 day;
-    uint8 questType;
-    bool highDifficulty;
-    uint8 stakeMask;
-    uint8 stakeRisk;
-    uint256 entropy;
+struct PlayerQuestView {
+    QuestInfo[2] quests;
+    uint128[2] progress;
+    bool[2] completed;
+    uint32 lastCompletedDay;
+    uint32 baseStreak;
 }
 
 interface IPurgeQuestModule {
@@ -54,19 +61,7 @@ interface IPurgeQuestModule {
         external
         returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed);
 
-    function getActiveQuest()
-        external
-        view
-        returns (uint48 day, uint8 questType, bool highDifficulty, uint8 stakeMask, uint8 stakeRisk);
-
     function getActiveQuests() external view returns (QuestInfo[2] memory quests);
-
-    function getQuestDetails() external view returns (QuestDetail[2] memory quests);
-
-    function playerQuestState(address player)
-        external
-        view
-        returns (uint32 streak, uint32 lastCompletedDay, uint128 progress, bool completedToday);
 
     function playerQuestStates(address player)
         external
@@ -77,4 +72,6 @@ interface IPurgeQuestModule {
             uint128[2] memory progress,
             bool[2] memory completed
         );
+
+    function getPlayerQuestView(address player) external view returns (PlayerQuestView memory viewData);
 }

@@ -85,15 +85,6 @@ contract QuestGameMock is IPurgeGame {
         coinReward = 0;
     }
 
-    function getJackpotWinners(
-        uint256 /*randomWord*/,
-        uint8 /*trait*/,
-        uint8 /*numWinners*/,
-        uint8 /*salt*/
-    ) external pure override returns (address[] memory winners) {
-        winners = new address[](0);
-    }
-
     function rngLocked() external pure override returns (bool) {
         return false;
     }
@@ -101,8 +92,6 @@ contract QuestGameMock is IPurgeGame {
     function isRngFulfilled() external pure override returns (bool) {
         return true;
     }
-
-    function releaseRngLock() external pure override {}
 
     function purchaseWithClaimable(bool /*mapPurchase*/) external pure override {}
 }

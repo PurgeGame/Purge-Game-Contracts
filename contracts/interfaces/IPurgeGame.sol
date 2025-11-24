@@ -36,18 +36,9 @@ interface IPurgeGame {
         uint256 costWei
     ) external payable returns (uint256 coinReward);
 
-    function getJackpotWinners(
-        uint256 randomWord,
-        uint8 trait,
-        uint8 numWinners,
-        uint8 salt
-    ) external view returns (address[] memory);
-
     function rngLocked() external view returns (bool);
 
     function isRngFulfilled() external view returns (bool);
-
-    function releaseRngLock() external;
 
     function purchaseWithClaimable(bool mapPurchase) external;
 }

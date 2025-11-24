@@ -27,7 +27,6 @@ contract PurgeQuestModule is IPurgeQuestModule {
     uint8 private constant QUEST_STAKE_REQUIRE_RISK = 1 << 2;
     uint8 private constant QUEST_TIER_MAX_INDEX = 10;
     uint32 private constant QUEST_TIER_STREAK_SPAN = 7;
-    uint8 private constant QUEST_STATE_COMPLETED_SLOT0 = 1 << 0;
     uint8 private constant QUEST_STATE_COMPLETED_SLOTS_MASK = (uint8(1) << QUEST_SLOT_COUNT) - 1;
     uint8 private constant QUEST_STATE_STREAK_CREDITED = 1 << 7;
     uint16 private constant QUEST_MIN_TOKEN = 250;
@@ -90,23 +89,6 @@ contract PurgeQuestModule is IPurgeQuestModule {
 
     function primeMintEthQuest(uint48 day) external onlyCoin {
         forcedMintEthQuestDay = day;
-    }
-
-    function getQuestDetails() external view override returns (QuestDetail[QUEST_SLOT_COUNT] memory quests) {
-        for (uint8 slot; slot < QUEST_SLOT_COUNT; ) {
-            DailyQuest memory quest = activeQuests[slot];
-            quests[slot] = QuestDetail({
-                day: quest.day,
-                questType: quest.questType,
-                highDifficulty: (quest.flags & QUEST_FLAG_HIGH_DIFFICULTY) != 0,
-                stakeMask: quest.stakeMask,
-                stakeRisk: quest.stakeRisk,
-                entropy: quest.entropy
-            });
-            unchecked {
-                ++slot;
-            }
-        }
     }
 
     function rollDailyQuest(
@@ -475,25 +457,9 @@ contract PurgeQuestModule is IPurgeQuestModule {
         return (0, false, matched ? fallbackType : QUEST_TYPE_PURGE, state.streak, false);
     }
 
-    function getActiveQuest()
-        external
-        view
-        override
-        returns (uint48 day, uint8 questType, bool highDifficulty, uint8 stakeMask, uint8 stakeRisk)
-    {
-        DailyQuest[QUEST_SLOT_COUNT] memory local = _materializeActiveQuestsForView();
-        DailyQuest memory quest = local[0];
-        return (
-            quest.day,
-            quest.questType,
-            (quest.flags & QUEST_FLAG_HIGH_DIFFICULTY) != 0,
-            quest.stakeMask,
-            quest.stakeRisk
-        );
-    }
-
     function getActiveQuests() external view override returns (QuestInfo[2] memory quests) {
         DailyQuest[QUEST_SLOT_COUNT] memory local = _materializeActiveQuestsForView();
+        uint8 baseTier = 0; // Baseline requirements with zero streak (use getPlayerQuestView for player-specific tiers)
         for (uint8 slot2; slot2 < QUEST_SLOT_COUNT; ) {
             DailyQuest memory quest = local[slot2];
             quests[slot2] = QuestInfo({
@@ -501,7 +467,8 @@ contract PurgeQuestModule is IPurgeQuestModule {
                 questType: quest.questType,
                 highDifficulty: (quest.flags & QUEST_FLAG_HIGH_DIFFICULTY) != 0,
                 stakeMask: quest.stakeMask,
-                stakeRisk: quest.stakeRisk
+                stakeRisk: quest.stakeRisk,
+                requirements: _questRequirementsForTier(quest, baseTier)
             });
             unchecked {
                 ++slot2;
@@ -537,21 +504,6 @@ contract PurgeQuestModule is IPurgeQuestModule {
         }
     }
 
-    function playerQuestState(
-        address player
-    ) external view override returns (uint32 streak, uint32 lastCompletedDay, uint128 progress, bool completedToday) {
-        PlayerQuestState memory state = questPlayerState[player];
-        streak = state.streak;
-        lastCompletedDay = state.lastCompletedDay;
-        DailyQuest memory quest = activeQuests[0];
-        if (quest.day != 0 && state.lastProgressDay[0] == quest.day) {
-            progress = state.progress[0];
-            completedToday =
-                state.lastSyncDay == quest.day &&
-                (state.completionMask & QUEST_STATE_COMPLETED_SLOT0) != 0;
-        }
-    }
-
     function playerQuestStates(
         address player
     )
@@ -578,9 +530,76 @@ contract PurgeQuestModule is IPurgeQuestModule {
         }
     }
 
+    function getPlayerQuestView(address player) external view override returns (PlayerQuestView memory viewData) {
+        DailyQuest[QUEST_SLOT_COUNT] memory local = _materializeActiveQuestsForView();
+        uint48 currentDay = _currentQuestDay(local);
+        PlayerQuestState memory state = questPlayerState[player];
+        uint32 effectiveStreak = state.streak;
+        if (state.lastCompletedDay != 0 && currentDay > uint48(state.lastCompletedDay + 1)) {
+            effectiveStreak = 0;
+        }
+        uint32 effectiveBaseStreak = (state.lastSyncDay == currentDay) ? state.baseStreak : effectiveStreak;
+
+        viewData.lastCompletedDay = state.lastCompletedDay;
+        viewData.baseStreak = effectiveBaseStreak;
+
+        uint8 tier = _questTier(effectiveBaseStreak);
+        for (uint8 slot; slot < QUEST_SLOT_COUNT; ) {
+            DailyQuest memory quest = local[slot];
+            viewData.quests[slot] = QuestInfo({
+                day: quest.day,
+                questType: quest.questType,
+                highDifficulty: (quest.flags & QUEST_FLAG_HIGH_DIFFICULTY) != 0,
+                stakeMask: quest.stakeMask,
+                stakeRisk: quest.stakeRisk,
+                requirements: _questRequirementsForTier(quest, tier)
+            });
+            if (quest.day != 0 && state.lastProgressDay[slot] == quest.day) {
+                viewData.progress[slot] = state.progress[slot];
+                viewData.completed[slot] =
+                    state.lastSyncDay == quest.day &&
+                    (state.completionMask & uint8(1 << slot)) != 0;
+            }
+            unchecked {
+                ++slot;
+            }
+        }
+    }
+
     // ---------------------------------------------------------------------
     // Internal helpers
     // ---------------------------------------------------------------------
+
+    function _questRequirementsForTier(
+        DailyQuest memory quest,
+        uint8 tier
+    ) private pure returns (QuestRequirements memory req) {
+        uint8 qType = quest.questType;
+        req.stakeRisk = (quest.stakeMask & QUEST_STAKE_REQUIRE_RISK) != 0 ? quest.stakeRisk : 0;
+        if (qType == QUEST_TYPE_MINT_ANY) {
+            req.mints = _questMintAnyTarget(tier, quest.entropy);
+        } else if (qType == QUEST_TYPE_MINT_ETH) {
+            req.mints = _questMintEthTarget(tier, quest.entropy);
+        } else if (qType == QUEST_TYPE_PURGE) {
+            req.mints = _questPurgeTarget(tier, quest.entropy);
+        } else if (qType == QUEST_TYPE_FLIP) {
+            req.tokenAmount = uint256(_questFlipTargetTokens(tier, quest.entropy)) * MILLION;
+        } else if (qType == QUEST_TYPE_DECIMATOR) {
+            req.tokenAmount = uint256(_questDecimatorTargetTokens(tier, quest.entropy)) * MILLION;
+        } else if (qType == QUEST_TYPE_AFFILIATE) {
+            req.tokenAmount = uint256(_questAffiliateTargetTokens(tier, quest.entropy)) * MILLION;
+        } else if (qType == QUEST_TYPE_STAKE) {
+            if ((quest.stakeMask & QUEST_STAKE_REQUIRE_PRINCIPAL) != 0) {
+                req.tokenAmount = uint256(_questStakePrincipalTarget(tier, quest.entropy)) * MILLION;
+            }
+            if ((quest.stakeMask & QUEST_STAKE_REQUIRE_DISTANCE) != 0) {
+                req.stakeDistance = _questStakeDistanceTarget(tier, quest.entropy);
+            }
+            if ((quest.stakeMask & QUEST_STAKE_REQUIRE_RISK) == 0) {
+                req.stakeRisk = 0;
+            }
+        }
+    }
 
     function _normalizeActivePurgeQuests() private {
         DailyQuest[QUEST_SLOT_COUNT] storage quests = activeQuests;
