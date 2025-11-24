@@ -92,6 +92,9 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
             if (kickoffJackpot) {
                 firstEarlyJackpotPaid = true;
             }
+            if (poolWei != 0) {
+                poolWei = (poolWei * _carryJackpotScaleBps(lvl)) / 10_000;
+            }
         }
 
         uint256 coinPool;
@@ -396,14 +399,15 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         uint24 nextLevel = lvl + 1;
         (uint256 dailyCoinPool, ) = coinContract.prepareCoinJackpot();
         uint256 carryBal = carryOver;
-        uint256 extraBps;
         bool purgeKickoff = !firstPurgeJackpotPaid;
         if (purgeKickoff) {
-            extraBps += 300;
             firstPurgeJackpotPaid = true;
         }
-        uint256 futureEthPool = (carryBal * (extraBps != 0 ? extraBps : 50)) / 10_000;
+        uint256 futureEthPool = (carryBal * (purgeKickoff ? 300 : 100)) / 10_000; // 3% kickoff, then 1%
         if (futureEthPool > carryBal) futureEthPool = carryBal;
+        if (futureEthPool != 0) {
+            futureEthPool = (futureEthPool * _carryJackpotScaleBps(nextLevel)) / 10_000;
+        }
 
         uint256 dailyPaidEth = _payFutureDailyJackpot(
             nextLevel,
@@ -830,6 +834,16 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
             }
         }
         return maxRel;
+    }
+
+    function _carryJackpotScaleBps(uint24 lvl) private pure returns (uint16) {
+        // Linearly scale carry-funded jackpot slices from 100% at the start of a 100-level band
+        // down to 50% on the last level of the band, then reset on the next band.
+        uint256 cycle = (lvl == 0) ? 0 : ((uint256(lvl) - 1) % 100); // 0..99
+        uint256 discount = (cycle * 5000) / 99; // up to 50% at cycle==99
+        uint256 scale = 10_000 - discount;
+        if (scale < 5000) scale = 5000;
+        return uint16(scale);
     }
 
     function _clearDailyPurgeCount() private {
