@@ -89,9 +89,5 @@ contract QuestGameMock is IPurgeGame {
         return false;
     }
 
-    function isRngFulfilled() external pure override returns (bool) {
-        return true;
-    }
-
     function purchaseWithClaimable(bool /*mapPurchase*/) external pure override {}
 }

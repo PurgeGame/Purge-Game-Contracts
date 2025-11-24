@@ -174,13 +174,11 @@ contract Purgecoin is PurgeCoinStorage {
 
         IPurgeQuestModule module = questModule;
         uint256 questReward;
-        if (address(module) != address(0)) {
-            (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleFlip(
-                caller,
-                amount
-            );
-            questReward = _questApplyReward(caller, reward, hardMode, questType, streak, completed);
-        }
+        (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleFlip(
+            caller,
+            amount
+        );
+        questReward = _questApplyReward(caller, reward, hardMode, questType, streak, completed);
 
         uint256 creditedFlip = amount + questReward;
         addFlip(caller, creditedFlip, true, true, false);
@@ -230,15 +228,23 @@ contract Purgecoin is PurgeCoinStorage {
         e.burn = uint192(updated);
 
         IPurgeQuestModule module = questModule;
-        if (address(module) != address(0)) {
-            (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleDecimator(
-                caller,
-                amount
-            );
-            uint256 questReward = _questApplyReward(caller, reward, hardMode, questType, streak, completed);
-            if (questReward != 0) {
-                addFlip(caller, questReward, false, false, false);
-            }
+        (uint32 streak, , , ) = module.playerQuestStates(caller);
+        if (streak != 0) {
+            uint256 bonusBps = uint256(streak) * 25; // (streak/4)%
+            if (bonusBps > 2500) bonusBps = 2500; // cap at 25%
+            uint256 streakBonus = (amount * bonusBps) / BPS_DENOMINATOR;
+            updated = uint256(e.burn) + streakBonus;
+            if (updated > type(uint192).max) updated = type(uint192).max;
+            e.burn = uint192(updated);
+        }
+
+        (uint256 reward, bool hardMode, uint8 questType, uint32 streak2, bool completed) = module.handleDecimator(
+            caller,
+            amount
+        );
+        uint256 questReward = _questApplyReward(caller, reward, hardMode, questType, streak2, completed);
+        if (questReward != 0) {
+            addFlip(caller, questReward, false, false, false);
         }
 
         emit DecimatorBurn(caller, amount, e.bucket);
@@ -532,20 +538,18 @@ contract Purgecoin is PurgeCoinStorage {
         uint256 principalRounded = boostedPrincipal - (boostedPrincipal % STAKE_PRINCIPAL_FACTOR);
         if (principalRounded == 0) principalRounded = STAKE_PRINCIPAL_FACTOR;
         IPurgeQuestModule module = questModule;
-        if (address(module) != address(0)) {
-            (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleStake(
-                sender,
-                principalRounded,
-                distance,
-                risk
-            );
-            uint256 questReward = _questApplyReward(sender, reward, hardMode, questType, streak, completed);
-            if (questReward != 0) {
-                uint256 bonus = questReward - (questReward % STAKE_PRINCIPAL_FACTOR);
-                if (bonus != 0) {
-                    uint256 updated = principalRounded + bonus;
-                    principalRounded = updated;
-                }
+        (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleStake(
+            sender,
+            principalRounded,
+            distance,
+            risk
+        );
+        uint256 questReward = _questApplyReward(sender, reward, hardMode, questType, streak, completed);
+        if (questReward != 0) {
+            uint256 bonus = questReward - (questReward % STAKE_PRINCIPAL_FACTOR);
+            if (bonus != 0) {
+                uint256 updated = principalRounded + bonus;
+                principalRounded = updated;
             }
         }
 

@@ -38,7 +38,5 @@ interface IPurgeGame {
 
     function rngLocked() external view returns (bool);
 
-    function isRngFulfilled() external view returns (bool);
-
     function purchaseWithClaimable(bool mapPurchase) external;
 }
