@@ -328,11 +328,11 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         }
 
         uint8 band = uint8((jp.lvl % 100) / 20) + 1;
-        uint16[4] memory bucketCounts = _traitBucketCounts(band, jp.entropy);
         uint8[4] memory traitIds = _unpackWinningTraits(jp.winningTraitsPacked);
         uint16[4] memory shareBps = _shareBpsByBucket(jp.traitShareBpsPacked, uint8(jp.entropy & 3));
 
         if (jp.ethPool != 0) {
+            uint16[4] memory bucketCounts = _traitBucketCounts(band, jp.entropy);
             (totalPaidEth, , ) = _runJackpotEth(
                 jp.mapTrophy,
                 jp.lvl,
@@ -349,6 +349,8 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         }
 
         if (jp.coinPool != 0) {
+            // Do not scale coin jackpots by level; use base bucket counts.
+            uint16[4] memory bucketCounts = _traitBucketCounts(1, jp.entropy);
             totalPaidCoin = _runJackpotCoin(
                 jp.lvl,
                 jp.coinPool,
