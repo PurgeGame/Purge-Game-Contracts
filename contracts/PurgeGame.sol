@@ -200,11 +200,6 @@ contract PurgeGame is PurgeGameStorage {
         return earlyPurgePercent;
     }
 
-    function purchaseMultiplier() external view returns (uint32) {
-        uint32 multiplier = airdropMultiplier;
-        return multiplier == 0 ? 1 : multiplier;
-    }
-
     function rngLocked() public view returns (bool) {
         return rngLockedFlag;
     }
@@ -395,7 +390,8 @@ contract PurgeGame is PurgeGameStorage {
                 uint32 purchaseCountRaw = nft.purchaseCount();
                 if (_phase == 5) {
                     if (!traitCountsSeedQueued) {
-                        if (!nft.processPendingMints(cap)) {
+                        uint32 multiplier_ = airdropMultiplier == 0 ? 1 : airdropMultiplier;
+                        if (!nft.processPendingMints(cap, multiplier_)) {
                             break;
                         }
                         if (purchaseCountRaw != 0) {
@@ -424,7 +420,7 @@ contract PurgeGame is PurgeGameStorage {
 
                 levelStartTime = ts;
                 uint32 mintedCount = _purchaseTargetCountFromRaw(nft.purchaseCount());
-                nft.finalizePurchasePhase(mintedCount);
+                nft.finalizePurchasePhase(mintedCount, rngWordCurrent);
                 dailyIdx = day;
                 traitRebuildCursor = 0;
                 airdropMultiplier = 1;
@@ -1000,7 +996,7 @@ contract PurgeGame is PurgeGameStorage {
     function rngAndTimeGate(uint48 day) internal returns (uint256 word) {
         if (day == dailyIdx) revert NotTimeYet();
 
-        uint256 currentWord = currentRngWord();
+        uint256 currentWord = rngFulfilled ? rngWordCurrent : 0;
 
         if (currentWord == 0) {
             if (rngLockedFlag) revert RngNotReady();
@@ -1050,7 +1046,7 @@ contract PurgeGame is PurgeGameStorage {
             writesBudget -= (writesBudget * 35) / 100; // 65% scaling
         }
         uint32 used = 0;
-        uint256 entropy = currentRngWord();
+        uint256 entropy = rngFulfilled ? rngWordCurrent : 0;
 
         while (airdropIndex < total && used < writesBudget) {
             address player = pendingMapMints[airdropIndex];

@@ -43,11 +43,7 @@ interface IPurgeGame {
         uint8 salt
     ) external view returns (address[] memory);
 
-    function purchaseMultiplier() external view returns (uint32);
-
     function rngLocked() external view returns (bool);
-
-    function currentRngWord() external view returns (uint256);
 
     function isRngFulfilled() external view returns (bool);
 

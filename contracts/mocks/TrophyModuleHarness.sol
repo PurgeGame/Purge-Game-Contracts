@@ -43,10 +43,6 @@ contract TrophyGameHarness is IPurgeGameMinimal {
         return rngLockedFlag;
     }
 
-    function currentRngWord() external view override returns (uint256) {
-        return rngWord;
-    }
-
     function coinPriceUnit() external view override returns (uint256) {
         return _coinPriceUnit;
     }

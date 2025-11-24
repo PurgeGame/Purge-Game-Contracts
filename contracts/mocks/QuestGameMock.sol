@@ -94,16 +94,8 @@ contract QuestGameMock is IPurgeGame {
         winners = new address[](0);
     }
 
-    function purchaseMultiplier() external pure override returns (uint32) {
-        return 0;
-    }
-
     function rngLocked() external pure override returns (bool) {
         return false;
-    }
-
-    function currentRngWord() external pure override returns (uint256) {
-        return 0;
     }
 
     function isRngFulfilled() external pure override returns (bool) {

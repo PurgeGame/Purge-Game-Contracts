@@ -144,7 +144,8 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
                     exterminator: pend.exterminator,
                     traitId: lastExterminatedTrait,
                     level: prevLevelPending,
-                    pool: poolValue
+                    pool: poolValue,
+                    rngWord: rngWord
                 })
             );
             if (hasAffiliates) {
@@ -182,7 +183,8 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
                     exterminator: affiliateRecipient,
                     traitId: lastExterminatedTrait,
                     level: prevLevelPending,
-                    pool: poolForProcess
+                    pool: poolForProcess,
+                    rngWord: rngWord
                 })
             );
 

@@ -32,6 +32,7 @@ interface IPurgeGameTrophies {
         uint16 traitId;
         uint24 level;
         uint256 pool;
+        uint256 rngWord;
     }
 
     function wire(address game_, address coin_) external;
@@ -90,7 +91,6 @@ interface IPurgeGameMinimal {
     function level() external view returns (uint24);
     function gameState() external view returns (uint8);
     function rngLocked() external view returns (bool);
-    function currentRngWord() external view returns (uint256);
     function coinPriceUnit() external view returns (uint256);
 }
 
@@ -998,7 +998,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             return (address(0), affiliateRecipients);
         }
         bool traitWin = req.traitId != TRAIT_ID_TIMEOUT;
-        uint256 randomWord = game.currentRngWord();
+        uint256 randomWord = req.rngWord;
 
         if (traitWin) {
             affiliateRecipients = _processTraitWin(req, nextLevel, levelTokenId, affiliateTokenId, randomWord);

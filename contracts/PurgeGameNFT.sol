@@ -38,10 +38,10 @@ interface IPurgeGameNFT {
     function tokenTraitsPacked(uint256 tokenId) external view returns (uint32);
     function purchaseCount() external view returns (uint32);
     function resetPurchaseCount() external;
-    function finalizePurchasePhase(uint32 minted) external;
+    function finalizePurchasePhase(uint32 minted, uint256 rngWord) external;
     function purge(address owner, uint256[] calldata tokenIds) external;
     function currentBaseTokenId() external view returns (uint256);
-    function processPendingMints(uint32 playersToProcess) external returns (bool finished);
+    function processPendingMints(uint32 playersToProcess, uint32 multiplier) external returns (bool finished);
     function tokensOwed(address player) external view returns (uint32);
     function processDormant(uint32 maxCount) external returns (bool finished, bool worked);
     function clearPlaceholderPadding(uint256 startTokenId, uint256 endTokenId) external;
@@ -584,7 +584,7 @@ contract PurgeGameNFT {
         }
     }
 
-    function processPendingMints(uint32 playersToProcess) external onlyGame returns (bool finished) {
+    function processPendingMints(uint32 playersToProcess, uint32 multiplier) external onlyGame returns (bool finished) {
         uint256 total = _pendingMintQueue.length;
 
         uint256 index = _mintQueueIndex;
@@ -599,10 +599,7 @@ contract PurgeGameNFT {
 
             uint32 minted;
             uint24 currentLevel = game.level();
-            uint32 multiplier = game.purchaseMultiplier();
-            if (multiplier == 0) {
-                multiplier = 1;
-            }
+            if (multiplier == 0) multiplier = 1;
             while (index < end) {
                 uint256 rawIdx = (index + _mintQueueStartOffset) % total;
                 address player = _pendingMintQueue[rawIdx];
@@ -1114,7 +1111,7 @@ contract PurgeGameNFT {
         seasonPurgedCount = 0;
     }
 
-    function finalizePurchasePhase(uint32 minted) external onlyGame {
+    function finalizePurchasePhase(uint32 minted, uint256 rngWord) external onlyGame {
         _setSeasonMintedSnapshot(minted);
         uint256 baseTokenId = _currentBaseTokenId();
 
@@ -1124,8 +1121,7 @@ contract PurgeGameNFT {
         _mintQueueIndex = 0;
         uint256 queueLength = _pendingMintQueue.length;
         if (queueLength > 1) {
-            uint256 entropy = game.currentRngWord();
-            _mintQueueStartOffset = ((entropy % (queueLength - 1)) + 1);
+            _mintQueueStartOffset = ((rngWord % (queueLength - 1)) + 1);
         } else {
             _mintQueueStartOffset = 0;
         }
