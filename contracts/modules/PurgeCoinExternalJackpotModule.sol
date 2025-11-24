@@ -50,7 +50,9 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
 
             uint32 limit = (kind == 0) ? uint32(_coinflipCount()) : uint32(decPlayersCount[lvl]);
 
-            bs.offset = uint8(executeWord % 10);
+            // Derive scatter offset from a hashed domain to avoid correlation with the raw word's low bits.
+            uint256 offsetSeed = uint256(keccak256(abi.encode(executeWord, 1)));
+            bs.offset = uint8(offsetSeed % 10);
             bs.limit = limit;
             scanCursor = bs.offset;
 
@@ -380,13 +382,7 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
                         uint256 trophyData = (uint256(DECIMATOR_TRAIT_SENTINEL) << 152) |
                             (uint256(lvl) << TROPHY_BASE_LEVEL_SHIFT) |
                             TROPHY_FLAG_DECIMATOR;
-                        purgeGameTrophies.awardTrophy(
-                            trophyOwner,
-                            lvl,
-                            PURGE_TROPHY_KIND_DECIMATOR,
-                            trophyData,
-                            0
-                        );
+                        purgeGameTrophies.awardTrophy(trophyOwner, lvl, PURGE_TROPHY_KIND_DECIMATOR, trophyData, 0);
                     } else {
                         purgeGameTrophies.burnDecPlaceholder(lvl);
                     }
