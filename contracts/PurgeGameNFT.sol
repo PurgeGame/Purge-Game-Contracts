@@ -76,6 +76,22 @@ contract PurgeGameNFT {
     event Transfer(address indexed from, address indexed to, uint256 indexed tokenId);
     event Approval(address indexed owner, address indexed approved, uint256 indexed tokenId);
     event ApprovalForAll(address indexed owner, address indexed operator, bool approved);
+    event TokenPurchase(
+        address indexed buyer,
+        uint32 quantity,
+        bool payInCoin,
+        bool usedClaimable,
+        uint256 costAmount,
+        uint256 bonusCoinCredit
+    );
+    event MapPurchase(
+        address indexed buyer,
+        uint32 quantity,
+        bool payInCoin,
+        bool usedClaimable,
+        uint256 costAmount,
+        uint256 bonusCoinCredit
+    );
 
     // ---------------------------------------------------------------------
     // ERC721 storage
@@ -339,6 +355,7 @@ contract PurgeGameNFT {
 
         uint256 priceWei = priceWeiHint == 0 ? game.mintPrice() : priceWeiHint;
         uint256 priceCoinUnit = priceCoinUnitHint == 0 ? game.coinPriceUnit() : priceCoinUnitHint;
+        uint256 coinCost = quantity * priceCoinUnit;
         _enforceCenturyLuckbox(buyer, targetLevel, priceCoinUnit);
 
         uint256 bonus;
@@ -385,6 +402,9 @@ contract PurgeGameNFT {
         }
 
         _recordPurchase(buyer, qty32);
+
+        uint256 costAmount = payInCoin ? coinCost : (priceWei * quantity);
+        emit TokenPurchase(buyer, qty32, payInCoin, useClaimable, costAmount, bonus);
     }
 
     function mintAndPurge(uint256 quantity, bool payInCoin, bytes32 affiliateCode) external payable {
@@ -474,6 +494,9 @@ contract PurgeGameNFT {
         }
 
         game.enqueueMap(buyer, uint32(quantity));
+
+        uint256 costAmount = payInCoin ? coinCost : expectedWei;
+        emit MapPurchase(buyer, uint32(quantity), payInCoin, useClaimable, costAmount, rebateMint);
     }
 
     function _processEthPurchase(
