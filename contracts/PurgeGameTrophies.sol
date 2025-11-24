@@ -15,8 +15,6 @@ interface IPurgeGameNftModule {
     function clearApproval(uint256 tokenId) external;
     function incrementTrophySupply(uint256 amount) external;
     function decrementTrophySupply(uint256 amount) external;
-    function gameAddress() external view returns (address);
-    function coinAddress() external view returns (address);
 }
 
 uint8 constant PURGE_TROPHY_KIND_MAP = 0;

@@ -33,8 +33,7 @@ interface ITokenRenderer {
 }
 
 interface IPurgeGameNFT {
-    function wireContracts(address game_) external;
-    function wireTrophies(address trophies_) external;
+    function wireAll(address game_, address trophies_) external;
     function tokenTraitsPacked(uint256 tokenId) external view returns (uint32);
     function purchaseCount() external view returns (uint32);
     function resetPurchaseCount() external;
@@ -983,15 +982,6 @@ contract PurgeGameNFT {
         _;
     }
 
-    function wireContracts(address game_) external {
-        if (msg.sender != address(coin)) revert E();
-        _wireGame(game_);
-    }
-
-    function wireTrophies(address trophies_) external onlyCoinContract {
-        _wireTrophies(trophies_);
-    }
-
     function wireAll(address game_, address trophies_) external onlyCoinContract {
         _wireGame(game_);
         _wireTrophies(trophies_);
@@ -1115,14 +1105,6 @@ contract PurgeGameNFT {
     function sendEth(address to, uint256 amount) external onlyTrophyModule {
         (bool ok, ) = payable(to).call{value: amount}("");
         if (!ok) revert E();
-    }
-
-    function gameAddress() external view returns (address) {
-        return address(game);
-    }
-
-    function coinAddress() external view returns (address) {
-        return address(coin);
     }
 
     // ---------------------------------------------------------------------
