@@ -319,10 +319,10 @@ contract PurgeGame is PurgeGameStorage {
             // --- State 1 - Pregame ---
             if (_gameState == 1) {
                 _runEndgameModule(lvl, cap, day, rngWord); // handles payouts, wipes, endgame dist, and jackpots
-                if (!firstEarlyJackpotPaid && pendingEndLevel.level == 0) {
-                    payDailyJackpot(false, level, rngWord);
-                }
                 if (gameState == 2 && pendingEndLevel.level == 0 && rngLockedFlag) {
+                    if (lastExterminatedTrait != TRAIT_ID_TIMEOUT) {
+                        payDailyJackpot(false, level, rngWord);
+                    }
                     dailyIdx = day;
                     _unlockRng();
                 }
@@ -379,6 +379,7 @@ contract PurgeGame is PurgeGameStorage {
                     }
                     uint256 mapEffectiveWei = _calcPrizePoolForJackpot(lvl, rngWord);
                     if (payMapJackpot(lvl, rngWord, mapEffectiveWei)) {
+                        firstPurgeBonusPending = true;
                         phase = 5;
                     }
                     break;
@@ -421,7 +422,6 @@ contract PurgeGame is PurgeGameStorage {
                 traitRebuildCursor = 0;
                 airdropMultiplier = 1;
                 gameState = 3;
-                firstPurgeJackpotPaid = false;
                 _unlockRng();
                 break;
             }
@@ -704,7 +704,7 @@ contract PurgeGame is PurgeGameStorage {
         }
 
         gameState = 1;
-        firstEarlyJackpotPaid = false;
+        firstPurgeBonusPending = false;
     }
 
     /// @notice Delegatecall into the endgame module to resolve slow settlement paths.
