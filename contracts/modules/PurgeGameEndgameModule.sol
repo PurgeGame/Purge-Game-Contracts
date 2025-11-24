@@ -41,17 +41,10 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
 
         if (_phase > 3) {
             if (lastExterminatedTrait != TRAIT_ID_TIMEOUT) {
-                if (prizePool != 0) {
+                if (currentPrizePool != 0) {
                     _payoutParticipants(cap, prevLevel);
                     return;
                 }
-
-                uint256 poolTotal = levelPrizePool;
-
-                pend.level = prevLevel;
-                pend.sidePool = poolTotal;
-
-                levelPrizePool = 0;
             }
 
             if (pend.level != 0 && pend.exterminator == address(0)) {
@@ -98,14 +91,10 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
             }
 
             if (lvl > 1) {
-                prizePool = 0;
+                currentPrizePool = 0;
                 phase = 0;
             }
-            uint256 pendingPool = nextPrizePool;
-            if (pendingPool != 0) {
-                prizePool = pendingPool;
-                nextPrizePool = 0;
-            }
+            // Next-level purchase phase starts with an empty currentPrizePool; new funds accumulate in nextPrizePool.
             gameState = 2;
             traitRebuildCursor = 0;
         }
@@ -201,7 +190,7 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         address[] storage arr = traitPurgeTicket[prevLevel][uint8(lastExterminatedTrait)];
         uint32 len = uint32(arr.length);
         if (len == 0) {
-            prizePool = 0;
+            currentPrizePool = 0;
             return;
         }
 
@@ -210,9 +199,9 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         uint32 end = i + cap;
         if (end > len) end = len;
 
-        uint256 unitPayout = prizePool;
+        uint256 unitPayout = currentPrizePool;
         if (end == len) {
-            prizePool = 0;
+            currentPrizePool = 0;
         }
 
         while (i < end) {

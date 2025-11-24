@@ -156,7 +156,8 @@ contract PurgeGame is PurgeGameStorage {
     /// @return price_           Current mint price (wei)
     /// @return carry_           Carryover earmarked for next level (wei)
     /// @return prizePoolTarget  Last level's prize pool snapshot (wei)
-    /// @return prizePoolCurrent Active prize pool (levelPrizePool when purging)
+    /// @return prizePoolCurrent Active prize pool (currentPrizePool)
+    /// @return nextPrizePool_   Pool accumulated during purchases before the MAP jackpot flush
     /// @return earlyPurgePercent_ Ratio of current prize pool vs. prior level prize pool (percent, capped at 255)
     function gameInfo()
         external
@@ -169,6 +170,7 @@ contract PurgeGame is PurgeGameStorage {
             uint256 carry_,
             uint256 prizePoolTarget,
             uint256 prizePoolCurrent,
+            uint256 nextPrizePool_,
             uint8 earlyPurgePercent_
         )
     {
@@ -178,7 +180,8 @@ contract PurgeGame is PurgeGameStorage {
         price_ = price;
         carry_ = carryOver;
         prizePoolTarget = lastPrizePool;
-        prizePoolCurrent = prizePool;
+        prizePoolCurrent = currentPrizePool;
+        nextPrizePool_ = nextPrizePool;
         earlyPurgePercent_ = earlyPurgePercent;
     }
 
@@ -275,34 +278,17 @@ contract PurgeGame is PurgeGameStorage {
             return _recordMintData(player, lvl, true);
         }
 
-        uint256 payment = msg.value;
-        if (payment == 0 && costWei != 0) {
+        uint256 amount = costWei;
+        if (msg.value == 0) {
             uint256 claimable = claimableWinnings[player];
-            if (claimable <= 1) revert E();
-
-            uint256 available;
+            if (claimable <= amount) revert E(); // preserves sentinel 1 when amount > 0
             unchecked {
-                available = claimable - 1;
-            }
-            if (available < costWei) revert E();
-
-            unchecked {
-                claimableWinnings[player] = (available - costWei) + 1;
-            }
-
-            if (creditNext) {
-                nextPrizePool += costWei;
-            } else {
-                prizePool += costWei;
+                claimableWinnings[player] = claimable - amount;
             }
         } else {
-            if (payment != costWei) revert E();
-            if (creditNext) {
-                nextPrizePool += payment;
-            } else {
-                prizePool += payment;
-            }
+            if (msg.value != amount) revert E();
         }
+        nextPrizePool += amount;
 
         coinReward = _recordMintData(player, lvl, false);
     }
@@ -368,7 +354,7 @@ contract PurgeGame is PurgeGameStorage {
                 if (_phase <= 2) {
                     bool advanceToAirdrop;
                     bool flipsPending = coinContract.coinflipWorkPending(lvl);
-                    if (_phase == 2 && prizePool >= lastPrizePool) {
+                    if (_phase == 2 && nextPrizePool >= lastPrizePool) {
                         if (flipsPending) {
                             coinContract.processCoinflipPayouts(lvl, cap, true, rngWord, day, priceCoin);
                             break;
@@ -655,10 +641,9 @@ contract PurgeGame is PurgeGameStorage {
     ///   from which the “exterminator” gets 20% (or 40% for 7th steps since L25),
     ///   and the rest is divided evenly per ticket for the exterminated trait.
     /// - Mint the level trophy (transfers the placeholder token owned by the contract).
-    /// - Start next level and seed `levelPrizePool`.
     ///
     /// When a non-trait end occurs (>=256, e.g. daily jackpots path):
-    /// - Allocate 10% of the remaining `prizePool` to the current MAP trophy holder and 5% each to three
+    /// - Allocate 10% of the remaining `currentPrizePool` to the current MAP trophy holder and 5% each to three
     ///   random MAP trophies still receiving drip payouts (with replacement).
     /// - Carry the remainder forward and reset leaderboards.
     /// - On L%100==0: adjust price and `lastPrizePool`.
@@ -676,7 +661,7 @@ contract PurgeGame is PurgeGameStorage {
         if (exterminated < 256) {
             uint8 exTrait = uint8(exterminated);
             bool repeatOrNinety = (uint16(exTrait) == lastExterminatedTrait) || (levelSnapshot == 90);
-            uint256 pool = prizePool;
+            uint256 pool = currentPrizePool;
 
             if (repeatOrNinety) {
                 uint256 keep = pool >> 1;
@@ -690,31 +675,27 @@ contract PurgeGame is PurgeGameStorage {
             uint256 participantShare = ninetyPercent - exterminatorShare;
 
             uint256 ticketsLen = traitPurgeTicket[levelSnapshot][exTrait].length;
-            prizePool = (ticketsLen == 0) ? 0 : (participantShare / ticketsLen);
+            currentPrizePool = (ticketsLen == 0) ? 0 : (participantShare / ticketsLen);
 
             pend.exterminator = exterminator;
             pend.sidePool = pool;
 
-            levelPrizePool = pool;
             lastExterminatedTrait = exTrait;
         } else {
             if (levelSnapshot % 100 == 0) {
                 price = 0.05 ether;
                 priceCoin >>= 1;
-                lastPrizePool = prizePool >> 3;
+                lastPrizePool = currentPrizePool >> 3;
             }
 
-            uint256 poolCarry = prizePool;
+            uint256 poolCarry = currentPrizePool;
 
             pend.exterminator = address(0);
             pend.sidePool = poolCarry;
 
-            prizePool = 0;
+            currentPrizePool = 0;
             lastExterminatedTrait = TRAIT_ID_TIMEOUT;
         }
-
-        dailyJackpotBase = 0;
-        dailyJackpotPaid = 0;
 
         trophies.prepareNextLevel(levelSnapshot + 1);
 

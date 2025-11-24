@@ -42,13 +42,10 @@ abstract contract PurgeGameStorage {
     // Prize Pools and RNG
     // -----------------------
     uint256 internal lastPrizePool = 125 ether;
-    uint256 internal levelPrizePool;
-    uint256 internal prizePool;
+    uint256 internal currentPrizePool;
     uint256 internal nextPrizePool;
     uint256 internal carryOver;
     uint256 internal decimatorHundredPool;
-    uint256 internal dailyJackpotBase;
-    uint256 internal dailyJackpotPaid;
     uint256 internal rngWordCurrent;
     uint256 internal vrfRequestId;
 

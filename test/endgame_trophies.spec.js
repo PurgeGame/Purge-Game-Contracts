@@ -213,7 +213,7 @@ describe("Endgame Trophy Mechanics", function () {
     const levelEntry = await getStorageEntry(PURGE_GAME_FQN, "level");
     const stateEntry = await getStorageEntry(PURGE_GAME_FQN, "gameState");
     const rngLockedEntry = await getStorageEntry(PURGE_GAME_FQN, "rngLockedFlag");
-    const prizePoolEntry = await getStorageEntry(PURGE_GAME_FQN, "prizePool");
+    const prizePoolEntry = await getStorageEntry(PURGE_GAME_FQN, "currentPrizePool");
 
     await setPackedValue(gameAddress, levelEntry, 5, 3);
     await setPackedValue(gameAddress, stateEntry, 3, 1);
@@ -301,7 +301,7 @@ describe("Endgame Trophy Mechanics", function () {
     const levelEntry = await getStorageEntry(PURGE_GAME_FQN, "level");
     const stateEntry = await getStorageEntry(PURGE_GAME_FQN, "gameState");
     const rngLockedEntry = await getStorageEntry(PURGE_GAME_FQN, "rngLockedFlag");
-    const prizePoolEntry = await getStorageEntry(PURGE_GAME_FQN, "prizePool");
+    const prizePoolEntry = await getStorageEntry(PURGE_GAME_FQN, "currentPrizePool");
     const jackpotCounterEntry = await getStorageEntry(PURGE_GAME_FQN, "jackpotCounter");
 
     await setPackedValue(gameAddress, levelEntry, 10, 3);

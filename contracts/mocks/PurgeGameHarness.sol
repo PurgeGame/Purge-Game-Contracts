@@ -54,11 +54,7 @@ contract PurgeGameHarness is PurgeGame {
     }
 
     function harnessSetPrize(uint256 unit) external {
-        prizePool = unit;
-    }
-
-    function harnessSetLevelPrize(uint256 amount) external {
-        levelPrizePool = amount;
+        currentPrizePool = unit;
     }
 
     function harnessGetNextPrizePool() external view returns (uint256) {
@@ -88,7 +84,7 @@ contract PurgeGameHarness is PurgeGame {
     }
 
     function harnessGetLevelPrize() external view returns (uint256) {
-        return levelPrizePool;
+        return currentPrizePool;
     }
 
     function harnessGetClaimable(address player) external view returns (uint256) {

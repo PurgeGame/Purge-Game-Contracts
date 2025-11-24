@@ -215,7 +215,7 @@ async function configureAdvanceScenario(
     PURGE_GAME_FQN,
     "carryoverForNextLevel"
   );
-  const prizeEntry = await getStorageEntry(PURGE_GAME_FQN, "prizePool");
+  const prizeEntry = await getStorageEntry(PURGE_GAME_FQN, "currentPrizePool");
   const rngWordEntry = await getStorageEntry(PURGE_GAME_FQN, "rngWord");
   const rngTsEntry = await getStorageEntry(PURGE_GAME_FQN, "rngTs");
   const rngFulfilledEntry = await getStorageEntry(

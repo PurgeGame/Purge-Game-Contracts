@@ -248,15 +248,11 @@ describe("AdvanceGame stake resolution", function () {
       PURGE_GAME_FQN,
       "jackpotCounter"
     );
-    const lastTraitEntry = await getStorageEntry(
-      PURGE_GAME_FQN,
-      "lastExterminatedTrait"
-    );
-    const levelPrizeEntry = await getStorageEntry(
-      PURGE_GAME_FQN,
-      "levelPrizePool"
-    );
-    const prizeEntry = await getStorageEntry(PURGE_GAME_FQN, "prizePool");
+  const lastTraitEntry = await getStorageEntry(
+    PURGE_GAME_FQN,
+    "lastExterminatedTrait"
+  );
+  const prizeEntry = await getStorageEntry(PURGE_GAME_FQN, "currentPrizePool");
     const carryEntry = await getStorageEntry(
       PURGE_GAME_FQN,
       "carryoverForNextLevel"
@@ -266,15 +262,14 @@ describe("AdvanceGame stake resolution", function () {
     await setPackedValue(gameAddress, phaseEntry, 7);
     await setPackedValue(gameAddress, stateEntry, 1);
     await setPackedValue(gameAddress, dailyIdxEntry, 0, 6);
-    await setPackedValue(gameAddress, jackpotCounterEntry, 0);
-    await setPackedValue(gameAddress, lastTraitEntry, 5, 2);
-    await setUint256(
-      gameAddress,
-      levelPrizeEntry,
-      ethers.parseEther("100")
-    );
-    await setUint256(gameAddress, prizeEntry, 0n);
-    await setUint256(gameAddress, carryEntry, 0n);
+  await setPackedValue(gameAddress, jackpotCounterEntry, 0);
+  await setPackedValue(gameAddress, lastTraitEntry, 5, 2);
+  await setUint256(
+    gameAddress,
+    prizeEntry,
+    ethers.parseEther("100")
+  );
+  await setUint256(gameAddress, carryEntry, 0n);
 
     // Configure pending end-level struct
     const pendingEntry = await getStorageEntry(
@@ -475,7 +470,7 @@ describe("AdvanceGame stake resolution", function () {
       PURGE_GAME_FQN,
       "carryoverForNextLevel"
     );
-    const prizeEntry = await getStorageEntry(PURGE_GAME_FQN, "prizePool");
+    const prizeEntry = await getStorageEntry(PURGE_GAME_FQN, "currentPrizePool");
     const dailyIdxEntry = await getStorageEntry(PURGE_GAME_FQN, "dailyIdx");
     const levelStartEntry = await getStorageEntry(
       PURGE_GAME_FQN,
@@ -662,7 +657,7 @@ describe("AdvanceGame stake resolution", function () {
     const phaseEntry = await getStorageEntry(PURGE_GAME_FQN, "phase");
     const stateEntry = await getStorageEntry(PURGE_GAME_FQN, "gameState");
     const carryEntry = await getStorageEntry(PURGE_GAME_FQN, "carryoverForNextLevel");
-    const prizeEntry = await getStorageEntry(PURGE_GAME_FQN, "prizePool");
+    const prizeEntry = await getStorageEntry(PURGE_GAME_FQN, "currentPrizePool");
     const dailyIdxEntry = await getStorageEntry(PURGE_GAME_FQN, "dailyIdx");
     const levelStartEntry = await getStorageEntry(PURGE_GAME_FQN, "levelStartTime");
 
@@ -798,7 +793,7 @@ describe("AdvanceGame stake resolution", function () {
     const levelEntry = await getStorageEntry(PURGE_GAME_FQN, "level");
     const phaseEntry = await getStorageEntry(PURGE_GAME_FQN, "phase");
     const stateEntry = await getStorageEntry(PURGE_GAME_FQN, "gameState");
-    const prizeEntry = await getStorageEntry(PURGE_GAME_FQN, "prizePool");
+    const prizeEntry = await getStorageEntry(PURGE_GAME_FQN, "currentPrizePool");
     const lastPrizeEntry = await getStorageEntry(PURGE_GAME_FQN, "lastPrizePool");
     const dailyIdxEntry = await getStorageEntry(PURGE_GAME_FQN, "dailyIdx");
     const levelStartEntry = await getStorageEntry(PURGE_GAME_FQN, "levelStartTime");
