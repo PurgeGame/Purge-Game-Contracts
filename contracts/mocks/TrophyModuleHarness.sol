@@ -210,11 +210,11 @@ contract TrophyNFTHarness is IPurgeGameNftModule {
         trophySupply -= amount;
     }
 
-    function gameAddress() external view override returns (address) {
+    function gameAddress() external view returns (address) {
         return _game;
     }
 
-    function coinAddress() external view override returns (address) {
+    function coinAddress() external view returns (address) {
         return _coin;
     }
 

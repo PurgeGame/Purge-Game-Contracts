@@ -224,6 +224,40 @@ contract PurgeGame is PurgeGameStorage {
         return uint24((mintPacked_[player] >> ETH_LEVEL_STREAK_SHIFT) & MINT_MASK_24);
     }
 
+    /// @notice Ticket counts per trait for a given level (useful for paging the arrays off-chain).
+    function traitTicketLengths(uint24 lvl) external view returns (uint256[256] memory lengths) {
+        address[][256] storage tickets = traitPurgeTicket[lvl];
+        for (uint256 i; i < 256; ) {
+            lengths[i] = tickets[i].length;
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    /// @notice Paged read of ticket holders for a specific trait at a level.
+    function traitTicketSlice(
+        uint24 lvl,
+        uint8 trait,
+        uint256 start,
+        uint256 count
+    ) external view returns (address[] memory slice) {
+        address[] storage arr = traitPurgeTicket[lvl][trait];
+        uint256 len = arr.length;
+        if (start >= len) return new address[](0);
+        uint256 n = count;
+        uint256 remaining = len - start;
+        if (n > remaining) n = remaining;
+
+        slice = new address[](n);
+        for (uint256 i; i < n; ) {
+            slice[i] = arr[start + i];
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
     /// @notice Record a mint, funded either by ETH (`msg.value`) or the caller's claimable balance.
     /// @dev For ETH paths, `msg.value` must equal `costWei`. For claimable paths, `msg.value` must be 0
     ///      and `costWei` is deducted from `claimableWinnings`, leaving the remainder (plus sentinel).
