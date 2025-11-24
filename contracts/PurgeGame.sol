@@ -363,7 +363,7 @@ contract PurgeGame is PurgeGameStorage {
                     payDailyJackpot(false, lvl, rngWord);
 
                     if (advanceToAirdrop && !batchesPending) {
-                        airdropMultiplier = _calculateAirdropMultiplier(nft.purchaseCount());
+                        airdropMultiplier = _calculateAirdropMultiplier(nft.purchaseCount(), lvl);
                         phase = 3;
                     }
                     dailyIdx = day;
@@ -1286,14 +1286,15 @@ contract PurgeGame is PurgeGameStorage {
         }
     }
 
-    function _calculateAirdropMultiplier(uint32 purchaseCount) private pure returns (uint32) {
+    function _calculateAirdropMultiplier(uint32 purchaseCount, uint24 lvl) private pure returns (uint32) {
         if (purchaseCount == 0) {
             return 1;
         }
-        if (purchaseCount >= 5000) {
+        uint256 target = (lvl % 10 == 8) ? 10_000 : 5_000;
+        if (purchaseCount >= target) {
             return 1;
         }
-        uint256 numerator = 5000 + uint256(purchaseCount) - 1;
+        uint256 numerator = target + uint256(purchaseCount) - 1;
         uint32 multiplier = uint32(numerator / purchaseCount);
         return multiplier == 0 ? 1 : multiplier;
     }

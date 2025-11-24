@@ -181,7 +181,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         IPurgeCoinModule coinContract
     ) external returns (uint256 effectiveWei) {
         uint256 totalWei = carryOver + prizePool;
-        // Burn 10% of the ETH pool, denominated in PURGE using the current mint conversion (priceCoin / price).
+        // Pay 10% PURGE using the current mint conversion (priceCoin / price) to Burnie.
         uint256 burnieAmount = (totalWei * priceCoin) / (10 * price);
         coinContract.burnie(burnieAmount);
 
