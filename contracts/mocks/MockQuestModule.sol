@@ -9,6 +9,13 @@ contract MockQuestModule is IPurgeQuestModule {
     function rollDailyQuest(uint48, uint256) external override returns (bool, uint8, bool, uint8, uint8) {
         return (false, 0, false, 0, 0);
     }
+    function rollDailyQuestWithOverrides(uint48, uint256, bool, bool)
+        external
+        override
+        returns (bool, uint8, bool, uint8, uint8)
+    {
+        return (false, 0, false, 0, 0);
+    }
     function handleMint(address, uint32, bool) external override returns (uint256, bool, uint8, uint32, bool) {
         return (0, false, 0, 0, false);
     }

@@ -49,6 +49,7 @@ interface IPurgeCoin {
     function primeMintEthQuest(uint48 day) external;
 
     function rollDailyQuest(uint48 day, uint256 entropy) external;
+    function rollDailyQuestWithOverrides(uint48 day, uint256 entropy, bool forceMintEth, bool forcePurge) external;
 
     function notifyQuestMint(address player, uint32 quantity, bool paidWithEth) external;
 

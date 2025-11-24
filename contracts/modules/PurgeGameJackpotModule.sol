@@ -102,7 +102,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         }
 
         coinContract.resetCoinflipLeaderboard();
-        _rollQuestForJackpot(coinContract, entropyWord, lvl);
+        _rollQuestForJackpot(coinContract, entropyWord, lvl, false);
 
         uint48 currentDay = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
         dailyIdx = currentDay;
@@ -167,7 +167,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         prizePool += remainingPool;
         levelPrizePool += remainingPool;
 
-        _rollQuestForJackpot(coinContract, rngWord, lvl);
+        _rollQuestForJackpot(coinContract, rngWord, lvl, true);
 
         uint48 questDay = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
         coinContract.primeMintEthQuest(questDay + 1);
@@ -412,7 +412,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         );
 
         coinContract.resetCoinflipLeaderboard();
-        _rollQuestForJackpot(coinContract, entropyWord, nextLevel);
+        _rollQuestForJackpot(coinContract, entropyWord, nextLevel, false);
 
         if (dailyPaidEth != 0) {
             uint256 carryAfter = carryOver;
@@ -725,10 +725,19 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         return state;
     }
 
-    function _rollQuestForJackpot(IPurgeCoinModule coinContract, uint256 entropySource, uint24 questLevel) private {
+    function _rollQuestForJackpot(
+        IPurgeCoinModule coinContract,
+        uint256 entropySource,
+        uint24 questLevel,
+        bool forceMintEthAndPurge
+    ) private {
         uint48 questDay = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
         uint256 questEntropy = uint256(keccak256(abi.encode(entropySource, questLevel, jackpotCounter, "daily-quest")));
-        coinContract.rollDailyQuest(questDay, questEntropy);
+        if (forceMintEthAndPurge) {
+            coinContract.rollDailyQuestWithOverrides(questDay, questEntropy, true, true);
+        } else {
+            coinContract.rollDailyQuest(questDay, questEntropy);
+        }
     }
 
     function _creditJackpot(

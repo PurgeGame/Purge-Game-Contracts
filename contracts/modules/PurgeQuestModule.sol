@@ -21,6 +21,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
     uint8 private constant QUEST_TYPE_COUNT = 7;
     uint8 private constant QUEST_FLAG_HIGH_DIFFICULTY = 1 << 0;
     uint8 private constant QUEST_FLAG_VERY_HIGH_DIFFICULTY = 1 << 1;
+    uint8 private constant QUEST_FLAG_FORCE_PURGE = 1 << 2;
     uint8 private constant QUEST_STAKE_REQUIRE_PRINCIPAL = 1 << 0;
     uint8 private constant QUEST_STAKE_REQUIRE_DISTANCE = 1 << 1;
     uint8 private constant QUEST_STAKE_REQUIRE_RISK = 1 << 2;
@@ -112,22 +113,39 @@ contract PurgeQuestModule is IPurgeQuestModule {
         uint48 day,
         uint256 entropy
     ) external onlyCoin returns (bool rolled, uint8 questType, bool highDifficulty, uint8 stakeMask, uint8 stakeRisk) {
+        return _rollDailyQuest(day, entropy, false, false);
+    }
+
+    function rollDailyQuestWithOverrides(
+        uint48 day,
+        uint256 entropy,
+        bool forceMintEth,
+        bool forcePurge
+    ) external onlyCoin returns (bool rolled, uint8 questType, bool highDifficulty, uint8 stakeMask, uint8 stakeRisk) {
+        return _rollDailyQuest(day, entropy, forceMintEth, forcePurge);
+    }
+
+    function _rollDailyQuest(
+        uint48 day,
+        uint256 entropy,
+        bool forceMintEth,
+        bool forcePurge
+    ) private returns (bool rolled, uint8 questType, bool highDifficulty, uint8 stakeMask, uint8 stakeRisk) {
         if (day == 0) revert InvalidQuestDay();
         if (entropy == 0) revert InvalidEntropy();
         DailyQuest[QUEST_SLOT_COUNT] storage quests = activeQuests;
-        bool purgeAllowed = _canRollPurgeQuest();
+        uint48 forcedDay = forcedMintEthQuestDay;
+        if (forcedDay != 0 && day >= forcedDay) {
+            forceMintEth = day == forcedDay;
+            forcedMintEthQuestDay = 0;
+        }
+        bool purgeAllowed = _canRollPurgeQuest(day) || forcePurge;
         bool decAllowed = _canRollDecimatorQuest();
         _normalizeActivePurgeQuestsStorage(quests, purgeAllowed);
         if (_questsCurrent(quests, day)) {
             DailyQuest storage current = quests[0];
             bool hard = (current.flags & QUEST_FLAG_HIGH_DIFFICULTY) != 0;
             return (false, current.questType, hard, current.stakeMask, current.stakeRisk);
-        }
-        bool forceMintEth;
-        uint48 forcedDay = forcedMintEthQuestDay;
-        if (forcedDay != 0 && day >= forcedDay) {
-            forceMintEth = day == forcedDay;
-            forcedMintEthQuestDay = 0;
         }
         for (uint8 slot; slot < QUEST_SLOT_COUNT; ) {
             uint8 exclude = slot == 0 ? type(uint8).max : quests[0].questType;
@@ -137,10 +155,20 @@ contract PurgeQuestModule is IPurgeQuestModule {
                 slotEntropy = (entropy >> 128) | (entropy << 128);
             }
             _seedQuest(quests[slot], day, slotEntropy, exclude);
-            if (slot == 0 && forceMintEth) {
+            bool forceMintSlot = slot == 0 && forceMintEth;
+            bool forcePurgeSlot = slot == 1 && forcePurge;
+            if (forceMintSlot) {
                 quests[slot].questType = QUEST_TYPE_MINT_ETH;
+                quests[slot].stakeMask = 0;
+                quests[slot].stakeRisk = 0;
+            } else if (forcePurgeSlot) {
+                quests[slot].questType = QUEST_TYPE_PURGE;
+                quests[slot].stakeMask = 0;
+                quests[slot].stakeRisk = 0;
+                quests[slot].flags |= QUEST_FLAG_FORCE_PURGE;
             } else {
                 _applyQuestTypeConstraints(quests, slot, purgeAllowed, decAllowed);
+                quests[slot].flags &= ~QUEST_FLAG_FORCE_PURGE;
             }
             unchecked {
                 ++slot;
@@ -480,12 +508,14 @@ contract PurgeQuestModule is IPurgeQuestModule {
         returns (DailyQuest[QUEST_SLOT_COUNT] memory local)
     {
         local = activeQuests;
-        bool purgeAllowed = _canRollPurgeQuest();
+        bool purgeAllowed = _canRollPurgeQuest(_currentQuestDay(local));
         if (purgeAllowed) return local;
         for (uint8 slot; slot < QUEST_SLOT_COUNT; ) {
             if (local[slot].questType == QUEST_TYPE_PURGE) {
                 uint8 otherSlot = slot == 0 ? uint8(1) : uint8(0);
-                if (local[otherSlot].questType == QUEST_TYPE_MINT_ETH) {
+                if ((local[slot].flags & QUEST_FLAG_FORCE_PURGE) != 0) {
+                    // Keep as-is
+                } else if (local[otherSlot].questType == QUEST_TYPE_MINT_ETH) {
                     local[slot].questType = QUEST_TYPE_STAKE;
                     (local[slot].stakeMask, local[slot].stakeRisk) = _stakeQuestMaskAndRisk(local[slot].entropy);
                 } else {
@@ -547,7 +577,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
 
     function _normalizeActivePurgeQuests() private {
         DailyQuest[QUEST_SLOT_COUNT] storage quests = activeQuests;
-        bool purgeAllowed = _canRollPurgeQuest();
+        bool purgeAllowed = _canRollPurgeQuest(quests[0].day != 0 ? quests[0].day : quests[1].day);
         _normalizeActivePurgeQuestsStorage(quests, purgeAllowed);
     }
 
@@ -558,7 +588,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         if (purgeAllowed) return;
         for (uint8 slot; slot < QUEST_SLOT_COUNT; ) {
             DailyQuest storage quest = quests[slot];
-            if (quest.questType == QUEST_TYPE_PURGE) {
+            if (quest.questType == QUEST_TYPE_PURGE && (quest.flags & QUEST_FLAG_FORCE_PURGE) == 0) {
                 _convertPurgeQuest(quests, slot);
             }
             unchecked {
@@ -579,9 +609,10 @@ contract PurgeQuestModule is IPurgeQuestModule {
             quest.stakeMask = 0;
             quest.stakeRisk = 0;
         }
+        quest.flags &= ~QUEST_FLAG_FORCE_PURGE;
     }
 
-    function _canRollPurgeQuest() private view returns (bool) {
+    function _canRollPurgeQuest(uint48 /*questDay*/) private view returns (bool) {
         IPurgeGame game_ = questGame;
         if (address(game_) == address(0)) {
             return false;
@@ -762,6 +793,9 @@ contract PurgeQuestModule is IPurgeQuestModule {
         uint256 entropy
     ) private {
         if (QUEST_SLOT_COUNT < 2) return;
+        if ((quests[1].flags & QUEST_FLAG_FORCE_PURGE) != 0 || (quests[0].flags & QUEST_FLAG_FORCE_PURGE) != 0) {
+            return;
+        }
         uint8 referenceType = quests[0].questType;
         if (quests[1].questType != referenceType) return;
         for (uint8 attempt; attempt < QUEST_TYPE_COUNT * 2; ) {

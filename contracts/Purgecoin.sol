@@ -879,6 +879,27 @@ contract Purgecoin is PurgeCoinStorage {
         }
     }
 
+    function rollDailyQuestWithOverrides(uint48 day, uint256 entropy, bool forceMintEth, bool forcePurge)
+        external
+        onlyPurgeGameContract
+    {
+        IPurgeQuestModule module = questModule;
+        (bool rolled, , , , ) = module.rollDailyQuestWithOverrides(day, entropy, forceMintEth, forcePurge);
+        if (rolled) {
+            QuestInfo[2] memory quests = module.getActiveQuests();
+            for (uint256 i; i < 2; ) {
+                QuestInfo memory info = quests[i];
+                if (info.day == day) {
+                    emit DailyQuestRolled(day, info.questType, info.highDifficulty, info.stakeMask, info.stakeRisk);
+                    break;
+                }
+                unchecked {
+                    ++i;
+                }
+            }
+        }
+    }
+
     function notifyQuestMint(address player, uint32 quantity, bool paidWithEth) external onlyGameplayContracts {
         IPurgeQuestModule module = questModule;
         (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleMint(

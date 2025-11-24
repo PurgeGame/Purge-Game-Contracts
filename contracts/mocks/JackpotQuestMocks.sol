@@ -11,6 +11,8 @@ contract JackpotCoinModuleMock is IPurgeCoinModule {
     uint48 public lastRollDay;
     uint256 public lastRollEntropy;
     uint256 public rollCount;
+    bool public lastRollForceMint;
+    bool public lastRollForcePurge;
     uint48 public lastPrimeDay;
 
     function setCoinJackpot(uint256 amount, address biggestFlip) external {
@@ -93,6 +95,18 @@ contract JackpotCoinModuleMock is IPurgeCoinModule {
     function rollDailyQuest(uint48 day, uint256 entropy) external override {
         lastRollDay = day;
         lastRollEntropy = entropy;
+        lastRollForceMint = false;
+        lastRollForcePurge = false;
+        unchecked {
+            ++rollCount;
+        }
+    }
+
+    function rollDailyQuestWithOverrides(uint48 day, uint256 entropy, bool forceMintEth, bool forcePurge) external override {
+        lastRollDay = day;
+        lastRollEntropy = entropy;
+        lastRollForceMint = forceMintEth;
+        lastRollForcePurge = forcePurge;
         unchecked {
             ++rollCount;
         }

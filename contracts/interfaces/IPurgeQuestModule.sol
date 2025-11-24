@@ -26,6 +26,9 @@ interface IPurgeQuestModule {
     function rollDailyQuest(uint48 day, uint256 entropy)
         external
         returns (bool rolled, uint8 questType, bool highDifficulty, uint8 stakeMask, uint8 stakeRisk);
+    function rollDailyQuestWithOverrides(uint48 day, uint256 entropy, bool forceMintEth, bool forcePurge)
+        external
+        returns (bool rolled, uint8 questType, bool highDifficulty, uint8 stakeMask, uint8 stakeRisk);
 
     function handleMint(address player, uint32 quantity, bool paidWithEth)
         external
