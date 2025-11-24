@@ -74,7 +74,7 @@ interface IPurgeGameTrophies {
 
     function stakedTrophySample(uint256 rngSeed) external view returns (address owner);
 
-    function hasTrophy(uint256 tokenId) external view returns (bool);
+    function isTrophy(uint256 tokenId) external view returns (bool);
 
     function trophyData(uint256 tokenId) external view returns (uint256 rawData);
 
@@ -1607,7 +1607,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         owner = address(uint160(nft.packedOwnershipOf(chosen)));
     }
 
-    function hasTrophy(uint256 tokenId) external view override returns (bool) {
+    function isTrophy(uint256 tokenId) external view override returns (bool) {
         return trophyData_[tokenId] != 0;
     }
 

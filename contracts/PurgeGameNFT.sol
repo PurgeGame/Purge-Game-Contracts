@@ -286,7 +286,7 @@ contract PurgeGameNFT {
         // Revert for nonexistent or burned tokens (keeps ERC721-consistent surface for indexers).
         _packedOwnershipOf(tokenId);
 
-        uint256 info = address(trophyModule) == address(0) ? 0 : trophyModule.trophyData(tokenId);
+        uint256 info = trophyModule.trophyData(tokenId);
         if (info != 0) {
             uint32[4] memory extras;
             uint32 flags;
@@ -510,15 +510,13 @@ contract PurgeGameNFT {
         uint256 priceUnit
     ) private returns (uint256 bonusMint) {
         if (mapPurchase) {
-            uint8 mapDiscount = address(trophyModule) == address(0) ? 0 : trophyModule.mapStakeDiscount(payer);
+            uint8 mapDiscount = trophyModule.mapStakeDiscount(payer);
             if (mapDiscount != 0) {
                 uint256 discountWei = (expectedWei * mapDiscount) / 100;
                 expectedWei -= discountWei;
             }
         } else {
-            uint8 levelDiscount = address(trophyModule) == address(0)
-                ? 0
-                : trophyModule.exterminatorStakeDiscount(payer);
+            uint8 levelDiscount = trophyModule.exterminatorStakeDiscount(payer);
             if (levelDiscount != 0) {
                 uint256 discountWei = (expectedWei * levelDiscount) / 100;
                 expectedWei -= discountWei;
@@ -708,9 +706,7 @@ contract PurgeGameNFT {
             }
         }
 
-        if (
-            tokenId < _currentBaseTokenId() && (address(trophyModule) == address(0) || !trophyModule.hasTrophy(tokenId))
-        ) {
+        if (tokenId < _currentBaseTokenId() && !trophyModule.isTrophy(tokenId)) {
             revert InvalidToken();
         }
 
@@ -766,7 +762,7 @@ contract PurgeGameNFT {
 
     function _exists(uint256 tokenId) internal view returns (bool) {
         if (tokenId < _currentBaseTokenId()) {
-            if (address(trophyModule) != address(0) && trophyModule.hasTrophy(tokenId)) return true;
+            if (trophyModule.isTrophy(tokenId)) return true;
             uint256 packed = _packedOwnerships[tokenId];
             if (packed == 0) {
                 unchecked {
@@ -1347,7 +1343,7 @@ contract PurgeGameNFT {
         bool isActive;
         IPurgeGameTrophies module = trophyModule;
 
-        isActive = module.hasTrophy(tokenId);
+        isActive = module.isTrophy(tokenId);
 
         uint256 cleared = packed & ~(_BITMASK_TROPHY_KIND | _BITMASK_TROPHY_STAKED | _BITMASK_TROPHY_ACTIVE);
         uint256 updated = cleared | (uint256(kind) << _BITPOS_TROPHY_KIND);
@@ -1408,7 +1404,7 @@ contract PurgeGameNFT {
         view
         returns (uint256 owedWei, uint24 baseLevel, uint24 lastClaimLevel, uint16 traitId, uint8 trophyKind)
     {
-        uint256 raw = address(trophyModule) == address(0) ? 0 : trophyModule.trophyData(tokenId);
+        uint256 raw = trophyModule.trophyData(tokenId);
         owedWei = raw & TROPHY_OWED_MASK;
         uint256 shiftedBase = raw >> TROPHY_BASE_LEVEL_SHIFT;
         baseLevel = uint24(shiftedBase);
