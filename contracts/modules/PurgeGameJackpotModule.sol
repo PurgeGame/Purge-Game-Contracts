@@ -16,6 +16,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
     uint48 private constant JACKPOT_RESET_TIME = 82620;
     uint8 private constant JACKPOT_LEVEL_CAP = 10;
     uint8 private constant EARLY_PURGE_COIN_ONLY_THRESHOLD = 50;
+    uint8 private constant EARLY_PURGE_BOOST_THRESHOLD = 60;
     uint8 private constant PURGE_TROPHY_KIND_MAP = 0;
     uint256 private constant DEGENERATE_ENTROPY_CHECK_VALUE = 420;
     uint64 private constant MAP_JACKPOT_SHARES_PACKED =
@@ -67,21 +68,21 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         uint8[4] memory winningTraits = _getRandomTraits(entropyWord);
         uint32 winningTraitsPacked = _packWinningTraits(winningTraits);
 
-        bool coinOnly = percentBefore >= EARLY_PURGE_COIN_ONLY_THRESHOLD;
+        bool boostTrigger = purchasePhaseActive &&
+            percentBefore < EARLY_PURGE_BOOST_THRESHOLD &&
+            percentAfter >= EARLY_PURGE_BOOST_THRESHOLD;
+        bool coinOnly = percentBefore >= EARLY_PURGE_COIN_ONLY_THRESHOLD && !boostTrigger;
         uint256 poolWei;
         if (!coinOnly && (purchasePhaseActive || purgePhaseActive || kickoffJackpot)) {
             uint256 carryBal = carryOver;
             uint256 poolBps = kickoffJackpot ? 300 : 50; // default 0.5% unless first jackpot
             bool initialTrigger = kickoffJackpot;
-            bool thresholdTrigger = purchasePhaseActive &&
-                percentBefore < EARLY_PURGE_COIN_ONLY_THRESHOLD &&
-                percentAfter >= EARLY_PURGE_COIN_ONLY_THRESHOLD;
             uint256 boostedBps;
 
             if (initialTrigger) {
                 boostedBps += 300;
             }
-            if (thresholdTrigger) {
+            if (boostTrigger) {
                 boostedBps += 300;
             }
             if (boostedBps != 0) {
