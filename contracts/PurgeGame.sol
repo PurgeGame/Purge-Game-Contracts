@@ -698,6 +698,13 @@ contract PurgeGame is PurgeGameStorage {
 
         traitRebuildCursor = 0;
         jackpotCounter = 0;
+        // Reset daily purge counters so the next level's jackpots start fresh.
+        for (uint8 i; i < 80; ) {
+            dailyPurgeCount[i] = 0;
+            unchecked {
+                ++i;
+            }
+        }
 
         uint256 mod100 = levelSnapshot % 100;
         uint256 mod20 = levelSnapshot % 20;
