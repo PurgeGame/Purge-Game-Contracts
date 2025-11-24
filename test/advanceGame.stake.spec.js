@@ -331,7 +331,6 @@ describe("AdvanceGame stake resolution", function () {
     );
     console.log("state after first", stateAfterFirst);
     expect(stateAfterFirst).to.equal(1);
-    console.log("rng word after first", await purgeNFT.currentRngWord());
     const pendingAfterFirst = await readStorage(
       gameAddress,
       toBytes32(pendingSlot)
@@ -375,7 +374,6 @@ describe("AdvanceGame stake resolution", function () {
       await getPackedValue(gameAddress, stateEntry)
     );
     console.log("state after second", finalState);
-    console.log("rng word after second", await purgeNFT.currentRngWord());
     const pendingAfterSecond = await readStorage(
       gameAddress,
       toBytes32(pendingSlot)

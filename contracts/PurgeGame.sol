@@ -204,10 +204,6 @@ contract PurgeGame is PurgeGameStorage {
         return rngLockedFlag;
     }
 
-    function currentRngWord() public view returns (uint256) {
-        return rngFulfilled ? rngWordCurrent : 0;
-    }
-
     function isRngFulfilled() external view returns (bool) {
         return rngFulfilled;
     }
@@ -1046,7 +1042,7 @@ contract PurgeGame is PurgeGameStorage {
             writesBudget -= (writesBudget * 35) / 100; // 65% scaling
         }
         uint32 used = 0;
-        uint256 entropy = rngFulfilled ? rngWordCurrent : 0;
+        uint256 entropy = rngWordCurrent;
 
         while (airdropIndex < total && used < writesBudget) {
             address player = pendingMapMints[airdropIndex];

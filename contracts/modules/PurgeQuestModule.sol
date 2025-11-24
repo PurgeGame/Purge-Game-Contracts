@@ -211,6 +211,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
             return (0, false, QUEST_TYPE_MINT_ETH, state.streak, false);
         }
 
+        uint256 priceUnit = questGame.coinPriceUnit();
         bool matched;
         bool aggregatedCompleted;
         bool aggregatedHardMode;
@@ -234,7 +235,8 @@ contract PurgeQuestModule is IPurgeQuestModule {
                     quest,
                     slot,
                     quantity,
-                    tier
+                    tier,
+                    priceUnit
                 );
                 if (completed) {
                     aggregatedReward += reward;
@@ -269,6 +271,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         }
         _questSyncState(state, currentDay);
         uint8 tier = _questTier(state.baseStreak);
+        uint256 priceUnit = questGame.coinPriceUnit();
 
         bool matched;
         uint8 fallbackType = quests[0].questType;
@@ -289,7 +292,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
             }
             uint256 target = uint256(_questFlipTargetTokens(tier, quest.entropy)) * MILLION;
             if (state.progress[slot] >= target) {
-                return _questComplete(state, slot, quest);
+                return _questComplete(state, slot, quest, priceUnit);
             }
             unchecked {
                 ++slot;
@@ -311,6 +314,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         }
         _questSyncState(state, currentDay);
         uint8 tier = _questTier(state.baseStreak);
+        uint256 priceUnit = questGame.coinPriceUnit();
 
         bool matched;
         uint8 fallbackType = quests[0].questType;
@@ -331,7 +335,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
             }
             uint256 target = uint256(_questDecimatorTargetTokens(tier, quest.entropy)) * MILLION;
             if (state.progress[slot] >= target) {
-                return _questComplete(state, slot, quest);
+                return _questComplete(state, slot, quest, priceUnit);
             }
             unchecked {
                 ++slot;
@@ -355,6 +359,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         PlayerQuestState storage state = questPlayerState[player];
         _questSyncState(state, currentDay);
         uint8 tier = _questTier(state.baseStreak);
+        uint256 priceUnit = questGame.coinPriceUnit();
 
         bool matched;
         uint8 fallbackType = quests[0].questType;
@@ -381,7 +386,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
                 meets = risk >= quest.stakeRisk;
             }
             if (meets) {
-                return _questComplete(state, slot, quest);
+                return _questComplete(state, slot, quest, priceUnit);
             }
             unchecked {
                 ++slot;
@@ -403,6 +408,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         }
         _questSyncState(state, currentDay);
         uint8 tier = _questTier(state.baseStreak);
+        uint256 priceUnit = questGame.coinPriceUnit();
 
         bool matched;
         uint8 fallbackType = quests[0].questType;
@@ -420,7 +426,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
             state.progress[slot] = _clampedAdd128(state.progress[slot], amount);
             uint256 target = uint256(_questAffiliateTargetTokens(tier, quest.entropy)) * MILLION;
             if (state.progress[slot] >= target) {
-                return _questComplete(state, slot, quest);
+                return _questComplete(state, slot, quest, priceUnit);
             }
             unchecked {
                 ++slot;
@@ -442,6 +448,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         }
         _questSyncState(state, currentDay);
         uint8 tier = _questTier(state.baseStreak);
+        uint256 priceUnit = questGame.coinPriceUnit();
 
         bool matched;
         uint8 fallbackType = quests[0].questType;
@@ -459,7 +466,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
             state.progress[slot] = _clampedAdd128(state.progress[slot], quantity);
             uint32 target = _questPurgeTarget(tier, quest.entropy);
             if (state.progress[slot] >= target) {
-                return _questComplete(state, slot, quest);
+                return _questComplete(state, slot, quest, priceUnit);
             }
             unchecked {
                 ++slot;
@@ -655,7 +662,8 @@ contract PurgeQuestModule is IPurgeQuestModule {
         DailyQuest memory quest,
         uint8 slot,
         uint32 quantity,
-        uint8 tier
+        uint8 tier,
+        uint256 priceUnit
     ) private returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) {
         _questSyncProgress(state, slot, quest.day);
         state.progress[slot] = _clampedAdd128(state.progress[slot], quantity);
@@ -663,7 +671,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
             ? _questMintAnyTarget(tier, quest.entropy)
             : _questMintEthTarget(tier, quest.entropy);
         if (state.progress[slot] >= target) {
-            return _questComplete(state, slot, quest);
+            return _questComplete(state, slot, quest, priceUnit);
         }
         return (0, false, quest.questType, state.streak, false);
     }
@@ -850,7 +858,8 @@ contract PurgeQuestModule is IPurgeQuestModule {
     function _questComplete(
         PlayerQuestState storage state,
         uint8 slot,
-        DailyQuest memory quest
+        DailyQuest memory quest,
+        uint256 priceUnit
     ) private returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) {
         uint8 slotMask = uint8(1 << slot);
         if ((state.completionMask & slotMask) != 0) {
@@ -871,16 +880,15 @@ contract PurgeQuestModule is IPurgeQuestModule {
         }
         bool isHard = (quest.flags & QUEST_FLAG_HIGH_DIFFICULTY) != 0;
         uint32 rewardStreak = streakJustUpdated ? newStreak : state.baseStreak;
-        uint256 baseReward = _questBaseReward(rewardStreak, quest.flags);
+        uint256 baseReward = _questBaseReward(rewardStreak, quest.flags, priceUnit);
         uint256 rewardShare = baseReward / QUEST_SLOT_COUNT;
         if (streakJustUpdated) {
-            rewardShare += _questStreakBonus(newStreak);
+            rewardShare += _questStreakBonus(newStreak, priceUnit);
         }
         return (rewardShare, isHard, quest.questType, newStreak, true);
     }
 
-    function _questBaseReward(uint32 streak, uint8 questFlags) private view returns (uint256 totalReward) {
-        uint256 priceUnit = questGame.coinPriceUnit();
+    function _questBaseReward(uint32 streak, uint8 questFlags, uint256 priceUnit) private pure returns (uint256 totalReward) {
         totalReward = priceUnit / 5; // 20% of mint coin cost
         uint8 tier = _questTier(streak);
         if ((questFlags & QUEST_FLAG_HIGH_DIFFICULTY) != 0 && streak >= QUEST_TIER_STREAK_SPAN) {
@@ -891,10 +899,9 @@ contract PurgeQuestModule is IPurgeQuestModule {
         }
     }
 
-    function _questStreakBonus(uint32 streak) private view returns (uint256 bonusReward) {
+    function _questStreakBonus(uint32 streak, uint256 priceUnit) private pure returns (uint256 bonusReward) {
         if (streak < 5) return 0;
         if (streak != 5 && (streak % 10) != 0) return 0;
-        uint256 priceUnit = questGame.coinPriceUnit();
         uint256 bonus = uint256(streak) * (priceUnit / 10); // 10% of mint coin cost per streak unit
         uint256 maxBonus = priceUnit * 3; // Cap at 3x mint coin cost
         if (bonus > maxBonus) bonus = maxBonus;

@@ -27,6 +27,20 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
     bytes32 private constant CARRYOVER_3D4_SALT = keccak256("carryover-3d4");
     uint256 private constant TROPHY_FLAG_MAP = uint256(1) << 200;
 
+    struct JackpotParams {
+        uint24 lvl;
+        uint256 ethPool;
+        uint256 coinPool;
+        bool mapTrophy;
+        uint256 entropy;
+        uint32 winningTraitsPacked;
+        uint64 traitShareBpsPacked;
+        IPurgeCoinModule coinContract;
+        IPurgeGameTrophiesModule trophiesContract;
+        uint256 mapStakeSiphon;
+        uint256 mapTrophyBonus;
+    }
+
     function payDailyJackpot(
         bool isDaily,
         uint24 lvl,
@@ -86,19 +100,20 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         }
         uint256 paidWei;
         if (poolWei != 0 || coinPool != 0) {
-            (paidWei, , ) = _runJackpot(
-                lvl,
-                poolWei,
-                coinPool,
-                false,
-                entropyWord ^ (uint256(lvl) << 192),
-                winningTraitsPacked,
-                DAILY_JACKPOT_SHARES_PACKED,
-                coinContract,
-                trophiesContract,
-                0,
-                0
-            );
+            JackpotParams memory jp = JackpotParams({
+                lvl: lvl,
+                ethPool: poolWei,
+                coinPool: coinPool,
+                mapTrophy: false,
+                entropy: entropyWord ^ (uint256(lvl) << 192),
+                winningTraitsPacked: winningTraitsPacked,
+                traitShareBpsPacked: DAILY_JACKPOT_SHARES_PACKED,
+                coinContract: coinContract,
+                trophiesContract: trophiesContract,
+                mapStakeSiphon: 0,
+                mapTrophyBonus: 0
+            });
+            (paidWei, ) = _runJackpot(jp);
         }
 
         coinContract.resetCoinflipLeaderboard();
@@ -145,19 +160,20 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         mapTrophyFallback += stakeRemainder;
 
         uint256 paidWeiMap;
-        (paidWeiMap, , ) = _runJackpot(
-            lvl,
-            effectiveWei,
-            0,
-            true,
-            rngWord,
-            winningTraitsPacked,
-            MAP_JACKPOT_SHARES_PACKED,
-            coinContract,
-            trophiesContract,
-            stakeTotal,
-            mapTrophyFallback
-        );
+        JackpotParams memory jp = JackpotParams({
+            lvl: lvl,
+            ethPool: effectiveWei,
+            coinPool: 0,
+            mapTrophy: true,
+            entropy: rngWord,
+            winningTraitsPacked: winningTraitsPacked,
+            traitShareBpsPacked: MAP_JACKPOT_SHARES_PACKED,
+            coinContract: coinContract,
+            trophiesContract: trophiesContract,
+            mapStakeSiphon: stakeTotal,
+            mapTrophyBonus: mapTrophyFallback
+        });
+        (paidWeiMap, ) = _runJackpot(jp);
 
         uint256 distributedEth = paidWeiMap + stakePaid;
         if (distributedEth > effectiveWei) {
@@ -314,57 +330,45 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         return (lvl % 20 == 16) ? 30 : 17;
     }
 
-    function _runJackpot(
-        uint24 lvl,
-        uint256 ethPool,
-        uint256 coinPool,
-        bool mapTrophy,
-        uint256 entropy,
-        uint32 winningTraitsPacked,
-        uint64 traitShareBpsPacked,
-        IPurgeCoinModule coinContract,
-        IPurgeGameTrophiesModule trophiesContract,
-        uint256 mapStakeSiphon,
-        uint256 mapTrophyBonus
-    ) private returns (uint256 totalPaidEth, uint256 totalPaidCoin, uint256 coinRemainder) {
-        if (ethPool == 0 && coinPool == 0) {
-            return (0, 0, 0);
+    function _runJackpot(JackpotParams memory jp) private returns (uint256 totalPaidEth, uint256 totalPaidCoin) {
+        if (jp.ethPool == 0 && jp.coinPool == 0) {
+            return (0, 0);
         }
 
-        uint8 band = uint8((lvl % 100) / 20) + 1;
-        uint16[4] memory bucketCounts = _traitBucketCounts(band, entropy);
-        uint8[4] memory traitIds = _unpackWinningTraits(winningTraitsPacked);
-        uint16[4] memory shareBps = _shareBpsByBucket(traitShareBpsPacked, uint8(entropy & 3));
+        uint8 band = uint8((jp.lvl % 100) / 20) + 1;
+        uint16[4] memory bucketCounts = _traitBucketCounts(band, jp.entropy);
+        uint8[4] memory traitIds = _unpackWinningTraits(jp.winningTraitsPacked);
+        uint16[4] memory shareBps = _shareBpsByBucket(jp.traitShareBpsPacked, uint8(jp.entropy & 3));
 
-        if (ethPool != 0) {
+        if (jp.ethPool != 0) {
             (totalPaidEth, , ) = _runJackpotEth(
-                mapTrophy,
-                lvl,
-                ethPool,
-                entropy,
+                jp.mapTrophy,
+                jp.lvl,
+                jp.ethPool,
+                jp.entropy,
                 traitIds,
                 shareBps,
                 bucketCounts,
-                coinContract,
-                trophiesContract,
-                mapStakeSiphon,
-                mapTrophyBonus
+                jp.coinContract,
+                jp.trophiesContract,
+                jp.mapStakeSiphon,
+                jp.mapTrophyBonus
             );
         }
 
-        if (coinPool != 0) {
+        if (jp.coinPool != 0) {
             totalPaidCoin = _runJackpotCoin(
-                lvl,
-                coinPool,
-                entropy ^ uint256(COIN_JACKPOT_TAG),
+                jp.lvl,
+                jp.coinPool,
+                jp.entropy ^ uint256(COIN_JACKPOT_TAG),
                 traitIds,
                 shareBps,
                 bucketCounts,
-                coinContract
+                jp.coinContract
             );
         }
 
-        coinRemainder = 0;
+        return (totalPaidEth, totalPaidCoin);
     }
 
     function _handleDailyJackpot(
@@ -455,19 +459,20 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         if (budget > prizePool) {
             budget = prizePool;
         }
-        (uint256 paid, , ) = _runJackpot(
-            lvl,
-            budget,
-            0,
-            false,
-            entropy,
-            winningTraitsPacked,
-            DAILY_JACKPOT_SHARES_PACKED,
-            coinContract,
-            trophiesContract,
-            0,
-            0
-        );
+        JackpotParams memory jp = JackpotParams({
+            lvl: lvl,
+            ethPool: budget,
+            coinPool: 0,
+            mapTrophy: false,
+            entropy: entropy,
+            winningTraitsPacked: winningTraitsPacked,
+            traitShareBpsPacked: DAILY_JACKPOT_SHARES_PACKED,
+            coinContract: coinContract,
+            trophiesContract: trophiesContract,
+            mapStakeSiphon: 0,
+            mapTrophyBonus: 0
+        });
+        (uint256 paid, ) = _runJackpot(jp);
         if (paid == 0) return;
         uint256 poolBal = prizePool;
         prizePool = paid > poolBal ? 0 : poolBal - paid;
@@ -501,19 +506,20 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         if (futureEthPool == 0 && dailyCoinPool == 0) return 0;
 
         uint256 nextEntropy = _entropyStep(entropyWord) ^ (uint256(nextLevel) << 192);
-        (paidEth, , ) = _runJackpot(
-            nextLevel,
-            futureEthPool,
-            dailyCoinPool,
-            false,
-            nextEntropy,
-            winningTraitsPacked,
-            DAILY_JACKPOT_SHARES_PACKED,
-            coinContract,
-            trophiesContract,
-            0,
-            0
-        );
+        JackpotParams memory jp = JackpotParams({
+            lvl: nextLevel,
+            ethPool: futureEthPool,
+            coinPool: dailyCoinPool,
+            mapTrophy: false,
+            entropy: nextEntropy,
+            winningTraitsPacked: winningTraitsPacked,
+            traitShareBpsPacked: DAILY_JACKPOT_SHARES_PACKED,
+            coinContract: coinContract,
+            trophiesContract: trophiesContract,
+            mapStakeSiphon: 0,
+            mapTrophyBonus: 0
+        });
+        (paidEth, ) = _runJackpot(jp);
     }
 
     function _runJackpotEth(
