@@ -5,7 +5,7 @@ import {PurgeGameNFT} from "./PurgeGameNFT.sol";
 import {IPurgeGameTrophies, PURGE_TROPHY_KIND_STAKE} from "./PurgeGameTrophies.sol";
 import {IPurgeGame} from "./interfaces/IPurgeGame.sol";
 import {IPurgeRenderer} from "./interfaces/IPurgeRenderer.sol";
-import {IPurgeQuestModule, QuestInfo} from "./interfaces/IPurgeQuestModule.sol";
+import {IPurgeQuestModule, QuestInfo, PlayerQuestView} from "./interfaces/IPurgeQuestModule.sol";
 import {IPurgeCoinExternalJackpotModule} from "./interfaces/IPurgeCoinExternalJackpotModule.sol";
 import {PurgeCoinStorage} from "./storage/PurgeCoinStorage.sol";
 
@@ -102,9 +102,6 @@ contract Purgecoin is PurgeCoinStorage {
     uint16 private constant COINFLIP_EXTRA_MIN_PERCENT = 78;
     uint16 private constant COINFLIP_EXTRA_RANGE = 38;
     uint16 private constant BPS_DENOMINATOR = 10_000;
-    uint32 private constant QUEST_TIER_BONUS_SPAN = 7;
-    uint8 private constant QUEST_TIER_BONUS_MAX = 10;
-    uint16 private constant QUEST_TIER_BONUS_BPS_PER_TIER = 20;
     bytes32 private constant H = 0x9aeceb0bff1d88815fac67760a5261a814d06dfaedc391fdf4cf62afac3f10b5;
     uint8 private constant STAKE_MAX_LANES = 3;
     uint256 private constant STAKE_LANE_BITS = 86;
@@ -876,10 +873,12 @@ contract Purgecoin is PurgeCoinStorage {
         }
     }
 
-    function rollDailyQuestWithOverrides(uint48 day, uint256 entropy, bool forceMintEth, bool forcePurge)
-        external
-        onlyPurgeGameContract
-    {
+    function rollDailyQuestWithOverrides(
+        uint48 day,
+        uint256 entropy,
+        bool forceMintEth,
+        bool forcePurge
+    ) external onlyPurgeGameContract {
         IPurgeQuestModule module = questModule;
         (bool rolled, , , , ) = module.rollDailyQuestWithOverrides(day, entropy, forceMintEth, forcePurge);
         if (rolled) {
@@ -922,25 +921,9 @@ contract Purgecoin is PurgeCoinStorage {
         }
     }
 
-    function getActiveQuest()
-        external
-        view
-        returns (uint48 day, uint8 questType, bool highDifficulty, uint8 stakeMask, uint8 stakeRisk)
-    {
-        IPurgeQuestModule module = questModule;
-        return module.getActiveQuest();
-    }
-
     function getActiveQuests() external view returns (QuestInfo[2] memory quests) {
         IPurgeQuestModule module = questModule;
         return module.getActiveQuests();
-    }
-
-    function playerQuestState(
-        address player
-    ) external view returns (uint32 streak, uint32 lastCompletedDay, uint128 progress, bool completedToday) {
-        IPurgeQuestModule module = questModule;
-        return module.playerQuestState(player);
     }
 
     function playerQuestStates(
@@ -952,6 +935,11 @@ contract Purgecoin is PurgeCoinStorage {
     {
         IPurgeQuestModule module = questModule;
         return module.playerQuestStates(player);
+    }
+
+    function getPlayerQuestView(address player) external view returns (PlayerQuestView memory viewData) {
+        IPurgeQuestModule module = questModule;
+        return module.getPlayerQuestView(player);
     }
 
     /// @notice Burn PURGE from `target` during gameplay flows (purchases, fees).
@@ -1148,8 +1136,7 @@ contract Purgecoin is PurgeCoinStorage {
                     coinflipAmount[p] = 0;
                 } else {
                     uint256 workingAmt = amt;
-                    uint32 streak = _questStreak(p);
-                    uint256 payout = _coinflipWinAmount(workingAmt, rewardPercent, streak);
+                    uint256 payout = workingAmt + (workingAmt * uint256(rewardPercent) * 100) / BPS_DENOMINATOR;
                     if (isBafLevel) {
                         coinflipAmount[p] = payout;
                     } else {
@@ -1173,7 +1160,8 @@ contract Purgecoin is PurgeCoinStorage {
         payoutIndex = uint32(end);
         // --- Phase 4: cleanup (single shot) -------------------------------------------
         if (end >= totalPlayers) {
-            if (!isBafLevel) {
+            bool clearQueue = !win || !isBafLevel;
+            if (clearQueue) {
                 cfHead = cfTail;
             }
             payoutIndex = 0;
@@ -1222,10 +1210,6 @@ contract Purgecoin is PurgeCoinStorage {
         if (top == address(0)) return;
 
         addFlip(top, amount, false, false, true);
-    }
-
-    function lastBiggestFlip() external view returns (address) {
-        return topBettors[0].player;
     }
     /// @notice Progress an external jackpot: BAF (kind=0) or Decimator (kind=1).
     /// @dev
@@ -1398,22 +1382,6 @@ contract Purgecoin is PurgeCoinStorage {
         }
     }
 
-    function _coinflipWinAmount(uint256 amount, uint16 rewardPercent, uint32 streak) private pure returns (uint256) {
-        if (amount == 0) return 0;
-        uint256 baseBps = uint256(rewardPercent) * 100;
-        uint256 bonusBps = _questTierBonusBps(streak);
-        uint256 payoutBonus = (amount * (baseBps + bonusBps)) / BPS_DENOMINATOR;
-        return amount + payoutBonus;
-    }
-    function _questTierBonusBps(uint32 streak) private pure returns (uint256) {
-        if (streak == 0) return 0;
-        uint256 tier = uint256(streak) / QUEST_TIER_BONUS_SPAN;
-        if (tier > QUEST_TIER_BONUS_MAX) {
-            tier = QUEST_TIER_BONUS_MAX;
-        }
-        return tier * QUEST_TIER_BONUS_BPS_PER_TIER;
-    }
-
     function _questApplyReward(
         address player,
         uint256 reward,
@@ -1422,15 +1390,9 @@ contract Purgecoin is PurgeCoinStorage {
         uint32 streak,
         bool completed
     ) private returns (uint256) {
-        if (!completed || player == address(0)) return 0;
+        if (!completed) return 0;
         emit QuestCompleted(player, questType, streak, reward, hardMode);
         return reward;
-    }
-
-    function _questStreak(address player) private view returns (uint32) {
-        IPurgeQuestModule module = questModule;
-        (uint32 streak, , , ) = module.playerQuestState(player);
-        return streak;
     }
 
     function _isBafLevel(uint24 lvl) private pure returns (bool) {
