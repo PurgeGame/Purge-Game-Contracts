@@ -110,11 +110,7 @@ contract JackpotCoinModuleMock is IPurgeCoinModule {
 }
 
 contract JackpotTrophiesModuleMock is IPurgeGameTrophiesModule {
-    function processEndLevel(
-        IPurgeGameTrophies.EndLevelRequest calldata
-    ) external override returns (uint256) {
-        return 0;
-    }
+    function processEndLevel(IPurgeGameTrophies.EndLevelRequest calldata) external override {}
 
     function awardTrophy(
         address,

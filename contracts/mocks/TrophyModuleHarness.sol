@@ -62,14 +62,11 @@ contract TrophyGameHarness is IPurgeGameMinimal {
         rewardPool += amount;
     }
 
-    function processEndLevel(
-        address trophies,
-        IPurgeGameTrophies.EndLevelRequest calldata req
-    ) external payable returns (uint256 trophyPoolDelta) {
+    function processEndLevel(address trophies, IPurgeGameTrophies.EndLevelRequest calldata req) external payable {
         if (msg.value != 0) {
             totalReceived += msg.value;
         }
-        return IPurgeGameTrophies(trophies).processEndLevel(req);
+        IPurgeGameTrophies(trophies).processEndLevel(req);
     }
 
     function prepareNextLevel(address trophies, uint24 nextLevel) external {

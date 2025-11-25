@@ -47,9 +47,7 @@ interface IPurgeCoinModule {
 }
 
 interface IPurgeGameTrophiesModule {
-    function processEndLevel(
-        IPurgeGameTrophies.EndLevelRequest calldata req
-    ) external returns (uint256 trophyPoolDelta);
+    function processEndLevel(IPurgeGameTrophies.EndLevelRequest calldata req) external;
 
     function awardTrophy(address to, uint24 level, uint8 kind, uint256 data, uint256 deferredWei) external;
 

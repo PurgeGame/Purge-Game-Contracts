@@ -131,6 +131,7 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
             uint256 deferredWei = exterminatorShare - immediate;
             _addClaimableEth(pend.exterminator, immediate);
             req.deferredWei = deferredWei;
+            trophyPool += deferredWei;
 
             // Reassign the trophy slice from the prize pool to players: 10% split across three tickets
             // using their ETH mint streaks as weights (even split if all streaks are zero).
@@ -180,12 +181,9 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
             dailyJackpotBase = 0;
         }
 
-        uint256 trophyPoolDelta = trophiesContract.processEndLevel(req);
-        if (trophyPoolDelta != 0) {
-            trophyPool += trophyPoolDelta;
-        }
+        trophiesContract.processEndLevel(req);
 
-        _payoutCarryBonuses(prevLevelPending, rngWord, trophiesContract);
+        _payTrophyRewards(prevLevelPending, rngWord, trophiesContract);
 
         delete pendingEndLevel;
 
@@ -272,11 +270,7 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         return (isFinished, returnedWei);
     }
 
-    function _payoutCarryBonuses(
-        uint24 lvl,
-        uint256 rngWord,
-        IPurgeGameTrophiesModule trophiesContract
-    ) private {
+    function _payTrophyRewards(uint24 lvl, uint256 rngWord, IPurgeGameTrophiesModule trophiesContract) private {
         uint256 rewardBudgetAffiliate = _scaledRewardSlice(rewardPool, AFFILIATE_CARRY_BPS, lvl);
         uint256 rewardBudgetStake = _scaledRewardSlice(rewardPool, STAKE_CARRY_BPS, lvl);
         uint256 rewardBudgetRandom = _scaledRewardSlice(rewardPool, STAKED_RANDOM_BPS, lvl);
@@ -304,7 +298,10 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
 
         if (rewardBudgetRandom != 0) {
             uint256 tokenA = _pickStakedToken(rngWord, trophiesContract);
-            uint256 tokenB = _pickStakedToken(uint256(keccak256(abi.encodePacked(rngWord, lvl, uint256(1)))), trophiesContract);
+            uint256 tokenB = _pickStakedToken(
+                uint256(keccak256(abi.encodePacked(rngWord, lvl, uint256(1)))),
+                trophiesContract
+            );
 
             if (tokenA == 0 && tokenB == 0) {
                 // No staked trophies to pay; leave reward pool unchanged for this slice.
@@ -342,9 +339,14 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         return (base * _rewardBonusScaleBps(lvl)) / 10_000;
     }
 
-    function _pickStakedToken(uint256 seed, IPurgeGameTrophiesModule trophiesContract) private view returns (uint256 tokenId) {
+    function _pickStakedToken(
+        uint256 seed,
+        IPurgeGameTrophiesModule trophiesContract
+    ) private view returns (uint256 tokenId) {
         uint256 drawA = trophiesContract.stakedTrophySampleWithId(seed);
-        uint256 drawB = trophiesContract.stakedTrophySampleWithId(uint256(keccak256(abi.encodePacked(seed, uint256(7777)))));
+        uint256 drawB = trophiesContract.stakedTrophySampleWithId(
+            uint256(keccak256(abi.encodePacked(seed, uint256(7777))))
+        );
         if (drawA == 0) return drawB;
         if (drawB == 0) return drawA;
         return drawA < drawB ? drawA : drawB;

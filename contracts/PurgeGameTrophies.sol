@@ -45,7 +45,7 @@ interface IPurgeGameTrophies {
     function burnBafPlaceholder(uint24 level) external;
 
     function burnDecPlaceholder(uint24 level) external;
-    function processEndLevel(EndLevelRequest calldata req) external returns (uint256 trophyPoolDelta);
+    function processEndLevel(EndLevelRequest calldata req) external;
 
     function claimTrophy(uint256 tokenId) external;
 
@@ -1002,90 +1002,46 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         _eraseTrophy(tokenId, PURGE_TROPHY_KIND_DECIMATOR, true);
     }
 
-    function processEndLevel(EndLevelRequest calldata req) external override onlyGame returns (uint256 trophyPoolDelta) {
-        uint24 nextLevel = req.level + 1;
+    function processEndLevel(EndLevelRequest calldata req) external override onlyGame {
         (uint256 previousBase, uint256 currentBase) = nft.getBasePointers();
         uint24 currentLevel = game.level();
-        uint256 mapTokenId = _placeholderTokenId(
-            req.level,
-            PURGE_TROPHY_KIND_MAP,
-            previousBase,
-            currentBase,
-            currentLevel
-        );
-        uint256 levelTokenId = _placeholderTokenId(
-            req.level,
-            PURGE_TROPHY_KIND_LEVEL,
-            previousBase,
-            currentBase,
-            currentLevel
-        );
-        uint256 affiliateTokenId = _placeholderTokenId(
-            req.level,
-            PURGE_TROPHY_KIND_AFFILIATE,
-            previousBase,
-            currentBase,
-            currentLevel
-        );
-        uint256 stakeTokenId = _placeholderTokenId(
-            req.level,
-            PURGE_TROPHY_KIND_STAKE,
-            previousBase,
-            currentBase,
-            currentLevel
-        );
 
-        if (mapTokenId == 0 || levelTokenId == 0 || affiliateTokenId == 0) return 0;
+        uint256 base = req.level == currentLevel ? currentBase : (req.level + 1 == currentLevel ? previousBase : 0);
+        if (base <= 4) return;
+
+        uint256 levelTokenId = base - 1;
+        uint256 affiliateTokenId = base - 3;
+        uint256 stakeTokenId = base - 4;
+
+        if (levelTokenId == 0 || affiliateTokenId == 0) return;
         bool traitWin = req.traitId != TRAIT_ID_TIMEOUT;
-        uint256 randomWord = req.rngWord;
 
-        trophyPoolDelta = _processEnd(
+        _processEnd(
             req,
-            previousBase,
-            currentBase,
-            currentLevel,
-            nextLevel,
-            mapTokenId,
             levelTokenId,
             affiliateTokenId,
             stakeTokenId,
-            randomWord,
             traitWin
         );
-
-        return trophyPoolDelta;
     }
 
     function _processEnd(
         EndLevelRequest calldata req,
-        uint256 previousBase,
-        uint256 currentBase,
-        uint24 currentLevel,
-        uint24 /*nextLevel*/,
-        uint256 mapTokenId,
         uint256 levelTokenId,
         uint256 affiliateTokenId,
         uint256 stakeTokenId,
-        uint256 /*randomWord*/,
         bool traitWin
-    ) private returns (uint256 trophyPoolDelta) {
+    ) private {
         address gameAddr = gameAddress;
 
         // Level trophy: award on trait win with exterminator data, otherwise burn if still unassigned.
         if (traitWin) {
-            uint256 levelPlaceholder = _placeholderTokenId(
-                req.level,
-                PURGE_TROPHY_KIND_LEVEL,
-                previousBase,
-                currentBase,
-                currentLevel
-            );
+            uint256 levelPlaceholder = levelTokenId;
 
-        TraitWinContext memory ctx;
-        ctx.levelBits = uint256(req.level) << TROPHY_BASE_LEVEL_SHIFT;
-        ctx.traitData = (uint256(req.traitId) << 152) | ctx.levelBits;
-        ctx.deferredAward = req.deferredWei;
-        trophyPoolDelta = ctx.deferredAward;
+            TraitWinContext memory ctx;
+            ctx.levelBits = uint256(req.level) << TROPHY_BASE_LEVEL_SHIFT;
+            ctx.traitData = (uint256(req.traitId) << 152) | ctx.levelBits;
+            ctx.deferredAward = req.deferredWei;
             _awardTrophyInternal(
                 req.exterminator,
                 PURGE_TROPHY_KIND_LEVEL,
@@ -1121,11 +1077,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             _eraseTrophy(stakeTokenId, PURGE_TROPHY_KIND_STAKE, true);
         }
 
-        // MAP trophy untouched; assigned during jackpots.
-        if (mapTokenId != 0 && address(uint160(nft.packedOwnershipOf(mapTokenId))) == gameAddr) {
-            // no-op
-        }
-        return trophyPoolDelta;
     }
 
     function _processDecimatorClaim(ClaimContext memory ctx, uint256 priceUnit) private view {
