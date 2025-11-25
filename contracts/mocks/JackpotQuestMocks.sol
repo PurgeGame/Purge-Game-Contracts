@@ -42,11 +42,18 @@ contract JackpotCoinModuleMock is IPurgeCoinModule {
         external
         pure
         override
-        returns (bool finished, address[] memory winners, uint256[] memory amounts, uint256 returnAmountWei)
+        returns (
+            bool finished,
+            address[] memory winners,
+            uint256[] memory amounts,
+            uint256 trophyPoolDelta,
+            uint256 returnAmountWei
+        )
     {
         finished = true;
         winners = new address[](0);
         amounts = new uint256[](0);
+        trophyPoolDelta = 0;
         returnAmountWei = 0;
     }
 
@@ -105,7 +112,7 @@ contract JackpotCoinModuleMock is IPurgeCoinModule {
 contract JackpotTrophiesModuleMock is IPurgeGameTrophiesModule {
     function processEndLevel(
         IPurgeGameTrophies.EndLevelRequest calldata
-    ) external payable override returns (address, address[6] memory) {
+    ) external override returns (address, address[6] memory) {
         address[6] memory affiliates;
         return (address(0), affiliates);
     }
@@ -116,7 +123,7 @@ contract JackpotTrophiesModuleMock is IPurgeGameTrophiesModule {
         uint8,
         uint256,
         uint256
-    ) external payable override {}
+    ) external override {}
 
     function stakedTrophySampleWithId(uint256) external pure override returns (uint256 tokenId) {
         return 0;
@@ -130,7 +137,7 @@ contract JackpotTrophiesModuleMock is IPurgeGameTrophiesModule {
         return address(0);
     }
 
-    function rewardTrophyByToken(uint256, uint256) external override {}
+    function rewardTrophyByToken(uint256, uint256, uint24) external override {}
 
     function burnBafPlaceholder(uint24) external pure override {}
 

@@ -754,6 +754,16 @@ contract PurgeGame is PurgeGameStorage {
         if (!ok) revert E();
     }
 
+    function payoutTrophy(address recipient, uint256 amount) external {
+        if (msg.sender != address(trophies)) revert E();
+        if (amount == 0) return;
+        uint256 pool = trophyPool;
+        if (amount > pool) revert E();
+        trophyPool = pool - amount;
+        (bool ok, ) = payable(recipient).call{value: amount}("");
+        if (!ok) revert E();
+    }
+
     // --- Claiming winnings (ETH) --------------------------------------------------------------------
 
     /// @notice Claim the caller’s accrued ETH winnings (affiliates, jackpots, endgame payouts).

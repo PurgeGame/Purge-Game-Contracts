@@ -76,4 +76,6 @@ abstract contract PurgeGameStorage {
     uint32[80] internal dailyPurgeCount;
     uint32[256] internal traitRemaining;
     mapping(address => uint256) internal mintPacked_;
+
+    uint256 internal trophyPool;
 }

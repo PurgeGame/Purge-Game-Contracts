@@ -10,6 +10,7 @@ contract TrophyGameHarness is IPurgeGameMinimal {
     uint256 private rngWord;
     uint256 private _coinPriceUnit = 1_000_000;
     uint256 public totalReceived;
+    uint256 public trophyPool;
 
     function setLevel(uint24 newLevel) external {
         _level = newLevel;
@@ -47,11 +48,21 @@ contract TrophyGameHarness is IPurgeGameMinimal {
         return _coinPriceUnit;
     }
 
+    function payoutTrophy(address to, uint256 amount) external override {
+        if (amount > trophyPool) revert();
+        trophyPool -= amount;
+        (bool ok, ) = payable(to).call{value: amount}("");
+        require(ok, "payout");
+    }
+
     function processEndLevel(
         address trophies,
         IPurgeGameTrophies.EndLevelRequest calldata req
     ) external payable returns (address mapRecipient, address[6] memory affiliates) {
-        return IPurgeGameTrophies(trophies).processEndLevel{value: msg.value}(req);
+        if (msg.value != 0) {
+            totalReceived += msg.value;
+        }
+        return IPurgeGameTrophies(trophies).processEndLevel(req);
     }
 
     function prepareNextLevel(address trophies, uint24 nextLevel) external {
@@ -116,8 +127,8 @@ contract TrophyCoinHarness is IPurgecoinMinimal {
         uint8 kind,
         uint256 data,
         uint256 deferredWei
-    ) external payable {
-        IPurgeGameTrophies(trophies).awardTrophy{value: msg.value}(to, level_, kind, data, deferredWei);
+    ) external {
+        IPurgeGameTrophies(trophies).awardTrophy(to, level_, kind, data, deferredWei);
     }
 }
 

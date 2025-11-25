@@ -21,7 +21,9 @@ interface IPurgeCoinModule {
         uint32 cap,
         uint24 lvl,
         uint256 rngWord
-    ) external returns (bool finished, address[] memory winners, uint256[] memory amounts, uint256 returnAmountWei);
+    )
+        external
+        returns (bool finished, address[] memory winners, uint256[] memory amounts, uint256 trophyPoolDelta, uint256 returnAmountWei);
 
     function getLeaderboardAddresses(uint8 which) external view returns (address[] memory);
     function getTopAffiliate() external view returns (address);
@@ -47,13 +49,13 @@ interface IPurgeCoinModule {
 interface IPurgeGameTrophiesModule {
     function processEndLevel(
         IPurgeGameTrophies.EndLevelRequest calldata req
-    ) external payable returns (address mapImmediateRecipient, address[6] memory affiliateRecipients);
+    ) external returns (address mapImmediateRecipient, address[6] memory affiliateRecipients);
 
-    function awardTrophy(address to, uint24 level, uint8 kind, uint256 data, uint256 deferredWei) external payable;
+    function awardTrophy(address to, uint24 level, uint8 kind, uint256 data, uint256 deferredWei) external;
 
     function stakedTrophySampleWithId(uint256 rngSeed) external view returns (uint256 tokenId);
     function trophyToken(uint24 level, uint8 kind) external view returns (uint256 tokenId, address owner);
-    function rewardTrophyByToken(uint256 tokenId, uint256 amountWei) external;
+    function rewardTrophyByToken(uint256 tokenId, uint256 amountWei, uint24 level) external;
     function trophyOwner(uint256 tokenId) external view returns (address owner);
 
     function burnBafPlaceholder(uint24 level) external;

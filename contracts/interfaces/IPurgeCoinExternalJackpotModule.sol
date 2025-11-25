@@ -8,5 +8,7 @@ interface IPurgeCoinExternalJackpotModule {
         uint32 cap,
         uint24 lvl,
         uint256 rngWord
-    ) external returns (bool finished, address[] memory winners, uint256[] memory amounts, uint256 returnAmountWei);
+    )
+        external
+        returns (bool finished, address[] memory winners, uint256[] memory amounts, uint256 trophyPoolDelta, uint256 returnAmountWei);
 }

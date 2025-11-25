@@ -639,8 +639,9 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
                 }
                 uint256 deferred = perWinner - half;
                 if (deferred != 0 && address(trophiesContract) != address(0)) {
+                    trophyPool += deferred;
                     uint256 trophyData = (uint256(traitId) << 152) | (uint256(lvl) << 128) | TROPHY_FLAG_MAP;
-                    trophiesContract.awardTrophy{value: deferred}(w, lvl, PURGE_TROPHY_KIND_MAP, trophyData, deferred);
+                    trophiesContract.awardTrophy(w, lvl, PURGE_TROPHY_KIND_MAP, trophyData, deferred);
                     ethDelta += deferred;
                 }
             } else if (_creditJackpot(coinContract, payCoin, w, perWinner)) {

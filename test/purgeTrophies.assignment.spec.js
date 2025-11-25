@@ -118,6 +118,7 @@ describe("PurgeGameTrophies assignment and funds", function () {
       traitId: 123,
       level: 5,
       pool,
+      deferredWei: 300n,
     };
 
     await game.processEndLevel(await trophies.getAddress(), req, { value: 300n });
@@ -156,6 +157,7 @@ describe("PurgeGameTrophies assignment and funds", function () {
       traitId: TRAIT_ID_TIMEOUT,
       level: 7,
       pool,
+      deferredWei: 0n,
     };
 
     await game.processEndLevel(await trophies.getAddress(), req, { value: 2_050n });
@@ -168,7 +170,7 @@ describe("PurgeGameTrophies assignment and funds", function () {
     const baseLevel = Number((stakedMapData >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFFn);
     expect(baseLevel).to.equal(7);
 
-    expect(await game.totalReceived()).to.equal(50n);
+    expect(await game.totalReceived()).to.equal(2_050n);
   });
 
   it("requires full affiliate-only funding and burns the level trophy on timeout", async function () {
@@ -182,6 +184,7 @@ describe("PurgeGameTrophies assignment and funds", function () {
       traitId: TRAIT_ID_TIMEOUT,
       level: 8,
       pool,
+      deferredWei: pool,
     };
 
     await expect(
@@ -276,6 +279,7 @@ describe("PurgeGameTrophies assignment and funds", function () {
       traitId: 777,
       level: 6,
       pool: 5_000n,
+      deferredWei: 0n,
     };
 
     const supplyBefore = await nft.trophySupply();

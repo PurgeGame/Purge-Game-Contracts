@@ -161,6 +161,7 @@ describe("PurgeGameTrophies staking lifecycle", function () {
       traitId: 123,
       level: 20,
       pool: 10_000n,
+      deferredWei: 500n,
     };
 
     await game.processEndLevel(await trophies.getAddress(), req, { value: 500n });
@@ -254,7 +255,7 @@ describe("PurgeGameTrophies staking lifecycle", function () {
     expect(await trophies.isTrophyStaked(placeholders.stake)).to.equal(true);
 
     await game.setRngWord((1n << 64n) + 1n);
-    const req = { exterminator: player.address, traitId: 111, level: 21, pool: 10_000n };
+    const req = { exterminator: player.address, traitId: 111, level: 21, pool: 10_000n, deferredWei: 500n };
     await game.processEndLevel(await trophies.getAddress(), req, { value: 500n });
 
     const mapInfo = await trophies.trophyData(placeholders.map);
@@ -309,12 +310,12 @@ describe("PurgeGameTrophies staking lifecycle", function () {
     );
 
     const pool = 2_000n;
-    const req = { exterminator: ethers.ZeroAddress, traitId: TRAIT_ID_TIMEOUT, level: 24, pool };
+    const req = { exterminator: ethers.ZeroAddress, traitId: TRAIT_ID_TIMEOUT, level: 24, pool, deferredWei: 0n };
     await game.processEndLevel(await trophies.getAddress(), req, { value: pool });
 
     const mapInfo = await trophies.trophyData(placeholders.map);
     expect(owed(mapInfo)).to.equal(100n);
-    expect(await game.totalReceived()).to.equal(pool - 100n);
+    expect(await game.totalReceived()).to.equal(pool);
     const supplyBeforeBurn = await nft.trophySupply();
 
     await trophies.connect(player).setTrophyStake(placeholders.stake, true);

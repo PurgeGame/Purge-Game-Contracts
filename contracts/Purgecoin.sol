@@ -1239,7 +1239,7 @@ contract Purgecoin is PurgeCoinStorage {
     )
         external
         onlyPurgeGameContract
-        returns (bool finished, address[] memory winners, uint256[] memory amounts, uint256 returnAmountWei)
+        returns (bool finished, address[] memory winners, uint256[] memory amounts, uint256 trophyPoolDelta, uint256 returnAmountWei)
     {
         address module = externalJackpotModule;
         if (module == address(0)) revert ZeroAddress();
@@ -1259,7 +1259,7 @@ contract Purgecoin is PurgeCoinStorage {
                 revert(add(ret, 0x20), mload(ret))
             }
         }
-        return abi.decode(ret, (bool, address[], uint256[], uint256));
+        return abi.decode(ret, (bool, address[], uint256[], uint256, uint256));
     }
 
     /// @notice Return addresses from a leaderboard.

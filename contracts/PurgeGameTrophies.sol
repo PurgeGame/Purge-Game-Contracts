@@ -31,6 +31,7 @@ interface IPurgeGameTrophies {
         uint24 level;
         uint256 pool;
         uint256 rngWord;
+        uint256 deferredWei;
     }
 
     function wire(address game_, address coin_) external;
@@ -40,7 +41,7 @@ interface IPurgeGameTrophies {
 
     function prepareNextLevel(uint24 nextLevel) external;
 
-    function awardTrophy(address to, uint24 level, uint8 kind, uint256 data, uint256 deferredWei) external payable;
+    function awardTrophy(address to, uint24 level, uint8 kind, uint256 data, uint256 deferredWei) external;
 
     function burnBafPlaceholder(uint24 level) external;
 
@@ -48,7 +49,7 @@ interface IPurgeGameTrophies {
 
     function processEndLevel(
         EndLevelRequest calldata req
-    ) external payable returns (address mapImmediateRecipient, address[6] memory affiliateRecipients);
+    ) external returns (address mapImmediateRecipient, address[6] memory affiliateRecipients);
 
     function claimTrophy(uint256 tokenId) external;
 
@@ -78,7 +79,7 @@ interface IPurgeGameTrophies {
 
     function trophyOwner(uint256 tokenId) external view returns (address owner);
 
-    function rewardTrophyByToken(uint256 tokenId, uint256 amountWei) external;
+    function rewardTrophyByToken(uint256 tokenId, uint256 amountWei, uint24 level) external;
 
     function isTrophy(uint256 tokenId) external view returns (bool);
 
@@ -96,6 +97,7 @@ interface IPurgeGameMinimal {
     function gameState() external view returns (uint8);
     function rngLocked() external view returns (bool);
     function coinPriceUnit() external view returns (uint256);
+    function payoutTrophy(address to, uint256 amount) external;
 }
 
 interface IPurgecoinMinimal {
@@ -164,7 +166,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
 
     struct MapTimeoutContext {
         uint256 mapUnit;
-        uint256 valueIn;
         address affiliateWinner;
         uint256 stakedCount;
         uint256 distributed;
@@ -378,14 +379,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         nft.setTrophyPackedInfo(tokenId, kind, false);
         if (adjustSupply && hadData) {
             nft.decrementTrophySupply(1);
-        }
-    }
-
-    function _returnValue(address target, uint256 amount) private {
-        if (amount == 0) return;
-        (bool ok, ) = payable(target).call{value: amount}("");
-        if (!ok) {
-            // best-effort refund; ignore failure to avoid bubbling a revert
         }
     }
 
@@ -966,15 +959,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         uint8 kind,
         uint256 data,
         uint256 deferredWei
-    ) external payable override {
-        address caller = msg.sender;
-        bool fromGame = caller == gameAddress;
-        bool fromCoin = caller == coinAddress;
-        if (!fromGame && !fromCoin) {
-            _returnValue(caller, deferredWei);
-            return;
-        }
-
+    ) external override onlyGameOrCoin {
         (uint256 previousBase, uint256 currentBase) = nft.getBasePointers();
         uint24 currentLevel = game.level();
         uint256 tokenId = _placeholderTokenId(level, kind, previousBase, currentBase, currentLevel);
@@ -1025,12 +1010,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
 
     function processEndLevel(
         EndLevelRequest calldata req
-    )
-        external
-        payable
-        override
-        onlyGame
-        returns (address mapImmediateRecipient, address[6] memory affiliateRecipients)
+    ) external override onlyGame returns (address mapImmediateRecipient, address[6] memory affiliateRecipients)
     {
         uint24 nextLevel = req.level + 1;
         (uint256 previousBase, uint256 currentBase) = nft.getBasePointers();
@@ -1115,7 +1095,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         if (req.traitId == DECIMATOR_TRAIT_SENTINEL) {
             ctx.traitData |= TROPHY_FLAG_DECIMATOR;
         }
-        uint256 available = msg.value;
 
         address[] memory leaders = coin.getLeaderboardAddresses(1);
         bool hasAffiliates = leaders.length != 0;
@@ -1139,7 +1118,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             _eraseTrophy(affiliatePlaceholder, PURGE_TROPHY_KIND_AFFILIATE, true);
         }
 
-        ctx.deferredAward = available;
+        ctx.deferredAward = req.deferredWei;
         _awardTrophyInternal(req.exterminator, PURGE_TROPHY_KIND_LEVEL, ctx.traitData, ctx.deferredAward, levelPlaceholder);
     }
 
@@ -1155,8 +1134,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
 
         if (affiliateOnly) {
             _eraseTrophy(levelTokenId, PURGE_TROPHY_KIND_LEVEL, true);
-            uint256 valueIn = msg.value;
-            if (valueIn < req.pool) revert InvalidToken();
             _awardTrophyInternal(
                 req.exterminator,
                 PURGE_TROPHY_KIND_AFFILIATE,
@@ -1170,13 +1147,15 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         MapTimeoutContext memory ctx;
         ctx.mapUnit = req.pool / 20;
         mapImmediateRecipient = address(uint160(nft.packedOwnershipOf(mapTokenId)));
+        uint256 remaining = req.pool;
 
         _eraseTrophy(levelTokenId, PURGE_TROPHY_KIND_LEVEL, true);
 
-        ctx.valueIn = msg.value;
         ctx.affiliateWinner = req.exterminator;
 
         if (ctx.affiliateWinner != address(0)) {
+            if (remaining < ctx.mapUnit) revert InvalidToken();
+            remaining -= ctx.mapUnit;
             _awardTrophyInternal(
                 ctx.affiliateWinner,
                 PURGE_TROPHY_KIND_AFFILIATE,
@@ -1184,8 +1163,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
                 ctx.mapUnit,
                 affiliateTokenId
             );
-            if (ctx.valueIn < ctx.mapUnit) revert InvalidToken();
-            ctx.valueIn -= ctx.mapUnit;
         } else {
             _eraseTrophy(affiliateTokenId, PURGE_TROPHY_KIND_AFFILIATE, true);
         }
@@ -1197,13 +1174,16 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             }
         }
 
-        _addTrophyRewardInternal(mapTokenId, ctx.mapUnit, nextLevel);
-        if (ctx.valueIn < ctx.mapUnit) revert InvalidToken();
-        ctx.valueIn -= ctx.mapUnit;
+        if (ctx.mapUnit != 0) {
+            if (remaining < ctx.mapUnit) revert InvalidToken();
+            remaining -= ctx.mapUnit;
+            _addTrophyRewardInternal(mapTokenId, ctx.mapUnit, nextLevel);
+        }
 
         ctx.stakedCount = stakedTrophyIds.length;
         if (ctx.mapUnit != 0 && ctx.stakedCount != 0) {
-            ctx.draws = ctx.valueIn / ctx.mapUnit;
+            uint256 drawBudget = remaining;
+            ctx.draws = drawBudget / ctx.mapUnit;
             ctx.rand = randomWord;
             for (uint256 j; j < ctx.draws; ) {
                 uint256 idx = ctx.stakedCount == 1 ? 0 : (ctx.rand & type(uint64).max) % ctx.stakedCount;
@@ -1215,12 +1195,8 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
                     ++j;
                 }
             }
-        }
-
-        uint256 leftover = ctx.valueIn - ctx.distributed;
-        if (leftover != 0) {
-            (bool ok, ) = payable(gameAddress).call{value: leftover}("");
-            if (!ok) revert InvalidToken();
+            if (ctx.distributed > drawBudget) revert InvalidToken();
+            remaining = drawBudget - ctx.distributed;
         }
     }
 
@@ -1442,8 +1418,10 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         _setTrophyData(tokenId, newInfo);
 
         if (ctx.ethClaimed) {
-            (bool ok, ) = msg.sender.call{value: ctx.payout}("");
-            if (!ok) revert TransferFailed();
+            try game.payoutTrophy(msg.sender, ctx.payout) {
+            } catch {
+                revert TransferFailed();
+            }
             emit TrophyRewardClaimed(tokenId, msg.sender, ctx.payout);
         }
 
@@ -1616,8 +1594,8 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         owner = address(uint160(nft.packedOwnershipOf(tokenId)));
     }
 
-    function rewardTrophyByToken(uint256 tokenId, uint256 amountWei) external override onlyGameOrCoin {
-        _addTrophyRewardInternal(tokenId, amountWei, game.level());
+    function rewardTrophyByToken(uint256 tokenId, uint256 amountWei, uint24 level) external override onlyGameOrCoin {
+        _addTrophyRewardInternal(tokenId, amountWei, level);
     }
 
     function isTrophyStaked(uint256 tokenId) external view override returns (bool) {

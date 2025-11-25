@@ -112,6 +112,14 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         bool traitWin = pend.exterminator != address(0);
         uint24 prevLevelPending = pend.level;
         uint256 poolValue = pend.sidePool;
+        IPurgeGameTrophies.EndLevelRequest memory req = IPurgeGameTrophies.EndLevelRequest({
+            exterminator: pend.exterminator,
+            traitId: lastExterminatedTrait,
+            level: prevLevelPending,
+            pool: poolValue,
+            rngWord: rngWord,
+            deferredWei: 0
+        });
 
         if (traitWin) {
             uint256 exterminatorShare = (prevLevelPending % 10 == 4 && prevLevelPending != 4)
@@ -121,6 +129,7 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
             uint256 immediate = exterminatorShare >> 1;
             uint256 deferredWei = exterminatorShare - immediate;
             _addClaimableEth(pend.exterminator, immediate);
+            req.deferredWei = deferredWei;
 
             // Reassign the trophy slice from the prize pool to players: 10% split across three tickets
             // using their ETH mint streaks as weights (even split if all streaks are zero).
@@ -165,24 +174,22 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
                 // Defensive: if no tickets exist (unexpected), roll the bonus back into the reward pool.
                 rewardPool += ticketBonus;
             }
-
-            uint256 processValue = deferredWei;
-            trophiesContract.processEndLevel{value: processValue}(
-                IPurgeGameTrophies.EndLevelRequest({
-                    exterminator: pend.exterminator,
-                    traitId: lastExterminatedTrait,
-                    level: prevLevelPending,
-                    pool: poolValue,
-                    rngWord: rngWord
-                })
-            );
-
-            _payoutCarryBonuses(prevLevelPending, rngWord, trophiesContract);
         } else {
             // Timeout path: the final daily jackpot already forwarded any leftovers; clear stale base and settle bonuses.
             dailyJackpotBase = 0;
-            _payoutCarryBonuses(prevLevelPending, rngWord, trophiesContract);
         }
+
+        uint256 trophyPoolDelta = req.deferredWei;
+        if (req.traitId == TRAIT_ID_TIMEOUT && req.pool != 0) {
+            trophyPoolDelta += req.pool;
+        }
+        if (trophyPoolDelta != 0) {
+            trophyPool += trophyPoolDelta;
+        }
+
+        trophiesContract.processEndLevel(req);
+
+        _payoutCarryBonuses(prevLevelPending, rngWord, trophiesContract);
 
         delete pendingEndLevel;
 
@@ -241,14 +248,23 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         IPurgeCoinModule coinContract,
         bool consumeCarry
     ) private returns (bool finished, uint256 returnedWei) {
-        (bool isFinished, address[] memory winnersArr, uint256[] memory amountsArr, uint256 returnWei) = coinContract
-            .runExternalJackpot(kind, poolWei, cap, lvl, rngWord);
+        (
+            bool isFinished,
+            address[] memory winnersArr,
+            uint256[] memory amountsArr,
+            uint256 trophyPoolDelta,
+            uint256 returnWei
+        ) = coinContract.runExternalJackpot(kind, poolWei, cap, lvl, rngWord);
 
         for (uint256 i; i < winnersArr.length; ) {
             _addClaimableEth(winnersArr[i], amountsArr[i]);
             unchecked {
                 ++i;
             }
+        }
+
+        if (trophyPoolDelta != 0) {
+            trophyPool += trophyPoolDelta;
         }
 
         if (isFinished) {
@@ -270,25 +286,31 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         if (rewardBudgetAffiliate == 0 && rewardBudgetStake == 0) return;
 
         uint256 rewardSpent;
+        uint256 trophyDelta;
 
         (uint256 affiliateTokenId, address affiliateOwner) = trophiesContract.trophyToken(
             lvl,
             PURGE_TROPHY_KIND_AFFILIATE
         );
         if (affiliateTokenId != 0 && affiliateOwner != address(0) && rewardBudgetAffiliate != 0) {
-            trophiesContract.rewardTrophyByToken(affiliateTokenId, rewardBudgetAffiliate);
+            trophiesContract.rewardTrophyByToken(affiliateTokenId, rewardBudgetAffiliate, lvl);
             rewardSpent += rewardBudgetAffiliate;
+            trophyDelta += rewardBudgetAffiliate;
         }
 
         (uint256 stakeTokenId, address stakeOwner) = trophiesContract.trophyToken(lvl, PURGE_TROPHY_KIND_STAKE);
         if (stakeTokenId != 0 && stakeOwner != address(0) && rewardBudgetStake != 0) {
-            trophiesContract.rewardTrophyByToken(stakeTokenId, rewardBudgetStake);
+            trophiesContract.rewardTrophyByToken(stakeTokenId, rewardBudgetStake, lvl);
             rewardSpent += rewardBudgetStake;
+            trophyDelta += rewardBudgetStake;
         }
 
         if (rewardSpent != 0) {
             uint256 rewardBal = rewardPool;
             rewardPool = rewardSpent > rewardBal ? 0 : rewardBal - rewardSpent;
+        }
+        if (trophyDelta != 0) {
+            trophyPool += trophyDelta;
         }
     }
 

@@ -39,7 +39,16 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
         uint32 cap,
         uint24 lvl,
         uint256 rngWord
-    ) external returns (bool finished, address[] memory winners, uint256[] memory amounts, uint256 returnAmountWei) {
+    )
+        external
+        returns (
+            bool finished,
+            address[] memory winners,
+            uint256[] memory amounts,
+            uint256 trophyPoolDelta,
+            uint256 returnAmountWei
+        )
+    {
         uint32 batch = (cap == 0) ? BAF_BATCH : cap;
         uint256 executeWord = rngWord;
 
@@ -173,6 +182,7 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
                 }
 
                 {
+                    uint256 trophyDelta;
                     uint256[4] memory trophyPrizes = [(P * 5) / 100, (P * 3) / 100, (P * 2) / 100, uint256(0)];
                     address[4] memory trophyOwners;
                     uint256[4] memory trophyIds;
@@ -226,7 +236,8 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
                         address owner = trophyOwners[i];
                         bool eligibleOwner = tokenId != 0 && owner != address(0) && _eligible(owner);
                         if (eligibleOwner && prize != 0) {
-                            purgeGameTrophies.rewardTrophyByToken(tokenId, prize);
+                            purgeGameTrophies.rewardTrophyByToken(tokenId, prize, lvl);
+                            trophyDelta += prize;
                             credited += prize;
                         } else if (prize != 0) {
                             toReturn += prize;
@@ -235,6 +246,7 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
                             ++i;
                         }
                     }
+                    extVar = trophyDelta;
                 }
 
                 {
@@ -293,17 +305,19 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
 
                 if (bs.per == 0 || limit < 10 || bs.offset >= limit) {
                     uint256 ret = uint256(bafState.returnAmountWei);
+                    trophyPoolDelta = extVar;
                     delete bafState;
                     delete bs;
                     extMode = 0;
                     extVar = 0;
                     scanCursor = SS_IDLE;
-                    return (true, winners, amounts, ret);
+                    return (true, winners, amounts, trophyPoolDelta, ret);
                 }
-                return (false, winners, amounts, 0);
+                trophyPoolDelta = extVar;
+                return (false, winners, amounts, trophyPoolDelta, 0);
             }
 
-            return (false, new address[](0), new uint256[](0), 0);
+            return (false, new address[](0), new uint256[](0), 0, 0);
         }
 
         if (extMode == 1) {
@@ -347,14 +361,15 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
 
             if (end == bs.limit) {
                 uint256 ret = uint256(bafState.returnAmountWei);
+                trophyPoolDelta = extVar;
                 delete bafState;
                 delete bs;
                 extMode = 0;
                 extVar = 0;
                 scanCursor = SS_IDLE;
-                return (true, winners, amounts, ret);
+                return (true, winners, amounts, trophyPoolDelta, ret);
             }
-            return (false, winners, amounts, 0);
+            return (false, winners, amounts, extVar, 0);
         }
 
         if (extMode == 2) {
@@ -386,7 +401,7 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
             }
             scanCursor = end;
 
-            if (end < bs.limit) return (false, new address[](0), new uint256[](0), 0);
+            if (end < bs.limit) return (false, new address[](0), new uint256[](0), 0, 0);
 
             if (extVar == 0) {
                 uint256 refund = uint256(bafState.totalPrizePoolWei);
@@ -399,12 +414,12 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
                 extVar = 0;
                 scanCursor = SS_IDLE;
                 _resetDecBucketState();
-                return (true, new address[](0), new uint256[](0), refund);
+                return (true, new address[](0), new uint256[](0), 0, refund);
             }
 
             extMode = 3;
             scanCursor = bs.offset;
-            return (false, new address[](0), new uint256[](0), 0);
+            return (false, new address[](0), new uint256[](0), 0, 0);
         }
 
         {
@@ -430,7 +445,7 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
                 extVar = 0;
                 scanCursor = SS_IDLE;
                 _resetDecBucketState();
-                return (true, new address[](0), new uint256[](0), refundAll);
+                return (true, new address[](0), new uint256[](0), 0, refundAll);
             }
 
             for (uint32 i = scanCursor; i < end; ) {
@@ -486,9 +501,9 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
                 extVar = 0;
                 scanCursor = SS_IDLE;
                 _resetDecBucketState();
-                return (true, winners, amounts, ret);
+                return (true, winners, amounts, 0, ret);
             }
-            return (false, winners, amounts, 0);
+            return (false, winners, amounts, 0, 0);
         }
     }
 
