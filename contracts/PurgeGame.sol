@@ -569,28 +569,38 @@ contract PurgeGame is PurgeGameStorage {
             }
 
             if (hasExterminatorStake) {
+                bool traitBonusApplied;
                 uint8 levelPercent = trophiesContract.handleExterminatorTraitPurge(caller, uint16(trait0));
                 if (levelPercent != 0) {
                     unchecked {
                         stakeBonusCoin += (priceCoinLocal * uint256(levelPercent)) / 100;
                     }
+                    traitBonusApplied = true;
                 }
-                levelPercent = trophiesContract.handleExterminatorTraitPurge(caller, uint16(trait1));
-                if (levelPercent != 0) {
-                    unchecked {
-                        stakeBonusCoin += (priceCoinLocal * uint256(levelPercent)) / 100;
+                if (!traitBonusApplied) {
+                    levelPercent = trophiesContract.handleExterminatorTraitPurge(caller, uint16(trait1));
+                    if (levelPercent != 0) {
+                        unchecked {
+                            stakeBonusCoin += (priceCoinLocal * uint256(levelPercent)) / 100;
+                        }
+                        traitBonusApplied = true;
                     }
                 }
-                levelPercent = trophiesContract.handleExterminatorTraitPurge(caller, uint16(trait2));
-                if (levelPercent != 0) {
-                    unchecked {
-                        stakeBonusCoin += (priceCoinLocal * uint256(levelPercent)) / 100;
+                if (!traitBonusApplied) {
+                    levelPercent = trophiesContract.handleExterminatorTraitPurge(caller, uint16(trait2));
+                    if (levelPercent != 0) {
+                        unchecked {
+                            stakeBonusCoin += (priceCoinLocal * uint256(levelPercent)) / 100;
+                        }
+                        traitBonusApplied = true;
                     }
                 }
-                levelPercent = trophiesContract.handleExterminatorTraitPurge(caller, uint16(trait3));
-                if (levelPercent != 0) {
-                    unchecked {
-                        stakeBonusCoin += (priceCoinLocal * uint256(levelPercent)) / 100;
+                if (!traitBonusApplied) {
+                    levelPercent = trophiesContract.handleExterminatorTraitPurge(caller, uint16(trait3));
+                    if (levelPercent != 0) {
+                        unchecked {
+                            stakeBonusCoin += (priceCoinLocal * uint256(levelPercent)) / 100;
+                        }
                     }
                 }
             }

@@ -11,8 +11,11 @@ contract MockPurgeGameTrophies {
     function awardTrophy(address, uint24, uint8, uint256, uint256) external {}
     function stakeTrophyBonus(address) external pure returns (uint8) { return 0; }
     function affiliateStakeBonus(address) external pure returns (uint8) { return 0; }
-    function stakedTrophySampleWithId(uint256) external view returns (uint256 tokenId) {
-        return 0;
+    function stakedTrophySampleWithId(uint256) external view returns (uint256 tokenId, address owner) {
+        return (0, address(0));
+    }
+    function rewardRandomStaked(uint256, uint256, uint24) external pure returns (uint256 tokenIdA, uint256 tokenIdB) {
+        return (0, 0);
     }
     function trophyToken(uint24, uint8) external pure returns (uint256 tokenId, address owner) {
         return (0, address(0));

@@ -70,13 +70,17 @@ interface IPurgeGameTrophies {
 
     function purgeTrophy(uint256 tokenId) external;
 
-    function stakedTrophySampleWithId(uint256 rngSeed) external view returns (uint256 tokenId);
+    function stakedTrophySampleWithId(uint256 rngSeed) external view returns (uint256 tokenId, address owner);
 
     function trophyToken(uint24 level, uint8 kind) external view returns (uint256 tokenId, address owner);
 
     function trophyOwner(uint256 tokenId) external view returns (address owner);
 
     function rewardTrophyByToken(uint256 tokenId, uint256 amountWei, uint24 level) external;
+
+    function rewardRandomStaked(uint256 rngSeed, uint256 amountWei, uint24 level)
+        external
+        returns (uint256 tokenIdA, uint256 tokenIdB);
 
     function isTrophy(uint256 tokenId) external view returns (bool);
 
@@ -141,8 +145,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         bool targetBaf;
         bool targetDec;
         bool pureExterminatorTrophy;
-        uint24 trophyBaseLevel;
-        uint24 trophyLevelValue;
         uint24 effectiveLevel;
         uint24 currentLevel;
         uint256 priceUnit;
@@ -219,10 +221,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     uint8 private constant _STAKE_ERR_NOT_STAKED = 4;
     uint8 private constant _STAKE_ERR_LOCKED = 5;
 
-    uint8 private constant MAP_STAKE_MAX = 20;
-    uint8 private constant EXTERMINATOR_STAKE_MAX = 20;
-    uint8 private constant AFFILIATE_STAKE_MAX = 20;
-    uint8 private constant STAKE_TROPHY_MAX = 20;
     uint8 private constant EXTERMINATOR_STAKE_COIN_CAP = 25;
 
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
@@ -242,22 +240,11 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     mapping(uint256 => uint256) private stakedTrophyIndex; // 1-based index
     mapping(uint256 => bool) private trophyStaked;
     mapping(uint256 => uint256) private trophyData_;
-    mapping(address => uint8) private mapStakeCount_;
     mapping(address => uint8) private mapStakeBonusPct_;
-    mapping(address => uint24) private mapStakeBaseLevelEarliest_;
-    mapping(address => uint8) private affiliateStakeCount_;
     mapping(address => uint8) private affiliateStakeBonusPct_;
-    mapping(address => uint24) private affiliateStakeBaseLevel_;
-    mapping(address => uint8) private exterminatorStakeCount_;
     mapping(address => uint8) private exterminatorStakeBonusPct_;
-    mapping(address => uint24) private exterminatorStakeBaseLevelEarliest_;
-    mapping(address => mapping(uint16 => uint8)) private exterminatorStakeTraitCount_;
-    mapping(address => mapping(uint16 => uint8)) private exterminatorStakeTraitPct_;
-    mapping(address => uint16[]) private exterminatorStakeTraits_;
-    mapping(address => mapping(uint16 => uint256)) private exterminatorStakeTraitIndex_;
-    mapping(address => uint8) private stakeStakeCount_;
+    mapping(address => bool[256]) private exterminatorStakeTraits_;
     mapping(address => uint8) private stakeStakeBonusPct_;
-    mapping(address => uint24) private stakeStakeBaseLevelEarliest_;
     mapping(address => BafStakeInfo) private bafStakeInfo;
 
     // ---------------------------------------------------------------------
@@ -409,7 +396,8 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             if (claims > 0xFF) claims = 0xFF;
         }
         uint256 base = uint256((startLevel - 1) & 0xFFFFFF);
-        uint256 updated = (info & ~(TROPHY_OWED_MASK | (uint256(0xFFFFFF) << TROPHY_BASE_LEVEL_SHIFT) | TROPHY_CLAIMS_MASK)) |
+        uint256 updated = (info &
+            ~(TROPHY_OWED_MASK | (uint256(0xFFFFFF) << TROPHY_BASE_LEVEL_SHIFT) | TROPHY_CLAIMS_MASK)) |
             (owed & TROPHY_OWED_MASK) |
             (base << TROPHY_BASE_LEVEL_SHIFT) |
             (claims << TROPHY_CLAIMS_SHIFT);
@@ -435,65 +423,13 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     }
 
     function _addExterminatorStakeTrait(address player, uint16 traitId) private {
-        uint8 count = exterminatorStakeTraitCount_[player][traitId];
-        unchecked {
-            count += 1;
-        }
-        exterminatorStakeTraitCount_[player][traitId] = count;
-        if (count == 1) {
-            exterminatorStakeTraitIndex_[player][traitId] = exterminatorStakeTraits_[player].length + 1;
-            exterminatorStakeTraits_[player].push(traitId);
-        }
-        if (exterminatorStakeTraitPct_[player][traitId] > EXTERMINATOR_STAKE_COIN_CAP) {
-            exterminatorStakeTraitPct_[player][traitId] = EXTERMINATOR_STAKE_COIN_CAP;
-        }
-        _recomputeExterminatorStakeBonus(player);
+        if (traitId >= 256) revert StakeInvalid();
+        exterminatorStakeTraits_[player][traitId] = true;
     }
 
     function _removeExterminatorStakeTrait(address player, uint16 traitId) private {
-        uint8 count = exterminatorStakeTraitCount_[player][traitId];
-        if (count == 0) return;
-        unchecked {
-            exterminatorStakeTraitCount_[player][traitId] = count - 1;
-        }
-        if (count == 1) {
-            uint256 index = exterminatorStakeTraitIndex_[player][traitId];
-            if (index != 0) {
-                uint16[] storage list = exterminatorStakeTraits_[player];
-                uint256 lastIndex = list.length;
-                if (index != lastIndex) {
-                    uint16 lastTrait = list[lastIndex - 1];
-                    list[index - 1] = lastTrait;
-                    exterminatorStakeTraitIndex_[player][lastTrait] = index;
-                }
-                list.pop();
-                delete exterminatorStakeTraitIndex_[player][traitId];
-            }
-            exterminatorStakeTraitPct_[player][traitId] = 0;
-        }
-        _recomputeExterminatorStakeBonus(player);
-    }
-
-    function _recomputeExterminatorStakeBonus(address player) private {
-        uint16[] storage traits = exterminatorStakeTraits_[player];
-        uint8 best;
-        for (uint256 i; i < traits.length; ) {
-            uint16 traitId = traits[i];
-            if (exterminatorStakeTraitCount_[player][traitId] != 0) {
-                uint8 pct = exterminatorStakeTraitPct_[player][traitId];
-                if (pct > best) {
-                    best = pct;
-                }
-            }
-            unchecked {
-                ++i;
-            }
-        }
-        uint8 cap = _exterminatorStakeDiscountCap(exterminatorStakeCount_[player]);
-        if (best > cap) {
-            best = cap;
-        }
-        exterminatorStakeBonusPct_[player] = best;
+        if (traitId >= 256) revert StakeInvalid();
+        exterminatorStakeTraits_[player][traitId] = false;
     }
 
     function _mapDiscountCap(uint8 count) private pure returns (uint8) {
@@ -508,6 +444,13 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         if (count == 1) return 5;
         if (count == 2) return 8;
         return 10;
+    }
+
+    function _exterminatorTraitPurgeCap(uint8 count) private pure returns (uint8) {
+        if (count == 0) return 0;
+        if (count == 1) return 8;
+        if (count == 2) return 12;
+        return 15;
     }
 
     function _stakeBonusCap(uint8 count) private pure returns (uint8) {
@@ -531,16 +474,49 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         return uint8(levelsHeld);
     }
 
+    function _exterminatorStakeStats(address player) private view returns (uint8 total, uint24 earliest) {
+        earliest = type(uint24).max;
+        uint256 len = stakedTrophyIds.length;
+        for (uint256 i; i < len; ) {
+            uint256 tokenId = stakedTrophyIds[i];
+            if (trophyStaked[tokenId]) {
+                address owner = address(uint160(nft.packedOwnershipOf(tokenId)));
+                if (owner == player) {
+                    uint256 info = trophyData_[tokenId];
+                    if (info != 0) {
+                        bool invalid = (info & TROPHY_FLAG_MAP) != 0 ||
+                            (info & TROPHY_FLAG_AFFILIATE) != 0 ||
+                            (info & TROPHY_FLAG_STAKE) != 0 ||
+                            (info & TROPHY_FLAG_BAF) != 0 ||
+                            (info & TROPHY_FLAG_DECIMATOR) != 0;
+                        if (!invalid) {
+                            unchecked {
+                                total += 1;
+                            }
+                            uint24 stakeLevel = uint24((info >> TROPHY_STAKE_LEVEL_SHIFT) & 0xFFFFFF);
+                            uint24 base = stakeLevel == 0 ? uint24((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF) : stakeLevel;
+                            if (base < earliest) earliest = base;
+                        }
+                    }
+                }
+            }
+            unchecked {
+                ++i;
+            }
+        }
+        if (earliest == type(uint24).max) {
+            earliest = 0;
+        }
+    }
+
     function _ensurePlayerOwnsStaked(address player, uint256 tokenId) private view {
         if (!trophyStaked[tokenId]) revert StakeInvalid();
         address owner = address(uint160(nft.packedOwnershipOf(tokenId)));
         if (owner != player) revert StakeInvalid();
     }
 
-    function _currentAffiliateBonus(address player, uint24 effectiveLevel) private view returns (uint8) {
-        uint8 count = affiliateStakeCount_[player];
+    function _currentAffiliateBonus(uint8 count, uint24 baseLevel, uint24 effectiveLevel) private pure returns (uint8) {
         if (count == 0) return 0;
-        uint24 baseLevel = affiliateStakeBaseLevel_[player];
         uint24 levelsHeld = effectiveLevel > baseLevel ? effectiveLevel - baseLevel : 0;
         uint256 effectiveBonus = uint256(levelsHeld) * uint256(count);
         uint256 cap = 10 + (uint256(count - 1) * 5);
@@ -576,59 +552,19 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         uint8 discountPct;
 
         if (params.targetMap) {
-            uint8 current = mapStakeCount_[params.player];
-            if (current >= MAP_STAKE_MAX) revert StakeInvalid();
-            unchecked {
-                current += 1;
-            }
-            mapStakeCount_[params.player] = current;
-            uint8 cap = _mapDiscountCap(current);
-            uint24 earliest = mapStakeBaseLevelEarliest_[params.player];
-            if (earliest == 0 || params.effectiveLevel < earliest) {
-                earliest = params.effectiveLevel;
-                mapStakeBaseLevelEarliest_[params.player] = earliest;
-            }
-            uint8 candidate = _timeBasedDiscount(current, earliest, params.effectiveLevel, cap);
-            mapStakeBonusPct_[params.player] = candidate;
-            discountPct = candidate;
+            discountPct = 0;
             data.kind = 1;
-            data.count = current;
+            data.count = 0;
         } else if (params.targetAffiliate) {
-            uint8 before = affiliateStakeCount_[params.player];
-            if (before >= AFFILIATE_STAKE_MAX) revert StakeInvalid();
-            uint8 current = before + 1;
-            affiliateStakeCount_[params.player] = current;
-            uint24 earliest = affiliateStakeBaseLevel_[params.player];
-            if (earliest == 0 || params.effectiveLevel < earliest) {
-                earliest = params.effectiveLevel;
-                affiliateStakeBaseLevel_[params.player] = earliest;
-            }
-            discountPct = _currentAffiliateBonus(params.player, params.effectiveLevel);
-            affiliateStakeBonusPct_[params.player] = discountPct;
+            discountPct = 0;
             data.kind = 2;
-            data.count = current;
+            data.count = 0;
         } else if (params.targetExterminator) {
-            if (params.pureExterminatorTrophy) {
-                uint8 current = exterminatorStakeCount_[params.player];
-                if (current >= EXTERMINATOR_STAKE_MAX) revert StakeInvalid();
-                unchecked {
-                    current += 1;
-                }
-                exterminatorStakeCount_[params.player] = current;
-                uint8 cap = _exterminatorStakeDiscountCap(current);
-                uint24 earliest = exterminatorStakeBaseLevelEarliest_[params.player];
-                if (earliest == 0 || params.effectiveLevel < earliest) {
-                    earliest = params.effectiveLevel;
-                    exterminatorStakeBaseLevelEarliest_[params.player] = earliest;
-                }
-                uint8 candidate = _timeBasedDiscount(current, earliest, params.effectiveLevel, cap);
-                exterminatorStakeBonusPct_[params.player] = candidate;
-            }
             uint16 traitId = uint16((trophyData_[params.tokenId] >> 152) & 0xFFFF);
             _addExterminatorStakeTrait(params.player, traitId);
             discountPct = 0;
             data.kind = 3;
-            data.count = exterminatorStakeCount_[params.player];
+            data.count = 0;
         } else if (params.targetBaf) {
             BafStakeInfo storage state = bafStakeInfo[params.player];
             _syncBafStake(params.player, state, params.currentLevel, params.priceUnit);
@@ -650,23 +586,9 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             data.kind = 6;
             data.count = 0;
         } else {
-            uint8 current = stakeStakeCount_[params.player];
-            if (current >= STAKE_TROPHY_MAX) revert StakeInvalid();
-            unchecked {
-                current += 1;
-            }
-            stakeStakeCount_[params.player] = current;
-            uint8 cap = _stakeBonusCap(current);
-            uint24 earliest = stakeStakeBaseLevelEarliest_[params.player];
-            if (earliest == 0 || params.effectiveLevel < earliest) {
-                earliest = params.effectiveLevel;
-                stakeStakeBaseLevelEarliest_[params.player] = earliest;
-            }
-            uint8 candidate = _timeBasedDiscount(current, earliest, params.effectiveLevel, cap);
-            stakeStakeBonusPct_[params.player] = candidate;
-            discountPct = candidate;
+            discountPct = 0;
             data.kind = 4;
-            data.count = current;
+            data.count = 0;
         }
 
         data.discountBps = uint16(discountPct) * 100;
@@ -679,86 +601,20 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         if (!trophyStaked[params.tokenId]) revert TrophyStakeViolation(_STAKE_ERR_NOT_STAKED);
         trophyStaked[params.tokenId] = false;
         _removeStakedTrophy(params.tokenId);
-        uint24 stakeLevel = uint24((info >> TROPHY_STAKE_LEVEL_SHIFT) & 0xFFFFFF);
-
         if (params.targetMap) {
-            uint8 current = mapStakeCount_[params.player];
-            if (current == 0) revert StakeInvalid();
-            unchecked {
-                current -= 1;
-            }
-            mapStakeCount_[params.player] = current;
-            uint8 prevPct = mapStakeBonusPct_[params.player];
-            if (current == 0) {
-                if (prevPct != 0) {
-                    mapStakeBonusPct_[params.player] = 0;
-                }
-                mapStakeBaseLevelEarliest_[params.player] = 0;
-            } else {
-                uint8 cap = _mapDiscountCap(current);
-                uint24 earliest = mapStakeBaseLevelEarliest_[params.player];
-                if (stakeLevel == earliest) {
-                    earliest = params.effectiveLevel;
-                    mapStakeBaseLevelEarliest_[params.player] = earliest;
-                }
-                mapStakeBonusPct_[params.player] = _timeBasedDiscount(current, earliest, params.effectiveLevel, cap);
-            }
+            mapStakeBonusPct_[params.player] = 0;
             data.kind = 1;
-            data.count = current;
+            data.count = 0;
         } else if (params.targetAffiliate) {
-            uint8 current = affiliateStakeCount_[params.player];
-            if (current == 0) revert StakeInvalid();
-            unchecked {
-                current -= 1;
-            }
-            affiliateStakeCount_[params.player] = current;
-            if (current == 0) {
-                if (affiliateStakeBonusPct_[params.player] != 0) {
-                    affiliateStakeBonusPct_[params.player] = 0;
-                }
-                affiliateStakeBaseLevel_[params.player] = 0;
-            } else {
-                uint24 earliest = affiliateStakeBaseLevel_[params.player];
-                if (stakeLevel == earliest) {
-                    earliest = params.effectiveLevel;
-                    affiliateStakeBaseLevel_[params.player] = earliest;
-                }
-                uint8 candidate = _currentAffiliateBonus(params.player, params.effectiveLevel);
-                affiliateStakeBonusPct_[params.player] = candidate;
-            }
+            affiliateStakeBonusPct_[params.player] = 0;
             data.kind = 2;
-            data.count = current;
+            data.count = 0;
         } else if (params.targetExterminator) {
-            uint8 current = exterminatorStakeCount_[params.player];
-            if (current == 0) revert StakeInvalid();
-            unchecked {
-                current -= 1;
-            }
-            exterminatorStakeCount_[params.player] = current;
-            uint8 prevPct = exterminatorStakeBonusPct_[params.player];
-            if (current == 0) {
-                if (prevPct != 0) {
-                    exterminatorStakeBonusPct_[params.player] = 0;
-                }
-                exterminatorStakeBaseLevelEarliest_[params.player] = 0;
-            } else {
-                uint8 cap = _exterminatorStakeDiscountCap(current);
-                uint24 earliest = exterminatorStakeBaseLevelEarliest_[params.player];
-                if (stakeLevel == earliest) {
-                    earliest = params.effectiveLevel;
-                    exterminatorStakeBaseLevelEarliest_[params.player] = earliest;
-                }
-                exterminatorStakeBonusPct_[params.player] = _timeBasedDiscount(
-                    current,
-                    earliest,
-                    params.effectiveLevel,
-                    cap
-                );
-            }
+            exterminatorStakeBonusPct_[params.player] = 0;
             uint16 traitId = uint16((info >> 152) & 0xFFFF);
             _removeExterminatorStakeTrait(params.player, traitId);
             data.kind = 3;
-            data.count = current;
+            data.count = 0;
         } else if (params.targetBaf) {
             BafStakeInfo storage state = bafStakeInfo[params.player];
             _syncBafStake(params.player, state, params.currentLevel, params.priceUnit);
@@ -775,34 +631,9 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             data.kind = 6;
             data.count = 0;
         } else {
-            uint8 current = stakeStakeCount_[params.player];
-            if (current == 0) revert StakeInvalid();
-            unchecked {
-                current -= 1;
-            }
-            stakeStakeCount_[params.player] = current;
-            uint8 prevPct = stakeStakeBonusPct_[params.player];
-            if (current == 0) {
-                if (prevPct != 0) {
-                    stakeStakeBonusPct_[params.player] = 0;
-                }
-                stakeStakeBaseLevelEarliest_[params.player] = 0;
-            } else {
-                uint8 cap = _stakeBonusCap(current);
-                uint24 earliest = stakeStakeBaseLevelEarliest_[params.player];
-                if (stakeLevel == earliest) {
-                    earliest = params.effectiveLevel;
-                    stakeStakeBaseLevelEarliest_[params.player] = earliest;
-                }
-                stakeStakeBonusPct_[params.player] = _timeBasedDiscount(
-                    current,
-                    earliest,
-                    params.effectiveLevel,
-                    cap
-                );
-            }
+            stakeStakeBonusPct_[params.player] = 0;
             data.kind = 4;
-            data.count = current;
+            data.count = 0;
         }
 
         uint256 storedInfo = trophyData_[params.tokenId];
@@ -815,50 +646,37 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     }
 
     function _refreshMapBonus(address player, uint256[] calldata tokenIds) private {
-        require(tokenIds.length <= 25, "too many tokenIds");
-        uint8 expected = mapStakeCount_[player];
         uint256 len = tokenIds.length;
         if (len == 0) {
-            if (expected == 0) {
-                mapStakeBonusPct_[player] = 0;
-                mapStakeBaseLevelEarliest_[player] = 0;
-                return;
-            }
-            revert StakeInvalid();
+            return;
         }
-        if (expected == 0 || len != expected) revert StakeInvalid();
-        uint8 cap = _mapDiscountCap(expected);
+        if (len > 10) revert StakeInvalid();
+        uint8 cap = _mapDiscountCap(uint8(len));
         uint24 earliest = type(uint24).max;
         for (uint256 i; i < len; ) {
             uint256 tokenId = tokenIds[i];
             _ensurePlayerOwnsStaked(player, tokenId);
             uint256 info = trophyData_[tokenId];
             if ((info & TROPHY_FLAG_MAP) == 0) revert StakeInvalid();
-            uint24 base = uint24((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF);
+            uint24 stakeLevel = uint24((info >> TROPHY_STAKE_LEVEL_SHIFT) & 0xFFFFFF);
+            uint24 base = stakeLevel == 0 ? uint24((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF) : stakeLevel;
             if (base < earliest) earliest = base;
             unchecked {
                 ++i;
             }
         }
         if (earliest == type(uint24).max) revert StakeInvalid();
-        mapStakeBaseLevelEarliest_[player] = earliest;
         uint24 effective = _currentEffectiveStakeLevel();
-        mapStakeBonusPct_[player] = _timeBasedDiscount(expected, earliest, effective, cap);
+        mapStakeBonusPct_[player] = _timeBasedDiscount(uint8(len), earliest, effective, cap);
     }
 
     function _refreshExterminatorStakeBonus(address player, uint256[] calldata tokenIds) private {
-        require(tokenIds.length <= 25, "too many tokenIds");
-        uint8 expected = exterminatorStakeCount_[player];
         uint256 len = tokenIds.length;
         if (len == 0) {
-            if (expected == 0) {
-                exterminatorStakeBonusPct_[player] = 0;
-                return;
-            }
-            revert StakeInvalid();
+            return;
         }
-        if (expected == 0 || len != expected) revert StakeInvalid();
-        uint8 cap = _exterminatorStakeDiscountCap(expected);
+        if (len > 10) revert StakeInvalid();
+        uint8 cap = _exterminatorStakeDiscountCap(uint8(len));
         uint24 earliest = type(uint24).max;
         for (uint256 i; i < len; ) {
             uint256 tokenId = tokenIds[i];
@@ -869,78 +687,68 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
                 (info & TROPHY_FLAG_STAKE) != 0 ||
                 (info & TROPHY_FLAG_BAF) != 0;
             if (invalid) revert StakeInvalid();
-            uint24 base = uint24((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF);
+            uint24 stakeLevel = uint24((info >> TROPHY_STAKE_LEVEL_SHIFT) & 0xFFFFFF);
+            uint24 base = stakeLevel == 0 ? uint24((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF) : stakeLevel;
             if (base < earliest) earliest = base;
+            uint16 traitId = uint16((info >> 152) & 0xFFFF);
+            if (traitId >= 256) revert StakeInvalid();
+            exterminatorStakeTraits_[player][traitId] = true;
             unchecked {
                 ++i;
             }
         }
         if (earliest == type(uint24).max) revert StakeInvalid();
-        exterminatorStakeBaseLevelEarliest_[player] = earliest;
         uint24 effective = _currentEffectiveStakeLevel();
-        exterminatorStakeBonusPct_[player] = _timeBasedDiscount(expected, earliest, effective, cap);
+        exterminatorStakeBonusPct_[player] = _timeBasedDiscount(uint8(len), earliest, effective, cap);
     }
 
     function _refreshStakeBonus(address player, uint256[] calldata tokenIds) private {
-        require(tokenIds.length <= 25, "too many tokenIds");
-        uint8 expected = stakeStakeCount_[player];
         uint256 len = tokenIds.length;
         if (len == 0) {
-            if (expected == 0) {
-                stakeStakeBonusPct_[player] = 0;
-                return;
-            }
-            revert StakeInvalid();
+            return;
         }
-        if (expected == 0 || len != expected) revert StakeInvalid();
-        uint8 cap = _stakeBonusCap(expected);
+        if (len > 10) revert StakeInvalid();
+        uint8 cap = _stakeBonusCap(uint8(len));
         uint24 earliest = type(uint24).max;
         for (uint256 i; i < len; ) {
             uint256 tokenId = tokenIds[i];
             _ensurePlayerOwnsStaked(player, tokenId);
             uint256 info = trophyData_[tokenId];
             if ((info & TROPHY_FLAG_STAKE) == 0) revert StakeInvalid();
-            uint24 value = uint24((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF);
+            uint24 stakeLevel = uint24((info >> TROPHY_STAKE_LEVEL_SHIFT) & 0xFFFFFF);
+            uint24 value = stakeLevel == 0 ? uint24((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF) : stakeLevel;
             if (value < earliest) earliest = value;
             unchecked {
                 ++i;
             }
         }
         if (earliest == type(uint24).max) revert StakeInvalid();
-        stakeStakeBaseLevelEarliest_[player] = earliest;
         uint24 effective = _currentEffectiveStakeLevel();
-        stakeStakeBonusPct_[player] = _timeBasedDiscount(expected, earliest, effective, cap);
+        stakeStakeBonusPct_[player] = _timeBasedDiscount(uint8(len), earliest, effective, cap);
     }
 
     function _refreshAffiliateBonus(address player, uint256[] calldata tokenIds) private {
-        require(tokenIds.length <= 25, "too many tokenIds");
-        uint8 expected = affiliateStakeCount_[player];
         uint256 len = tokenIds.length;
         if (len == 0) {
-            if (expected == 0) {
-                affiliateStakeBonusPct_[player] = 0;
-                affiliateStakeBaseLevel_[player] = 0;
-                return;
-            }
-            revert StakeInvalid();
+            return;
         }
-        if (expected == 0 || len != expected) revert StakeInvalid();
+        if (len > 10) revert StakeInvalid();
         uint24 earliest = type(uint24).max;
         for (uint256 i; i < len; ) {
             uint256 tokenId = tokenIds[i];
             _ensurePlayerOwnsStaked(player, tokenId);
             uint256 info = trophyData_[tokenId];
             if ((info & TROPHY_FLAG_AFFILIATE) == 0) revert StakeInvalid();
-            uint24 base = uint24((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF);
+            uint24 stakeLevel = uint24((info >> TROPHY_STAKE_LEVEL_SHIFT) & 0xFFFFFF);
+            uint24 base = stakeLevel == 0 ? uint24((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF) : stakeLevel;
             if (base < earliest) earliest = base;
             unchecked {
                 ++i;
             }
         }
         if (earliest == type(uint24).max) revert StakeInvalid();
-        affiliateStakeBaseLevel_[player] = earliest;
         uint24 effective = _currentEffectiveStakeLevel();
-        affiliateStakeBonusPct_[player] = _currentAffiliateBonus(player, effective);
+        affiliateStakeBonusPct_[player] = _currentAffiliateBonus(uint8(len), earliest, effective);
     }
 
     function _mintTrophyPlaceholders(uint24 level) private returns (uint256 newBaseTokenId) {
@@ -1036,26 +844,14 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     function clearStakePreview(uint24 level) external override onlyCoinCaller {
         (uint256 previousBase, uint256 currentBase) = nft.getBasePointers();
         uint24 currentLevel = game.level();
-        uint256 tokenId = _placeholderTokenId(
-            level,
-            PURGE_TROPHY_KIND_STAKE,
-            previousBase,
-            currentBase,
-            currentLevel
-        );
+        uint256 tokenId = _placeholderTokenId(level, PURGE_TROPHY_KIND_STAKE, previousBase, currentBase, currentLevel);
         _eraseTrophy(tokenId, PURGE_TROPHY_KIND_STAKE, true);
     }
 
     function burnBafPlaceholder(uint24 level) external override onlyCoinCaller {
         (uint256 previousBase, uint256 currentBase) = nft.getBasePointers();
         uint24 currentLevel = game.level();
-        uint256 tokenId = _placeholderTokenId(
-            level,
-            PURGE_TROPHY_KIND_BAF,
-            previousBase,
-            currentBase,
-            currentLevel
-        );
+        uint256 tokenId = _placeholderTokenId(level, PURGE_TROPHY_KIND_BAF, previousBase, currentBase, currentLevel);
         if (tokenId == 0) return;
         _eraseTrophy(tokenId, PURGE_TROPHY_KIND_BAF, true);
     }
@@ -1088,13 +884,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         if (levelTokenId == 0 || affiliateTokenId == 0) return;
         bool traitWin = req.traitId != TRAIT_ID_TIMEOUT;
 
-        _processEnd(
-            req,
-            levelTokenId,
-            affiliateTokenId,
-            stakeTokenId,
-            traitWin
-        );
+        _processEnd(req, levelTokenId, affiliateTokenId, stakeTokenId, traitWin);
     }
 
     function _processEnd(
@@ -1137,7 +927,9 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             }
         }
 
-        uint256 affiliateData = (uint256(0xFFFE) << 152) | (uint256(req.level) << TROPHY_BASE_LEVEL_SHIFT) | TROPHY_FLAG_AFFILIATE;
+        uint256 affiliateData = (uint256(0xFFFE) << 152) |
+            (uint256(req.level) << TROPHY_BASE_LEVEL_SHIFT) |
+            TROPHY_FLAG_AFFILIATE;
         if (affiliateWinner != address(0)) {
             _awardTrophyInternal(affiliateWinner, PURGE_TROPHY_KIND_AFFILIATE, affiliateData, 0, affiliateTokenId);
         } else if (affiliateTokenId != 0 && address(uint160(nft.packedOwnershipOf(affiliateTokenId))) == gameAddr) {
@@ -1148,7 +940,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         if (stakeTokenId != 0 && address(uint160(nft.packedOwnershipOf(stakeTokenId))) == gameAddr) {
             _eraseTrophy(stakeTokenId, PURGE_TROPHY_KIND_STAKE, true);
         }
-
     }
 
     function _processDecimatorClaim(ClaimContext memory ctx, uint256 priceUnit) private view {
@@ -1369,8 +1160,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         _setTrophyData(tokenId, newInfo);
 
         if (ctx.ethClaimed) {
-            try game.payoutTrophy(msg.sender, ctx.payout) {
-            } catch {
+            try game.payoutTrophy(msg.sender, ctx.payout) {} catch {
                 revert TransferFailed();
             }
             emit TrophyRewardClaimed(tokenId, msg.sender, ctx.payout);
@@ -1415,8 +1205,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
 
         if (stake && sender.code.length != 0) revert StakeInvalid();
 
-        params.trophyBaseLevel = uint24((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF);
-        params.trophyLevelValue = params.trophyBaseLevel;
         params.pureExterminatorTrophy = params.targetExterminator;
         params.effectiveLevel = effectiveLevel;
         params.currentLevel = currentLevel;
@@ -1437,7 +1225,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
 
         nft.setTrophyPackedInfo(tokenId, storedKind, stake);
 
-        emit TrophyStakeChanged(sender, tokenId, eventData.kind, stake, eventData.count, eventData.discountBps);
+        emit TrophyStakeChanged(sender, tokenId, eventData.kind, stake, 0, eventData.discountBps);
     }
 
     function refreshStakeBonuses(
@@ -1457,19 +1245,18 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         address player,
         uint16 traitId
     ) external override onlyGame returns (uint8 newPercent) {
-        if (exterminatorStakeTraitCount_[player][traitId] == 0) return 0;
-        uint8 current = exterminatorStakeTraitPct_[player][traitId];
-        if (current < EXTERMINATOR_STAKE_COIN_CAP) {
-            unchecked {
-                current += 1;
-            }
-            if (current > EXTERMINATOR_STAKE_COIN_CAP) {
-                current = EXTERMINATOR_STAKE_COIN_CAP;
-            }
-            exterminatorStakeTraitPct_[player][traitId] = current;
-            _recomputeExterminatorStakeBonus(player);
+        if (traitId >= 256) return 0;
+        if (!exterminatorStakeTraits_[player][traitId]) return 0;
+        (uint8 total, uint24 earliest) = _exterminatorStakeStats(player);
+        if (total == 0 || earliest == 0) return 0;
+        uint24 effective = _currentEffectiveStakeLevel();
+        if (effective <= earliest) return 0;
+        uint24 levelsHeld = effective - earliest;
+        uint8 cap = _exterminatorTraitPurgeCap(total);
+        if (levelsHeld > cap) {
+            return cap;
         }
-        return current;
+        return uint8(levelsHeld);
     }
 
     function affiliateStakeBonus(address player) external view override returns (uint8) {
@@ -1485,7 +1272,14 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     }
 
     function hasExterminatorStake(address player) external view override returns (bool) {
-        return exterminatorStakeTraits_[player].length != 0;
+        bool[256] storage traits = exterminatorStakeTraits_[player];
+        for (uint256 i; i < 256; ) {
+            if (traits[i]) return true;
+            unchecked {
+                ++i;
+            }
+        }
+        return false;
     }
 
     function mapStakeDiscount(address player) external view override returns (uint8) {
@@ -1518,9 +1312,9 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         return trophyData_[tokenId] != 0;
     }
 
-    function stakedTrophySampleWithId(uint256 rngSeed) external view override returns (uint256 tokenId) {
+    function stakedTrophySampleWithId(uint256 rngSeed) public view override returns (uint256 tokenId, address owner) {
         uint256 count = stakedTrophyIds.length;
-        if (count == 0) return 0;
+        if (count == 0) return (0, address(0));
         uint256 rand = uint256(keccak256(abi.encodePacked(rngSeed, count)));
         uint256 idxA = count == 1 ? 0 : rand % count;
         uint256 idxB = count == 1 ? idxA : (rand >> 64) % count;
@@ -1531,6 +1325,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
                 tokenId = otherToken;
             }
         }
+        owner = address(uint160(nft.packedOwnershipOf(tokenId)));
     }
 
     function trophyToken(uint24 level, uint8 kind) external view override returns (uint256 tokenId, address owner) {
@@ -1547,6 +1342,38 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
 
     function rewardTrophyByToken(uint256 tokenId, uint256 amountWei, uint24 level) external override onlyGameOrCoin {
         _addTrophyRewardInternal(tokenId, amountWei, level);
+    }
+
+    function rewardRandomStaked(uint256 rngSeed, uint256 amountWei, uint24 level)
+        external
+        override
+        onlyGameOrCoin
+        returns (uint256 tokenIdA, uint256 tokenIdB)
+    {
+        (tokenIdA, ) = stakedTrophySampleWithId(rngSeed);
+        (tokenIdB, ) = stakedTrophySampleWithId(uint256(keccak256(abi.encodePacked(rngSeed, uint256(7777)))));
+
+        if (tokenIdA == 0 && tokenIdB == 0) {
+            return (0, 0);
+        }
+        if (tokenIdA != 0 && (tokenIdB == 0 || tokenIdB == tokenIdA)) {
+            _addTrophyRewardInternal(tokenIdA, amountWei, level);
+            return (tokenIdA, 0);
+        }
+        if (tokenIdA == 0) {
+            _addTrophyRewardInternal(tokenIdB, amountWei, level);
+            return (0, tokenIdB);
+        }
+
+        if (tokenIdB < tokenIdA) {
+            uint256 tmp = tokenIdA;
+            tokenIdA = tokenIdB;
+            tokenIdB = tmp;
+        }
+        uint256 half = amountWei >> 1;
+        uint256 rem = amountWei - half;
+        _addTrophyRewardInternal(tokenIdA, half, level);
+        _addTrophyRewardInternal(tokenIdB, rem, level);
     }
 
     function isTrophyStaked(uint256 tokenId) external view override returns (bool) {

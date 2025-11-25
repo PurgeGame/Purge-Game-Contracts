@@ -147,6 +147,9 @@ describe("PurgeGameTrophies staking lifecycle", function () {
 
     await trophies.connect(mapHolder).setTrophyStake(placeholders.map, true);
     await trophies.connect(stakeHolder).setTrophyStake(placeholders.stake, true);
+    await trophies
+      .connect(mapHolder)
+      .refreshStakeBonuses([placeholders.map], [], [placeholders.stake], []);
 
     expect(await coin.burnCount()).to.equal(2n);
     const firstBurn = await coin.burnAt(0);
@@ -247,6 +250,9 @@ describe("PurgeGameTrophies staking lifecycle", function () {
 
     await trophies.connect(player).setTrophyStake(placeholders.map, true);
     await trophies.connect(player).setTrophyStake(placeholders.stake, true);
+    await trophies
+      .connect(player)
+      .refreshStakeBonuses([placeholders.map], [], [placeholders.stake], []);
 
     expect(await coin.burnCount()).to.equal(2n);
     expect(await trophies.mapStakeDiscount(player.address)).to.equal(5n);

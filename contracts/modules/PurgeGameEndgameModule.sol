@@ -297,27 +297,12 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         }
 
         if (rewardBudgetRandom != 0) {
-            uint256 tokenA = _pickStakedToken(rngWord, trophiesContract);
-            uint256 tokenB = _pickStakedToken(
-                uint256(keccak256(abi.encodePacked(rngWord, lvl, uint256(1)))),
-                trophiesContract
+            (uint256 tokenA, uint256 tokenB) = trophiesContract.rewardRandomStaked(
+                rngWord,
+                rewardBudgetRandom,
+                lvl
             );
-
-            if (tokenA == 0 && tokenB == 0) {
-                // No staked trophies to pay; leave reward pool unchanged for this slice.
-            } else if (tokenA != 0 && (tokenB == 0 || tokenB == tokenA)) {
-                trophiesContract.rewardTrophyByToken(tokenA, rewardBudgetRandom, lvl);
-                rewardSpent += rewardBudgetRandom;
-                trophyDelta += rewardBudgetRandom;
-            } else if (tokenA == 0) {
-                trophiesContract.rewardTrophyByToken(tokenB, rewardBudgetRandom, lvl);
-                rewardSpent += rewardBudgetRandom;
-                trophyDelta += rewardBudgetRandom;
-            } else {
-                uint256 half = rewardBudgetRandom >> 1;
-                uint256 rem = rewardBudgetRandom - half;
-                trophiesContract.rewardTrophyByToken(tokenA, half, lvl);
-                trophiesContract.rewardTrophyByToken(tokenB, rem, lvl);
+            if (tokenA != 0 || tokenB != 0) {
                 rewardSpent += rewardBudgetRandom;
                 trophyDelta += rewardBudgetRandom;
             }
@@ -337,19 +322,6 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         uint256 base = (rewardBudget * sliceBps) / 10_000;
         if (base == 0) return 0;
         return (base * _rewardBonusScaleBps(lvl)) / 10_000;
-    }
-
-    function _pickStakedToken(
-        uint256 seed,
-        IPurgeGameTrophiesModule trophiesContract
-    ) private view returns (uint256 tokenId) {
-        uint256 drawA = trophiesContract.stakedTrophySampleWithId(seed);
-        uint256 drawB = trophiesContract.stakedTrophySampleWithId(
-            uint256(keccak256(abi.encodePacked(seed, uint256(7777))))
-        );
-        if (drawA == 0) return drawB;
-        if (drawB == 0) return drawA;
-        return drawA < drawB ? drawA : drawB;
     }
 
     function _rewardBonusScaleBps(uint24 lvl) private pure returns (uint16) {
