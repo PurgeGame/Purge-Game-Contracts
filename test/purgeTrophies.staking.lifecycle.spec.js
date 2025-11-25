@@ -249,7 +249,7 @@ describe("PurgeGameTrophies staking lifecycle", function () {
     await trophies.connect(player).setTrophyStake(placeholders.stake, true);
 
     expect(await coin.burnCount()).to.equal(2n);
-    expect(await trophies.mapStakeDiscount(player.address)).to.equal(7n);
+    expect(await trophies.mapStakeDiscount(player.address)).to.equal(5n);
     expect(await trophies.stakeTrophyBonus(player.address)).to.equal(5n);
     expect(await trophies.isTrophyStaked(placeholders.map)).to.equal(true);
     expect(await trophies.isTrophyStaked(placeholders.stake)).to.equal(true);
