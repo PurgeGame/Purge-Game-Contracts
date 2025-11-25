@@ -179,15 +179,10 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
             dailyJackpotBase = 0;
         }
 
-        uint256 trophyPoolDelta = req.deferredWei;
-        if (req.traitId == TRAIT_ID_TIMEOUT && req.pool != 0) {
-            trophyPoolDelta += req.pool;
-        }
+        (, , uint256 trophyPoolDelta) = trophiesContract.processEndLevel(req);
         if (trophyPoolDelta != 0) {
             trophyPool += trophyPoolDelta;
         }
-
-        trophiesContract.processEndLevel(req);
 
         _payoutCarryBonuses(prevLevelPending, rngWord, trophiesContract);
 

@@ -313,8 +313,7 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
                     scanCursor = SS_IDLE;
                     return (true, winners, amounts, trophyPoolDelta, ret);
                 }
-                trophyPoolDelta = extVar;
-                return (false, winners, amounts, trophyPoolDelta, 0);
+                return (false, winners, amounts, 0, 0);
             }
 
             return (false, new address[](0), new uint256[](0), 0, 0);
@@ -369,7 +368,7 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
                 scanCursor = SS_IDLE;
                 return (true, winners, amounts, trophyPoolDelta, ret);
             }
-            return (false, winners, amounts, extVar, 0);
+            return (false, winners, amounts, 0, 0);
         }
 
         if (extMode == 2) {

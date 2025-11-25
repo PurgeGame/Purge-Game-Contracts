@@ -756,12 +756,14 @@ contract PurgeGame is PurgeGameStorage {
 
     function payoutTrophy(address recipient, uint256 amount) external {
         if (msg.sender != address(trophies)) revert E();
-        if (amount == 0) return;
-        uint256 pool = trophyPool;
-        if (amount > pool) revert E();
-        trophyPool = pool - amount;
-        (bool ok, ) = payable(recipient).call{value: amount}("");
-        if (!ok) revert E();
+        trophyPool -= amount;
+        claimableWinnings[recipient] += amount;
+    }
+
+    function recycleTrophyEth(uint256 amount) external {
+        if (msg.sender != address(trophies)) revert E();
+        trophyPool -= amount;
+        rewardPool += amount;
     }
 
     // --- Claiming winnings (ETH) --------------------------------------------------------------------

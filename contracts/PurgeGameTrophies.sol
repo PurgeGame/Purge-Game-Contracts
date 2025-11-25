@@ -49,7 +49,7 @@ interface IPurgeGameTrophies {
 
     function processEndLevel(
         EndLevelRequest calldata req
-    ) external returns (address mapImmediateRecipient, address[6] memory affiliateRecipients);
+    ) external returns (address mapImmediateRecipient, address[6] memory affiliateRecipients, uint256 trophyPoolDelta);
 
     function claimTrophy(uint256 tokenId) external;
 
@@ -98,6 +98,7 @@ interface IPurgeGameMinimal {
     function rngLocked() external view returns (bool);
     function coinPriceUnit() external view returns (uint256);
     function payoutTrophy(address to, uint256 amount) external;
+    function recycleTrophyEth(uint256 amount) external;
 }
 
 interface IPurgecoinMinimal {
@@ -1010,7 +1011,11 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
 
     function processEndLevel(
         EndLevelRequest calldata req
-    ) external override onlyGame returns (address mapImmediateRecipient, address[6] memory affiliateRecipients)
+    )
+        external
+        override
+        onlyGame
+        returns (address mapImmediateRecipient, address[6] memory affiliateRecipients, uint256 trophyPoolDelta)
     {
         uint24 nextLevel = req.level + 1;
         (uint256 previousBase, uint256 currentBase) = nft.getBasePointers();
@@ -1038,13 +1043,13 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         );
 
         if (mapTokenId == 0 || levelTokenId == 0 || affiliateTokenId == 0) {
-            return (address(0), affiliateRecipients);
+            return (address(0), affiliateRecipients, 0);
         }
         bool traitWin = req.traitId != TRAIT_ID_TIMEOUT;
         uint256 randomWord = req.rngWord;
 
         if (traitWin) {
-            affiliateRecipients = _processTraitWin(
+            (affiliateRecipients, trophyPoolDelta) = _processTraitWin(
                 req,
                 nextLevel,
                 previousBase,
@@ -1053,7 +1058,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
                 randomWord
             );
         } else {
-            (mapImmediateRecipient, affiliateRecipients) = _processTimeout(
+            (mapImmediateRecipient, affiliateRecipients, trophyPoolDelta) = _processTimeout(
                 req,
                 nextLevel,
                 mapTokenId,
@@ -1063,7 +1068,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             );
         }
 
-        return (mapImmediateRecipient, affiliateRecipients);
+        return (mapImmediateRecipient, affiliateRecipients, trophyPoolDelta);
     }
 
     function _processTraitWin(
@@ -1073,7 +1078,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         uint256 currentBase,
         uint24 currentLevel,
         uint256 randomWord
-    ) private returns (address[6] memory recipients) {
+    ) private returns (address[6] memory recipients, uint256 trophyPoolDelta) {
         uint256 levelPlaceholder = _placeholderTokenId(
             req.level,
             PURGE_TROPHY_KIND_LEVEL,
@@ -1119,7 +1124,14 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         }
 
         ctx.deferredAward = req.deferredWei;
-        _awardTrophyInternal(req.exterminator, PURGE_TROPHY_KIND_LEVEL, ctx.traitData, ctx.deferredAward, levelPlaceholder);
+        trophyPoolDelta = ctx.deferredAward;
+        _awardTrophyInternal(
+            req.exterminator,
+            PURGE_TROPHY_KIND_LEVEL,
+            ctx.traitData,
+            ctx.deferredAward,
+            levelPlaceholder
+        );
     }
 
     function _processTimeout(
@@ -1129,7 +1141,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         uint256 levelTokenId,
         uint256 affiliateTokenId,
         uint256 randomWord
-    ) private returns (address mapImmediateRecipient, address[6] memory recipients) {
+    ) private returns (address mapImmediateRecipient, address[6] memory recipients, uint256 trophyPoolDelta) {
         bool affiliateOnly = req.traitId == TRAIT_ID_TIMEOUT && req.exterminator != address(0) && req.pool != 0;
 
         if (affiliateOnly) {
@@ -1141,7 +1153,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
                 req.pool,
                 affiliateTokenId
             );
-            return (address(0), recipients);
+            return (address(0), recipients, req.pool);
         }
 
         MapTimeoutContext memory ctx;
@@ -1163,6 +1175,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
                 ctx.mapUnit,
                 affiliateTokenId
             );
+            trophyPoolDelta += ctx.mapUnit;
         } else {
             _eraseTrophy(affiliateTokenId, PURGE_TROPHY_KIND_AFFILIATE, true);
         }
@@ -1178,6 +1191,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             if (remaining < ctx.mapUnit) revert InvalidToken();
             remaining -= ctx.mapUnit;
             _addTrophyRewardInternal(mapTokenId, ctx.mapUnit, nextLevel);
+            trophyPoolDelta += ctx.mapUnit;
         }
 
         ctx.stakedCount = stakedTrophyIds.length;
@@ -1189,6 +1203,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
                 uint256 idx = ctx.stakedCount == 1 ? 0 : (ctx.rand & type(uint64).max) % ctx.stakedCount;
                 uint256 tokenId = stakedTrophyIds[idx];
                 _addTrophyRewardInternal(tokenId, ctx.mapUnit, nextLevel);
+                trophyPoolDelta += ctx.mapUnit;
                 ctx.distributed += ctx.mapUnit;
                 ctx.rand >>= 64;
                 unchecked {
@@ -1555,8 +1570,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         _eraseTrophy(tokenId, kind, true);
 
         if (owed != 0) {
-            (bool ok, ) = payable(gameAddress).call{value: owed}("");
-            if (!ok) revert TransferFailed();
+            game.recycleTrophyEth(owed);
         }
 
         uint256 priceUnit = game.coinPriceUnit();

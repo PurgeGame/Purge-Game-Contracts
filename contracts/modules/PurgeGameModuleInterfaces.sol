@@ -49,7 +49,7 @@ interface IPurgeCoinModule {
 interface IPurgeGameTrophiesModule {
     function processEndLevel(
         IPurgeGameTrophies.EndLevelRequest calldata req
-    ) external returns (address mapImmediateRecipient, address[6] memory affiliateRecipients);
+    ) external returns (address mapImmediateRecipient, address[6] memory affiliateRecipients, uint256 trophyPoolDelta);
 
     function awardTrophy(address to, uint24 level, uint8 kind, uint256 data, uint256 deferredWei) external;
 
