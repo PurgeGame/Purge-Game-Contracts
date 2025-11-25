@@ -78,9 +78,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
             if (!coinOnly) {
                 uint256 poolBps = boostTrigger ? 200 : 50; // default 0.5%, 2% when EP boost triggers
                 rewardPoolSlice = (rewardPool * poolBps) / 10_000;
-                if (rewardPoolSlice != 0) {
-                    rewardPoolSlice = (rewardPoolSlice * _rewardJackpotScaleBps(lvl)) / 10_000;
-                }
+                rewardPoolSlice = (rewardPoolSlice * _rewardJackpotScaleBps(lvl)) / 10_000;
             }
 
             uint256 ethPool = rewardPoolSlice;
@@ -101,83 +99,57 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
             );
 
             // Only the reward pool-funded slice should reduce reward pool accounting.
-            if (rewardPoolSlice != 0 && paidEth != 0) {
-                uint256 deduct = paidEth > rewardPoolSlice ? rewardPoolSlice : paidEth;
-                uint256 rewardBal = rewardPool;
-                rewardPool = deduct > rewardBal ? 0 : rewardBal - deduct;
-            }
+            uint256 deduct = paidEth > rewardPoolSlice ? rewardPoolSlice : paidEth;
+            uint256 rewardBal = rewardPool;
+            rewardPool = deduct > rewardBal ? 0 : rewardBal - deduct;
         } else {
             uint32 winningTraitsPacked = _packWinningTraits(_getWinningTraits(entropyWord, dailyPurgeCount));
             bool lastDaily = (jackpotCounter + 1) >= JACKPOT_LEVEL_CAP;
-            uint8 remainingJackpots = jackpotCounter >= JACKPOT_LEVEL_CAP
-                ? uint8(1)
-                : uint8(JACKPOT_LEVEL_CAP - jackpotCounter);
+            uint256 budget = (dailyJackpotBase * _dailyJackpotBps(jackpotCounter)) / 10_000;
 
-            if (remainingJackpots == 0) {
-                remainingJackpots = 1;
-            }
-            uint8 jackpotIndex = jackpotCounter < JACKPOT_LEVEL_CAP ? jackpotCounter : (JACKPOT_LEVEL_CAP - 1);
-            uint256 base = dailyJackpotBase;
-            if (base == 0) {
-                base = currentPrizePool;
-            }
-            uint256 budget = (base * _dailyJackpotBps(jackpotIndex)) / 10_000;
-            if (budget != 0 && budget > currentPrizePool) {
-                budget = currentPrizePool;
-            }
-
-            if (budget != 0) {
-                _executeStandardJackpot(
-                    lvl,
-                    entropyWord ^ (uint256(lvl) << 192),
-                    budget,
-                    0,
-                    winningTraitsPacked,
-                    coinContract,
-                    trophiesContract,
-                    true,
-                    false
-                );
-            }
-
-            uint256 futureTopup;
-            if (lastDaily) {
-                uint256 leftoverPrize = currentPrizePool;
-                if (leftoverPrize != 0) {
-                    currentPrizePool = 0;
-                    futureTopup = leftoverPrize;
-                }
-                // Avoid leaving stale bases into the next level.
-                dailyJackpotBase = 0;
-            }
+            _executeStandardJackpot(
+                lvl,
+                entropyWord ^ (uint256(lvl) << 192),
+                budget,
+                0,
+                winningTraitsPacked,
+                coinContract,
+                trophiesContract,
+                true,
+                false
+            );
 
             uint24 nextLevel = lvl + 1;
-            uint256 futurePoolBps = jackpotCounter == 0 ? 300 : 100; // 3% on first purge, else 1%
-            if (jackpotCounter == 1) {
-                futurePoolBps += 100; // +1% boost on the second daily jackpot
-            }
-            uint256 futureEthPool = (rewardPool * futurePoolBps) / 10_000;
-            if (futureEthPool > rewardPool) futureEthPool = rewardPool;
-            if (futureEthPool != 0) {
-                futureEthPool = (futureEthPool * _rewardJackpotScaleBps(nextLevel)) / 10_000;
-            }
-            if (futureTopup != 0) {
-                futureEthPool += futureTopup;
+            uint256 futureEthPool;
+            uint256 rewardSlice;
+
+            // On the last daily, push all leftover prize pool plus the standard 1% reward slice to the next level.
+            if (lastDaily) {
+                uint256 leftoverPool = currentPrizePool;
+                currentPrizePool = 0;
+                uint256 futurePoolBps = 100; // 1% reward pool contribution
+                rewardSlice = (rewardPool * futurePoolBps * _rewardJackpotScaleBps(nextLevel)) / 100_000_000;
+                rewardPool -= rewardSlice;
+                futureEthPool = rewardSlice + leftoverPool;
+            } else {
+                uint256 futurePoolBps = jackpotCounter == 0 ? 300 : 100; // 3% on first purge, else 1%
+                if (jackpotCounter == 1) {
+                    futurePoolBps += 100; // +1% boost on the second daily jackpot
+                }
+                futureEthPool = (rewardPool * futurePoolBps * _rewardJackpotScaleBps(nextLevel)) / 100_000_000;
             }
 
-            if (futureEthPool != 0 || priceCoin != 0) {
-                _executeStandardJackpot(
-                    nextLevel,
-                    _entropyStep(entropyWord) ^ (uint256(nextLevel) << 192),
-                    futureEthPool,
-                    priceCoin * 10,
-                    winningTraitsPacked,
-                    coinContract,
-                    trophiesContract,
-                    false,
-                    futureEthPool != 0
-                );
-            }
+            _executeStandardJackpot(
+                nextLevel,
+                _entropyStep(entropyWord) ^ (uint256(nextLevel) << 192),
+                futureEthPool,
+                priceCoin * 10,
+                winningTraitsPacked,
+                coinContract,
+                trophiesContract,
+                false,
+                !lastDaily // lastDaily reward slice already debited; carryover is prize pool
+            );
 
             unchecked {
                 ++jackpotCounter;
