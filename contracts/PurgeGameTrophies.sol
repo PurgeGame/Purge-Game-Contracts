@@ -159,15 +159,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     struct TraitWinContext {
         uint256 levelBits;
         uint256 traitData;
-        uint256 sharedPool;
-        uint256 base;
-        uint256 stakerRewardPool;
-        uint256 affiliateShare;
         uint256 deferredAward;
-        uint256 rand;
-        uint256 trophyCount;
-        uint256 rounds;
-        uint256 baseShare;
     }
 
     struct MapTimeoutContext {
@@ -1117,26 +1109,12 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         if (req.traitId == DECIMATOR_TRAIT_SENTINEL) {
             ctx.traitData |= TROPHY_FLAG_DECIMATOR;
         }
-        ctx.sharedPool = req.pool / 20;
-        ctx.base = ctx.sharedPool / 100;
-        ctx.stakerRewardPool = ctx.base * 10;
-        ctx.affiliateShare = ctx.sharedPool - ctx.base * 80;
-        uint256 legacyAffiliateShare = ctx.base * 10;
         uint256 available = msg.value;
-        if (ctx.stakerRewardPool > available) {
-            ctx.stakerRewardPool = available;
-        }
-        available -= ctx.stakerRewardPool;
 
         address[] memory leaders = coin.getLeaderboardAddresses(1);
         bool hasAffiliates = leaders.length != 0;
         address[6] memory selectedRecipients = _selectAffiliateRecipients(leaders, randomWord);
         if (hasAffiliates) {
-            uint256 payout = ctx.affiliateShare;
-            if (payout > available) {
-                payout = available;
-            }
-            available -= payout;
             recipients = selectedRecipients;
             address winner = selectedRecipients[0];
             if (winner == address(0)) {
@@ -1148,41 +1126,15 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
                 winner,
                 PURGE_TROPHY_KIND_AFFILIATE,
                 (uint256(0xFFFE) << 152) | ctx.levelBits | TROPHY_FLAG_AFFILIATE,
-                payout,
+                0, // Affiliate ETH now flows from carry; keep in-contract pool untouched.
                 affiliatePlaceholder
             );
         } else {
-            ctx.affiliateShare = 0;
-            legacyAffiliateShare = 0;
             _eraseTrophy(affiliatePlaceholder, PURGE_TROPHY_KIND_AFFILIATE, true);
         }
 
         ctx.deferredAward = available;
         _awardTrophyInternal(req.exterminator, PURGE_TROPHY_KIND_LEVEL, ctx.traitData, ctx.deferredAward, levelPlaceholder);
-
-        ctx.trophyCount = stakedTrophyIds.length;
-        if (ctx.stakerRewardPool != 0 && ctx.trophyCount != 0) {
-            ctx.rounds = ctx.trophyCount == 1 ? 1 : 2;
-            ctx.baseShare = ctx.stakerRewardPool / ctx.rounds;
-            ctx.rand = randomWord;
-            for (uint256 i; i < ctx.rounds; ) {
-                uint256 idx = ctx.trophyCount == 1 ? 0 : (ctx.rand & type(uint64).max) % ctx.trophyCount;
-                ctx.rand >>= 64;
-                uint256 chosen = stakedTrophyIds[idx];
-                if (ctx.trophyCount != 1) {
-                    uint256 otherIdx = (ctx.rand & type(uint64).max) % ctx.trophyCount;
-                    ctx.rand >>= 64;
-                    uint256 otherToken = stakedTrophyIds[otherIdx];
-                    if (otherToken < chosen) {
-                        chosen = otherToken;
-                    }
-                }
-                _addTrophyRewardInternal(chosen, ctx.baseShare, nextLevel);
-                unchecked {
-                    ++i;
-                }
-            }
-        }
     }
 
     function _processTimeout(

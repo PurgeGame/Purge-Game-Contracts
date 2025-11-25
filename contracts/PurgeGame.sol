@@ -637,8 +637,10 @@ contract PurgeGame is PurgeGameStorage {
     /// @dev
     /// When a trait is exterminated (<256):
     /// - Lock the exterminated trait in the current level’s storage.
-    /// - Split prize pool: 90% to participants, 10% to trophies and affiliates (handled elsewhere),
-    ///   from which the “exterminator” gets 20% (or 40% for 7th steps since L25),
+    /// - Split prize pool: 90% to participants (including the exterminator slice below) and 10% as a bonus
+    ///   split across three winning tickets weighted by ETH mint streaks (even split if all streaks are zero);
+    ///   affiliate/stake trophy rewards are now funded from carry.
+    ///   From within the 90%, the “exterminator” gets 20% (or 40% for 7th steps since L25),
     ///   and the rest is divided evenly per ticket for the exterminated trait.
     /// - Mint the level trophy (transfers the placeholder token owned by the contract).
     ///

@@ -18,6 +18,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
     uint8 private constant EARLY_PURGE_COIN_ONLY_THRESHOLD = 50;
     uint8 private constant EARLY_PURGE_BOOST_THRESHOLD = 60;
     uint8 private constant PURGE_TROPHY_KIND_MAP = 0;
+    uint16 private constant TRAIT_ID_TIMEOUT = 420;
     uint256 private constant DEGENERATE_ENTROPY_CHECK_VALUE = 420;
     uint64 private constant MAP_JACKPOT_SHARES_PACKED =
         (uint64(6000)) | (uint64(1333) << 16) | (uint64(1333) << 32) | (uint64(1334) << 48);
@@ -73,28 +74,41 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         if (!isDaily) {
             uint32 winningTraitsPacked = _packWinningTraits(_getRandomTraits(entropyWord));
 
-            uint256 ethPool;
+            uint256 carryPool;
             if (!coinOnly) {
                 uint256 poolBps = boostTrigger ? 200 : 50; // default 0.5%, 2% when EP boost triggers
-                ethPool = (carryOver * poolBps) / 10_000;
-                if (ethPool != 0) {
-                    ethPool = (ethPool * _carryJackpotScaleBps(lvl)) / 10_000;
+                carryPool = (carryOver * poolBps) / 10_000;
+                if (carryPool != 0) {
+                    carryPool = (carryPool * _carryJackpotScaleBps(lvl)) / 10_000;
                 }
             }
 
-            _executeStandardJackpot(
-                lvl,
-                entropyWord ^ (uint256(lvl) << 192),
-                ethPool,
-                priceCoin * 10,
-                winningTraitsPacked,
-                coinContract,
-                trophiesContract,
+            uint256 ethPool = carryPool;
+            uint256 paidEth = _executeJackpot(
+                JackpotParams({
+                    lvl: lvl,
+                    ethPool: ethPool,
+                    coinPool: priceCoin * 10,
+                    mapTrophy: false,
+                    entropy: entropyWord ^ (uint256(lvl) << 192),
+                    winningTraitsPacked: winningTraitsPacked,
+                    traitShareBpsPacked: DAILY_JACKPOT_SHARES_PACKED,
+                    coinContract: coinContract,
+                    trophiesContract: trophiesContract
+                }),
                 false,
-                ethPool != 0
+                false
             );
+
+            // Only the carry-funded slice should reduce carry accounting.
+            if (carryPool != 0 && paidEth != 0) {
+                uint256 deduct = paidEth > carryPool ? carryPool : paidEth;
+                uint256 carryBal = carryOver;
+                carryOver = deduct > carryBal ? 0 : carryBal - deduct;
+            }
         } else {
             uint32 winningTraitsPacked = _packWinningTraits(_getWinningTraits(entropyWord, dailyPurgeCount));
+            bool lastDaily = (jackpotCounter + 1) >= JACKPOT_LEVEL_CAP;
             uint8 remainingJackpots = jackpotCounter >= JACKPOT_LEVEL_CAP
                 ? uint8(1)
                 : uint8(JACKPOT_LEVEL_CAP - jackpotCounter);
@@ -126,6 +140,17 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
                 );
             }
 
+            uint256 futureTopup;
+            if (lastDaily) {
+                uint256 leftoverPrize = currentPrizePool;
+                if (leftoverPrize != 0) {
+                    currentPrizePool = 0;
+                    futureTopup = leftoverPrize;
+                }
+                // Avoid carrying stale bases into the next level.
+                dailyJackpotBase = 0;
+            }
+
             uint24 nextLevel = lvl + 1;
             uint256 futurePoolBps = jackpotCounter == 0 ? 300 : 100; // 3% on first purge, else 1%
             if (jackpotCounter == 1) {
@@ -135,6 +160,9 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
             if (futureEthPool > carryOver) futureEthPool = carryOver;
             if (futureEthPool != 0) {
                 futureEthPool = (futureEthPool * _carryJackpotScaleBps(nextLevel)) / 10_000;
+            }
+            if (futureTopup != 0) {
+                futureEthPool += futureTopup;
             }
 
             if (futureEthPool != 0 || priceCoin != 0) {

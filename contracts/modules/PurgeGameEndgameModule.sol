@@ -22,6 +22,10 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
     uint8 private constant PURGE_TROPHY_KIND_AFFILIATE = 2;
     uint8 private constant PURGE_TROPHY_KIND_STAKE = 3;
+    uint16 private constant AFFILIATE_CARRY_BPS = 100; // 1% of carry pool
+    uint16 private constant STAKE_CARRY_BPS = 50; // 0.5% of carry pool
+    uint256 private constant MINT_MASK_24 = (uint256(1) << 24) - 1;
+    uint256 private constant ETH_LEVEL_STREAK_SHIFT = 48;
 
     constructor() {}
 
@@ -118,52 +122,49 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
             uint256 deferredWei = exterminatorShare - immediate;
             _addClaimableEth(pend.exterminator, immediate);
 
-            // Allocate the remaining 10%: 2% each to two staked trophies, 2% to the affiliate trophy,
-            // and 4% as a bonus to one random winning ticket.
-            uint256 onePercent = poolValue / 100;
-            uint256 twoPercent = onePercent * 2;
-            uint256 bonusPool = onePercent * 4;
-
-            // Staked trophies (2% each)
-            for (uint8 s; s < 2; ) {
-                uint256 seed = rngWord ^ (uint256(prevLevelPending) << 64) ^ uint256(s);
-                uint256 tokenId = trophiesContract.stakedTrophySampleWithId(seed);
-                if (tokenId != 0) {
-                    trophiesContract.rewardTrophyByToken(tokenId, twoPercent);
-                } else {
-                    carryOver += twoPercent;
-                }
-                unchecked {
-                    ++s;
-                }
-            }
-
-            // Affiliate trophy (2%)
-            (uint256 affiliateTokenId, address affiliateTrophyRecipient) = trophiesContract.trophyToken(
-                prevLevelPending,
-                PURGE_TROPHY_KIND_AFFILIATE
-            );
-            if (affiliateTokenId != 0 && affiliateTrophyRecipient != address(0)) {
-                trophiesContract.rewardTrophyByToken(affiliateTokenId, twoPercent);
-            } else {
-                carryOver += twoPercent;
-            }
-
-            // Bonus to one random winning ticket (4%), with 1% siphoned to the stake trophy holder for the previous level.
-            uint256 stakeBoost = onePercent; // 1%
-            uint256 ticketBonus = bonusPool - stakeBoost;
-            (uint256 stakeTokenId, address stakeTrophyRecipient) = trophiesContract.trophyToken(
-                prevLevelPending,
-                PURGE_TROPHY_KIND_STAKE
-            );
-            if (stakeTokenId != 0 && stakeTrophyRecipient != address(0)) {
-                trophiesContract.rewardTrophyByToken(stakeTokenId, stakeBoost);
-            } else {
-                carryOver += stakeBoost;
-            }
+            // Reassign the trophy slice from the prize pool to players: 10% split across three tickets
+            // using their ETH mint streaks as weights (even split if all streaks are zero).
+            uint256 ticketBonus = (poolValue * 10) / 100;
             address[] storage arr = traitPurgeTicket[prevLevelPending][uint8(lastExterminatedTrait)];
-            uint256 idx = (rngWord ^ (uint256(prevLevelPending) << 128)) % arr.length;
-            _addClaimableEth(arr[idx], ticketBonus);
+            if (arr.length != 0 && ticketBonus != 0) {
+                address[3] memory winners;
+                uint256[3] memory streaks;
+                uint256 seed = rngWord ^ (uint256(prevLevelPending) << 128);
+                for (uint8 i; i < 3; ) {
+                    seed = uint256(keccak256(abi.encodePacked(seed, i)));
+                    uint256 idx = seed % arr.length;
+                    address w = arr[idx];
+                    winners[i] = w;
+                    streaks[i] = (mintPacked_[w] >> ETH_LEVEL_STREAK_SHIFT) & MINT_MASK_24;
+                    unchecked {
+                        ++i;
+                    }
+                }
+
+                uint256 totalWeight = streaks[0] + streaks[1] + streaks[2];
+                uint256 remaining = ticketBonus;
+                for (uint8 i; i < 3; ) {
+                    uint256 share;
+                    if (totalWeight == 0) {
+                        share = ticketBonus / 3;
+                    } else {
+                        share = (ticketBonus * streaks[i]) / totalWeight;
+                    }
+                    if (share != 0) {
+                        _addClaimableEth(winners[i], share);
+                        remaining -= share;
+                    }
+                    unchecked {
+                        ++i;
+                    }
+                }
+                if (remaining != 0) {
+                    _addClaimableEth(winners[0], remaining);
+                }
+            } else if (ticketBonus != 0) {
+                // Defensive: if no tickets exist (unexpected), roll the bonus into carry.
+                carryOver += ticketBonus;
+            }
 
             uint256 processValue = deferredWei;
             trophiesContract.processEndLevel{value: processValue}(
@@ -175,33 +176,12 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
                     rngWord: rngWord
                 })
             );
+
+            _payoutCarryBonuses(prevLevelPending, rngWord, trophiesContract);
         } else {
-            // Timeout path: 1.25% to affiliate trophy, 0.75% to stake trophy, remainder to carry.
-            uint256 affiliateShare = (poolValue * 125) / 10_000;
-            uint256 stakeShare = (poolValue * 75) / 10_000;
-
-            (uint256 affiliateTokenId, address affiliateOwner) = trophiesContract.trophyToken(
-                prevLevelPending,
-                PURGE_TROPHY_KIND_AFFILIATE
-            );
-            if (affiliateTokenId != 0 && affiliateOwner != address(0)) {
-                trophiesContract.rewardTrophyByToken(affiliateTokenId, affiliateShare);
-            } else {
-                carryOver += affiliateShare;
-            }
-
-            (uint256 stakeTokenId, address stakeOwner) = trophiesContract.trophyToken(
-                prevLevelPending,
-                PURGE_TROPHY_KIND_STAKE
-            );
-            if (stakeTokenId != 0 && stakeOwner != address(0)) {
-                trophiesContract.rewardTrophyByToken(stakeTokenId, stakeShare);
-            } else {
-                carryOver += stakeShare;
-            }
-
-            uint256 remaining = poolValue - affiliateShare - stakeShare;
-            if (remaining != 0) carryOver += remaining;
+            // Timeout path: the final daily jackpot already forwarded any leftovers; clear stale base and settle bonuses.
+            dailyJackpotBase = 0;
+            _payoutCarryBonuses(prevLevelPending, rngWord, trophiesContract);
         }
 
         delete pendingEndLevel;
@@ -278,5 +258,54 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
             }
         }
         return (isFinished, returnedWei);
+    }
+
+    function _payoutCarryBonuses(
+        uint24 lvl,
+        uint256 /*rngWord*/,
+        IPurgeGameTrophiesModule trophiesContract
+    ) private {
+        uint256 carryBudgetAffiliate = _scaledCarrySlice(carryOver, AFFILIATE_CARRY_BPS, lvl);
+        uint256 carryBudgetStake = _scaledCarrySlice(carryOver, STAKE_CARRY_BPS, lvl);
+        if (carryBudgetAffiliate == 0 && carryBudgetStake == 0) return;
+
+        uint256 carrySpent;
+
+        (uint256 affiliateTokenId, address affiliateOwner) = trophiesContract.trophyToken(
+            lvl,
+            PURGE_TROPHY_KIND_AFFILIATE
+        );
+        if (affiliateTokenId != 0 && affiliateOwner != address(0) && carryBudgetAffiliate != 0) {
+            trophiesContract.rewardTrophyByToken(affiliateTokenId, carryBudgetAffiliate);
+            carrySpent += carryBudgetAffiliate;
+        }
+
+        (uint256 stakeTokenId, address stakeOwner) = trophiesContract.trophyToken(lvl, PURGE_TROPHY_KIND_STAKE);
+        if (stakeTokenId != 0 && stakeOwner != address(0) && carryBudgetStake != 0) {
+            trophiesContract.rewardTrophyByToken(stakeTokenId, carryBudgetStake);
+            carrySpent += carryBudgetStake;
+        }
+
+        if (carrySpent != 0) {
+            uint256 carryBal = carryOver;
+            carryOver = carrySpent > carryBal ? 0 : carryBal - carrySpent;
+        }
+    }
+
+    function _scaledCarrySlice(uint256 carryBudget, uint16 sliceBps, uint24 lvl) private pure returns (uint256) {
+        if (carryBudget == 0 || sliceBps == 0) return 0;
+        uint256 base = (carryBudget * sliceBps) / 10_000;
+        if (base == 0) return 0;
+        return (base * _carryBonusScaleBps(lvl)) / 10_000;
+    }
+
+    function _carryBonusScaleBps(uint24 lvl) private pure returns (uint16) {
+        // Linearly scale carry-funded slices from 100% at the start of a 100-level band
+        // down to 50% on the last level of the band, then reset on the next band.
+        uint256 cycle = (lvl == 0) ? 0 : ((uint256(lvl) - 1) % 100); // 0..99
+        uint256 discount = (cycle * 5000) / 99; // up to 50% at cycle==99
+        uint256 scale = 10_000 - discount;
+        if (scale < 5000) scale = 5000;
+        return uint16(scale);
     }
 }
