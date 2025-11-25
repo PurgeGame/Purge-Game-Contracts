@@ -29,7 +29,6 @@ interface IPurgeGameTrophies {
         address exterminator;
         uint16 traitId;
         uint24 level;
-        uint256 pool;
         uint256 rngWord;
         uint256 deferredWei;
     }

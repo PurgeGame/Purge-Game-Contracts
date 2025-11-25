@@ -118,7 +118,6 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
             exterminator: pend.exterminator,
             traitId: lastExterminatedTrait,
             level: prevLevelPending,
-            pool: poolValue,
             rngWord: rngWord,
             deferredWei: 0
         });
