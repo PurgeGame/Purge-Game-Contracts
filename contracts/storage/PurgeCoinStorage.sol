@@ -44,7 +44,6 @@ abstract contract PurgeCoinStorage {
         uint192 burn;
         uint24 level;
         uint8 bucket;
-        bool winner;
     }
 
     struct AffiliateCodeInfo {
@@ -115,4 +114,10 @@ abstract contract PurgeCoinStorage {
     mapping(uint24 => mapping(uint24 => address[])) internal decBuckets;
     mapping(uint24 => uint32) internal decPlayersCount;
     uint32[32] internal decBucketAccumulator;
+
+    // Decimator bucketed rosters and scan state
+    mapping(uint24 => mapping(uint8 => address[])) internal decBucketRoster;
+    address[] internal decWinners;
+    uint8 internal decScanDenom;
+    uint32 internal decScanIndex;
 }

@@ -217,10 +217,10 @@ contract Purgecoin is PurgeCoinStorage {
             e.level = lvl;
             e.burn = 0;
             e.bucket = bucket;
-            e.winner = false;
-            _decPush(lvl, caller);
-        } else if (bucket < e.bucket || e.bucket == 0) {
+            _decPush(lvl, bucket, caller);
+        } else if (e.bucket == 0) {
             e.bucket = bucket;
+            _decPush(lvl, bucket, caller);
         }
 
         uint256 updated = uint256(e.burn) + amount;
@@ -1457,12 +1457,10 @@ contract Purgecoin is PurgeCoinStorage {
     /// @notice Append a player to the Decimator roster for a given level.
     /// @param lvl Level bucket to push into.
     /// @param p   Player address.
-    function _decPush(uint24 lvl, address p) internal {
-        uint32 idx = decPlayersCount[lvl];
-        uint24 bucket = uint24(idx / BUCKET_SIZE);
-        decBuckets[lvl][bucket].push(p);
+    function _decPush(uint24 lvl, uint8 bucket, address p) internal {
+        decBucketRoster[lvl][bucket].push(p);
         unchecked {
-            decPlayersCount[lvl] = idx + 1;
+            decPlayersCount[lvl] = decPlayersCount[lvl] + 1;
         }
     }
 
