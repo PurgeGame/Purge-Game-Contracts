@@ -290,6 +290,12 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         _;
     }
 
+    modifier onlyGameOrCoin() {
+        address sender = msg.sender;
+        if (sender != gameAddress && sender != coinAddress) revert Unauthorized();
+        _;
+    }
+
     // ---------------------------------------------------------------------
     // Internal helpers
     // ---------------------------------------------------------------------
@@ -1610,7 +1616,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         owner = address(uint160(nft.packedOwnershipOf(tokenId)));
     }
 
-    function rewardTrophyByToken(uint256 tokenId, uint256 amountWei) external override onlyGame {
+    function rewardTrophyByToken(uint256 tokenId, uint256 amountWei) external override onlyGameOrCoin {
         _addTrophyRewardInternal(tokenId, amountWei, game.level());
     }
 
