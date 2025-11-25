@@ -68,8 +68,8 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
 
             if (kind == 0) {
                 uint256 P = poolWei;
-                address[8] memory tmpW;
-                uint256[8] memory tmpA;
+                address[] memory tmpW = new address[](8);
+                uint256[] memory tmpA = new uint256[](8);
                 uint256 n;
                 uint256 credited;
                 uint256 toReturn;
@@ -82,9 +82,7 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
                 {
                     uint256 prize = P / 5;
                     address w = topBettors[0].player;
-                    if (_eligible(w)) {
-                        tmpW[n] = w;
-                        tmpA[n] = prize;
+                    if (_creditOrRefund(w, prize, tmpW, tmpA, n)) {
                         unchecked {
                             ++n;
                         }
@@ -102,9 +100,7 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
                     entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
                     uint256 prize = P / 10;
                     address w = topBettors[2 + (entropy & 1)].player;
-                    if (_eligible(w)) {
-                        tmpW[n] = w;
-                        tmpA[n] = prize;
+                    if (_creditOrRefund(w, prize, tmpW, tmpA, n)) {
                         unchecked {
                             ++n;
                         }
@@ -121,26 +117,20 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
                     entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
 
                     address[4] memory draws;
-                    uint8 found;
-                    for (uint8 attempts; attempts < 12 && found < 4; ) {
-                        address w = _randomEligible(entropy);
-                        if (w != address(0)) {
-                            draws[found] = w;
-                            unchecked {
-                                ++found;
-                            }
-                        }
+                    uint256 entryCount = _coinflipCount();
+                    for (uint8 i; i < 4; ) {
+                        draws[i] = entryCount == 0 ? address(0) : _playerAt(entropy % entryCount);
                         unchecked {
-                            ++attempts;
-                            entropy = uint256(keccak256(abi.encodePacked(entropy, salt, attempts)));
+                            ++salt;
+                            entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
                         }
                     }
 
                     // Sort by coinflipAmount descending (simple selection sort for up to 4 items)
-                    for (uint8 i; i < found; ) {
+                    for (uint8 i; i < 4; ) {
                         uint8 bestIdx = i;
                         uint256 best = coinflipAmount[draws[i]];
-                        for (uint8 j = i + 1; j < found; ) {
+                        for (uint8 j = i + 1; j < 4; ) {
                             uint256 val = coinflipAmount[draws[j]];
                             if (val > best) {
                                 best = val;
@@ -160,17 +150,15 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
                         }
                     }
 
-                    uint256 prize10 = P / 10;
-                    uint256 prize7 = (P * 7) / 100;
+                    uint256 prize9 = (P * 9) / 100;
+                    uint256 prize6 = (P * 6) / 100;
                     uint256 prize3 = (P * 3) / 100;
-                    uint256[4] memory prizes = [prize10, prize7, prize3, uint256(0)];
+                    uint256[4] memory prizes = [prize9, prize6, prize3, uint256(0)];
 
                     for (uint8 i; i < 4; ) {
                         uint256 prize = prizes[i];
-                        address w = i < found ? draws[i] : address(0);
-                        if (w != address(0) && prize != 0) {
-                            tmpW[n] = w;
-                            tmpA[n] = prize;
+                        address w = draws[i];
+                        if (_creditOrRefund(w, prize, tmpW, tmpA, n)) {
                             unchecked {
                                 ++n;
                             }
@@ -185,47 +173,92 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
                 }
 
                 {
-                    for (uint256 s; s < 5; ) {
-                        uint256 prize = P / 50; // 2% each (5 draws)
+                    uint256[4] memory trophyPrizes = [(P * 5) / 100, (P * 3) / 100, (P * 2) / 100, uint256(0)];
+                    address[4] memory trophyOwners;
+                    uint256[4] memory trophyIds;
+
+                    for (uint8 s; s < 4; ) {
                         unchecked {
                             ++salt;
                         }
                         entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
                         uint256 tokenId = purgeGameTrophies.stakedTrophySampleWithId(entropy);
+                        trophyIds[s] = tokenId;
                         if (tokenId != 0) {
-                            address owner = purgeGameTrophies.trophyOwner(tokenId);
-                            if (_eligible(owner)) {
-                                purgeGameTrophies.rewardTrophyByToken(tokenId, prize);
-                                credited += prize;
-                            } else {
-                                toReturn += prize;
-                            }
-                        } else {
-                            toReturn += prize;
+                            trophyOwners[s] = purgeGameTrophies.trophyOwner(tokenId);
                         }
                         unchecked {
                             ++s;
                         }
+                    }
+
+                    // Sort trophies by owner coinflip size
+                    for (uint8 i; i < 4; ) {
+                        uint8 bestIdx = i;
+                        uint256 best = coinflipAmount[trophyOwners[i]];
+                        for (uint8 j = i + 1; j < 4; ) {
+                            uint256 val = coinflipAmount[trophyOwners[j]];
+                            if (val > best) {
+                                best = val;
+                                bestIdx = j;
+                            }
+                            unchecked {
+                                ++j;
+                            }
+                        }
+                        if (bestIdx != i) {
+                            address ownerTmp = trophyOwners[i];
+                            trophyOwners[i] = trophyOwners[bestIdx];
+                            trophyOwners[bestIdx] = ownerTmp;
+
+                            uint256 tokenTmp = trophyIds[i];
+                            trophyIds[i] = trophyIds[bestIdx];
+                            trophyIds[bestIdx] = tokenTmp;
+                        }
+                        unchecked {
+                            ++i;
+                        }
+                    }
+
+                    for (uint8 i; i < 4; ) {
+                        uint256 prize = trophyPrizes[i];
+                        uint256 tokenId = trophyIds[i];
+                        address owner = trophyOwners[i];
+                        bool eligibleOwner = tokenId != 0 && owner != address(0) && _eligible(owner);
+                        if (eligibleOwner && prize != 0) {
+                            purgeGameTrophies.rewardTrophyByToken(tokenId, prize);
+                            credited += prize;
+                        } else if (prize != 0) {
+                            toReturn += prize;
+                        }
+                        unchecked {
+                            ++i;
+                        }
+                    }
+                }
+
+                {
+                    uint256 prizeLuckbox = (P * 2) / 100;
+                    PlayerScore memory luckboxRecord = biggestLuckbox;
+                    address luckboxLeader = luckboxRecord.player;
+                    if (luckboxLeader != address(0) && luckboxRecord.score != 0) {
+                        if (_creditOrRefund(luckboxLeader, prizeLuckbox, tmpW, tmpA, n)) {
+                            unchecked {
+                                ++n;
+                            }
+                            credited += prizeLuckbox;
+                        } else {
+                            toReturn += prizeLuckbox;
+                        }
+                    } else {
+                        toReturn += prizeLuckbox;
                     }
                 }
 
                 uint256 scatter = (P * 2) / 5;
                 uint256 unallocated = P - credited - toReturn - scatter;
                 if (unallocated != 0) {
-                    PlayerScore memory luckboxRecord = biggestLuckbox;
-                    address luckboxLeader = luckboxRecord.player;
-                    if (luckboxLeader != address(0) && luckboxRecord.score != 0 && _eligible(luckboxLeader)) {
-                        tmpW[n] = luckboxLeader;
-                        tmpA[n] = unallocated;
-                        unchecked {
-                            ++n;
-                        }
-                        credited += unallocated;
-                        unallocated = 0;
-                    }
-                    if (unallocated != 0) {
-                        toReturn += unallocated;
-                    }
+                    toReturn += unallocated;
                 }
                 if (limit >= 10 && bs.offset < limit) {
                     uint256 occurrences = 1 + (uint256(limit) - 1 - bs.offset) / 10;
@@ -467,24 +500,20 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
         return purgeGame.ethMintStreakCount(player) >= 6;
     }
 
-    function _randomEligible(uint256 seed) internal view returns (address) {
-        uint256 total = _coinflipCount();
-        if (total == 0) return address(0);
-
-        uint256 idx = seed % total;
-        uint256 stride = (total & 1) == 1 ? 2 : 1;
-        uint256 maxChecks = total < 300 ? total : 300;
-
-        for (uint256 tries; tries < maxChecks; ) {
-            address p = _playerAt(idx);
-            if (_eligible(p)) return p;
-            unchecked {
-                idx += stride;
-                if (idx >= total) idx -= total;
-                ++tries;
-            }
+    function _creditOrRefund(
+        address candidate,
+        uint256 prize,
+        address[] memory winnersBuf,
+        uint256[] memory amountsBuf,
+        uint256 idx
+    ) private view returns (bool credited) {
+        if (prize == 0) return false;
+        if (candidate != address(0) && _eligible(candidate)) {
+            winnersBuf[idx] = candidate;
+            amountsBuf[idx] = prize;
+            return true;
         }
-        return address(0);
+        return false;
     }
 
     function _coinflipCount() internal view returns (uint256) {
