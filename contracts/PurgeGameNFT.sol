@@ -315,12 +315,12 @@ contract PurgeGameNFT {
     // ---------------------------------------------------------------------
 
     function purchase(uint256 quantity, bool payInCoin, bytes32 affiliateCode) external payable {
-        _purchase(msg.sender, quantity, payInCoin, affiliateCode, false, 0, 0);
+        _purchase(msg.sender, quantity, payInCoin, affiliateCode, false);
     }
 
     function purchaseWithClaimable(
         address buyer,
-        uint256 quantity,
+        uint256 quantity
     ) external onlyGame {
         _purchase(buyer, quantity, false, bytes32(0), true);
     }
@@ -398,7 +398,7 @@ contract PurgeGameNFT {
     }
 
     function mintAndPurge(uint256 quantity, bool payInCoin, bytes32 affiliateCode) external payable {
-        _mintAndPurge(msg.sender, quantity, payInCoin, affiliateCode, false, 0, 0);
+        _mintAndPurge(msg.sender, quantity, payInCoin, affiliateCode, false);
     }
 
     function mintAndPurgeWithClaimable(
