@@ -1003,7 +1003,7 @@ contract Purgecoin is PurgeCoinStorage {
         uint32 stepPayout = (cap == 0) ? 420 : cap;
         uint32 stepStake = (cap == 0) ? 200 : (cap > 200 ? 200 : cap);
 
-        bool isBafLevel = _isBafLevel(level);
+        bool bafActive = _isBafLevelActive(level);
         bool win = (word & 1) == 1;
         if (!win) {
             stepPayout *= 3;
@@ -1140,7 +1140,7 @@ contract Purgecoin is PurgeCoinStorage {
                 } else {
                     uint256 workingAmt = amt;
                     uint256 payout = workingAmt + (workingAmt * uint256(rewardPercent) * 100) / BPS_DENOMINATOR;
-                    if (isBafLevel) {
+                    if (bafActive) {
                         coinflipAmount[p] = payout;
                     } else {
                         coinflipAmount[p] = 0;
@@ -1163,7 +1163,7 @@ contract Purgecoin is PurgeCoinStorage {
         payoutIndex = uint32(end);
         // --- Phase 4: cleanup (single shot) -------------------------------------------
         if (end >= totalPlayers) {
-            bool clearQueue = !win || !isBafLevel;
+            bool clearQueue = !win || !bafActive;
             if (clearQueue) {
                 cfHead = cfTail;
             }
@@ -1171,7 +1171,7 @@ contract Purgecoin is PurgeCoinStorage {
 
             scanCursor = SS_IDLE;
             coinflipRewardPercent = 0;
-            if (isBafLevel) {
+            if (bafActive) {
                 lastBafFlipLevel = level;
             }
 
@@ -1194,10 +1194,11 @@ contract Purgecoin is PurgeCoinStorage {
         uint256 queued = _coinflipCount();
         if (queued == 0) return false;
 
-        if (_isBafLevel(level)) {
-            // BAF checkpoints only need a single doubling pass per level; after that the queue remains
-            // armed until a future non-BAF loss clears it.
-            return lastBafFlipLevel < level;
+        bool bafActive = _isBafLevelActive(level);
+        if (bafActive) {
+            // During purge on BAF levels, keep re-running queued flips each tick; wins stay queued and
+            // compound until a loss or until the game leaves purge (BAF main event pays out normally).
+            return true;
         }
 
         return true;
@@ -1396,6 +1397,11 @@ contract Purgecoin is PurgeCoinStorage {
         if (!completed) return 0;
         emit QuestCompleted(player, questType, streak, reward, hardMode);
         return reward;
+    }
+
+    function _isBafLevelActive(uint24 lvl) private view returns (bool) {
+        if (!_isBafLevel(lvl)) return false;
+        return purgeGame.gameState() == 3;
     }
 
     function _isBafLevel(uint24 lvl) private pure returns (bool) {
