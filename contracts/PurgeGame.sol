@@ -550,18 +550,21 @@ contract PurgeGame is PurgeGameStorage {
                 }
             }
 
+            bool tokenHasPrevExterminated = prevExterminated != TRAIT_ID_TIMEOUT &&
+                (uint16(trait0) == prevExterminated ||
+                    uint16(trait1) == prevExterminated ||
+                    uint16(trait2) == prevExterminated ||
+                    uint16(trait3) == prevExterminated);
+
             if (levelNinety) {
-                unchecked {
-                    bonusTenths += 9;
+                if (!tokenHasPrevExterminated) {
+                    unchecked {
+                        bonusTenths += 4;
+                    }
                 }
-            } else if (
-                uint16(trait0) == prevExterminated ||
-                uint16(trait1) == prevExterminated ||
-                uint16(trait2) == prevExterminated ||
-                uint16(trait3) == prevExterminated
-            ) {
+            } else if (tokenHasPrevExterminated) {
                 unchecked {
-                    bonusTenths += 9;
+                    bonusTenths += 4;
                 }
             }
 
@@ -662,7 +665,9 @@ contract PurgeGame is PurgeGameStorage {
 
         if (exterminated < 256) {
             uint8 exTrait = uint8(exterminated);
-            bool repeatOrNinety = (uint16(exTrait) == lastExterminatedTrait) || (levelSnapshot == 90);
+            bool repeatOrNinety = (levelSnapshot == 90)
+                ? (uint16(exTrait) != lastExterminatedTrait)
+                : (uint16(exTrait) == lastExterminatedTrait);
             uint256 pool = currentPrizePool;
 
             if (repeatOrNinety) {

@@ -306,9 +306,6 @@ contract IconRendererRegular32 {
 
         uint24 lvl = uint24((data >> 32) & 0xFFFFFF);
         uint16 lastEx = uint16((data >> 56) & 0xFFFF); // 0..255 valid; 420 = sentinel “none”
-        if (lvl == 90) {
-            lastEx = 0xFFFF; // special case: level 90 renders all quadrants inverted
-        }
         uint32 traits = uint32(data);
 
         (uint8[4] memory col, uint8[4] memory sym) = _decodeTraits(traits);
@@ -395,8 +392,19 @@ contract IconRendererRegular32 {
         uint8 traitId = _traitId(uint8(quadId), colorIndex, symbolIndex);
 
         // Highlight by inversion when this trait was exterminated last level.
-        bool highlightInvert = (lastExterminated == 0xFFFF) ||
-            (lastExterminated != 420 && lastExterminated <= 255 && traitId == uint8(lastExterminated));
+        bool levelNinety = level == 90;
+        bool highlightInvert;
+        if (levelNinety) {
+            // On level 90, invert every trait except the actual last exterminated (if present).
+            if (lastExterminated != 420 && lastExterminated <= 255) {
+                highlightInvert = traitId != uint8(lastExterminated);
+            } else {
+                highlightInvert = true;
+            }
+        } else {
+            highlightInvert = (lastExterminated == 0xFFFF) ||
+                (lastExterminated != 420 && lastExterminated <= 255 && traitId == uint8(lastExterminated));
+        }
 
         // Radius computation: derive scarcity‑scaled outer/mid/inner radii
         uint32 rMax = _rMaxAt(quadPos);
