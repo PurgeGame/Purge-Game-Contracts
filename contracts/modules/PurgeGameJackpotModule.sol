@@ -74,16 +74,16 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         if (!isDaily) {
             uint32 winningTraitsPacked = _packWinningTraits(_getRandomTraits(entropyWord));
 
-            uint256 carryPool;
+            uint256 rewardPoolSlice;
             if (!coinOnly) {
                 uint256 poolBps = boostTrigger ? 200 : 50; // default 0.5%, 2% when EP boost triggers
-                carryPool = (carryOver * poolBps) / 10_000;
-                if (carryPool != 0) {
-                    carryPool = (carryPool * _carryJackpotScaleBps(lvl)) / 10_000;
+                rewardPoolSlice = (rewardPool * poolBps) / 10_000;
+                if (rewardPoolSlice != 0) {
+                    rewardPoolSlice = (rewardPoolSlice * _rewardJackpotScaleBps(lvl)) / 10_000;
                 }
             }
 
-            uint256 ethPool = carryPool;
+            uint256 ethPool = rewardPoolSlice;
             uint256 paidEth = _executeJackpot(
                 JackpotParams({
                     lvl: lvl,
@@ -100,11 +100,11 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
                 false
             );
 
-            // Only the carry-funded slice should reduce carry accounting.
-            if (carryPool != 0 && paidEth != 0) {
-                uint256 deduct = paidEth > carryPool ? carryPool : paidEth;
-                uint256 carryBal = carryOver;
-                carryOver = deduct > carryBal ? 0 : carryBal - deduct;
+            // Only the reward pool-funded slice should reduce reward pool accounting.
+            if (rewardPoolSlice != 0 && paidEth != 0) {
+                uint256 deduct = paidEth > rewardPoolSlice ? rewardPoolSlice : paidEth;
+                uint256 rewardBal = rewardPool;
+                rewardPool = deduct > rewardBal ? 0 : rewardBal - deduct;
             }
         } else {
             uint32 winningTraitsPacked = _packWinningTraits(_getWinningTraits(entropyWord, dailyPurgeCount));
@@ -147,7 +147,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
                     currentPrizePool = 0;
                     futureTopup = leftoverPrize;
                 }
-                // Avoid carrying stale bases into the next level.
+                // Avoid leaving stale bases into the next level.
                 dailyJackpotBase = 0;
             }
 
@@ -156,10 +156,10 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
             if (jackpotCounter == 1) {
                 futurePoolBps += 100; // +1% boost on the second daily jackpot
             }
-            uint256 futureEthPool = (carryOver * futurePoolBps) / 10_000;
-            if (futureEthPool > carryOver) futureEthPool = carryOver;
+            uint256 futureEthPool = (rewardPool * futurePoolBps) / 10_000;
+            if (futureEthPool > rewardPool) futureEthPool = rewardPool;
             if (futureEthPool != 0) {
-                futureEthPool = (futureEthPool * _carryJackpotScaleBps(nextLevel)) / 10_000;
+                futureEthPool = (futureEthPool * _rewardJackpotScaleBps(nextLevel)) / 10_000;
             }
             if (futureTopup != 0) {
                 futureEthPool += futureTopup;
@@ -215,11 +215,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
             coinContract: coinContract,
             trophiesContract: trophiesContract
         });
-        paidWeiMap = _executeJackpot(
-            jp,
-            false,
-            false
-        );
+        paidWeiMap = _executeJackpot(jp, false, false);
 
         uint256 remainingPool = effectiveWei > paidWeiMap ? (effectiveWei - paidWeiMap) : 0;
         currentPrizePool += remainingPool;
@@ -242,16 +238,16 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
             nextPrizePool = 0;
         }
 
-        uint256 totalWei = carryOver + currentPrizePool;
+        uint256 totalWei = rewardPool + currentPrizePool;
         // Pay 10% PURGE using the current mint conversion (priceCoin / price) to Burnie.
         uint256 burnieAmount = (totalWei * priceCoin) / (10 * price);
         coinContract.burnie(burnieAmount);
 
-        uint256 savePctTimes2 = _mapCarryoverPercent(lvl, rngWord);
-        uint256 saveNextWei = (totalWei * savePctTimes2) / 200;
-        carryOver = saveNextWei;
+        uint256 savePctTimes2 = _mapRewardPoolPercent(lvl, rngWord);
+        uint256 _rewardPool = (totalWei * savePctTimes2) / 200;
+        rewardPool = _rewardPool;
 
-        uint256 jackpotBase = totalWei - saveNextWei;
+        uint256 jackpotBase = totalWei - _rewardPool;
         uint256 mapPct = _mapJackpotPercent(lvl);
         uint256 mapWei = (jackpotBase * mapPct) / 100;
 
@@ -288,7 +284,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         }
     }
 
-    function _mapCarryoverPercent(uint24 lvl, uint256 rngWord) private pure returns (uint256) {
+    function _mapRewardPoolPercent(uint24 lvl, uint256 rngWord) private pure returns (uint256) {
         if ((rngWord % 1_000_000_000) == DEGENERATE_ENTROPY_CHECK_VALUE) {
             return 20; // 10% fallback when trait entropy is degenerate (returned as times two).
         }
@@ -312,10 +308,10 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         } else if (lvl <= 79) {
             baseTimes2 = 64 + (uint256(lvl) - 4);
         } else {
-            baseTimes2 = _legacyCarryoverTimes2(lvl, rngWord);
+            baseTimes2 = _legacyRewardPoolTimes2(lvl, rngWord);
         }
 
-        baseTimes2 += _carryoverBonus(rngWord) * 2;
+        baseTimes2 += _rewardPoolBonus(rngWord) * 2;
         if (baseTimes2 > 196) {
             baseTimes2 = 196;
         }
@@ -327,7 +323,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         return baseTimes2;
     }
 
-    function _carryoverBonus(uint256 rngWord) private pure returns (uint256) {
+    function _rewardPoolBonus(uint256 rngWord) private pure returns (uint256) {
         uint256 seed = uint256(keccak256(abi.encodePacked(rngWord, CARRYOVER_BONUS_TAG)));
         uint256 d4a = (seed & 0xF) % 4;
         uint256 d4b = ((seed >> 8) & 0xF) % 4;
@@ -335,7 +331,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         return d4a + d4b + d14 + 3;
     }
 
-    function _legacyCarryoverTimes2(uint24 lvl, uint256 rngWord) private pure returns (uint256) {
+    function _legacyRewardPoolTimes2(uint24 lvl, uint256 rngWord) private pure returns (uint256) {
         uint256 base;
         uint256 lvlMod100 = lvl % 100;
         if (lvl < 10) base = uint256(lvl) * 5;
@@ -396,7 +392,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         IPurgeCoinModule coinContract,
         IPurgeGameTrophiesModule trophiesContract,
         bool fromPrizePool,
-        bool fromCarryOver
+        bool fromRewardPool
     ) private {
         _executeJackpot(
             JackpotParams({
@@ -411,14 +407,14 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
                 trophiesContract: trophiesContract
             }),
             fromPrizePool,
-            fromCarryOver
+            fromRewardPool
         );
     }
 
     function _executeJackpot(
         JackpotParams memory jp,
         bool fromPrizePool,
-        bool fromCarryOver
+        bool fromRewardPool
     ) private returns (uint256 paidEth) {
         paidEth = _runJackpot(jp);
         if (paidEth == 0) {
@@ -429,9 +425,9 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
             uint256 poolBal = currentPrizePool;
             currentPrizePool = paidEth > poolBal ? 0 : poolBal - paidEth;
         }
-        if (fromCarryOver) {
-            uint256 carry = carryOver;
-            carryOver = paidEth > carry ? 0 : carry - paidEth;
+        if (fromRewardPool) {
+            uint256 rewardBal = rewardPool;
+            rewardPool = paidEth > rewardBal ? 0 : rewardBal - paidEth;
         }
     }
 
@@ -773,8 +769,8 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         return maxRel;
     }
 
-    function _carryJackpotScaleBps(uint24 lvl) private pure returns (uint16) {
-        // Linearly scale carry-funded jackpot slices from 100% at the start of a 100-level band
+    function _rewardJackpotScaleBps(uint24 lvl) private pure returns (uint16) {
+        // Linearly scale reward pool-funded jackpot slices from 100% at the start of a 100-level band
         // down to 50% on the last level of the band, then reset on the next band.
         uint256 cycle = (lvl == 0) ? 0 : ((uint256(lvl) - 1) % 100); // 0..99
         uint256 discount = (cycle * 5000) / 99; // up to 50% at cycle==99

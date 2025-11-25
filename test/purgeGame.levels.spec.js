@@ -202,7 +202,7 @@ async function configureAdvanceScenario(
     level,
     phase,
     state,
-    carryWei,
+    rewardPoolWei,
     prizeWei,
     rngWord = 12345n,
   }
@@ -211,9 +211,9 @@ async function configureAdvanceScenario(
   const levelEntry = await getStorageEntry(PURGE_GAME_FQN, "level");
   const phaseEntry = await getStorageEntry(PURGE_GAME_FQN, "phase");
   const stateEntry = await getStorageEntry(PURGE_GAME_FQN, "gameState");
-  const carryEntry = await getStorageEntry(
+  const rewardPoolEntry = await getStorageEntry(
     PURGE_GAME_FQN,
-    "carryoverForNextLevel"
+    "rewardPool"
   );
   const prizeEntry = await getStorageEntry(PURGE_GAME_FQN, "currentPrizePool");
   const rngWordEntry = await getStorageEntry(PURGE_GAME_FQN, "rngWord");
@@ -235,7 +235,7 @@ async function configureAdvanceScenario(
   await setPackedValue(gameAddress, levelEntry, level, 3);
   await setPackedValue(gameAddress, phaseEntry, phase);
   await setPackedValue(gameAddress, stateEntry, state);
-  await setUint256(gameAddress, carryEntry, carryWei);
+  await setUint256(gameAddress, rewardPoolEntry, rewardPoolWei);
   await setUint256(gameAddress, prizeEntry, prizeWei);
   await setUint256(gameAddress, rngWordEntry, rngWord);
   await setPackedValue(gameAddress, rngTsEntry, now, 6);
@@ -346,7 +346,7 @@ describe.skip("advanceGame stress scenarios", function () {
       level: 20,
       phase: 4,
       state: 3,
-      carryWei: ethers.parseEther("500"),
+      rewardPoolWei: ethers.parseEther("500"),
       prizeWei: ethers.parseEther("200"),
       rngWord: 987654321n,
     });
@@ -396,7 +396,7 @@ describe.skip("advanceGame stress scenarios", function () {
       level: 35,
       phase: 4,
       state: 3,
-      carryWei: ethers.parseEther("350"),
+      rewardPoolWei: ethers.parseEther("350"),
       prizeWei: ethers.parseEther("120"),
       rngWord: 123123123n,
     });

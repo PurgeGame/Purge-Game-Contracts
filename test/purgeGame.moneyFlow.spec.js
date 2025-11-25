@@ -107,7 +107,7 @@ async function createWallets(count, funder, amount) {
 const JACKPOT_RESET_TIME = 82620;
 const DAY_SECONDS = 24 * 60 * 60;
 const MINIMUM_PRIZE_POOL_WEI = ethers.parseEther("125");
-const INITIAL_CARRYOVER_WEI = ethers.parseEther("40");
+const INITIAL_REWARD_POOL_WEI = ethers.parseEther("40");
 const MAP_PURCHASE_TARGET_WEI = ethers.parseEther("150");
 const JACKPOT_LEVEL_CAP = 10;
 const LEVEL_COUNT = 10;
@@ -1126,16 +1126,16 @@ async function snapshotMoneyBuckets(label, context) {
     sumClaimable(purgeGame, players),
   ]);
 
-  const trackedGame = info.carry_ + info.prizePoolCurrent + claimableTotal;
+  const trackedGame = info.rewardPool_ + info.prizePoolCurrent + claimableTotal;
   const inferredNext = gameBalance >= trackedGame ? gameBalance - trackedGame : 0n;
   const bucketShortfall = trackedGame > gameBalance ? trackedGame - gameBalance : 0n;
   const trackedTotal = gameBalance + trophyBalance;
   const contributionsTotal = totalContributions(contributions);
   const payoutsTotal = totalRealized(realizedWinnings);
-  const expectedTotal = INITIAL_CARRYOVER_WEI + contributionsTotal - payoutsTotal;
+  const expectedTotal = INITIAL_REWARD_POOL_WEI + contributionsTotal - payoutsTotal;
 
   const bucketRows = [
-    { bucket: "Carryover", amount: info.carry_ },
+    { bucket: "Reward pool", amount: info.rewardPool_ },
     { bucket: "Prize pool", amount: info.prizePoolCurrent },
     { bucket: "Claimable winnings", amount: claimableTotal },
   ];
@@ -2440,7 +2440,7 @@ describe("PurgeGame money flow simulation", function () {
     await (
       await primaryFunder.sendTransaction({
         to: purgeGameAddress,
-        value: INITIAL_CARRYOVER_WEI,
+        value: INITIAL_REWARD_POOL_WEI,
       })
     ).wait();
 
@@ -2485,7 +2485,7 @@ describe("PurgeGame money flow simulation", function () {
       }
       expect(preInfo.prizePoolCurrent).to.be.gte(desiredPrize);
       const levelMintPriceWei = preInfo.price_;
-      const totalPoolBefore = preInfo.carry_ + preInfo.prizePoolCurrent;
+      const totalPoolBefore = preInfo.rewardPool_ + preInfo.prizePoolCurrent;
       const { receipts: mapAdvanceReceipts, finalInfo: mapFinalInfo } = await advanceThroughPurchasePhase(
         purgeGame,
         advanceOperator,
@@ -2497,15 +2497,15 @@ describe("PurgeGame money flow simulation", function () {
 
       const { ordered: orderedCredits, totals: creditTotals } = collectCredits(purgeGame, mapAdvanceReceipts);
       const creditedTotal = orderedCredits.reduce((sum, entry) => sum + entry.amount, 0n);
-      const totalAfter = mapFinalInfo.carry_ + mapFinalInfo.prizePoolCurrent;
-      const totalBeforeAfterFlow = preInfo.carry_ + preInfo.prizePoolCurrent;
+      const totalAfter = mapFinalInfo.rewardPool_ + mapFinalInfo.prizePoolCurrent;
+      const totalBeforeAfterFlow = preInfo.rewardPool_ + preInfo.prizePoolCurrent;
       const recycledToPool = totalAfter > totalBeforeAfterFlow ? totalAfter - totalBeforeAfterFlow : 0n;
 
       console.log(`Level ${levelValue} map flow`);
       reportEthFlow([
-        { bucket: "Carryover before jackpots", expected: preInfo.carry_, actual: preInfo.carry_ },
+        { bucket: "Reward pool before jackpots", expected: preInfo.rewardPool_, actual: preInfo.rewardPool_ },
         { bucket: "Prize pool before jackpots", expected: preInfo.prizePoolCurrent, actual: preInfo.prizePoolCurrent },
-        { bucket: "Carry saved for next level", expected: mapFinalInfo.carry_, actual: mapFinalInfo.carry_ },
+        { bucket: "Reward pool saved for next level", expected: mapFinalInfo.rewardPool_, actual: mapFinalInfo.rewardPool_ },
         { bucket: "Prize pool after jackpots", expected: mapFinalInfo.prizePoolCurrent, actual: mapFinalInfo.prizePoolCurrent },
         { bucket: "Credited to participants", expected: creditedTotal, actual: creditedTotal },
         { bucket: "Recycled back to prize pool", expected: recycledToPool, actual: recycledToPool },
@@ -2530,7 +2530,7 @@ describe("PurgeGame money flow simulation", function () {
           break;
         }
         const counterBefore = Number(infoBefore.jackpotCounter_);
-        const carryBefore = infoBefore.carry_;
+        const rewardPoolBefore = infoBefore.rewardPool_;
         const prizePoolBefore = infoBefore.prizePoolCurrent;
 
         const pendingSnapshot = {
@@ -2556,22 +2556,22 @@ describe("PurgeGame money flow simulation", function () {
         };
         pendingDailyMapActivity = { buyers: 0, quantity: 0n, totalCost: 0n };
 
-        const carryAfter = infoAfter.carry_;
+        const rewardPoolAfter = infoAfter.rewardPool_;
         const prizePoolAfter = infoAfter.prizePoolCurrent;
         jackpotsExecuted += paid;
-        const carryPaid = carryBefore > carryAfter ? carryBefore - carryAfter : 0n;
+        const rewardPoolPaid = rewardPoolBefore > rewardPoolAfter ? rewardPoolBefore - rewardPoolAfter : 0n;
         const poolPaid = prizePoolBefore > prizePoolAfter ? prizePoolBefore - prizePoolAfter : 0n;
         daySummaries.push({
           level: levelValue,
           day: daySummaries.length + 1,
           jackpots: paid,
-          carryBefore,
-          carryAfter,
+          rewardPoolBefore,
+          rewardPoolAfter,
           prizePoolBefore,
           prizePoolAfter,
-          carryPaid,
+          rewardPoolPaid,
           poolPaid,
-          totalPaid: carryPaid + poolPaid,
+          totalPaid: rewardPoolPaid + poolPaid,
           mapBuyers: dailyMapActivity.buyers,
           mapQuantity: dailyMapActivity.quantity,
           mapSpent: dailyMapActivity.totalCost,
@@ -2613,9 +2613,9 @@ describe("PurgeGame money flow simulation", function () {
         daySummaries.map((entry) => ({
           day: entry.day,
           jackpots: entry.jackpots,
-          carryBefore: formatEth(entry.carryBefore),
-          carryAfter: formatEth(entry.carryAfter),
-          carryPaid: formatEth(entry.carryPaid),
+          rewardPoolBefore: formatEth(entry.rewardPoolBefore),
+          rewardPoolAfter: formatEth(entry.rewardPoolAfter),
+          rewardPoolPaid: formatEth(entry.rewardPoolPaid),
           prizePoolBefore: formatEth(entry.prizePoolBefore),
           prizePoolAfter: formatEth(entry.prizePoolAfter),
           poolPaid: formatEth(entry.poolPaid),

@@ -22,8 +22,8 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
     uint8 private constant PURGE_TROPHY_KIND_AFFILIATE = 2;
     uint8 private constant PURGE_TROPHY_KIND_STAKE = 3;
-    uint16 private constant AFFILIATE_CARRY_BPS = 100; // 1% of carry pool
-    uint16 private constant STAKE_CARRY_BPS = 50; // 0.5% of carry pool
+    uint16 private constant AFFILIATE_CARRY_BPS = 100; // 1% of the reward pool
+    uint16 private constant STAKE_CARRY_BPS = 50; // 0.5% of the reward pool
     uint256 private constant MINT_MASK_24 = (uint256(1) << 24) - 1;
     uint256 private constant ETH_LEVEL_STREAK_SHIFT = 48;
 
@@ -68,7 +68,7 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         } else {
             bool decWindow = prevLevel >= 25 && prevMod10 == 5 && prevMod100 != 95;
             if (prevLevel != 0 && (prevLevel % 20) == 0 && (prevLevel % 100) != 0) {
-                uint256 bafPoolWei = (carryOver * 24) / 100;
+                uint256 bafPoolWei = (rewardPool * 24) / 100;
                 (bool bafFinished, ) = _progressExternal(0, bafPoolWei, cap, prevLevel, rngWord, coinContract, true);
                 if (!bafFinished) return;
             }
@@ -88,10 +88,10 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
                 decimatorHundredPool = 0;
                 decimatorHundredReady = false;
                 if (returnWei != 0) {
-                    carryOver += returnWei;
+                    rewardPool += returnWei;
                 }
             } else if (decWindow) {
-                uint256 decPoolWei = (carryOver * 15) / 100;
+                uint256 decPoolWei = (rewardPool * 15) / 100;
                 (bool decFinished, ) = _progressExternal(1, decPoolWei, cap, prevLevel, rngWord, coinContract, true);
                 if (!decFinished) return;
             }
@@ -162,8 +162,8 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
                     _addClaimableEth(winners[0], remaining);
                 }
             } else if (ticketBonus != 0) {
-                // Defensive: if no tickets exist (unexpected), roll the bonus into carry.
-                carryOver += ticketBonus;
+                // Defensive: if no tickets exist (unexpected), roll the bonus back into the reward pool.
+                rewardPool += ticketBonus;
             }
 
             uint256 processValue = deferredWei;
@@ -254,7 +254,7 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         if (isFinished) {
             returnedWei = returnWei;
             if (consumeCarry && poolWei != 0) {
-                carryOver -= (poolWei - returnWei);
+                rewardPool -= (poolWei - returnWei);
             }
         }
         return (isFinished, returnedWei);
@@ -265,42 +265,42 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         uint256 /*rngWord*/,
         IPurgeGameTrophiesModule trophiesContract
     ) private {
-        uint256 carryBudgetAffiliate = _scaledCarrySlice(carryOver, AFFILIATE_CARRY_BPS, lvl);
-        uint256 carryBudgetStake = _scaledCarrySlice(carryOver, STAKE_CARRY_BPS, lvl);
-        if (carryBudgetAffiliate == 0 && carryBudgetStake == 0) return;
+        uint256 rewardBudgetAffiliate = _scaledRewardSlice(rewardPool, AFFILIATE_CARRY_BPS, lvl);
+        uint256 rewardBudgetStake = _scaledRewardSlice(rewardPool, STAKE_CARRY_BPS, lvl);
+        if (rewardBudgetAffiliate == 0 && rewardBudgetStake == 0) return;
 
-        uint256 carrySpent;
+        uint256 rewardSpent;
 
         (uint256 affiliateTokenId, address affiliateOwner) = trophiesContract.trophyToken(
             lvl,
             PURGE_TROPHY_KIND_AFFILIATE
         );
-        if (affiliateTokenId != 0 && affiliateOwner != address(0) && carryBudgetAffiliate != 0) {
-            trophiesContract.rewardTrophyByToken(affiliateTokenId, carryBudgetAffiliate);
-            carrySpent += carryBudgetAffiliate;
+        if (affiliateTokenId != 0 && affiliateOwner != address(0) && rewardBudgetAffiliate != 0) {
+            trophiesContract.rewardTrophyByToken(affiliateTokenId, rewardBudgetAffiliate);
+            rewardSpent += rewardBudgetAffiliate;
         }
 
         (uint256 stakeTokenId, address stakeOwner) = trophiesContract.trophyToken(lvl, PURGE_TROPHY_KIND_STAKE);
-        if (stakeTokenId != 0 && stakeOwner != address(0) && carryBudgetStake != 0) {
-            trophiesContract.rewardTrophyByToken(stakeTokenId, carryBudgetStake);
-            carrySpent += carryBudgetStake;
+        if (stakeTokenId != 0 && stakeOwner != address(0) && rewardBudgetStake != 0) {
+            trophiesContract.rewardTrophyByToken(stakeTokenId, rewardBudgetStake);
+            rewardSpent += rewardBudgetStake;
         }
 
-        if (carrySpent != 0) {
-            uint256 carryBal = carryOver;
-            carryOver = carrySpent > carryBal ? 0 : carryBal - carrySpent;
+        if (rewardSpent != 0) {
+            uint256 rewardBal = rewardPool;
+            rewardPool = rewardSpent > rewardBal ? 0 : rewardBal - rewardSpent;
         }
     }
 
-    function _scaledCarrySlice(uint256 carryBudget, uint16 sliceBps, uint24 lvl) private pure returns (uint256) {
-        if (carryBudget == 0 || sliceBps == 0) return 0;
-        uint256 base = (carryBudget * sliceBps) / 10_000;
+    function _scaledRewardSlice(uint256 rewardBudget, uint16 sliceBps, uint24 lvl) private pure returns (uint256) {
+        if (rewardBudget == 0 || sliceBps == 0) return 0;
+        uint256 base = (rewardBudget * sliceBps) / 10_000;
         if (base == 0) return 0;
-        return (base * _carryBonusScaleBps(lvl)) / 10_000;
+        return (base * _rewardBonusScaleBps(lvl)) / 10_000;
     }
 
-    function _carryBonusScaleBps(uint24 lvl) private pure returns (uint16) {
-        // Linearly scale carry-funded slices from 100% at the start of a 100-level band
+    function _rewardBonusScaleBps(uint24 lvl) private pure returns (uint16) {
+        // Linearly scale reward pool-funded slices from 100% at the start of a 100-level band
         // down to 50% on the last level of the band, then reset on the next band.
         uint256 cycle = (lvl == 0) ? 0 : ((uint256(lvl) - 1) % 100); // 0..99
         uint256 discount = (cycle * 5000) / 99; // up to 50% at cycle==99

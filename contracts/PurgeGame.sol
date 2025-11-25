@@ -154,7 +154,7 @@ contract PurgeGame is PurgeGameStorage {
     /// @return phase_           Airdrop sub-phase (0..7)
     /// @return jackpotCounter_  Daily jackpots processed this level
     /// @return price_           Current mint price (wei)
-    /// @return carry_           Carryover earmarked for next level (wei)
+    /// @return rewardPool_      Reward pool earmarked for next level (wei)
     /// @return prizePoolTarget  Last level's prize pool snapshot (wei)
     /// @return prizePoolCurrent Active prize pool (currentPrizePool)
     /// @return nextPrizePool_   Pool accumulated during purchases before the MAP jackpot flush
@@ -167,7 +167,7 @@ contract PurgeGame is PurgeGameStorage {
             uint8 phase_,
             uint8 jackpotCounter_,
             uint256 price_,
-            uint256 carry_,
+            uint256 rewardPool_,
             uint256 prizePoolTarget,
             uint256 prizePoolCurrent,
             uint256 nextPrizePool_,
@@ -178,7 +178,7 @@ contract PurgeGame is PurgeGameStorage {
         phase_ = phase;
         jackpotCounter_ = jackpotCounter;
         price_ = price;
-        carry_ = carryOver;
+        rewardPool_ = rewardPool;
         prizePoolTarget = lastPrizePool;
         prizePoolCurrent = currentPrizePool;
         nextPrizePool_ = nextPrizePool;
@@ -642,7 +642,7 @@ contract PurgeGame is PurgeGameStorage {
     /// - Lock the exterminated trait in the current level’s storage.
     /// - Split prize pool: 90% to participants (including the exterminator slice below) and 10% as a bonus
     ///   split across three winning tickets weighted by ETH mint streaks (even split if all streaks are zero);
-    ///   affiliate/stake trophy rewards are now funded from carry.
+    ///   affiliate/stake trophy rewards are now funded from the reward pool.
     ///   From within the 90%, the “exterminator” gets 20% (or 40% for 7th steps since L25),
     ///   and the rest is divided evenly per ticket for the exterminated trait.
     /// - Mint the level trophy (transfers the placeholder token owned by the contract).
@@ -672,7 +672,7 @@ contract PurgeGame is PurgeGameStorage {
 
             if (repeatOrNinety) {
                 uint256 keep = pool >> 1;
-                carryOver += keep;
+                rewardPool += keep;
                 pool -= keep;
             }
 
@@ -712,8 +712,8 @@ contract PurgeGame is PurgeGameStorage {
         }
 
         if (level == 100 && !decimatorHundredReady) {
-            decimatorHundredPool = carryOver;
-            carryOver = 0;
+            decimatorHundredPool = rewardPool;
+            rewardPool = 0;
             decimatorHundredReady = true;
         }
 
@@ -1475,6 +1475,6 @@ contract PurgeGame is PurgeGameStorage {
         maps = playerMapMintsOwed[player];
     }
     receive() external payable {
-        carryOver += msg.value;
+        rewardPool += msg.value;
     }
 }

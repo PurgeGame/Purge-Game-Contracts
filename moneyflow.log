@@ -8,7 +8,7 @@ Level 1 map flow
 ┌─────────┬───────────────────────────────┬──────────────┬──────────────┐
 │ (index) │ bucket                        │ expected     │ actual       │
 ├─────────┼───────────────────────────────┼──────────────┼──────────────┤
-│ 0       │ 'Carryover deposit'           │ '40.00 ETH'  │ '40.00 ETH'  │
+│ 0       │ 'Reward pool deposit'           │ '40.00 ETH'  │ '40.00 ETH'  │
 │ 1       │ 'Prize pool before jackpots'  │ '150.00 ETH' │ '150.00 ETH' │
 │ 2       │ 'Credited to participants'    │ '17.86 ETH'  │ '17.86 ETH'  │
 │ 3       │ 'Recycled back to prize pool' │ '0.00 ETH'   │ '0.00 ETH'   │
@@ -51,7 +51,7 @@ Level 1 after map jackpot bucket snapshot
 ┌─────────┬──────────────────────┬──────────────┐
 │ (index) │ bucket               │ amount       │
 ├─────────┼──────────────────────┼──────────────┤
-│ 0       │ 'Carryover'          │ '39.90 ETH'  │
+│ 0       │ 'Reward pool'          │ '39.90 ETH'  │
 │ 1       │ 'Prize pool'         │ '124.58 ETH' │
 │ 2       │ 'Next prize pool'    │ '60.00 ETH'  │
 │ 3       │ 'Claimable winnings' │ '17.86 ETH'  │
@@ -79,7 +79,7 @@ Level 1 after daily jackpots bucket snapshot
 ┌─────────┬──────────────────────┬──────────────┐
 │ (index) │ bucket               │ amount       │
 ├─────────┼──────────────────────┼──────────────┤
-│ 0       │ 'Carryover'          │ '52.36 ETH'  │
+│ 0       │ 'Reward pool'          │ '52.36 ETH'  │
 │ 1       │ 'Prize pool'         │ '0.00 ETH'   │
 │ 2       │ 'Next prize pool'    │ '126.25 ETH' │
 │ 3       │ 'Claimable winnings' │ '129.99 ETH' │
@@ -92,7 +92,7 @@ Level 1 after player claims bucket snapshot
 ┌─────────┬──────────────────────┬──────────────┐
 │ (index) │ bucket               │ amount       │
 ├─────────┼──────────────────────┼──────────────┤
-│ 0       │ 'Carryover'          │ '52.36 ETH'  │
+│ 0       │ 'Reward pool'          │ '52.36 ETH'  │
 │ 1       │ 'Prize pool'         │ '0.00 ETH'   │
 │ 2       │ 'Next prize pool'    │ '126.25 ETH' │
 │ 3       │ 'Claimable winnings' │ '0.00 ETH'   │
@@ -129,7 +129,7 @@ Level 2 map flow
 ┌─────────┬───────────────────────────────┬──────────────┬──────────────┐
 │ (index) │ bucket                        │ expected     │ actual       │
 ├─────────┼───────────────────────────────┼──────────────┼──────────────┤
-│ 0       │ 'Carryover deposit'           │ '52.36 ETH'  │ '52.36 ETH'  │
+│ 0       │ 'Reward pool deposit'           │ '52.36 ETH'  │ '52.36 ETH'  │
 │ 1       │ 'Prize pool before jackpots'  │ '165.00 ETH' │ '165.00 ETH' │
 │ 2       │ 'Credited to participants'    │ '18.11 ETH'  │ '18.11 ETH'  │
 │ 3       │ 'Recycled back to prize pool' │ '0.00 ETH'   │ '0.00 ETH'   │
@@ -172,7 +172,7 @@ Level 2 after map jackpot bucket snapshot
 ┌─────────┬──────────────────────┬──────────────┐
 │ (index) │ bucket               │ amount       │
 ├─────────┼──────────────────────┼──────────────┤
-│ 0       │ 'Carryover'          │ '65.21 ETH'  │
+│ 0       │ 'Reward pool'          │ '65.21 ETH'  │
 │ 1       │ 'Prize pool'         │ '126.29 ETH' │
 │ 2       │ 'Next prize pool'    │ '126.25 ETH' │
 │ 3       │ 'Claimable winnings' │ '18.11 ETH'  │
@@ -201,7 +201,7 @@ Level 2 after daily jackpots bucket snapshot
 ┌─────────┬──────────────────────┬──────────────┐
 │ (index) │ bucket               │ amount       │
 ├─────────┼──────────────────────┼──────────────┤
-│ 0       │ 'Carryover'          │ '77.84 ETH'  │
+│ 0       │ 'Reward pool'          │ '77.84 ETH'  │
 │ 1       │ 'Prize pool'         │ '0.00 ETH'   │
 │ 2       │ 'Next prize pool'    │ '200.00 ETH' │
 │ 3       │ 'Claimable winnings' │ '131.76 ETH' │
@@ -215,7 +215,7 @@ Level 2 after player claims bucket snapshot
 ┌─────────┬──────────────────────┬──────────────┐
 │ (index) │ bucket               │ amount       │
 ├─────────┼──────────────────────┼──────────────┤
-│ 0       │ 'Carryover'          │ '77.84 ETH'  │
+│ 0       │ 'Reward pool'          │ '77.84 ETH'  │
 │ 1       │ 'Prize pool'         │ '0.00 ETH'   │
 │ 2       │ 'Next prize pool'    │ '200.00 ETH' │
 │ 3       │ 'Claimable winnings' │ '0.00 ETH'   │
@@ -252,7 +252,7 @@ Level 3 map flow
 ┌─────────┬───────────────────────────────┬──────────────┬──────────────┐
 │ (index) │ bucket                        │ expected     │ actual       │
 ├─────────┼───────────────────────────────┼──────────────┼──────────────┤
-│ 0       │ 'Carryover deposit'           │ '77.84 ETH'  │ '77.84 ETH'  │
+│ 0       │ 'Reward pool deposit'           │ '77.84 ETH'  │ '77.84 ETH'  │
 │ 1       │ 'Prize pool before jackpots'  │ '182.50 ETH' │ '182.50 ETH' │
 │ 2       │ 'Credited to participants'    │ '18.90 ETH'  │ '18.90 ETH'  │
 │ 3       │ 'Recycled back to prize pool' │ '0.00 ETH'   │ '0.00 ETH'   │
@@ -295,7 +295,7 @@ Level 3 after map jackpot bucket snapshot
 ┌─────────┬──────────────────────┬──────────────┐
 │ (index) │ bucket               │ amount       │
 ├─────────┼──────────────────────┼──────────────┤
-│ 0       │ 'Carryover'          │ '101.53 ETH' │
+│ 0       │ 'Reward pool'          │ '101.53 ETH' │
 │ 1       │ 'Prize pool'         │ '131.81 ETH' │
 │ 2       │ 'Next prize pool'    │ '200.00 ETH' │
 │ 3       │ 'Claimable winnings' │ '18.90 ETH'  │
@@ -324,7 +324,7 @@ Level 3 after daily jackpots bucket snapshot
 ┌─────────┬──────────────────────┬──────────────┐
 │ (index) │ bucket               │ amount       │
 ├─────────┼──────────────────────┼──────────────┤
-│ 0       │ 'Carryover'          │ '114.71 ETH' │
+│ 0       │ 'Reward pool'          │ '114.71 ETH' │
 │ 1       │ 'Prize pool'         │ '0.00 ETH'   │
 │ 2       │ 'Next prize pool'    │ '280.00 ETH' │
 │ 3       │ 'Claimable winnings' │ '137.53 ETH' │
@@ -338,7 +338,7 @@ Level 3 after player claims bucket snapshot
 ┌─────────┬──────────────────────┬──────────────┐
 │ (index) │ bucket               │ amount       │
 ├─────────┼──────────────────────┼──────────────┤
-│ 0       │ 'Carryover'          │ '114.71 ETH' │
+│ 0       │ 'Reward pool'          │ '114.71 ETH' │
 │ 1       │ 'Prize pool'         │ '0.00 ETH'   │
 │ 2       │ 'Next prize pool'    │ '280.00 ETH' │
 │ 3       │ 'Claimable winnings' │ '0.00 ETH'   │
@@ -375,7 +375,7 @@ Level 4 map flow
 ┌─────────┬───────────────────────────────┬──────────────┬──────────────┐
 │ (index) │ bucket                        │ expected     │ actual       │
 ├─────────┼───────────────────────────────┼──────────────┼──────────────┤
-│ 0       │ 'Carryover deposit'           │ '114.71 ETH' │ '114.71 ETH' │
+│ 0       │ 'Reward pool deposit'           │ '114.71 ETH' │ '114.71 ETH' │
 │ 1       │ 'Prize pool before jackpots'  │ '200.00 ETH' │ '200.00 ETH' │
 │ 2       │ 'Credited to participants'    │ '22.10 ETH'  │ '22.10 ETH'  │
 │ 3       │ 'Recycled back to prize pool' │ '0.00 ETH'   │ '0.00 ETH'   │
@@ -418,7 +418,7 @@ Level 4 after map jackpot bucket snapshot
 ┌─────────┬──────────────────────┬──────────────┐
 │ (index) │ bucket               │ amount       │
 ├─────────┼──────────────────────┼──────────────┤
-│ 0       │ 'Carryover'          │ '129.03 ETH' │
+│ 0       │ 'Reward pool'          │ '129.03 ETH' │
 │ 1       │ 'Prize pool'         │ '154.11 ETH' │
 │ 2       │ 'Next prize pool'    │ '280.00 ETH' │
 │ 3       │ 'Claimable winnings' │ '22.10 ETH'  │
@@ -447,7 +447,7 @@ Level 4 after daily jackpots bucket snapshot
 ┌─────────┬──────────────────────┬──────────────┐
 │ (index) │ bucket               │ amount       │
 ├─────────┼──────────────────────┼──────────────┤
-│ 0       │ 'Carryover'          │ '144.44 ETH' │
+│ 0       │ 'Reward pool'          │ '144.44 ETH' │
 │ 1       │ 'Prize pool'         │ '0.00 ETH'   │
 │ 2       │ 'Next prize pool'    │ '368.75 ETH' │
 │ 3       │ 'Claimable winnings' │ '160.80 ETH' │
@@ -461,7 +461,7 @@ Level 4 after player claims bucket snapshot
 ┌─────────┬──────────────────────┬──────────────┐
 │ (index) │ bucket               │ amount       │
 ├─────────┼──────────────────────┼──────────────┤
-│ 0       │ 'Carryover'          │ '144.44 ETH' │
+│ 0       │ 'Reward pool'          │ '144.44 ETH' │
 │ 1       │ 'Prize pool'         │ '0.00 ETH'   │
 │ 2       │ 'Next prize pool'    │ '368.75 ETH' │
 │ 3       │ 'Claimable winnings' │ '0.00 ETH'   │
@@ -498,7 +498,7 @@ Level 5 map flow
 ┌─────────┬───────────────────────────────┬──────────────┬──────────────┐
 │ (index) │ bucket                        │ expected     │ actual       │
 ├─────────┼───────────────────────────────┼──────────────┼──────────────┤
-│ 0       │ 'Carryover deposit'           │ '144.44 ETH' │ '144.44 ETH' │
+│ 0       │ 'Reward pool deposit'           │ '144.44 ETH' │ '144.44 ETH' │
 │ 1       │ 'Prize pool before jackpots'  │ '220.00 ETH' │ '220.00 ETH' │
 │ 2       │ 'Credited to participants'    │ '22.77 ETH'  │ '22.77 ETH'  │
 │ 3       │ 'Recycled back to prize pool' │ '0.00 ETH'   │ '0.00 ETH'   │
@@ -541,7 +541,7 @@ Level 5 after map jackpot bucket snapshot
 ┌─────────┬──────────────────────┬──────────────┐
 │ (index) │ bucket               │ amount       │
 ├─────────┼──────────────────────┼──────────────┤
-│ 0       │ 'Carryover'          │ '173.11 ETH' │
+│ 0       │ 'Reward pool'          │ '173.11 ETH' │
 │ 1       │ 'Prize pool'         │ '158.81 ETH' │
 │ 2       │ 'Next prize pool'    │ '368.75 ETH' │
 │ 3       │ 'Claimable winnings' │ '22.77 ETH'  │
@@ -570,7 +570,7 @@ Level 5 after daily jackpots bucket snapshot
 ┌─────────┬──────────────────────┬──────────────┐
 │ (index) │ bucket               │ amount       │
 ├─────────┼──────────────────────┼──────────────┤
-│ 0       │ 'Carryover'          │ '188.99 ETH' │
+│ 0       │ 'Reward pool'          │ '188.99 ETH' │
 │ 1       │ 'Prize pool'         │ '0.00 ETH'   │
 │ 2       │ 'Next prize pool'    │ '466.25 ETH' │
 │ 3       │ 'Claimable winnings' │ '165.69 ETH' │
@@ -584,7 +584,7 @@ Level 5 after player claims bucket snapshot
 ┌─────────┬──────────────────────┬──────────────┐
 │ (index) │ bucket               │ amount       │
 ├─────────┼──────────────────────┼──────────────┤
-│ 0       │ 'Carryover'          │ '188.99 ETH' │
+│ 0       │ 'Reward pool'          │ '188.99 ETH' │
 │ 1       │ 'Prize pool'         │ '0.00 ETH'   │
 │ 2       │ 'Next prize pool'    │ '466.25 ETH' │
 │ 3       │ 'Claimable winnings' │ '0.00 ETH'   │
@@ -668,7 +668,7 @@ Simulation complete bucket snapshot
 ┌─────────┬──────────────────────┬──────────────┐
 │ (index) │ bucket               │ amount       │
 ├─────────┼──────────────────────┼──────────────┤
-│ 0       │ 'Carryover'          │ '188.99 ETH' │
+│ 0       │ 'Reward pool'          │ '188.99 ETH' │
 │ 1       │ 'Prize pool'         │ '0.00 ETH'   │
 │ 2       │ 'Next prize pool'    │ '466.25 ETH' │
 │ 3       │ 'Claimable winnings' │ '0.00 ETH'   │

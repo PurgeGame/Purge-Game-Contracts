@@ -1126,7 +1126,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
                 winner,
                 PURGE_TROPHY_KIND_AFFILIATE,
                 (uint256(0xFFFE) << 152) | ctx.levelBits | TROPHY_FLAG_AFFILIATE,
-                0, // Affiliate ETH now flows from carry; keep in-contract pool untouched.
+                0, // Affiliate ETH now flows from the reward pool; keep in-contract pool untouched.
                 affiliatePlaceholder
             );
         } else {
