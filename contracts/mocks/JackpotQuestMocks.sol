@@ -118,9 +118,19 @@ contract JackpotTrophiesModuleMock is IPurgeGameTrophiesModule {
         uint256
     ) external payable override {}
 
-    function stakedTrophySample(uint256) external pure override returns (address owner) {
+    function stakedTrophySampleWithId(uint256) external pure override returns (uint256 tokenId) {
+        return 0;
+    }
+
+    function trophyToken(uint24, uint8) external pure override returns (uint256 tokenId, address owner) {
+        return (0, address(0));
+    }
+
+    function trophyOwner(uint256) external pure override returns (address owner) {
         return address(0);
     }
+
+    function rewardTrophyByToken(uint256, uint256) external override {}
 
     function burnBafPlaceholder(uint24) external pure override {}
 

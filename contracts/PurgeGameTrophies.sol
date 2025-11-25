@@ -72,7 +72,13 @@ interface IPurgeGameTrophies {
 
     function purgeTrophy(uint256 tokenId) external;
 
-    function stakedTrophySample(uint256 rngSeed) external view returns (address owner);
+    function stakedTrophySampleWithId(uint256 rngSeed) external view returns (uint256 tokenId);
+
+    function trophyToken(uint24 level, uint8 kind) external view returns (uint256 tokenId, address owner);
+
+    function trophyOwner(uint256 tokenId) external view returns (address owner);
+
+    function rewardTrophyByToken(uint256 tokenId, uint256 amountWei) external;
 
     function isTrophy(uint256 tokenId) external view returns (bool);
 
@@ -183,6 +189,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         uint24 currentLevel;
         uint24 lastClaim;
         uint24 updatedLast;
+        uint8 claimsRemaining;
         bool ethClaimed;
         bool coinClaimed;
         bool isStaked;
@@ -216,6 +223,8 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     uint256 private constant TROPHY_BASE_LEVEL_SHIFT = 128;
     uint256 private constant TROPHY_LAST_CLAIM_SHIFT = 168;
     uint256 private constant TROPHY_LAST_CLAIM_MASK = uint256(0xFFFFFF) << TROPHY_LAST_CLAIM_SHIFT;
+    uint256 private constant TROPHY_CLAIMS_SHIFT = 192;
+    uint256 private constant TROPHY_CLAIMS_MASK = uint256(0xFF) << TROPHY_CLAIMS_SHIFT;
 
     uint8 private constant _STAKE_ERR_TRANSFER_BLOCKED = 1;
     uint8 private constant _STAKE_ERR_ALREADY_STAKED = 3;
@@ -389,7 +398,11 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         uint256 deferredWei
     ) private returns (bool incrementSupply) {
         uint256 prevData = trophyData_[tokenId];
-        uint256 newData = (data & ~(TROPHY_OWED_MASK | TROPHY_LAST_CLAIM_MASK)) | (deferredWei & TROPHY_OWED_MASK);
+        uint256 newData = (data & ~(TROPHY_OWED_MASK | TROPHY_LAST_CLAIM_MASK | TROPHY_CLAIMS_MASK)) |
+            (deferredWei & TROPHY_OWED_MASK);
+        if (deferredWei != 0) {
+            newData |= uint256(10) << TROPHY_CLAIMS_SHIFT;
+        }
         trophyData_[tokenId] = newData;
         if (prevData == 0 && newData != 0 && to != gameAddress) {
             incrementSupply = true;
@@ -399,10 +412,17 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     function _addTrophyRewardInternal(uint256 tokenId, uint256 amountWei, uint24 startLevel) private {
         uint256 info = trophyData_[tokenId];
         uint256 owed = (info & TROPHY_OWED_MASK) + amountWei;
+        uint256 claims = (info >> TROPHY_CLAIMS_SHIFT) & 0xFF;
+        if (amountWei != 0) {
+            if (claims < 3) claims = 3;
+            else if (claims < 0xFF) claims += 1;
+            if (claims > 0xFF) claims = 0xFF;
+        }
         uint256 base = uint256((startLevel - 1) & 0xFFFFFF);
-        uint256 updated = (info & ~(TROPHY_OWED_MASK | (uint256(0xFFFFFF) << TROPHY_BASE_LEVEL_SHIFT))) |
+        uint256 updated = (info & ~(TROPHY_OWED_MASK | (uint256(0xFFFFFF) << TROPHY_BASE_LEVEL_SHIFT) | TROPHY_CLAIMS_MASK)) |
             (owed & TROPHY_OWED_MASK) |
-            (base << TROPHY_BASE_LEVEL_SHIFT);
+            (base << TROPHY_BASE_LEVEL_SHIFT) |
+            (claims << TROPHY_CLAIMS_SHIFT);
         trophyData_[tokenId] = updated;
     }
 
@@ -1420,13 +1440,24 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         ctx.currentLevel = game.level();
         uint256 priceUnit = game.coinPriceUnit();
         ctx.lastClaim = uint24((ctx.info >> TROPHY_LAST_CLAIM_SHIFT) & 0xFFFFFF);
+        ctx.claimsRemaining = uint8((ctx.info >> TROPHY_CLAIMS_SHIFT) & 0xFF);
         ctx.updatedLast = ctx.lastClaim;
         ctx.isStaked = _isTrophyStaked(tokenId);
 
         ctx.owed = ctx.info & TROPHY_OWED_MASK;
         ctx.newOwed = ctx.owed;
 
-        if (ctx.owed != 0 && ctx.currentLevel > ctx.lastClaim) {
+        if (ctx.claimsRemaining != 0) {
+            if (ctx.currentLevel <= ctx.lastClaim) revert ClaimNotReady();
+            if (!ctx.isStaked) revert ClaimNotReady();
+            uint256 denom = ctx.claimsRemaining;
+            ctx.payout = ctx.owed / denom;
+            if (ctx.payout == 0) revert ClaimNotReady();
+            ctx.newOwed = ctx.owed - ctx.payout;
+            ctx.ethClaimed = true;
+            ctx.updatedLast = ctx.currentLevel;
+            ctx.claimsRemaining = uint8(ctx.claimsRemaining - 1);
+        } else if (ctx.owed != 0 && ctx.currentLevel > ctx.lastClaim) {
             if (!ctx.isStaked) revert ClaimNotReady();
             uint24 baseStartLevel = uint24((ctx.info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF) + 1;
             if (ctx.currentLevel >= baseStartLevel) {
@@ -1446,9 +1477,10 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         }
 
         if (!ctx.ethClaimed && !ctx.coinClaimed) revert ClaimNotReady();
-        uint256 newInfo = (ctx.info & ~(TROPHY_OWED_MASK | TROPHY_LAST_CLAIM_MASK)) |
+        uint256 newInfo = (ctx.info & ~(TROPHY_OWED_MASK | TROPHY_LAST_CLAIM_MASK | TROPHY_CLAIMS_MASK)) |
             (ctx.newOwed & TROPHY_OWED_MASK) |
-            (uint256(ctx.updatedLast & 0xFFFFFF) << TROPHY_LAST_CLAIM_SHIFT);
+            (uint256(ctx.updatedLast & 0xFFFFFF) << TROPHY_LAST_CLAIM_SHIFT) |
+            (uint256(ctx.claimsRemaining) << TROPHY_CLAIMS_SHIFT);
         _setTrophyData(tokenId, newInfo);
 
         if (ctx.ethClaimed) {
@@ -1595,20 +1627,39 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         coin.bonusCoinflip(sender, _purgeTrophyReward(priceUnit), false);
     }
 
-    function stakedTrophySample(uint256 rngSeed) external view override returns (address owner) {
+    function isTrophy(uint256 tokenId) external view override returns (bool) {
+        return trophyData_[tokenId] != 0;
+    }
+
+    function stakedTrophySampleWithId(uint256 rngSeed) external view override returns (uint256 tokenId) {
         uint256 count = stakedTrophyIds.length;
-        if (count == 0) return address(0);
+        if (count == 0) return 0;
         uint256 rand = uint256(keccak256(abi.encodePacked(rngSeed, count)));
         uint256 idxA = count == 1 ? 0 : rand % count;
         uint256 idxB = count == 1 ? idxA : (rand >> 64) % count;
-        uint256 tokenA = stakedTrophyIds[idxA];
-        uint256 tokenB = stakedTrophyIds[idxB];
-        uint256 chosen = tokenA <= tokenB ? tokenA : tokenB;
-        owner = address(uint160(nft.packedOwnershipOf(chosen)));
+        tokenId = stakedTrophyIds[idxA];
+        if (count != 1) {
+            uint256 otherToken = stakedTrophyIds[idxB];
+            if (otherToken < tokenId) {
+                tokenId = otherToken;
+            }
+        }
     }
 
-    function isTrophy(uint256 tokenId) external view override returns (bool) {
-        return trophyData_[tokenId] != 0;
+    function trophyToken(uint24 level, uint8 kind) external view override returns (uint256 tokenId, address owner) {
+        (uint256 previousBase, uint256 currentBase) = nft.getBasePointers();
+        uint24 currentLevel = game.level();
+        tokenId = _placeholderTokenId(level, kind, previousBase, currentBase, currentLevel);
+        if (tokenId == 0) return (0, address(0));
+        owner = address(uint160(nft.packedOwnershipOf(tokenId)));
+    }
+
+    function trophyOwner(uint256 tokenId) external view override returns (address owner) {
+        owner = address(uint160(nft.packedOwnershipOf(tokenId)));
+    }
+
+    function rewardTrophyByToken(uint256 tokenId, uint256 amountWei) external override onlyGame {
+        _addTrophyRewardInternal(tokenId, amountWei, game.level());
     }
 
     function isTrophyStaked(uint256 tokenId) external view override returns (bool) {

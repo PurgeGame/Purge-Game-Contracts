@@ -20,6 +20,8 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
 
     uint32 private constant DEFAULT_PAYOUTS_PER_TX = 420;
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
+    uint8 private constant PURGE_TROPHY_KIND_AFFILIATE = 2;
+    uint8 private constant PURGE_TROPHY_KIND_STAKE = 3;
 
     constructor() {}
 
@@ -106,8 +108,6 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         bool traitWin = pend.exterminator != address(0);
         uint24 prevLevelPending = pend.level;
         uint256 poolValue = pend.sidePool;
-        address topAffiliate = coinContract.getTopAffiliate();
-        bool hasAffiliates = topAffiliate != address(0);
 
         if (traitWin) {
             uint256 exterminatorShare = (prevLevelPending % 10 == 4 && prevLevelPending != 4)
@@ -118,17 +118,55 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
             uint256 deferredWei = exterminatorShare - immediate;
             _addClaimableEth(pend.exterminator, immediate);
 
-            uint256 sharedPool = poolValue / 20;
-            uint256 base = sharedPool / 100;
-            uint256 remainder = sharedPool - (base * 100);
-            uint256 baseTimes20 = base * 20;
-            uint256 affiliateTrophyShare = baseTimes20 + remainder;
-            uint256 legacyAffiliateShare = base * 10;
-            address affiliateTrophyRecipient = topAffiliate != address(0) ? topAffiliate : pend.exterminator;
+            // Allocate the remaining 10%: 2% each to two staked trophies, 2% to the affiliate trophy,
+            // and 4% as a bonus to one random winning ticket.
+            uint256 onePercent = poolValue / 100;
+            uint256 twoPercent = onePercent * 2;
+            uint256 bonusPool = onePercent * 4;
 
-            uint256 processValue = deferredWei + (hasAffiliates ? affiliateTrophyShare + legacyAffiliateShare : 0);
+            // Staked trophies (2% each)
+            for (uint8 s; s < 2; ) {
+                uint256 seed = rngWord ^ (uint256(prevLevelPending) << 64) ^ uint256(s);
+                uint256 tokenId = trophiesContract.stakedTrophySampleWithId(seed);
+                if (tokenId != 0) {
+                    trophiesContract.rewardTrophyByToken(tokenId, twoPercent);
+                } else {
+                    carryOver += twoPercent;
+                }
+                unchecked {
+                    ++s;
+                }
+            }
 
-            (, address[6] memory affiliateRecipients) = trophiesContract.processEndLevel{value: processValue}(
+            // Affiliate trophy (2%)
+            (uint256 affiliateTokenId, address affiliateTrophyRecipient) = trophiesContract.trophyToken(
+                prevLevelPending,
+                PURGE_TROPHY_KIND_AFFILIATE
+            );
+            if (affiliateTokenId != 0 && affiliateTrophyRecipient != address(0)) {
+                trophiesContract.rewardTrophyByToken(affiliateTokenId, twoPercent);
+            } else {
+                carryOver += twoPercent;
+            }
+
+            // Bonus to one random winning ticket (4%), with 1% siphoned to the stake trophy holder for the previous level.
+            uint256 stakeBoost = onePercent; // 1%
+            uint256 ticketBonus = bonusPool - stakeBoost;
+            (uint256 stakeTokenId, address stakeTrophyRecipient) = trophiesContract.trophyToken(
+                prevLevelPending,
+                PURGE_TROPHY_KIND_STAKE
+            );
+            if (stakeTokenId != 0 && stakeTrophyRecipient != address(0)) {
+                trophiesContract.rewardTrophyByToken(stakeTokenId, stakeBoost);
+            } else {
+                carryOver += stakeBoost;
+            }
+            address[] storage arr = traitPurgeTicket[prevLevelPending][uint8(lastExterminatedTrait)];
+            uint256 idx = (rngWord ^ (uint256(prevLevelPending) << 128)) % arr.length;
+            _addClaimableEth(arr[idx], ticketBonus);
+
+            uint256 processValue = deferredWei;
+            trophiesContract.processEndLevel{value: processValue}(
                 IPurgeGameTrophies.EndLevelRequest({
                     exterminator: pend.exterminator,
                     traitId: lastExterminatedTrait,
@@ -137,47 +175,32 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
                     rngWord: rngWord
                 })
             );
-            if (hasAffiliates) {
-                for (uint8 i; i < 6; ) {
-                    address recipient = affiliateRecipients[i];
-                    if (recipient == address(0)) {
-                        recipient = affiliateTrophyRecipient;
-                    }
-                    uint256 amount;
-                    if (i < 2) {
-                        amount = baseTimes20;
-                    } else if (i == 2) {
-                        amount = base * 10;
-                    } else if (i == 3) {
-                        amount = base * 8;
-                    } else if (i == 4) {
-                        amount = base * 7;
-                    } else {
-                        amount = base * 5;
-                    }
-                    if (amount != 0) {
-                        _addClaimableEth(recipient, amount);
-                    }
-                    unchecked {
-                        ++i;
-                    }
-                }
-            }
         } else {
-            uint256 poolForProcess = (poolValue * 20) / 100;
-            address affiliateRecipient = topAffiliate;
+            // Timeout path: 1.25% to affiliate trophy, 0.75% to stake trophy, remainder to carry.
+            uint256 affiliateShare = (poolValue * 125) / 10_000;
+            uint256 stakeShare = (poolValue * 75) / 10_000;
 
-            trophiesContract.processEndLevel{value: poolForProcess}(
-                IPurgeGameTrophies.EndLevelRequest({
-                    exterminator: affiliateRecipient,
-                    traitId: lastExterminatedTrait,
-                    level: prevLevelPending,
-                    pool: poolForProcess,
-                    rngWord: rngWord
-                })
+            (uint256 affiliateTokenId, address affiliateOwner) = trophiesContract.trophyToken(
+                prevLevelPending,
+                PURGE_TROPHY_KIND_AFFILIATE
             );
+            if (affiliateTokenId != 0 && affiliateOwner != address(0)) {
+                trophiesContract.rewardTrophyByToken(affiliateTokenId, affiliateShare);
+            } else {
+                carryOver += affiliateShare;
+            }
 
-            uint256 remaining = poolValue - poolForProcess;
+            (uint256 stakeTokenId, address stakeOwner) = trophiesContract.trophyToken(
+                prevLevelPending,
+                PURGE_TROPHY_KIND_STAKE
+            );
+            if (stakeTokenId != 0 && stakeOwner != address(0)) {
+                trophiesContract.rewardTrophyByToken(stakeTokenId, stakeShare);
+            } else {
+                carryOver += stakeShare;
+            }
+
+            uint256 remaining = poolValue - affiliateShare - stakeShare;
             if (remaining != 0) carryOver += remaining;
         }
 
