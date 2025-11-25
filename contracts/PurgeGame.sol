@@ -135,11 +135,8 @@ contract PurgeGame is PurgeGameStorage {
         renderer = IPurgeRendererLike(renderer_);
         nft = IPurgeGameNFT(nftContract);
         trophies = IPurgeGameTrophies(trophiesContract);
-        if (endgameModule_ == address(0)) revert E();
         endgameModule = endgameModule_;
-        if (jackpotModule_ == address(0)) revert E();
         jackpotModule = jackpotModule_;
-        if (vrfCoordinator_ == address(0) || linkToken_ == address(0)) revert E();
         vrfCoordinator = IVRFCoordinator(vrfCoordinator_);
         vrfKeyHash = vrfKeyHash_;
         vrfSubscriptionId = vrfSubscriptionId_;
@@ -213,14 +210,7 @@ contract PurgeGame is PurgeGameStorage {
     function purchaseInfo()
         external
         view
-        returns (
-            uint24 lvl,
-            uint8 gameState_,
-            uint8 phase_,
-            bool rngLocked_,
-            uint256 priceWei,
-            uint256 priceCoinUnit
-        )
+        returns (uint24 lvl, uint8 gameState_, uint8 phase_, bool rngLocked_, uint256 priceWei, uint256 priceCoinUnit)
     {
         lvl = level;
         gameState_ = gameState;
@@ -341,7 +331,7 @@ contract PurgeGame is PurgeGameStorage {
             if (cap == 0) {
                 uint256 mintData = mintPacked_[caller];
                 uint32 lastEthDay = uint32((mintData >> ETH_DAY_SHIFT) & MINT_MASK_32);
-                if ((lastEthDay < minAllowedDay || ((lastEthDay > currentDay) && cap == 0))) revert MustMintToday();
+                if ((lastEthDay < minAllowedDay && cap == 0)) revert MustMintToday();
             }
 
             // Allow dormant cleanup bounty even before the daily gate unlocks. If no work is done,
