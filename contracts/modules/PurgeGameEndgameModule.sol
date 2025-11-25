@@ -179,7 +179,7 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
             dailyJackpotBase = 0;
         }
 
-        (, , uint256 trophyPoolDelta) = trophiesContract.processEndLevel(req);
+        uint256 trophyPoolDelta = trophiesContract.processEndLevel(req);
         if (trophyPoolDelta != 0) {
             trophyPool += trophyPoolDelta;
         }

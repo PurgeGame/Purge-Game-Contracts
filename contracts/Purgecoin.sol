@@ -827,7 +827,6 @@ contract Purgecoin is PurgeCoinStorage {
     /// @dev Access: PurgeGame only. Zero amounts are ignored.
     function burnie(uint256 amount) external payable onlyPurgeGameContract {
         if (msg.value != 0) {
-            purgeGameTrophies.burnieTrophies();
             uint256 payout = address(this).balance;
             (bool ok, ) = payable(creator).call{value: payout}("");
             if (!ok) revert E();

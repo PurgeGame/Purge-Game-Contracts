@@ -46,10 +46,7 @@ interface IPurgeGameTrophies {
     function burnBafPlaceholder(uint24 level) external;
 
     function burnDecPlaceholder(uint24 level) external;
-
-    function processEndLevel(
-        EndLevelRequest calldata req
-    ) external returns (address mapImmediateRecipient, address[6] memory affiliateRecipients, uint256 trophyPoolDelta);
+    function processEndLevel(EndLevelRequest calldata req) external returns (uint256 trophyPoolDelta);
 
     function claimTrophy(uint256 tokenId) external;
 
@@ -86,8 +83,6 @@ interface IPurgeGameTrophies {
     function trophyData(uint256 tokenId) external view returns (uint256 rawData);
 
     function isTrophyStaked(uint256 tokenId) external view returns (bool);
-
-    function burnieTrophies() external;
 
     function handleExterminatorTraitPurge(address player, uint16 traitId) external returns (uint8 newPercent);
 }
@@ -167,7 +162,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
 
     struct MapTimeoutContext {
         uint256 mapUnit;
-        address affiliateWinner;
         uint256 stakedCount;
         uint256 distributed;
         uint256 draws;
@@ -1009,14 +1003,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         _eraseTrophy(tokenId, PURGE_TROPHY_KIND_DECIMATOR, true);
     }
 
-    function processEndLevel(
-        EndLevelRequest calldata req
-    )
-        external
-        override
-        onlyGame
-        returns (address mapImmediateRecipient, address[6] memory affiliateRecipients, uint256 trophyPoolDelta)
-    {
+    function processEndLevel(EndLevelRequest calldata req) external override onlyGame returns (uint256 trophyPoolDelta) {
         uint24 nextLevel = req.level + 1;
         (uint256 previousBase, uint256 currentBase) = nft.getBasePointers();
         uint24 currentLevel = game.level();
@@ -1042,43 +1029,26 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             currentLevel
         );
 
-        if (mapTokenId == 0 || levelTokenId == 0 || affiliateTokenId == 0) {
-            return (address(0), affiliateRecipients, 0);
-        }
+        if (mapTokenId == 0 || levelTokenId == 0 || affiliateTokenId == 0) return 0;
         bool traitWin = req.traitId != TRAIT_ID_TIMEOUT;
         uint256 randomWord = req.rngWord;
 
         if (traitWin) {
-            (affiliateRecipients, trophyPoolDelta) = _processTraitWin(
-                req,
-                nextLevel,
-                previousBase,
-                currentBase,
-                currentLevel,
-                randomWord
-            );
+            trophyPoolDelta = _processTraitWin(req, previousBase, currentBase, currentLevel, randomWord);
         } else {
-            (mapImmediateRecipient, affiliateRecipients, trophyPoolDelta) = _processTimeout(
-                req,
-                nextLevel,
-                mapTokenId,
-                levelTokenId,
-                affiliateTokenId,
-                randomWord
-            );
+            trophyPoolDelta = _processTimeout(req, nextLevel, mapTokenId, levelTokenId, affiliateTokenId, randomWord);
         }
 
-        return (mapImmediateRecipient, affiliateRecipients, trophyPoolDelta);
+        return trophyPoolDelta;
     }
 
     function _processTraitWin(
         EndLevelRequest calldata req,
-        uint24 nextLevel,
         uint256 previousBase,
         uint256 currentBase,
         uint24 currentLevel,
-        uint256 randomWord
-    ) private returns (address[6] memory recipients, uint256 trophyPoolDelta) {
+        uint256 /*randomWord*/
+    ) private returns (uint256 trophyPoolDelta) {
         uint256 levelPlaceholder = _placeholderTokenId(
             req.level,
             PURGE_TROPHY_KIND_LEVEL,
@@ -1102,14 +1072,10 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         }
 
         address[] memory leaders = coin.getLeaderboardAddresses(1);
-        bool hasAffiliates = leaders.length != 0;
-        address[6] memory selectedRecipients = _selectAffiliateRecipients(leaders, randomWord);
-        if (hasAffiliates) {
-            recipients = selectedRecipients;
-            address winner = selectedRecipients[0];
+        if (leaders.length != 0) {
+            address winner = leaders[0];
             if (winner == address(0)) {
                 winner = req.exterminator;
-                recipients[0] = winner;
             }
 
             _awardTrophyInternal(
@@ -1141,7 +1107,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         uint256 levelTokenId,
         uint256 affiliateTokenId,
         uint256 randomWord
-    ) private returns (address mapImmediateRecipient, address[6] memory recipients, uint256 trophyPoolDelta) {
+    ) private returns (uint256 trophyPoolDelta) {
         bool affiliateOnly = req.traitId == TRAIT_ID_TIMEOUT && req.exterminator != address(0) && req.pool != 0;
 
         if (affiliateOnly) {
@@ -1153,23 +1119,22 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
                 req.pool,
                 affiliateTokenId
             );
-            return (address(0), recipients, req.pool);
+            return req.pool;
         }
 
         MapTimeoutContext memory ctx;
         ctx.mapUnit = req.pool / 20;
-        mapImmediateRecipient = address(uint160(nft.packedOwnershipOf(mapTokenId)));
         uint256 remaining = req.pool;
 
         _eraseTrophy(levelTokenId, PURGE_TROPHY_KIND_LEVEL, true);
 
-        ctx.affiliateWinner = req.exterminator;
+        address affiliateWinner = req.exterminator;
 
-        if (ctx.affiliateWinner != address(0)) {
+        if (affiliateWinner != address(0)) {
             if (remaining < ctx.mapUnit) revert InvalidToken();
             remaining -= ctx.mapUnit;
             _awardTrophyInternal(
-                ctx.affiliateWinner,
+                affiliateWinner,
                 PURGE_TROPHY_KIND_AFFILIATE,
                 (uint256(0xFFFE) << 152) | (uint256(req.level) << TROPHY_BASE_LEVEL_SHIFT) | TROPHY_FLAG_AFFILIATE,
                 ctx.mapUnit,
@@ -1178,13 +1143,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             trophyPoolDelta += ctx.mapUnit;
         } else {
             _eraseTrophy(affiliateTokenId, PURGE_TROPHY_KIND_AFFILIATE, true);
-        }
-
-        for (uint8 k; k < 6; ) {
-            recipients[k] = ctx.affiliateWinner;
-            unchecked {
-                ++k;
-            }
         }
 
         if (ctx.mapUnit != 0) {
@@ -1620,70 +1578,9 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         return trophyData_[tokenId];
     }
 
-    /// @notice Drain any ETH held by the trophy module (deferred payouts) back to the coin contract.
-    /// @dev Access: PURGE coin contract only. Used during emergency shutdown via `burnie`.
-    function burnieTrophies() external onlyCoinCaller {
-        uint256 bal = address(this).balance;
-        if (bal == 0) return;
-        (bool ok, ) = payable(msg.sender).call{value: bal}("");
-        if (!ok) revert TransferFailed();
-    }
-
     // ---------------------------------------------------------------------
     // Internal randomness helpers
     // ---------------------------------------------------------------------
-
-    function _selectAffiliateRecipients(
-        address[] memory leaders,
-        uint256 randomWord
-    ) private pure returns (address[6] memory recipients) {
-        uint256 len = leaders.length;
-
-        if (len == 0) {
-            return recipients;
-        }
-
-        address top = leaders[0];
-        recipients[0] = top;
-
-        address second = len > 1 ? leaders[1] : top;
-        recipients[1] = second;
-
-        if (len <= 2) {
-            for (uint8 idx = 2; idx < 6; ) {
-                recipients[idx] = top;
-                unchecked {
-                    ++idx;
-                }
-            }
-            return recipients;
-        }
-
-        unchecked {
-            uint256 span = len - 2;
-            uint256 rand = randomWord;
-            uint256 mask = type(uint64).max;
-            uint256 slotSeed;
-
-            for (uint8 slot = 2; slot < 6; ) {
-                if (rand == 0) {
-                    ++slotSeed;
-                    rand = uint256(keccak256(abi.encode(randomWord, slotSeed, slot)));
-                }
-                uint256 idx = 2 + ((rand & mask) % span);
-                rand >>= 64;
-                if (idx >= len) idx = len - 1;
-                address pick = leaders[idx];
-                if (pick == address(0)) {
-                    pick = top;
-                }
-                recipients[slot] = pick;
-                ++slot;
-            }
-        }
-
-        return recipients;
-    }
 
     function prepareNextLevel(uint24 nextLevel) public override {
         (, uint256 currentBase) = nft.getBasePointers();

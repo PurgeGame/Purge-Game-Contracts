@@ -65,7 +65,7 @@ contract TrophyGameHarness is IPurgeGameMinimal {
     function processEndLevel(
         address trophies,
         IPurgeGameTrophies.EndLevelRequest calldata req
-    ) external payable returns (address mapRecipient, address[6] memory affiliates, uint256 trophyPoolDelta) {
+    ) external payable returns (uint256 trophyPoolDelta) {
         if (msg.value != 0) {
             totalReceived += msg.value;
         }
