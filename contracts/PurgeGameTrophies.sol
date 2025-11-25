@@ -1028,149 +1028,105 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             currentBase,
             currentLevel
         );
+        uint256 stakeTokenId = _placeholderTokenId(
+            req.level,
+            PURGE_TROPHY_KIND_STAKE,
+            previousBase,
+            currentBase,
+            currentLevel
+        );
 
         if (mapTokenId == 0 || levelTokenId == 0 || affiliateTokenId == 0) return 0;
         bool traitWin = req.traitId != TRAIT_ID_TIMEOUT;
         uint256 randomWord = req.rngWord;
 
-        if (traitWin) {
-            trophyPoolDelta = _processTraitWin(req, previousBase, currentBase, currentLevel, randomWord);
-        } else {
-            trophyPoolDelta = _processTimeout(req, nextLevel, mapTokenId, levelTokenId, affiliateTokenId, randomWord);
-        }
+        trophyPoolDelta = _processEnd(
+            req,
+            previousBase,
+            currentBase,
+            currentLevel,
+            nextLevel,
+            mapTokenId,
+            levelTokenId,
+            affiliateTokenId,
+            stakeTokenId,
+            randomWord,
+            traitWin
+        );
 
         return trophyPoolDelta;
     }
 
-    function _processTraitWin(
+    function _processEnd(
         EndLevelRequest calldata req,
         uint256 previousBase,
         uint256 currentBase,
         uint24 currentLevel,
-        uint256 /*randomWord*/
+        uint24 /*nextLevel*/,
+        uint256 mapTokenId,
+        uint256 levelTokenId,
+        uint256 affiliateTokenId,
+        uint256 stakeTokenId,
+        uint256 /*randomWord*/,
+        bool traitWin
     ) private returns (uint256 trophyPoolDelta) {
-        uint256 levelPlaceholder = _placeholderTokenId(
-            req.level,
-            PURGE_TROPHY_KIND_LEVEL,
-            previousBase,
-            currentBase,
-            currentLevel
-        );
-        uint256 affiliatePlaceholder = _placeholderTokenId(
-            req.level,
-            PURGE_TROPHY_KIND_AFFILIATE,
-            previousBase,
-            currentBase,
-            currentLevel
-        );
+        address gameAddr = gameAddress;
+
+        // Level trophy: award on trait win with exterminator data, otherwise burn if still unassigned.
+        if (traitWin) {
+            uint256 levelPlaceholder = _placeholderTokenId(
+                req.level,
+                PURGE_TROPHY_KIND_LEVEL,
+                previousBase,
+                currentBase,
+                currentLevel
+            );
 
         TraitWinContext memory ctx;
         ctx.levelBits = uint256(req.level) << TROPHY_BASE_LEVEL_SHIFT;
         ctx.traitData = (uint256(req.traitId) << 152) | ctx.levelBits;
-        if (req.traitId == DECIMATOR_TRAIT_SENTINEL) {
-            ctx.traitData |= TROPHY_FLAG_DECIMATOR;
-        }
-
-        address[] memory leaders = coin.getLeaderboardAddresses(1);
-        if (leaders.length != 0) {
-            address winner = leaders[0];
-            if (winner == address(0)) {
-                winner = req.exterminator;
-            }
-
-            _awardTrophyInternal(
-                winner,
-                PURGE_TROPHY_KIND_AFFILIATE,
-                (uint256(0xFFFE) << 152) | ctx.levelBits | TROPHY_FLAG_AFFILIATE,
-                0, // Affiliate ETH now flows from the reward pool; keep in-contract pool untouched.
-                affiliatePlaceholder
-            );
-        } else {
-            _eraseTrophy(affiliatePlaceholder, PURGE_TROPHY_KIND_AFFILIATE, true);
-        }
-
         ctx.deferredAward = req.deferredWei;
         trophyPoolDelta = ctx.deferredAward;
-        _awardTrophyInternal(
-            req.exterminator,
-            PURGE_TROPHY_KIND_LEVEL,
-            ctx.traitData,
-            ctx.deferredAward,
-            levelPlaceholder
-        );
-    }
-
-    function _processTimeout(
-        EndLevelRequest calldata req,
-        uint24 nextLevel,
-        uint256 mapTokenId,
-        uint256 levelTokenId,
-        uint256 affiliateTokenId,
-        uint256 randomWord
-    ) private returns (uint256 trophyPoolDelta) {
-        bool affiliateOnly = req.traitId == TRAIT_ID_TIMEOUT && req.exterminator != address(0) && req.pool != 0;
-
-        if (affiliateOnly) {
-            _eraseTrophy(levelTokenId, PURGE_TROPHY_KIND_LEVEL, true);
             _awardTrophyInternal(
                 req.exterminator,
-                PURGE_TROPHY_KIND_AFFILIATE,
-                (uint256(0xFFFE) << 152) | (uint256(req.level) << TROPHY_BASE_LEVEL_SHIFT) | TROPHY_FLAG_AFFILIATE,
-                req.pool,
-                affiliateTokenId
+                PURGE_TROPHY_KIND_LEVEL,
+                ctx.traitData,
+                ctx.deferredAward,
+                levelPlaceholder
             );
-            return req.pool;
+        } else {
+            if (levelTokenId != 0 && address(uint160(nft.packedOwnershipOf(levelTokenId))) == gameAddr) {
+                _eraseTrophy(levelTokenId, PURGE_TROPHY_KIND_LEVEL, true);
+            }
         }
 
-        MapTimeoutContext memory ctx;
-        ctx.mapUnit = req.pool / 20;
-        uint256 remaining = req.pool;
+        // Affiliate trophy: same handling for both paths (fall back to exterminator if leaderboard winner absent).
+        address affiliateWinner;
+        address[] memory leaders = coin.getLeaderboardAddresses(1);
+        if (leaders.length != 0) {
+            affiliateWinner = leaders[0];
+            if (affiliateWinner == address(0)) {
+                affiliateWinner = req.exterminator;
+            }
+        }
 
-        _eraseTrophy(levelTokenId, PURGE_TROPHY_KIND_LEVEL, true);
-
-        address affiliateWinner = req.exterminator;
-
+        uint256 affiliateData = (uint256(0xFFFE) << 152) | (uint256(req.level) << TROPHY_BASE_LEVEL_SHIFT) | TROPHY_FLAG_AFFILIATE;
         if (affiliateWinner != address(0)) {
-            if (remaining < ctx.mapUnit) revert InvalidToken();
-            remaining -= ctx.mapUnit;
-            _awardTrophyInternal(
-                affiliateWinner,
-                PURGE_TROPHY_KIND_AFFILIATE,
-                (uint256(0xFFFE) << 152) | (uint256(req.level) << TROPHY_BASE_LEVEL_SHIFT) | TROPHY_FLAG_AFFILIATE,
-                ctx.mapUnit,
-                affiliateTokenId
-            );
-            trophyPoolDelta += ctx.mapUnit;
-        } else {
+            _awardTrophyInternal(affiliateWinner, PURGE_TROPHY_KIND_AFFILIATE, affiliateData, 0, affiliateTokenId);
+        } else if (affiliateTokenId != 0 && address(uint160(nft.packedOwnershipOf(affiliateTokenId))) == gameAddr) {
             _eraseTrophy(affiliateTokenId, PURGE_TROPHY_KIND_AFFILIATE, true);
         }
 
-        if (ctx.mapUnit != 0) {
-            if (remaining < ctx.mapUnit) revert InvalidToken();
-            remaining -= ctx.mapUnit;
-            _addTrophyRewardInternal(mapTokenId, ctx.mapUnit, nextLevel);
-            trophyPoolDelta += ctx.mapUnit;
+        // Stake placeholder: burn if still unassigned.
+        if (stakeTokenId != 0 && address(uint160(nft.packedOwnershipOf(stakeTokenId))) == gameAddr) {
+            _eraseTrophy(stakeTokenId, PURGE_TROPHY_KIND_STAKE, true);
         }
 
-        ctx.stakedCount = stakedTrophyIds.length;
-        if (ctx.mapUnit != 0 && ctx.stakedCount != 0) {
-            uint256 drawBudget = remaining;
-            ctx.draws = drawBudget / ctx.mapUnit;
-            ctx.rand = randomWord;
-            for (uint256 j; j < ctx.draws; ) {
-                uint256 idx = ctx.stakedCount == 1 ? 0 : (ctx.rand & type(uint64).max) % ctx.stakedCount;
-                uint256 tokenId = stakedTrophyIds[idx];
-                _addTrophyRewardInternal(tokenId, ctx.mapUnit, nextLevel);
-                trophyPoolDelta += ctx.mapUnit;
-                ctx.distributed += ctx.mapUnit;
-                ctx.rand >>= 64;
-                unchecked {
-                    ++j;
-                }
-            }
-            if (ctx.distributed > drawBudget) revert InvalidToken();
-            remaining = drawBudget - ctx.distributed;
+        // MAP trophy untouched; assigned during jackpots.
+        if (mapTokenId != 0 && address(uint160(nft.packedOwnershipOf(mapTokenId))) == gameAddr) {
+            // no-op
         }
+        return trophyPoolDelta;
     }
 
     function _processDecimatorClaim(ClaimContext memory ctx, uint256 priceUnit) private view {

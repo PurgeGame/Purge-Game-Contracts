@@ -22,6 +22,7 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
     uint8 private constant PURGE_TROPHY_KIND_AFFILIATE = 2;
     uint8 private constant PURGE_TROPHY_KIND_STAKE = 3;
+    uint16 private constant STAKED_RANDOM_BPS = 50; // 0.5% of the reward pool
     uint16 private constant AFFILIATE_CARRY_BPS = 100; // 1% of the reward pool
     uint16 private constant STAKE_CARRY_BPS = 50; // 0.5% of the reward pool
     uint256 private constant MINT_MASK_24 = (uint256(1) << 24) - 1;
@@ -112,6 +113,7 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         bool traitWin = pend.exterminator != address(0);
         uint24 prevLevelPending = pend.level;
         uint256 poolValue = pend.sidePool;
+
         IPurgeGameTrophies.EndLevelRequest memory req = IPurgeGameTrophies.EndLevelRequest({
             exterminator: pend.exterminator,
             traitId: lastExterminatedTrait,
@@ -273,12 +275,13 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
 
     function _payoutCarryBonuses(
         uint24 lvl,
-        uint256 /*rngWord*/,
+        uint256 rngWord,
         IPurgeGameTrophiesModule trophiesContract
     ) private {
         uint256 rewardBudgetAffiliate = _scaledRewardSlice(rewardPool, AFFILIATE_CARRY_BPS, lvl);
         uint256 rewardBudgetStake = _scaledRewardSlice(rewardPool, STAKE_CARRY_BPS, lvl);
-        if (rewardBudgetAffiliate == 0 && rewardBudgetStake == 0) return;
+        uint256 rewardBudgetRandom = _scaledRewardSlice(rewardPool, STAKED_RANDOM_BPS, lvl);
+        if (rewardBudgetAffiliate == 0 && rewardBudgetStake == 0 && rewardBudgetRandom == 0) return;
 
         uint256 rewardSpent;
         uint256 trophyDelta;
@@ -300,6 +303,30 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
             trophyDelta += rewardBudgetStake;
         }
 
+        if (rewardBudgetRandom != 0) {
+            uint256 tokenA = _pickStakedToken(rngWord, trophiesContract);
+            uint256 tokenB = _pickStakedToken(uint256(keccak256(abi.encodePacked(rngWord, lvl, uint256(1)))), trophiesContract);
+
+            if (tokenA == 0 && tokenB == 0) {
+                // No staked trophies to pay; leave reward pool unchanged for this slice.
+            } else if (tokenA != 0 && (tokenB == 0 || tokenB == tokenA)) {
+                trophiesContract.rewardTrophyByToken(tokenA, rewardBudgetRandom, lvl);
+                rewardSpent += rewardBudgetRandom;
+                trophyDelta += rewardBudgetRandom;
+            } else if (tokenA == 0) {
+                trophiesContract.rewardTrophyByToken(tokenB, rewardBudgetRandom, lvl);
+                rewardSpent += rewardBudgetRandom;
+                trophyDelta += rewardBudgetRandom;
+            } else {
+                uint256 half = rewardBudgetRandom >> 1;
+                uint256 rem = rewardBudgetRandom - half;
+                trophiesContract.rewardTrophyByToken(tokenA, half, lvl);
+                trophiesContract.rewardTrophyByToken(tokenB, rem, lvl);
+                rewardSpent += rewardBudgetRandom;
+                trophyDelta += rewardBudgetRandom;
+            }
+        }
+
         if (rewardSpent != 0) {
             uint256 rewardBal = rewardPool;
             rewardPool = rewardSpent > rewardBal ? 0 : rewardBal - rewardSpent;
@@ -314,6 +341,14 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         uint256 base = (rewardBudget * sliceBps) / 10_000;
         if (base == 0) return 0;
         return (base * _rewardBonusScaleBps(lvl)) / 10_000;
+    }
+
+    function _pickStakedToken(uint256 seed, IPurgeGameTrophiesModule trophiesContract) private view returns (uint256 tokenId) {
+        uint256 drawA = trophiesContract.stakedTrophySampleWithId(seed);
+        uint256 drawB = trophiesContract.stakedTrophySampleWithId(uint256(keccak256(abi.encodePacked(seed, uint256(7777)))));
+        if (drawA == 0) return drawB;
+        if (drawB == 0) return drawA;
+        return drawA < drawB ? drawA : drawB;
     }
 
     function _rewardBonusScaleBps(uint24 lvl) private pure returns (uint16) {
