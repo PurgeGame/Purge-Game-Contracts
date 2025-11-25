@@ -417,7 +417,7 @@ contract PurgeGame is PurgeGameStorage {
                 uint32 purchaseCountRaw = nft.purchaseCount();
                 if (_phase == 5) {
                     if (!traitCountsSeedQueued) {
-                        uint32 multiplier_ = airdropMultiplier == 0 ? 1 : airdropMultiplier;
+                        uint32 multiplier_ = airdropMultiplier;
                         if (!nft.processPendingMints(cap, multiplier_)) {
                             break;
                         }
@@ -820,8 +820,6 @@ contract PurgeGame is PurgeGameStorage {
         }
 
         uint256 priceWei = price;
-        if (priceWei == 0) revert E();
-        uint256 priceCoinLocal = priceCoin;
 
         if (!mapPurchase) {
             uint256 qty = available / priceWei;
@@ -1344,15 +1342,14 @@ contract PurgeGame is PurgeGameStorage {
             return 1;
         }
         uint256 numerator = target + uint256(purchaseCount) - 1;
-        uint32 multiplier = uint32(numerator / purchaseCount);
-        return multiplier == 0 ? 1 : multiplier;
+        return uint32(numerator / purchaseCount);
     }
 
     function _purchaseTargetCountFromRaw(uint32 rawCount) private view returns (uint32) {
         if (rawCount == 0) {
             return 0;
         }
-        uint32 multiplier = airdropMultiplier == 0 ? 1 : airdropMultiplier;
+        uint32 multiplier = airdropMultiplier;
         uint256 scaled = uint256(rawCount) * uint256(multiplier);
         if (scaled > type(uint32).max) revert E();
         return uint32(scaled);

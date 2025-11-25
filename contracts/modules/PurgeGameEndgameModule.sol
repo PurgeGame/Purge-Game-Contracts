@@ -309,8 +309,7 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         }
 
         if (rewardSpent != 0) {
-            uint256 rewardBal = rewardPool;
-            rewardPool = rewardSpent > rewardBal ? 0 : rewardBal - rewardSpent;
+            rewardPool -= rewardSpent;
         }
         if (trophyDelta != 0) {
             trophyPool += trophyDelta;

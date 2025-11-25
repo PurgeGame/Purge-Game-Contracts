@@ -99,9 +99,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
             );
 
             // Only the reward pool-funded slice should reduce reward pool accounting.
-            uint256 deduct = paidEth > rewardPoolSlice ? rewardPoolSlice : paidEth;
-            uint256 rewardBal = rewardPool;
-            rewardPool = deduct > rewardBal ? 0 : rewardBal - deduct;
+            rewardPool -= paidEth;
         } else {
             uint32 winningTraitsPacked = _packWinningTraits(_getWinningTraits(entropyWord, dailyPurgeCount));
             bool lastDaily = (jackpotCounter + 1) >= JACKPOT_LEVEL_CAP;
@@ -189,8 +187,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         });
         paidWeiMap = _executeJackpot(jp, false, false);
 
-        uint256 remainingPool = effectiveWei > paidWeiMap ? (effectiveWei - paidWeiMap) : 0;
-        currentPrizePool += remainingPool;
+        currentPrizePool += (effectiveWei - paidWeiMap);
 
         _rollQuestForJackpot(coinContract, rngWord, true);
 
@@ -394,12 +391,10 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         }
 
         if (fromPrizePool) {
-            uint256 poolBal = currentPrizePool;
-            currentPrizePool = paidEth > poolBal ? 0 : poolBal - paidEth;
+            currentPrizePool -= paidEth;
         }
         if (fromRewardPool) {
-            uint256 rewardBal = rewardPool;
-            rewardPool = paidEth > rewardBal ? 0 : rewardBal - paidEth;
+            rewardPool -= paidEth;
         }
     }
 
