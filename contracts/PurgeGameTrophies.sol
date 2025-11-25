@@ -88,7 +88,7 @@ interface IPurgeGameTrophies {
 
     function isTrophyStaked(uint256 tokenId) external view returns (bool);
 
-    function handleExterminatorTraitPurge(address player, uint16 traitId) external returns (uint8 newPercent);
+    function handleExterminatorTraitPurge(address player, uint16 traitId) external view returns (uint8 newPercent);
 }
 
 interface IPurgeGameMinimal {
@@ -1244,7 +1244,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     function handleExterminatorTraitPurge(
         address player,
         uint16 traitId
-    ) external override onlyGame returns (uint8 newPercent) {
+    ) external view override onlyGame returns (uint8 newPercent) {
         if (traitId >= 256) return 0;
         if (!exterminatorStakeTraits_[player][traitId]) return 0;
         (uint8 total, uint24 earliest) = _exterminatorStakeStats(player);
