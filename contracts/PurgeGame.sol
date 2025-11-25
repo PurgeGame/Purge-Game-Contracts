@@ -88,7 +88,6 @@ contract PurgeGame is PurgeGameStorage {
     uint64 private constant MAP_LCG_MULT = 0x5851F42D4C957F2D; // LCG multiplier for map RNG slices
     uint8 private constant JACKPOT_LEVEL_CAP = 10;
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
-    uint8 private constant EARLY_PURGE_UNLOCK_PERCENT = 30; // 30% early-purge threshold gate
     uint16 private constant LUCK_PER_LINK_PERCENT = 22; // flip credit per LINK before multiplier (as % of priceCoin)
     uint32 private constant VRF_CALLBACK_GAS_LIMIT = 200_000;
     uint16 private constant VRF_REQUEST_CONFIRMATIONS = 10;
@@ -211,8 +210,30 @@ contract PurgeGame is PurgeGameStorage {
         return rngFulfilled;
     }
 
-    function coinMintUnlock(uint24 lvl) external view returns (bool) {
-        return lvl < 5 || earlyPurgePercent >= EARLY_PURGE_UNLOCK_PERCENT;
+    function purchaseInfo()
+        external
+        view
+        returns (
+            uint24 lvl,
+            uint8 gameState_,
+            uint8 phase_,
+            bool rngLocked_,
+            uint256 priceWei,
+            uint256 priceCoinUnit
+        )
+    {
+        lvl = level;
+        gameState_ = gameState;
+        phase_ = phase;
+        rngLocked_ = rngLockedFlag;
+        priceWei = price;
+        priceCoinUnit = priceCoin;
+
+        if (gameState_ == 3) {
+            unchecked {
+                ++lvl;
+            }
+        }
     }
 
     function ethMintLastLevel(address player) external view returns (uint24) {
@@ -815,7 +836,7 @@ contract PurgeGame is PurgeGameStorage {
         if (!mapPurchase) {
             uint256 qty = available / priceWei;
             if (qty == 0) revert E();
-            nft.purchaseWithClaimable(buyer, qty, priceWei, priceCoinLocal);
+            nft.purchaseWithClaimable(buyer, qty);
         } else {
             uint24 lvl = level;
             if (gameState == 3) {
@@ -824,17 +845,10 @@ contract PurgeGame is PurgeGameStorage {
                 }
             }
             uint256 qty = (available * 4) / priceWei;
-            uint32 minQty = _mapMinimumQuantity(lvl);
+            uint32 minQty = nft.mapMinimumQuantity(lvl);
             if (qty < minQty) revert E();
-            nft.mintAndPurgeWithClaimable(buyer, qty, priceWei, priceCoinLocal);
+            nft.mintAndPurgeWithClaimable(buyer, qty);
         }
-    }
-
-    function _mapMinimumQuantity(uint24 lvl) private pure returns (uint32) {
-        uint24 mod = lvl % 100;
-        if (mod >= 60) return 1;
-        if (mod >= 40) return 2;
-        return 4;
     }
 
     // --- Credits & jackpot helpers ------------------------------------------------------------------

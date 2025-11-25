@@ -44,8 +44,9 @@ interface IPurgeGameNFT {
     function tokensOwed(address player) external view returns (uint32);
     function processDormant(uint32 maxCount) external returns (bool finished, bool worked);
     function clearPlaceholderPadding(uint256 startTokenId, uint256 endTokenId) external;
-    function purchaseWithClaimable(address buyer, uint256 quantity, uint256 priceWei, uint256 priceCoinUnit) external;
-    function mintAndPurgeWithClaimable(address buyer, uint256 quantity, uint256 priceWei, uint256 priceCoinUnit) external;
+    function purchaseWithClaimable(address buyer, uint256 quantity) external;
+    function mintAndPurgeWithClaimable(address buyer, uint256 quantity) external;
+    function mapMinimumQuantity(uint24 lvl) external pure returns (uint32);
 }
 
 contract PurgeGameNFT {
@@ -221,13 +222,6 @@ contract PurgeGameNFT {
         _packedAddressData[owner] = packedData;
     }
 
-    function _mapMinimumQuantity(uint24 lvl) private pure returns (uint32) {
-        uint24 mod = lvl % 100;
-        if (mod >= 60) return 1;
-        if (mod >= 40) return 2;
-        return 4;
-    }
-
 
     constructor(address regularRenderer_, address trophyRenderer_, address coin_) {
         regularRenderer = ITokenRenderer(regularRenderer_);
@@ -327,10 +321,8 @@ contract PurgeGameNFT {
     function purchaseWithClaimable(
         address buyer,
         uint256 quantity,
-        uint256 priceWei,
-        uint256 priceCoinUnit
     ) external onlyGame {
-        _purchase(buyer, quantity, false, bytes32(0), true, priceWei, priceCoinUnit);
+        _purchase(buyer, quantity, false, bytes32(0), true);
     }
 
     function _purchase(
@@ -338,22 +330,22 @@ contract PurgeGameNFT {
         uint256 quantity,
         bool payInCoin,
         bytes32 affiliateCode,
-        bool useClaimable,
-        uint256 priceWeiHint,
-        uint256 priceCoinUnitHint
+        bool useClaimable
     ) private {
         if (quantity == 0 || quantity > type(uint32).max) revert InvalidQuantity();
 
-        uint24 currentLevel = game.level();
-        uint8 state = game.gameState();
-        bool queueNext = state == 3;
-        uint24 targetLevel = queueNext ? currentLevel + 1 : currentLevel;
+        (
+            uint24 targetLevel,
+            uint8 state,
+            uint8 phase,
+            bool rngLocked_,
+            uint256 priceWei,
+            uint256 priceCoinUnit
+        ) = game.purchaseInfo();
 
         if ((targetLevel % 20) == 16) revert NotTimeYet();
-        if (game.rngLocked()) revert RngNotReady();
+        if (rngLocked_) revert RngNotReady();
 
-        uint256 priceWei = priceWeiHint == 0 ? game.mintPrice() : priceWeiHint;
-        uint256 priceCoinUnit = priceCoinUnitHint == 0 ? game.coinPriceUnit() : priceCoinUnitHint;
         uint256 coinCost = quantity * priceCoinUnit;
         _enforceCenturyLuckbox(buyer, targetLevel, priceCoinUnit);
 
@@ -364,7 +356,6 @@ contract PurgeGameNFT {
             if (msg.value != 0) revert E();
             _coinReceive(buyer, uint32(quantity), quantity * priceCoinUnit, targetLevel, 0);
         } else {
-            uint8 phase = game.currentPhase();
             bool creditNext = (state == 3 || state == 1);
             bonusCoinReward = (quantity / 10) * priceCoinUnit;
             uint256 expectedWei = priceWei * quantity;
@@ -412,11 +403,16 @@ contract PurgeGameNFT {
 
     function mintAndPurgeWithClaimable(
         address buyer,
-        uint256 quantity,
-        uint256 priceWei,
-        uint256 priceCoinUnit
+        uint256 quantity
     ) external onlyGame {
-        _mintAndPurge(buyer, quantity, false, bytes32(0), true, priceWei, priceCoinUnit);
+        _mintAndPurge(buyer, quantity, false, bytes32(0), true);
+    }
+
+    function mapMinimumQuantity(uint24 lvl) public pure returns (uint32) {
+        uint24 mod = lvl % 100;
+        if (mod >= 60) return 1;
+        if (mod >= 40) return 2;
+        return 4;
     }
 
     function _mintAndPurge(
@@ -424,26 +420,23 @@ contract PurgeGameNFT {
         uint256 quantity,
         bool payInCoin,
         bytes32 affiliateCode,
-        bool useClaimable,
-        uint256 priceWeiHint,
-        uint256 priceCoinUnitHint
+        bool useClaimable
     ) private {
-        uint256 priceUnit = priceCoinUnitHint == 0 ? game.coinPriceUnit() : priceCoinUnitHint;
-        uint8 phase = game.currentPhase();
-        uint8 state = game.gameState();
-        uint24 lvl = game.level();
-        if (state == 3) {
-            unchecked {
-                ++lvl;
-            }
-        }
-        uint32 minQuantity = _mapMinimumQuantity(lvl);
+        (
+            uint24 lvl,
+            uint8 state,
+            uint8 phase,
+            bool rngLocked_,
+            uint256 priceWei,
+            uint256 priceUnit
+        ) = game.purchaseInfo();
+        if (state == 3 && payInCoin) revert NotTimeYet();
+        uint32 minQuantity = mapMinimumQuantity(lvl);
         if (quantity < minQuantity || quantity > type(uint32).max) revert InvalidQuantity();
-        if (game.rngLocked()) revert RngNotReady();
+        if (rngLocked_) revert RngNotReady();
 
         _enforceCenturyLuckbox(buyer, lvl, priceUnit);
 
-        uint256 priceWei = priceWeiHint == 0 ? game.mintPrice() : priceWeiHint;
         uint256 coinCost = quantity * (priceUnit / 4);
         uint256 scaledQty = quantity * 25;
         uint256 mapRebate = (quantity / 4) * (priceUnit / 10);
@@ -455,7 +448,6 @@ contract PurgeGameNFT {
 
         if (payInCoin) {
             if (msg.value != 0) revert E();
-            if (!game.coinMintUnlock(lvl)) revert NotTimeYet();
             _coinReceive(buyer, uint32(quantity), coinCost, lvl, 0);
             bonus = mapRebate;
         } else {

@@ -348,8 +348,8 @@ async function executeStrategyMintCoin({
   const playerStats = stats.get(player.address);
   if (playerStats.coinsToSpend <= 0n) return;
 
-  const unlocked = await purgeGame.coinMintUnlock(targetLevel);
-  if (!unlocked) return;
+  const state = await purgeGame.gameState();
+  if (Number(state) === 3) return;
 
   const info = await purgeGame.gameInfo();
   const priceCoin = await purgeGame.coinPriceUnit();
@@ -554,9 +554,9 @@ async function completeDailyQuestsMinimal({
                      const cost = (priceCoin / 4n) * BigInt(effectiveQty);
                      const bal = await purgecoin.balanceOf(player.address);
 
-                     const unlocked = await purgeGame.coinMintUnlock(currentLevel);
+                     const state = await purgeGame.gameState();
                      
-                     if (unlocked && bal >= cost) {
+                     if (Number(state) !== 3 && bal >= cost) {
                          try {
                              await (await purgeNFT.connect(player).mintAndPurge(effectiveQty, true, ethers.ZeroHash, { value: 0 })).wait();
                              if (stats) {

@@ -57,8 +57,31 @@ contract QuestGameMock is IPurgeGame {
         return 0;
     }
 
-    function coinMintUnlock(uint24 /*lvl*/) external pure override returns (bool) {
-        return false;
+    function purchaseInfo()
+        external
+        view
+        override
+        returns (
+            uint24 lvl,
+            uint8 gameState_,
+            uint8 phase_,
+            bool rngLocked_,
+            uint256 priceWei,
+            uint256 priceCoinUnit
+        )
+    {
+        lvl = currentLevel;
+        gameState_ = state;
+        phase_ = phase;
+        rngLocked_ = false;
+        priceWei = 0;
+        priceCoinUnit = 0;
+
+        if (gameState_ == 3) {
+            unchecked {
+                ++lvl;
+            }
+        }
     }
 
     function ethMintLevelCount(address /*player*/) external pure override returns (uint24) {

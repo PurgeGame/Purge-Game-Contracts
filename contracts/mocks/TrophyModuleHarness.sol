@@ -73,6 +73,10 @@ contract TrophyGameHarness is IPurgeGameMinimal {
         IPurgeGameTrophies(trophies).prepareNextLevel(nextLevel);
     }
 
+    function probeTraitPurge(address trophies, address player, uint16 traitId) external view returns (uint8) {
+        return IPurgeGameTrophies(trophies).handleExterminatorTraitPurge(player, traitId);
+    }
+
     receive() external payable {
         totalReceived += msg.value;
     }

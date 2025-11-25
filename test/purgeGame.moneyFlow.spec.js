@@ -110,7 +110,7 @@ const MINIMUM_PRIZE_POOL_WEI = ethers.parseEther("125");
 const INITIAL_REWARD_POOL_WEI = ethers.parseEther("40");
 const MAP_PURCHASE_TARGET_WEI = ethers.parseEther("150");
 const JACKPOT_LEVEL_CAP = 10;
-const LEVEL_COUNT = 10;
+const LEVEL_COUNT = 12;
 const FUTURE_MAP_OPTIONS = { baseQuantity: 100, quantityVariance: 20, minBuyers: 8, maxBuyers: 12 };
 const EARLY_PURGE_UNLOCK_THRESHOLD = 30;
 const EARLY_PURGE_BONUS_THRESHOLD = 50;
@@ -1269,7 +1269,7 @@ async function ensureQuestSlotComplete(context, player, slot) {
   if (completed[slot]) {
     return;
   }
-  const questData = await resolveQuestSlot(context, slot);
+  const questData = await resolveQuestSlot(context, slot, player);
   if (!questData) {
     return;
   }
@@ -1277,27 +1277,17 @@ async function ensureQuestSlotComplete(context, player, slot) {
   await performQuestAction(context, player, quest, slot, questDetail);
 }
 
-async function resolveQuestSlot(context, slot) {
-  const { purgecoin, questModule, questSnapshots } = context;
-  let quests;
-  let questDetails;
-  if (questSnapshots && questSnapshots.quests && questSnapshots.questDetails) {
-    ({ quests, questDetails } = questSnapshots);
-  } else {
-    ({ quests, questDetails } = await snapshotQuestData(purgecoin, questModule));
-  }
-  if (!quests || quests.length <= slot) return null;
-  const quest = quests[slot];
+async function resolveQuestSlot(context, slot, player) {
+  const { questModule } = context;
+  const view = await questModule.getPlayerQuestView(player.address);
+  if (!view || !view.quests || view.quests.length <= slot) return null;
+  const quest = view.quests[slot];
   if (!quest || quest.day === 0n) return null;
-  const detail = questDetails?.[slot];
-  if (!detail || detail.day === 0n) {
-    return { quest, questDetail: undefined };
-  }
-  return { quest, questDetail: detail };
+  return { quest, questDetail: undefined };
 }
 
-async function refreshQuestIfChanged(context, quest, slot) {
-  const next = await resolveQuestSlot(context, slot);
+async function refreshQuestIfChanged(context, quest, slot, player) {
+  const next = await resolveQuestSlot(context, slot, player);
   if (!next || !next.quest || next.quest.day === 0n) {
     return { questChanged: true, quest: undefined, questDetail: undefined };
   }
@@ -1333,14 +1323,13 @@ async function performQuestAction(context, player, quest, slot, questDetail) {
     if (!activeQuest || activeQuest.day === 0n) {
       return;
     }
-    const questEntropy = activeQuestDetail ? bigNumberToBigInt(activeQuestDetail.entropy) : 0n;
     const questTier = questTiers.get(player.address) ?? 0;
     const questType = Number(activeQuest.questType);
-    const questStakeMask = valueToNumber(activeQuestDetail?.stakeMask ?? activeQuest.stakeMask ?? 0);
-    const questStakeRisk = valueToNumber(activeQuestDetail?.stakeRisk ?? activeQuest.stakeRisk ?? 0);
+    const questStakeMask = valueToNumber(activeQuest.stakeMask ?? 0);
+    const questStakeRisk = valueToNumber(activeQuest.stakeRisk ?? 0);
     switch (questType) {
       case QUEST_TYPES.MINT_ANY: {
-        const requiredQuantity = questMintAnyTarget(questTier, questEntropy);
+        const requiredQuantity = Number(activeQuest.requirements.mints);
         const quantity = Math.max(requiredQuantity, QUEST_COMPLETION_PARAMS.mintQuantity);
         const mintResult = await performQuestCoinMint({
           purgeNFT,
@@ -1372,7 +1361,7 @@ async function performQuestAction(context, player, quest, slot, questDetail) {
         return;
       }
       case QUEST_TYPES.MINT_ETH: {
-        const requiredEthQuantity = questMintEthTarget(questTier, questEntropy);
+        const requiredEthQuantity = Number(activeQuest.requirements.mints);
         const ethQuantity = Math.max(requiredEthQuantity, QUEST_COMPLETION_PARAMS.mintQuantity);
         const ethResult = await performQuestEthMint({
           purgecoin,
@@ -1403,8 +1392,8 @@ async function performQuestAction(context, player, quest, slot, questDetail) {
         return;
       }
       case QUEST_TYPES.FLIP: {
-        const requiredTokens = questFlipTargetTokens(questTier, questEntropy);
-        const requiredAmount = BigInt(requiredTokens) * MILLION;
+        const requiredTokens = Number(activeQuest.requirements.tokenAmount / MILLION);
+        const requiredAmount = activeQuest.requirements.tokenAmount;
         const amount =
           requiredAmount > QUEST_COMPLETION_PARAMS.flipAmount ? requiredAmount : QUEST_COMPLETION_PARAMS.flipAmount;
         const flipResult = await performQuestFlip(context, player, activeQuest, slot, amount, {
@@ -1421,8 +1410,8 @@ async function performQuestAction(context, player, quest, slot, questDetail) {
         if (SKIP_STAKE_QUESTS_FOR_SIM) {
           return;
         }
-        const requiredPrincipal = BigInt(questStakePrincipalTarget(questTier, questEntropy)) * MILLION;
-        const requiredDistance = questStakeDistanceTarget(questTier, questEntropy);
+        const requiredPrincipal = activeQuest.requirements.tokenAmount;
+        const requiredDistance = Number(activeQuest.requirements.stakeDistance);
         const distanceOverride = Number(requiredDistance);
         let riskOverride = 1;
         if ((questStakeMask & QUEST_STAKE_REQUIRE_RISK) !== 0) {
@@ -1441,8 +1430,8 @@ async function performQuestAction(context, player, quest, slot, questDetail) {
         return;
       }
       case QUEST_TYPES.AFFILIATE: {
-        const requiredTokens = questAffiliateTargetTokens(questTier, questEntropy);
-        const requiredAmount = BigInt(requiredTokens) * MILLION;
+        const requiredTokens = Number(activeQuest.requirements.tokenAmount / MILLION);
+        const requiredAmount = activeQuest.requirements.tokenAmount;
         const priceUnit = bigNumberToBigInt(await purgeGame.coinPriceUnit());
         let affiliateQuantity = estimateAffiliateMintQuantity(requiredAmount, priceUnit);
         affiliateQuantity = Math.max(affiliateQuantity, QUEST_COMPLETION_PARAMS.mintQuantity);
@@ -1455,7 +1444,7 @@ async function performQuestAction(context, player, quest, slot, questDetail) {
         return;
       }
       case QUEST_TYPES.PURGE: {
-        const requiredQuantity = questMintEthTarget(questTier, questEntropy);
+        const requiredQuantity = Number(activeQuest.requirements.mints);
         const quantity = Math.max(requiredQuantity, QUEST_COMPLETION_PARAMS.purgeQuantity);
         const purgeResult = await performQuestPurge(context, player, activeQuest, slot, quantity);
         if (purgeResult?.questChanged) {
@@ -1466,8 +1455,8 @@ async function performQuestAction(context, player, quest, slot, questDetail) {
         return;
       }
       case QUEST_TYPES.DECIMATOR: {
-        const requiredTokens = questDecimatorTargetTokens(questTier, questEntropy);
-        const requiredAmount = BigInt(requiredTokens) * MILLION;
+        const requiredTokens = Number(activeQuest.requirements.tokenAmount / MILLION);
+        const requiredAmount = activeQuest.requirements.tokenAmount;
         const amount =
           requiredAmount > QUEST_COMPLETION_PARAMS.decimatorAmount
             ? requiredAmount
@@ -1567,7 +1556,7 @@ async function snapshotQuestTiers(questModule, players) {
     return tiers;
   }
   for (const player of players) {
-    const [streak] = await questModule.playerQuestState(player.address);
+    const [streak] = await questModule.playerQuestStates(player.address);
     const numeric = valueToNumber(streak);
     tiers.set(player.address, computeQuestTier(numeric));
   }
@@ -1600,8 +1589,8 @@ function questTypeLabel(value) {
 }
 
 async function snapshotQuestData(purgecoin, questModule) {
-  const [quests, questDetails] = await Promise.all([purgecoin.getActiveQuests(), questModule.getQuestDetails()]);
-  return { quests, questDetails };
+  const quests = await purgecoin.getActiveQuests();
+  return { quests, questDetails: [] };
 }
 
 function questMintAnyTarget(tier, entropy) {
@@ -1721,12 +1710,7 @@ async function performQuestCoinMint({
 }) {
   const info = await purgeGame.gameInfo();
   const stateValue = typeof info.gameState_ === "bigint" ? Number(info.gameState_) : Number(info.gameState_);
-  let mintLevelValue = Number(await purgeGame.level());
   if (stateValue === 3) {
-    mintLevelValue += 1;
-  }
-  const coinUnlocked = await purgeGame.coinMintUnlock(mintLevelValue);
-  if (!coinUnlocked) {
     await performQuestEthMint({
       purgecoin,
       player,
@@ -1777,7 +1761,7 @@ async function performQuestCoinMint({
   const priceUnit = await purgeGame.coinPriceUnit();
   const baseCost = BigInt(quantity) * (priceUnit / 4n);
   for (let attempt = 0; attempt < QUEST_MINT_ATTEMPT_LIMIT; attempt += 1) {
-    const questUpdate = await refreshQuestIfChanged({ purgecoin, questModule }, quest, slot);
+    const questUpdate = await refreshQuestIfChanged({ purgecoin, questModule }, quest, slot, player);
     if (questUpdate) {
       return questUpdate;
     }
@@ -1826,7 +1810,7 @@ async function performQuestEthMint({
   const targetQuantity = typeof questMeta.expectedQuantity === "number" ? questMeta.expectedQuantity : quantity;
   const dynamicLimit = Math.max(QUEST_MINT_ATTEMPT_LIMIT, Math.ceil(targetQuantity / Math.max(1, quantity)) + 2);
   for (let attempt = 0; attempt < dynamicLimit; attempt += 1) {
-    const questUpdate = await refreshQuestIfChanged({ purgecoin, questModule }, quest, slot);
+    const questUpdate = await refreshQuestIfChanged({ purgecoin, questModule }, quest, slot, player);
     if (questUpdate) {
       return questUpdate;
     }
@@ -1889,7 +1873,7 @@ async function performQuestFlip(context, player, quest, slot, overrideAmount, qu
     }
   }
   for (let attempt = 0; attempt < dynamicLimit; attempt += 1) {
-    const questUpdate = await refreshQuestIfChanged(context, quest, slot);
+    const questUpdate = await refreshQuestIfChanged(context, quest, slot, player);
     if (questUpdate) {
       return questUpdate;
     }
@@ -1953,7 +1937,7 @@ async function performQuestStake(context, player, quest, slot, overrides = {}) {
   if (baseRisk > contractMaxRisk) baseRisk = contractMaxRisk;
   let distanceBonus = 0;
   for (let attempt = 0; attempt < QUEST_MINT_ATTEMPT_LIMIT; attempt += 1) {
-    const questUpdate = await refreshQuestIfChanged(context, quest, slot);
+    const questUpdate = await refreshQuestIfChanged(context, quest, slot, player);
     if (questUpdate) {
       return questUpdate;
     }
@@ -2044,7 +2028,7 @@ async function performQuestAffiliate(context, player, quest, slot, quantityOverr
   let helperCursor = 0;
   const maxAttempts = helpers.length * QUEST_MINT_ATTEMPT_LIMIT;
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    const questUpdate = await refreshQuestIfChanged(context, quest, slot);
+    const questUpdate = await refreshQuestIfChanged(context, quest, slot, player);
     if (questUpdate) {
       return questUpdate;
     }
@@ -2089,7 +2073,7 @@ async function performQuestPurge(context, player, quest, slot, quantityOverride)
   const { purgecoin, purgeNFT, purgeGame, referralCodes, contributions, vrf, vrfConsumer } = context;
   const quantity = quantityOverride ?? QUEST_COMPLETION_PARAMS.purgeQuantity;
   for (let attempt = 0; attempt < QUEST_MINT_ATTEMPT_LIMIT; attempt += 1) {
-    const questUpdate = await refreshQuestIfChanged(context, quest, slot);
+    const questUpdate = await refreshQuestIfChanged(context, quest, slot, player);
     if (questUpdate) {
       return questUpdate;
     }
@@ -2148,7 +2132,7 @@ async function performQuestDecimator(context, player, quest, slot, overrideAmoun
   const { purgecoin, coinBank } = context;
   const amount = overrideAmount ?? QUEST_COMPLETION_PARAMS.decimatorAmount;
   for (let attempt = 0; attempt < QUEST_MINT_ATTEMPT_LIMIT; attempt += 1) {
-    const questUpdate = await refreshQuestIfChanged(context, quest, slot);
+    const questUpdate = await refreshQuestIfChanged(context, quest, slot, player);
     if (questUpdate) {
       return questUpdate;
     }
@@ -2173,7 +2157,7 @@ async function performQuestDecimator(context, player, quest, slot, overrideAmoun
 describe("PurgeGame money flow simulation", function () {
   this.timeout(0);
 
-  it("runs levels 1-5 money flow end to end", async function () {
+  it("runs levels 1-12 money flow end to end", async function () {
     const [primaryFunder, secondaryFunder] = await ethers.getSigners();
     const firstBatch = await createWallets(50, primaryFunder, ethers.parseEther("50"));
     const secondBatch = await createWallets(50, secondaryFunder, ethers.parseEther("50"));
@@ -2339,9 +2323,10 @@ describe("PurgeGame money flow simulation", function () {
       let info = await purgeGame.gameInfo();
       const desiredDays = desiredPurchaseDayCount(levelValue);
       let bucketIndex = 0;
-      while (info.prizePoolCurrent < targetWei && bucketIndex < desiredDays) {
+      while (info.prizePoolCurrent + info.nextPrizePool_ < targetWei && bucketIndex < desiredDays) {
         const bucket = await ensureMintBucket(bucketIndex);
-        const remaining = targetWei > info.prizePoolCurrent ? targetWei - info.prizePoolCurrent : 0n;
+        const totalPool = info.prizePoolCurrent + info.nextPrizePool_;
+        const remaining = targetWei > totalPool ? targetWei - totalPool : 0n;
         const bucketsRemaining = desiredDays - bucketIndex;
         let quantityPerPlayer = BUCKET_PURCHASE_MIN_MINT_QUANTITY;
         if (remaining > 0n) {
@@ -2377,9 +2362,10 @@ describe("PurgeGame money flow simulation", function () {
         bucketIndex += 1;
         info = await purgeGame.gameInfo();
       }
-      while (info.prizePoolCurrent < targetWei) {
+      while (info.prizePoolCurrent + info.nextPrizePool_ < targetWei) {
         const bucket = await ensureMintBucket(bucketIndex);
-        const remaining = targetWei > info.prizePoolCurrent ? targetWei - info.prizePoolCurrent : 0n;
+        const totalPool = info.prizePoolCurrent + info.nextPrizePool_;
+        const remaining = targetWei > totalPool ? targetWei - totalPool : 0n;
         const price = info.price_;
         const perPlayerUnitCost = (price * 25n) / 100n;
         const bucketUnitCost = perPlayerUnitCost * BigInt(bucket.players.length);
@@ -2468,7 +2454,7 @@ describe("PurgeGame money flow simulation", function () {
 
       let preInfo = await purgeGame.gameInfo();
       const desiredPrize = targetPerLevel[levelIndex];
-      if (preInfo.prizePoolCurrent < desiredPrize) {
+      if (preInfo.prizePoolCurrent + preInfo.nextPrizePool_ < desiredPrize) {
         const bucketUsage = await runPurchaseBuckets(levelValue, desiredPrize);
         if (bucketUsage.length !== 0) {
           console.log(`Level ${levelValue} mint buckets`);
@@ -2483,9 +2469,9 @@ describe("PurgeGame money flow simulation", function () {
         }
         preInfo = await purgeGame.gameInfo();
       }
-      expect(preInfo.prizePoolCurrent).to.be.gte(desiredPrize);
+      expect(preInfo.prizePoolCurrent + preInfo.nextPrizePool_).to.be.gte(desiredPrize);
       const levelMintPriceWei = preInfo.price_;
-      const totalPoolBefore = preInfo.rewardPool_ + preInfo.prizePoolCurrent;
+      const totalPoolBefore = preInfo.rewardPool_ + preInfo.prizePoolCurrent + preInfo.nextPrizePool_;
       const { receipts: mapAdvanceReceipts, finalInfo: mapFinalInfo } = await advanceThroughPurchasePhase(
         purgeGame,
         advanceOperator,
@@ -2498,13 +2484,13 @@ describe("PurgeGame money flow simulation", function () {
       const { ordered: orderedCredits, totals: creditTotals } = collectCredits(purgeGame, mapAdvanceReceipts);
       const creditedTotal = orderedCredits.reduce((sum, entry) => sum + entry.amount, 0n);
       const totalAfter = mapFinalInfo.rewardPool_ + mapFinalInfo.prizePoolCurrent;
-      const totalBeforeAfterFlow = preInfo.rewardPool_ + preInfo.prizePoolCurrent;
+      const totalBeforeAfterFlow = preInfo.rewardPool_ + preInfo.prizePoolCurrent + preInfo.nextPrizePool_;
       const recycledToPool = totalAfter > totalBeforeAfterFlow ? totalAfter - totalBeforeAfterFlow : 0n;
 
       console.log(`Level ${levelValue} map flow`);
       reportEthFlow([
         { bucket: "Reward pool before jackpots", expected: preInfo.rewardPool_, actual: preInfo.rewardPool_ },
-        { bucket: "Prize pool before jackpots", expected: preInfo.prizePoolCurrent, actual: preInfo.prizePoolCurrent },
+        { bucket: "Prize pool before jackpots", expected: preInfo.prizePoolCurrent + preInfo.nextPrizePool_, actual: preInfo.prizePoolCurrent + preInfo.nextPrizePool_ },
         { bucket: "Reward pool saved for next level", expected: mapFinalInfo.rewardPool_, actual: mapFinalInfo.rewardPool_ },
         { bucket: "Prize pool after jackpots", expected: mapFinalInfo.prizePoolCurrent, actual: mapFinalInfo.prizePoolCurrent },
         { bucket: "Credited to participants", expected: creditedTotal, actual: creditedTotal },
