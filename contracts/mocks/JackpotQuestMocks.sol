@@ -110,8 +110,6 @@ contract JackpotCoinModuleMock is IPurgeCoinModule {
 }
 
 contract JackpotTrophiesModuleMock is IPurgeGameTrophiesModule {
-    function processEndLevel(IPurgeGameTrophies.EndLevelRequest calldata) external override {}
-
     function awardTrophy(
         address,
         uint24,
@@ -138,5 +136,5 @@ contract JackpotTrophiesModuleMock is IPurgeGameTrophiesModule {
 
     function rewardRandomStaked(uint256, uint256, uint24) external pure override returns (bool) { return false; }
     function rewardTrophy(uint24, uint8, uint256) external pure override returns (bool) { return false; }
-    function rewardEndgame(uint24, uint256, uint256) external pure override returns (uint256) { return 0; }
+    function processEndLevel(IPurgeGameTrophies.EndLevelRequest calldata, uint256) external pure override returns (uint256) { return 0; }
 }

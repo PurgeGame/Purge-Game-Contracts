@@ -47,17 +47,14 @@ interface IPurgeCoinModule {
 }
 
 interface IPurgeGameTrophiesModule {
-    function processEndLevel(IPurgeGameTrophies.EndLevelRequest calldata req) external;
-
     function awardTrophy(address to, uint24 level, uint8 kind, uint256 data, uint256 deferredWei) external;
 
     function trophyToken(uint24 level, uint8 kind) external view returns (uint256 tokenId);
     function rewardTrophyByToken(uint256 tokenId, uint256 amountWei, uint24 level) external;
     function rewardTrophy(uint24 level, uint8 kind, uint256 amountWei) external returns (bool paid);
     function rewardRandomStaked(uint256 rngSeed, uint256 amountWei, uint24 level) external returns (bool paid);
-    function rewardEndgame(
-        uint24 level,
-        uint256 rngSeed,
+    function processEndLevel(
+        IPurgeGameTrophies.EndLevelRequest calldata req,
         uint256 scaledPool
     ) external returns (uint256 paidTotal);
     function trophyOwner(uint256 tokenId) external view returns (address owner);

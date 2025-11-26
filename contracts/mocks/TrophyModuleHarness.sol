@@ -66,7 +66,7 @@ contract TrophyGameHarness is IPurgeGameMinimal {
         if (msg.value != 0) {
             totalReceived += msg.value;
         }
-        IPurgeGameTrophies(trophies).processEndLevel(req);
+        IPurgeGameTrophies(trophies).processEndLevel(req, 0);
     }
 
     function prepareNextLevel(address trophies, uint24 nextLevel) external {

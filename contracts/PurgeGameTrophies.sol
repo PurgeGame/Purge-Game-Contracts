@@ -45,7 +45,6 @@ interface IPurgeGameTrophies {
     function burnBafPlaceholder(uint24 level) external;
 
     function burnDecPlaceholder(uint24 level) external;
-    function processEndLevel(EndLevelRequest calldata req) external;
 
     function claimTrophy(uint256 tokenId) external;
 
@@ -82,7 +81,7 @@ interface IPurgeGameTrophies {
 
     function rewardRandomStaked(uint256 rngSeed, uint256 amountWei, uint24 level) external returns (bool paid);
 
-    function rewardEndgame(uint24 level, uint256 rngSeed, uint256 scaledPool) external returns (uint256 paidTotal);
+    function processEndLevel(EndLevelRequest calldata req, uint256 scaledPool) external returns (uint256 paidTotal);
 
     function isTrophy(uint256 tokenId) external view returns (bool);
 
@@ -872,7 +871,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         _eraseTrophy(tokenId, PURGE_TROPHY_KIND_DECIMATOR, true);
     }
 
-    function processEndLevel(EndLevelRequest calldata req) external override onlyGame {
+    function _processEndLevel(EndLevelRequest calldata req) private {
         (uint256 previousBase, uint256 currentBase) = nft.getBasePointers();
         uint24 currentLevel = game.level();
 
@@ -1393,12 +1392,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         return true;
     }
 
-    function rewardEndgame(uint24 level, uint256 rngSeed, uint256 scaledPool)
-        external
-        override
-        onlyGameOrCoin
-        returns (uint256 paidTotal)
-    {
+    function _rewardEndgame(uint24 level, uint256 rngSeed, uint256 scaledPool) private returns (uint256 paidTotal) {
         uint256 halfPercent = scaledPool / 200; // 0.5% of the scaled pool
         uint256 affiliateAmount = halfPercent << 1; // 1%
         uint256 stakeAmount = halfPercent;
@@ -1413,6 +1407,16 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         if (rewardRandomStaked(rngSeed, randomAmount, level)) {
             paidTotal += randomAmount;
         }
+    }
+
+    function processEndLevel(EndLevelRequest calldata req, uint256 scaledPool)
+        external
+        override
+        onlyGame
+        returns (uint256 paidTotal)
+    {
+        _processEndLevel(req);
+        paidTotal = _rewardEndgame(req.level, req.rngWord, scaledPool);
     }
 
     function isTrophyStaked(uint256 tokenId) external view override returns (bool) {

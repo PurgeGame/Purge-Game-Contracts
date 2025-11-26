@@ -40,29 +40,20 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         IPurgeGameTrophiesModule trophiesContract
     ) external {
         PendingEndLevel storage pend = pendingEndLevel;
-
         bool traitWin = pend.exterminator != address(0);
-
         uint8 _phase = phase;
         uint24 prevLevel = lvl - 1;
-        uint8 prevMod10 = uint8(prevLevel % 10);
-        uint8 prevMod100 = uint8(prevLevel % 100);
-        bool bafLevel = prevLevel != 0 && (prevLevel % 20) == 0 && (prevLevel % 100) != 0;
-
         if (_phase > 3) {
-            if (traitWin) {
-                if (currentPrizePool != 0) {
-                    _payoutParticipants(cap, prevLevel);
-                    return;
-                }
+            if (traitWin && currentPrizePool != 0) {
+                _payoutParticipants(cap, prevLevel);
+                return;
             }
-
-            if (bafLevel) {
+            if (prevLevel != 0 && (prevLevel % 20) == 0 && (prevLevel % 100) != 0) {
                 uint256 bafPoolWei = (rewardPool * 24) / 100;
                 (bool bafFinished, ) = _progressExternal(0, bafPoolWei, cap, prevLevel, rngWord, coinContract, true);
                 if (!bafFinished) return;
             }
-            bool decWindow = prevLevel >= 25 && prevMod10 == 5 && prevMod100 != 95;
+            bool decWindow = prevLevel % 10 == 5 && prevLevel >= 25 && prevLevel % 100 != 95;
             bool bigDecWindow = decimatorHundredReady && prevLevel == 100;
             if (bigDecWindow) {
                 uint256 bigPool = decimatorHundredPool;
@@ -99,19 +90,17 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
             return;
         }
 
-        uint24 prevLevelPending = pend.level;
-
         IPurgeGameTrophies.EndLevelRequest memory req = IPurgeGameTrophies.EndLevelRequest({
             exterminator: pend.exterminator,
             traitId: lastExterminatedTrait,
-            level: prevLevelPending,
+            level: prevLevel,
             rngWord: rngWord,
             deferredWei: 0
         });
 
         if (traitWin) {
             uint256 poolValue = pend.sidePool;
-            uint256 exterminatorShare = (prevLevelPending % 10 == 4 && prevLevelPending != 4)
+            uint256 exterminatorShare = (prevLevel % 10 == 4 && prevLevel != 4)
                 ? (poolValue * 40) / 100
                 : (poolValue * 20) / 100;
 
@@ -124,11 +113,11 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
             // Reassign the trophy slice from the prize pool to players: 10% split across three tickets
             // using their ETH mint streaks as weights (even split if all streaks are zero).
             uint256 ticketBonus = (poolValue * 10) / 100;
-            address[] storage arr = traitPurgeTicket[prevLevelPending][uint8(lastExterminatedTrait)];
+            address[] storage arr = traitPurgeTicket[prevLevel][uint8(lastExterminatedTrait)];
             if (arr.length != 0 && ticketBonus != 0) {
                 address[3] memory winners;
                 uint256[3] memory streaks;
-                uint256 seed = rngWord ^ (uint256(prevLevelPending) << 128);
+                uint256 seed = rngWord ^ (uint256(prevLevel) << 128);
                 for (uint8 i; i < 3; ) {
                     seed = uint256(keccak256(abi.encodePacked(seed, i)));
                     uint256 idx = seed % arr.length;
@@ -166,9 +155,15 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
             }
         }
 
-        trophiesContract.processEndLevel(req);
+        uint256 scale = _rewardBonusScaleBps(prevLevel);
+        uint256 scaledPool = (rewardPool * scale) / 10_000;
 
-        _payTrophyRewards(prevLevelPending, rngWord, trophiesContract);
+        uint256 rewardsTotal = trophiesContract.processEndLevel(req, scaledPool);
+
+        if (rewardsTotal != 0) {
+            rewardPool -= rewardsTotal;
+            trophyPool += rewardsTotal;
+        }
 
         delete pendingEndLevel;
 
@@ -255,22 +250,10 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         return (isFinished, returnedWei);
     }
 
-    function _payTrophyRewards(uint24 lvl, uint256 rngWord, IPurgeGameTrophiesModule trophiesContract) private {
-        uint256 scale = _rewardBonusScaleBps(lvl);
-        uint256 scaledPool = (rewardPool * scale) / 10_000;
-
-        uint256 rewardsTotal = trophiesContract.rewardEndgame(lvl, rngWord, scaledPool);
-
-        if (rewardsTotal != 0) {
-            rewardPool -= rewardsTotal;
-            trophyPool += rewardsTotal;
-        }
-    }
-
     function _rewardBonusScaleBps(uint24 lvl) private pure returns (uint16) {
         // Linearly scale reward pool-funded slices from 100% at the start of a 100-level band
         // down to 50% on the last level of the band, then reset on the next band.
-        uint256 cycle = (lvl == 0) ? 0 : ((uint256(lvl) - 1) % 100); // 0..99
+        uint256 cycle = ((uint256(lvl) - 1) % 100); // 0..99
         uint256 discount = (cycle * 5000) / 99; // up to 50% at cycle==99
         uint256 scale = 10_000 - discount;
         if (scale < 5000) scale = 5000;
