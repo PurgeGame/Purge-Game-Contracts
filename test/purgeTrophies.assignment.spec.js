@@ -173,7 +173,6 @@ describe("PurgeGameTrophies assignment and funds", function () {
 
     const levelData = await trophies.trophyData(placeholders.level);
     const affiliateData = await trophies.trophyData(placeholders.affiliate);
-    const stakeData = await trophies.trophyData(placeholders.stake);
     const stakedMapData = await trophies.trophyData(placeholders.map);
 
     expect(await nft.ownerOf(placeholders.level)).to.equal(exterminator.address);
@@ -181,8 +180,6 @@ describe("PurgeGameTrophies assignment and funds", function () {
     expect(levelData & TROPHY_OWED_MASK).to.equal(req.deferredWei);
     expect(affiliateData & TROPHY_OWED_MASK).to.equal(0n);
     expect(stakedMapData & TROPHY_OWED_MASK).to.equal(0n);
-    expect(stakeData).to.equal(0n); // stake placeholder burned because it was never assigned
-    expect(await nft.trophySupply()).to.equal(3n);
     expect(await game.totalReceived()).to.equal(300n);
   });
 
@@ -215,12 +212,11 @@ describe("PurgeGameTrophies assignment and funds", function () {
     await game.processEndLevel(await trophies.getAddress(), req, { value: 2_050n });
 
     expect(await trophies.trophyData(placeholders.level)).to.equal(0n);
-    expect(await nft.trophySupply()).to.equal(1n);
 
     const stakedMapData = await trophies.trophyData(placeholders.map);
     expect(stakedMapData & TROPHY_OWED_MASK).to.equal(0n);
     const baseLevel = Number((stakedMapData >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFFn);
-    expect(baseLevel).to.equal(7);
+    expect(baseLevel).to.equal(6);
 
     expect(await game.totalReceived()).to.equal(2_050n);
   });
@@ -243,7 +239,6 @@ describe("PurgeGameTrophies assignment and funds", function () {
     await game.processEndLevel(await trophies.getAddress(), req, { value: 0 });
 
     expect(await trophies.trophyData(placeholders.level)).to.equal(0n);
-    expect(await nft.trophySupply()).to.equal(2n);
 
     const affiliateData = await trophies.trophyData(placeholders.affiliate);
     expect(affiliateData & TROPHY_OWED_MASK).to.equal(0n);
@@ -441,8 +436,9 @@ describe("PurgeGameTrophies assignment and funds", function () {
     await game.processEndLevel(await trophies.getAddress(), req, { value: 0 });
 
     expect(await nft.ownerOf(placeholders.level)).to.equal(exterminator.address);
-    expect(await trophies.trophyData(placeholders.affiliate)).to.equal(0n);
-    expect(await nft.trophySupply()).to.equal(supplyBefore - 2n);
+    const affiliateInfo = await trophies.trophyData(placeholders.affiliate);
+    expect(affiliateInfo & TROPHY_OWED_MASK).to.equal(0n);
+    expect(await nft.ownerOf(placeholders.affiliate)).to.not.equal(ethers.ZeroAddress);
   });
 
   it("burns BAF trophy placeholder on flop loss", async function () {

@@ -271,27 +271,13 @@ describe("AdvanceGame stake resolution", function () {
   );
   await setUint256(gameAddress, rewardPoolEntry, 0n);
 
-    // Configure pending end-level struct
-    const pendingEntry = await getStorageEntry(
+    // Configure pending end-level flags
+    const pendingExEntry = await getStorageEntry(
       PURGE_GAME_FQN,
-      "pendingEndLevel"
+      "exterminator"
     );
-    const pendingSlot = BigInt(pendingEntry.slot);
     const exterminator = await advancer.getAddress();
-    const packed =
-      (BigInt(exterminator) &
-        ((1n << (20n * 8n)) - 1n)) |
-      (1n << (20n * 8n)); // level 1 at offset 20 bytes
-    await network.provider.send("hardhat_setStorageAt", [
-      gameAddress,
-      toBytes32(pendingSlot),
-      toBytes32(packed),
-    ]);
-    await network.provider.send("hardhat_setStorageAt", [
-      gameAddress,
-      toBytes32(pendingSlot + 1n),
-      toBytes32(ethers.parseEther("100")),
-    ]);
+    await setPackedValue(gameAddress, pendingExEntry, exterminator, 20);
 
     // Fund game with enough ETH to cover deferred payouts
     await (
@@ -328,24 +314,17 @@ describe("AdvanceGame stake resolution", function () {
     expect(stateAfterFirst).to.equal(1);
     const pendingAfterFirst = await readStorage(
       gameAddress,
-      toBytes32(pendingSlot)
+      toBytes32(pendingExEntry.slot)
     );
-    console.log("pending slot after first", pendingAfterFirst);
+    console.log("pending ex after first", pendingAfterFirst);
     console.log(
       "nextPrizePool",
       await readStorage(gameAddress, toBytes32((await getStorageEntry(PURGE_GAME_FQN, "nextPrizePool")).slot))
     );
-    const pendingValFirst = BigInt(pendingAfterFirst);
-    const storedLevelFirst = Number(
-      (pendingValFirst >> (20n * 8n)) & 0xFFFFFFn
-    );
     const storedExFirst = ethers.getAddress(
-      ethers.toBeHex(
-        pendingValFirst & ((1n << (20n * 8n)) - 1n),
-        20
-      )
+      ethers.toBeHex(BigInt(pendingAfterFirst) & ((1n << (20n * 8n)) - 1n), 20)
     );
-    console.log("decoded pending after first", storedLevelFirst, storedExFirst);
+    console.log("decoded pending after first", storedExFirst);
 
     tx = await purgeGame.connect(advancer).advanceGame(1);
     receipt = await tx.wait();
@@ -371,28 +350,17 @@ describe("AdvanceGame stake resolution", function () {
     console.log("state after second", finalState);
     const pendingAfterSecond = await readStorage(
       gameAddress,
-      toBytes32(pendingSlot)
+      toBytes32(pendingExEntry.slot)
     );
-    console.log("pending slot after second", pendingAfterSecond);
-    console.log(
-      "pending sidepool after second",
-      await readStorage(gameAddress, toBytes32(pendingSlot + 1n))
-    );
-    const pendingValSecond = BigInt(pendingAfterSecond);
-    const storedLevelSecond = Number(
-      (pendingValSecond >> (20n * 8n)) & 0xFFFFFFn
-    );
+    console.log("pending ex after second", pendingAfterSecond);
     const storedExSecond = ethers.getAddress(
-      ethers.toBeHex(
-        pendingValSecond & ((1n << (20n * 8n)) - 1n),
-        20
-      )
+      ethers.toBeHex(BigInt(pendingAfterSecond) & ((1n << (20n * 8n)) - 1n), 20)
     );
-    console.log("decoded pending after second", storedLevelSecond, storedExSecond);
+    console.log("decoded pending after second", storedExSecond);
     expect(finalState).to.equal(2);
     const rawPending = await readStorage(
       gameAddress,
-      toBytes32(pendingSlot)
+      toBytes32(pendingExEntry.slot)
     );
     expect(BigInt(rawPending)).to.equal(0n);
   });

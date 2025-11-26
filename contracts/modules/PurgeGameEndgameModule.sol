@@ -39,10 +39,12 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         IPurgeCoinModule coinContract,
         IPurgeGameTrophiesModule trophiesContract
     ) external {
-        PendingEndLevel storage pend = pendingEndLevel;
-        bool traitWin = pend.exterminator != address(0);
-        uint8 _phase = phase;
         uint24 prevLevel = lvl - 1;
+        bool traitWin = lastExterminatedTrait != TRAIT_ID_TIMEOUT;
+        if (traitWin) {
+            _primeTraitPayouts(prevLevel, rngWord, trophiesContract);
+        }
+        uint8 _phase = phase;
         if (_phase > 3) {
             if (traitWin && currentPrizePool != 0) {
                 _payoutParticipants(cap, prevLevel);
@@ -90,82 +92,25 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
             return;
         }
 
-        IPurgeGameTrophies.EndLevelRequest memory req = IPurgeGameTrophies.EndLevelRequest({
-            exterminator: pend.exterminator,
-            traitId: lastExterminatedTrait,
-            level: prevLevel,
-            rngWord: rngWord,
-            deferredWei: 0
-        });
+        if (!traitWin) {
+            IPurgeGameTrophies.EndLevelRequest memory req = IPurgeGameTrophies.EndLevelRequest({
+                exterminator: address(0),
+                traitId: lastExterminatedTrait,
+                level: prevLevel,
+                rngWord: rngWord,
+                deferredWei: 0
+            });
 
-        if (traitWin) {
-            uint256 poolValue = pend.sidePool;
-            uint256 exterminatorShare = (prevLevel % 10 == 4 && prevLevel != 4)
-                ? (poolValue * 40) / 100
-                : (poolValue * 20) / 100;
+            uint256 scale = _rewardBonusScaleBps(prevLevel);
+            uint256 scaledPool = (rewardPool * scale) / 10_000;
 
-            uint256 immediate = exterminatorShare >> 1;
-            uint256 deferredWei = exterminatorShare - immediate;
-            _addClaimableEth(pend.exterminator, immediate);
-            req.deferredWei = deferredWei;
-            trophyPool += deferredWei;
+            uint256 rewardsTotal = trophiesContract.processEndLevel(req, scaledPool);
 
-            // Reassign the trophy slice from the prize pool to players: 10% split across three tickets
-            // using their ETH mint streaks as weights (even split if all streaks are zero).
-            uint256 ticketBonus = (poolValue * 10) / 100;
-            address[] storage arr = traitPurgeTicket[prevLevel][uint8(lastExterminatedTrait)];
-            if (arr.length != 0 && ticketBonus != 0) {
-                address[3] memory winners;
-                uint256[3] memory streaks;
-                uint256 seed = rngWord ^ (uint256(prevLevel) << 128);
-                for (uint8 i; i < 3; ) {
-                    seed = uint256(keccak256(abi.encodePacked(seed, i)));
-                    uint256 idx = seed % arr.length;
-                    address w = arr[idx];
-                    winners[i] = w;
-                    streaks[i] = (mintPacked_[w] >> ETH_LEVEL_STREAK_SHIFT) & MINT_MASK_24;
-                    unchecked {
-                        ++i;
-                    }
-                }
-
-                uint256 totalWeight = streaks[0] + streaks[1] + streaks[2];
-                uint256 remaining = ticketBonus;
-                for (uint8 i; i < 3; ) {
-                    uint256 share;
-                    if (totalWeight == 0) {
-                        share = ticketBonus / 3;
-                    } else {
-                        share = (ticketBonus * streaks[i]) / totalWeight;
-                    }
-                    if (share != 0) {
-                        _addClaimableEth(winners[i], share);
-                        remaining -= share;
-                    }
-                    unchecked {
-                        ++i;
-                    }
-                }
-                if (remaining != 0) {
-                    _addClaimableEth(winners[0], remaining);
-                }
-            } else if (ticketBonus != 0) {
-                // Defensive: if no tickets exist (unexpected), roll the bonus back into the reward pool.
-                rewardPool += ticketBonus;
+            if (rewardsTotal != 0) {
+                rewardPool -= rewardsTotal;
+                trophyPool += rewardsTotal;
             }
         }
-
-        uint256 scale = _rewardBonusScaleBps(prevLevel);
-        uint256 scaledPool = (rewardPool * scale) / 10_000;
-
-        uint256 rewardsTotal = trophiesContract.processEndLevel(req, scaledPool);
-
-        if (rewardsTotal != 0) {
-            rewardPool -= rewardsTotal;
-            trophyPool += rewardsTotal;
-        }
-
-        delete pendingEndLevel;
 
         coinContract.resetAffiliateLeaderboard(lvl);
     }
@@ -173,17 +118,15 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
     function _payoutParticipants(uint32 capHint, uint24 prevLevel) private {
         address[] storage arr = traitPurgeTicket[prevLevel][uint8(lastExterminatedTrait)];
         uint32 len = uint32(arr.length);
-        if (len == 0) {
-            currentPrizePool = 0;
-            return;
-        }
+
+        uint256 participantPool = currentPrizePool;
+        uint256 unitPayout = participantPool / len;
 
         uint32 cap = (capHint == 0) ? DEFAULT_PAYOUTS_PER_TX : capHint;
         uint32 i = airdropIndex;
         uint32 end = i + cap;
         if (end > len) end = len;
 
-        uint256 unitPayout = currentPrizePool;
         if (end == len) {
             currentPrizePool = 0;
         }
@@ -204,6 +147,97 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         if (i == len) {
             airdropIndex = 0;
         }
+    }
+
+    function _primeTraitPayouts(
+        uint24 prevLevel,
+        uint256 rngWord,
+        IPurgeGameTrophiesModule trophiesContract
+    ) private {
+        address ex = exterminator;
+        if (ex == address(0)) return;
+
+        uint256 poolValue = currentPrizePool;
+        uint256 exterminatorShare = (prevLevel % 10 == 4 && prevLevel != 4)
+            ? (poolValue * 40) / 100
+            : (poolValue * 20) / 100;
+
+        uint256 immediate = exterminatorShare >> 1;
+        uint256 deferredWei = exterminatorShare - immediate;
+        _addClaimableEth(ex, immediate);
+        trophyPool += deferredWei;
+
+        // Reassign the trophy slice from the prize pool to players: 10% split across three tickets
+        // using their ETH mint streaks as weights (even split if all streaks are zero).
+        uint256 ticketBonus = (poolValue * 10) / 100;
+        address[] storage arr = traitPurgeTicket[prevLevel][uint8(lastExterminatedTrait)];
+        if (arr.length != 0 && ticketBonus != 0) {
+            address[3] memory winners;
+            uint256[3] memory streaks;
+            uint256 seed = rngWord ^ (uint256(prevLevel) << 128);
+            for (uint8 i; i < 3; ) {
+                seed = uint256(keccak256(abi.encodePacked(seed, i)));
+                uint256 idx = seed % arr.length;
+                address w = arr[idx];
+                winners[i] = w;
+                streaks[i] = (mintPacked_[w] >> ETH_LEVEL_STREAK_SHIFT) & MINT_MASK_24;
+                unchecked {
+                    ++i;
+                }
+            }
+
+            uint256 totalWeight = streaks[0] + streaks[1] + streaks[2];
+            uint256 remaining = ticketBonus;
+            for (uint8 i; i < 3; ) {
+                uint256 share;
+                if (totalWeight == 0) {
+                    share = ticketBonus / 3;
+                } else {
+                    share = (ticketBonus * streaks[i]) / totalWeight;
+                }
+                if (share != 0) {
+                    _addClaimableEth(winners[i], share);
+                    remaining -= share;
+                }
+                unchecked {
+                    ++i;
+                }
+            }
+            if (remaining != 0) {
+                _addClaimableEth(winners[0], remaining);
+            }
+        } else if (ticketBonus != 0) {
+            // Defensive: if no tickets exist (unexpected), roll the bonus back into the reward pool.
+            rewardPool += ticketBonus;
+        }
+
+        uint256 participantShare = ((poolValue * 90) / 100) - exterminatorShare;
+        if (arr.length == 0) {
+            currentPrizePool = 0;
+        } else {
+            currentPrizePool = participantShare;
+            airdropIndex = 0;
+        }
+
+        IPurgeGameTrophies.EndLevelRequest memory req = IPurgeGameTrophies.EndLevelRequest({
+            exterminator: ex,
+            traitId: lastExterminatedTrait,
+            level: prevLevel,
+            rngWord: rngWord,
+            deferredWei: deferredWei
+        });
+
+        uint256 scale = _rewardBonusScaleBps(prevLevel);
+        uint256 scaledPool = (rewardPool * scale) / 10_000;
+
+        uint256 rewardsTotal = trophiesContract.processEndLevel(req, scaledPool);
+
+        if (rewardsTotal != 0) {
+            rewardPool -= rewardsTotal;
+            trophyPool += rewardsTotal;
+        }
+
+        exterminator = address(0);
     }
 
     function _addClaimableEth(address beneficiary, uint256 weiAmount) private {

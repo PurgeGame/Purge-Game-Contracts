@@ -61,14 +61,7 @@ abstract contract PurgeGameStorage {
     // -----------------------
     mapping(address => uint256) internal claimableWinnings;
     mapping(uint24 => address[][256]) internal traitPurgeTicket;
-
-    struct PendingEndLevel {
-        address exterminator;
-        uint24 level;
-        uint256 sidePool;
-    }
-
-    PendingEndLevel internal pendingEndLevel;
+    address internal exterminator;
 
     // -----------------------
     // Daily / Trait Counters

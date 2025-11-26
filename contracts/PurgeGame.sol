@@ -354,8 +354,7 @@ contract PurgeGame is PurgeGameStorage {
                     if (lastExterminatedTrait != TRAIT_ID_TIMEOUT) {
                         payDailyJackpot(false, level, rngWord);
                     }
-                    dailyIdx = day;
-                    _unlockRng();
+                    _unlockRng(day);
                 }
                 break;
             }
@@ -382,8 +381,7 @@ contract PurgeGame is PurgeGameStorage {
                         airdropMultiplier = _calculateAirdropMultiplier(nft.purchaseCount(), lvl);
                         phase = 3;
                     }
-                    dailyIdx = day;
-                    _unlockRng();
+                    _unlockRng(day);
 
                     break;
                 }
@@ -446,11 +444,10 @@ contract PurgeGame is PurgeGameStorage {
                     coinContract.rewardTopFlipBonus(priceCoin);
                 }
                 coinContract.resetCoinflipLeaderboard();
-                dailyIdx = day;
                 traitRebuildCursor = 0;
                 airdropMultiplier = 1;
                 gameState = 3;
-                _unlockRng();
+                _unlockRng(day);
                 break;
             }
 
@@ -472,8 +469,7 @@ contract PurgeGame is PurgeGameStorage {
 
                 payDailyJackpot(true, lvl, rngWord);
                 if (!_handleJackpotLevelCap() || gameState != 3) break;
-                dailyIdx = day;
-                _unlockRng();
+                _unlockRng(day);
                 break;
             }
 
@@ -673,12 +669,10 @@ contract PurgeGame is PurgeGameStorage {
     /// - Reset per-level state, mint the next level’s trophy placeholder,
     ///   set default exterminated sentinel to TRAIT_ID_TIMEOUT, and request fresh VRF.
     function _endLevel(uint16 exterminated) private {
-        PendingEndLevel storage pend = pendingEndLevel;
+        uint256 prizeSnapshot = currentPrizePool;
 
-        address exterminator = msg.sender;
+        address callerExterminator = msg.sender;
         uint24 levelSnapshot = level;
-        pend.level = levelSnapshot;
-
         if (exterminated < 256) {
             uint8 exTrait = uint8(exterminated);
             bool repeatOrNinety = (levelSnapshot == 90)
@@ -692,40 +686,28 @@ contract PurgeGame is PurgeGameStorage {
                 pool -= keep;
             }
 
-            uint256 ninetyPercent = (pool * 90) / 100;
-            uint256 mod10 = levelSnapshot % 10;
-            uint256 exterminatorShare = (mod10 == 4 && levelSnapshot != 4) ? (pool * 40) / 100 : (pool * 20) / 100;
-            uint256 participantShare = ninetyPercent - exterminatorShare;
-
-            uint256 ticketsLen = traitPurgeTicket[levelSnapshot][exTrait].length;
-            currentPrizePool = (ticketsLen == 0) ? 0 : (participantShare / ticketsLen);
-
-            pend.exterminator = exterminator;
-            pend.sidePool = pool;
+            currentPrizePool = pool;
+            exterminator = callerExterminator;
 
             lastExterminatedTrait = exTrait;
         } else {
-            if (levelSnapshot % 100 == 0) {
-                price = 0.05 ether;
-                priceCoin >>= 1;
-                lastPrizePool = currentPrizePool >> 3;
-            }
-
-            uint256 poolCarry = currentPrizePool;
-
-            pend.exterminator = address(0);
-            pend.sidePool = poolCarry;
+            exterminator = address(0);
 
             currentPrizePool = 0;
             lastExterminatedTrait = TRAIT_ID_TIMEOUT;
         }
 
-        trophies.prepareNextLevel(levelSnapshot + 1);
+        if (levelSnapshot % 100 == 0) {
+            price = 0.05 ether;
+            priceCoin >>= 1;
+            lastPrizePool = prizeSnapshot >> 3;
+        }
 
         unchecked {
             levelSnapshot++;
             level++;
         }
+        trophies.prepareNextLevel(levelSnapshot);
 
         if (level == 100 && !decimatorHundredReady) {
             decimatorHundredPool = rewardPool;
@@ -1165,7 +1147,8 @@ contract PurgeGame is PurgeGameStorage {
         rngLockedFlag = true;
     }
 
-    function _unlockRng() private {
+    function _unlockRng(uint48 day) private {
+        dailyIdx = day;
         rngLockedFlag = false;
         vrfRequestId = 0;
     }

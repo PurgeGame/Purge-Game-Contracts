@@ -39,10 +39,8 @@ contract PurgeGameHarness is PurgeGame {
         gameState = state_;
     }
 
-    function harnessSeedPending(address exterminator, uint24 prevLevel, uint256 sidePool) external {
-        pendingEndLevel.exterminator = exterminator;
-        pendingEndLevel.level = prevLevel;
-        pendingEndLevel.sidePool = sidePool;
+    function harnessSeedPending(address exterminator_, bool /*prepared*/ ) external {
+        exterminator = exterminator_;
     }
 
     function harnessSeedTickets(uint24 lvl, uint8 trait, address[] calldata players) external {
@@ -79,8 +77,8 @@ contract PurgeGameHarness is PurgeGame {
         _runEndgameModule(level, cap, day, rngWord);
     }
 
-    function harnessGetPendingEndLevel() external view returns (PendingEndLevel memory) {
-        return pendingEndLevel;
+    function harnessGetPendingEndLevel() external view returns (address) {
+        return exterminator;
     }
 
     function harnessGetLevelPrize() external view returns (uint256) {
