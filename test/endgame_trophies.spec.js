@@ -76,6 +76,10 @@ async function deploySystem() {
   const externalJackpotModule = await PurgeCoinExternalJackpotModule.deploy();
   await externalJackpotModule.waitForDeployment();
 
+  const MockStETH = await ethers.getContractFactory("MockStETH");
+  const steth = await MockStETH.deploy();
+  await steth.waitForDeployment();
+
   const PurgeGame = await ethers.getContractFactory("PurgeGame");
   const purgeGame = await PurgeGame.deploy(
     await purgecoin.getAddress(),
@@ -87,7 +91,8 @@ async function deploySystem() {
     await vrf.getAddress(),
     ethers.ZeroHash,
     1n,
-    LINK_TOKEN_ADDRESS
+    LINK_TOKEN_ADDRESS,
+    await steth.getAddress()
   );
   await purgeGame.waitForDeployment();
 

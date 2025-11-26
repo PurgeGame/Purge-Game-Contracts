@@ -19,7 +19,8 @@ contract PurgeGameHarness is PurgeGame {
         address vrfCoordinator_,
         bytes32 vrfKeyHash_,
         uint256 vrfSubscriptionId_,
-        address linkToken_
+        address linkToken_,
+        address stEthToken_
     ) PurgeGame(
         purgeCoinContract,
         renderer_,
@@ -30,7 +31,8 @@ contract PurgeGameHarness is PurgeGame {
         vrfCoordinator_,
         vrfKeyHash_,
         vrfSubscriptionId_,
-        linkToken_
+        linkToken_,
+        stEthToken_
     ) {}
 
     function harnessSetState(uint24 lvl, uint8 phase_, uint8 state_) external {

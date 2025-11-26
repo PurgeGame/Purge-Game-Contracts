@@ -38,7 +38,7 @@ interface IPurgeCoinModule {
 
     function resetAffiliateLeaderboard(uint24 lvl) external;
 
-    function burnie(uint256 amount) external payable;
+    function burnie(uint256 amount, address stethToken) external payable;
 
     function primeMintEthQuest(uint48 day) external;
 

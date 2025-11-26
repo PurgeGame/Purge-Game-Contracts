@@ -255,7 +255,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         uint256 totalWei = rewardPool + currentPrizePool;
         // Pay 10% PURGE using the current mint conversion (priceCoin / price) to Burnie.
         uint256 burnieAmount = (totalWei * priceCoin) / (10 * price);
-        coinContract.burnie(burnieAmount);
+        coinContract.burnie(burnieAmount, address(0));
 
         uint256 savePctTimes2 = _mapRewardPoolPercent(lvl, rngWord);
         uint256 _rewardPool = (totalWei * savePctTimes2) / 200;

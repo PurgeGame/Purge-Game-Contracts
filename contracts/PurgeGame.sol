@@ -10,6 +10,12 @@ import {IPurgeRendererLike} from "./interfaces/IPurgeRendererLike.sol";
 import {IPurgeGameEndgameModule, IPurgeGameJackpotModule} from "./interfaces/IPurgeGameModules.sol";
 import {PurgeGameStorage} from "./storage/PurgeGameStorage.sol";
 
+interface IStETH {
+    function submit(address referral) external payable returns (uint256);
+    function balanceOf(address account) external view returns (uint256);
+    function transfer(address to, uint256 amount) external returns (bool);
+}
+
 /**
  * @title Purge Game — Core NFT game contract
  * @notice This file defines the on-chain game logic surface (interfaces + core state).
@@ -74,6 +80,7 @@ contract PurgeGame is PurgeGameStorage {
     IPurgeCoin private immutable coin; // Trusted coin/game-side coordinator (PURGE ERC20)
     IPurgeGameNFT private immutable nft; // ERC721 interface for mint/burn/metadata surface
     IPurgeGameTrophies private immutable trophies; // Dedicated trophy module
+    IStETH private immutable steth; // stETH token held by the game
     address private immutable endgameModule; // Delegate module for endgame settlement
     address private immutable jackpotModule; // Delegate module for jackpot routines
     IVRFCoordinator private immutable vrfCoordinator; // Chainlink VRF coordinator
@@ -94,6 +101,7 @@ contract PurgeGame is PurgeGameStorage {
     uint32 private constant VRF_CALLBACK_GAS_LIMIT = 200_000;
     uint16 private constant VRF_REQUEST_CONFIRMATIONS = 10;
     uint256 private constant RNG_NUDGE_COST = 100 * 1e6; // PURGE has 6 decimals
+    uint256 private constant REWARD_POOL_MIN_STAKE = 0.5 ether;
 
     uint256 private constant MINT_MASK_24 = (uint256(1) << 24) - 1;
     uint256 private constant MINT_MASK_16 = (uint256(1) << 16) - 1;
@@ -122,6 +130,11 @@ contract PurgeGame is PurgeGameStorage {
      * @param trophiesContract  Trophy manager contract
      * @param endgameModule_    Delegate module handling endgame settlement
      * @param jackpotModule_    Delegate module handling jackpot distribution
+     * @param vrfCoordinator_   Chainlink VRF coordinator
+     * @param vrfKeyHash_       VRF key hash
+     * @param vrfSubscriptionId_ VRF subscription identifier
+     * @param linkToken_        LINK token contract (ERC677) for VRF billing
+     * @param stEthToken_       stETH token address
      *
      * @dev ERC721 sentinel trophy token is minted lazily during the first transition to state 2.
      */
@@ -135,7 +148,8 @@ contract PurgeGame is PurgeGameStorage {
         address vrfCoordinator_,
         bytes32 vrfKeyHash_,
         uint256 vrfSubscriptionId_,
-        address linkToken_
+        address linkToken_,
+        address stEthToken_
     ) {
         coin = IPurgeCoin(purgeCoinContract);
         renderer = IPurgeRendererLike(renderer_);
@@ -147,6 +161,7 @@ contract PurgeGame is PurgeGameStorage {
         vrfKeyHash = vrfKeyHash_;
         vrfSubscriptionId = vrfSubscriptionId_;
         linkToken = linkToken_;
+        steth = IStETH(stEthToken_);
     }
 
     // --- View: lightweight game status -------------------------------------------------
@@ -322,8 +337,18 @@ contract PurgeGame is PurgeGameStorage {
         // Liveness drain
         if (ts - 365 days > levelStartTime) {
             gameState = 0;
+            address stethAddress = address(steth);
+            uint256 stBal = steth.balanceOf(address(this));
+            if (stBal != 0) {
+                if (!steth.transfer(address(coinContract), stBal)) revert E();
+            } else stethAddress = address(0);
+
             uint256 bal = address(this).balance;
-            if (bal > 0) coinContract.burnie{value: bal}(0);
+            if (bal > 0) {
+                coinContract.burnie{value: bal}(0, stethAddress);
+            } else {
+                coinContract.burnie(0, stethAddress);
+            }
         }
         uint24 lvl = level;
         uint8 _gameState = gameState;
@@ -361,6 +386,7 @@ contract PurgeGame is PurgeGameStorage {
                     if (lastExterminatedTrait != TRAIT_ID_TIMEOUT) {
                         payDailyJackpot(false, level, rngWord);
                     }
+                    _stakeForTargetRatio(lvl);
                     _unlockRng(day);
                 }
                 break;
@@ -757,7 +783,7 @@ contract PurgeGame is PurgeGameStorage {
     function payoutTrophy(address recipient, uint256 amount) external {
         if (msg.sender != address(trophies)) revert E();
         trophyPool -= amount;
-        claimableWinnings[recipient] += amount;
+        _addClaimableEth(recipient, amount);
     }
 
     function recycleTrophyEth(uint256 amount) external {
@@ -774,16 +800,28 @@ contract PurgeGame is PurgeGameStorage {
         address player = msg.sender;
         uint256 amount = claimableWinnings[player];
         if (amount <= 1) revert E();
+        uint256 payout;
         unchecked {
             claimableWinnings[player] = 1;
-            amount -= 1;
+            payout = amount - 1;
         }
-        (bool ok, ) = payable(player).call{value: amount}("");
-        if (!ok) revert E();
+        uint256 bal = address(this).balance;
+        uint256 ethToSend = bal >= payout ? payout : bal;
+        uint256 stShortfall = payout > ethToSend ? (payout - ethToSend) : 0;
+        if (ethToSend != 0) {
+            (bool okEth, ) = payable(player).call{value: ethToSend}("");
+            if (!okEth) revert E();
+        }
+        if (stShortfall != 0) {
+            if (!steth.transfer(player, stShortfall)) revert E();
+            principalStEth -= stShortfall;
+        }
     }
 
     function getWinnings() external view returns (uint256) {
-        return claimableWinnings[msg.sender];
+        uint256 stored = claimableWinnings[msg.sender];
+        if (stored <= 1) return 0;
+        return stored - 1;
     }
 
     /// @notice Spend claimable ETH to purchase either NFTs or MAPs using the full available balance.
@@ -1059,6 +1097,30 @@ contract PurgeGame is PurgeGameStorage {
             return false;
         }
         return true;
+    }
+
+    // --- Reward vault & liquidity -----------------------------------------------------
+
+    function _stakeEth(uint256 amount) private {
+        uint256 minted = steth.submit{value: amount}(address(0));
+        principalStEth += minted;
+    }
+
+    function _stakeForTargetRatio(uint24 lvl) private {
+        // Skip staking during decimator (L%10==5), BAF (L%20==0), and 90-99 levels.
+        if ((lvl % 10 == 5) || (lvl % 20 == 0) || (lvl >= 90 && lvl < 100)) return;
+
+        uint256 rp = rewardPool;
+        if (rp == 0) return;
+
+        uint256 targetSt = ((rp * 8) / 10); // ceiling to hit 80%
+        uint256 stBal = principalStEth;
+        if (stBal >= targetSt) return;
+
+        uint256 stakeAmount = targetSt - stBal;
+        if (stakeAmount < REWARD_POOL_MIN_STAKE) return;
+
+        _stakeEth(stakeAmount);
     }
 
     // --- Flips, VRF, payments, rarity ----------------------------------------------------------------

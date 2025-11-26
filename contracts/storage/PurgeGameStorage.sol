@@ -72,4 +72,5 @@ abstract contract PurgeGameStorage {
 
     uint256 internal trophyPool;
     uint256 internal totalFlipReversals;
+    uint256 internal principalStEth;
 }

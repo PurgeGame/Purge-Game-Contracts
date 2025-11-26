@@ -114,4 +114,8 @@ contract QuestGameMock is IPurgeGame {
     }
 
     function purchaseWithClaimable(bool /*mapPurchase*/) external pure override {}
+
+    function stEthToken() external pure returns (address) {
+        return address(0);
+    }
 }

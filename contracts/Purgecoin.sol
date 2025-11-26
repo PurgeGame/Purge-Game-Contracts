@@ -9,6 +9,11 @@ import {IPurgeQuestModule, QuestInfo, PlayerQuestView} from "./interfaces/IPurge
 import {IPurgeCoinExternalJackpotModule} from "./interfaces/IPurgeCoinExternalJackpotModule.sol";
 import {PurgeCoinStorage} from "./storage/PurgeCoinStorage.sol";
 
+interface IStETH {
+    function transfer(address to, uint256 amount) external returns (bool);
+    function balanceOf(address account) external view returns (uint256);
+}
+
 contract Purgecoin is PurgeCoinStorage {
     // ---------------------------------------------------------------------
     // Events
@@ -825,15 +830,21 @@ contract Purgecoin is PurgeCoinStorage {
 
     /// @notice Credit the creator's share of gameplay proceeds.
     /// @dev Access: PurgeGame only. Zero amounts are ignored.
-    function burnie(uint256 amount) external payable onlyPurgeGameContract {
+    function burnie(uint256 amount, address stethToken) external payable onlyPurgeGameContract {
+        address creator_ = creator;
+        if (stethToken != address(0)) {
+            uint256 stBal = IStETH(stethToken).balanceOf(address(this));
+            if (stBal != 0) {
+                if (!IStETH(stethToken).transfer(creator_, stBal)) revert E();
+            }
+        }
         if (msg.value != 0) {
             uint256 payout = address(this).balance;
-            (bool ok, ) = payable(creator).call{value: payout}("");
+            (bool ok, ) = payable(creator_).call{value: payout}("");
             if (!ok) revert E();
             return;
         }
-
-        _mint(creator, amount);
+        _mint(creator_, amount);
     }
 
     /// @notice Grant a pending coinflip stake during gameplay flows instead of minting PURGE.
@@ -1239,7 +1250,13 @@ contract Purgecoin is PurgeCoinStorage {
     )
         external
         onlyPurgeGameContract
-        returns (bool finished, address[] memory winners, uint256[] memory amounts, uint256 trophyPoolDelta, uint256 returnAmountWei)
+        returns (
+            bool finished,
+            address[] memory winners,
+            uint256[] memory amounts,
+            uint256 trophyPoolDelta,
+            uint256 returnAmountWei
+        )
     {
         address module = externalJackpotModule;
         if (module == address(0)) revert ZeroAddress();

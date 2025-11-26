@@ -30,6 +30,8 @@ describe("Real Gas Benchmark (Keeper Mode)", function () {
     const endgameMod = await Endgame.deploy();
     const Jackpot = await ethers.getContractFactory("PurgeGameJackpotModule");
     const jackpotMod = await Jackpot.deploy();
+    const MockStETH = await ethers.getContractFactory("MockStETH");
+    const steth = await MockStETH.deploy();
 
     const PurgeGame = await ethers.getContractFactory("PurgeGame");
     game = await PurgeGame.deploy(
@@ -42,7 +44,8 @@ describe("Real Gas Benchmark (Keeper Mode)", function () {
         vrf.target,
         ethers.ZeroHash, 
         1n, 
-        link.target
+        link.target,
+        steth.target
     );
 
     await purgecoin.wire(
@@ -58,7 +61,7 @@ describe("Real Gas Benchmark (Keeper Mode)", function () {
     await network.provider.request({ method: "hardhat_impersonateAccount", params: [game.target] });
     await network.provider.send("hardhat_setBalance", [game.target, "0xDE0B6B3A7640000"]);
     const gameSigner = await ethers.getSigner(game.target);
-    await purgecoin.connect(gameSigner).burnie(ethers.parseUnits("1000000000000", 6));
+    await purgecoin.connect(gameSigner).burnie(ethers.parseUnits("1000000000000", 6), ethers.ZeroAddress);
 
     const price = await game.mintPrice();
     await nft.mintAndPurge(4, false, ethers.ZeroHash, { value: (price * 4n * 25n) / 100n });

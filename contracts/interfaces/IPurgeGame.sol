@@ -21,14 +21,7 @@ interface IPurgeGame {
     function purchaseInfo()
         external
         view
-        returns (
-            uint24 lvl,
-            uint8 gameState_,
-            uint8 phase_,
-            bool rngLocked_,
-            uint256 priceWei,
-            uint256 priceCoinUnit
-        );
+        returns (uint24 lvl, uint8 gameState_, uint8 phase_, bool rngLocked_, uint256 priceWei, uint256 priceCoinUnit);
 
     function ethMintLevelCount(address player) external view returns (uint24);
 

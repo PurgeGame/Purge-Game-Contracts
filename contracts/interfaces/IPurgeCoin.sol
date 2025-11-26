@@ -6,7 +6,7 @@ import {QuestInfo, PlayerQuestView} from "./IPurgeQuestModule.sol";
 interface IPurgeCoin {
     function bonusCoinflip(address player, uint256 amount, bool rngReady) external;
 
-    function burnie(uint256 amount) external payable;
+    function burnie(uint256 amount, address stethToken) external payable;
 
     function burnCoin(address target, uint256 amount) external;
 

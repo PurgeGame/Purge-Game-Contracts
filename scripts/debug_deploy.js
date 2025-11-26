@@ -4,6 +4,8 @@ async function main() {
   const [deployer] = await ethers.getSigners();
   console.log("Deploying with:", deployer.address);
 
+  const STETH_MAINNET = "0xae7ab96520de3a18e5e111b5eaab095312d7fe84";
+
   console.log("1. Deploying MockLinkToken...");
   const MockLinkToken = await ethers.getContractFactory("MockLinkToken");
   const link = await MockLinkToken.deploy();
@@ -86,7 +88,8 @@ async function main() {
     await vrf.getAddress(),
     ethers.ZeroHash,
     1n,
-    await link.getAddress()
+    await link.getAddress(),
+    STETH_MAINNET
   );
   await purgeGame.waitForDeployment();
   console.log("   PurgeGame deployed at:", await purgeGame.getAddress());

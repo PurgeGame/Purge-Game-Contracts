@@ -55,6 +55,10 @@ describe("Massive System Benchmark (Gas & Calls)", function () {
     jackpotMod = await Jackpot.deploy();
     await jackpotMod.waitForDeployment();
 
+    const MockStETH = await ethers.getContractFactory("MockStETH");
+    const steth = await MockStETH.deploy();
+    await steth.waitForDeployment();
+
     const PurgeGame = await ethers.getContractFactory("PurgeGame");
     game = await PurgeGame.deploy(
         purgecoin.target,
@@ -66,7 +70,8 @@ describe("Massive System Benchmark (Gas & Calls)", function () {
         vrf.target,
         ethers.ZeroHash, 
         1n, 
-        link.target
+        link.target,
+        steth.target
     );
     await game.waitForDeployment();
 
@@ -84,7 +89,7 @@ describe("Massive System Benchmark (Gas & Calls)", function () {
     await network.provider.request({ method: "hardhat_impersonateAccount", params: [game.target] });
     await network.provider.send("hardhat_setBalance", [game.target, "0xDE0B6B3A7640000"]);
     const gameSigner = await ethers.getSigner(game.target);
-    await purgecoin.connect(gameSigner).burnie(ethers.parseUnits("1000000000000", 6)); // 1 Trillion
+    await purgecoin.connect(gameSigner).burnie(ethers.parseUnits("1000000000000", 6), ethers.ZeroAddress); // 1 Trillion
 
     // Start Game
     const price = await game.mintPrice();
@@ -221,7 +226,7 @@ describe("Massive System Benchmark (Gas & Calls)", function () {
       await network.provider.request({ method: "hardhat_impersonateAccount", params: [game.target] });
       await network.provider.send("hardhat_setBalance", [game.target, "0xDE0B6B3A7640000"]);
       const gameSigner = await ethers.getSigner(game.target);
-      await purgecoin.connect(gameSigner).burnie(ethers.parseUnits("1000000000000", 6));
+      await purgecoin.connect(gameSigner).burnie(ethers.parseUnits("1000000000000", 6), ethers.ZeroAddress);
 
       // Level 25
       await game.harnessSetState(25, 2, 1);
@@ -279,7 +284,7 @@ describe("Massive System Benchmark (Gas & Calls)", function () {
       await network.provider.request({ method: "hardhat_impersonateAccount", params: [game.target] });
       await network.provider.send("hardhat_setBalance", [game.target, "0xDE0B6B3A7640000"]);
       const gameSigner = await ethers.getSigner(game.target);
-      await purgecoin.connect(gameSigner).burnie(ethers.parseUnits("1000000000000", 6));
+      await purgecoin.connect(gameSigner).burnie(ethers.parseUnits("1000000000000", 6), ethers.ZeroAddress);
 
       await game.harnessSetState(20, 2, 1);
       await game.harnessSetPrize(ethers.parseEther("1000"));
@@ -333,7 +338,7 @@ describe("Massive System Benchmark (Gas & Calls)", function () {
       await network.provider.request({ method: "hardhat_impersonateAccount", params: [game.target] });
       await network.provider.send("hardhat_setBalance", [game.target, "0xDE0B6B3A7640000"]);
       const gameSigner = await ethers.getSigner(game.target);
-      await purgecoin.connect(gameSigner).burnie(ethers.parseUnits("1000000000000", 6));
+      await purgecoin.connect(gameSigner).burnie(ethers.parseUnits("1000000000000", 6), ethers.ZeroAddress);
 
       await game.harnessSetState(16, 2, 1);
       await game.harnessSetPrize(ethers.parseEther("1000"));

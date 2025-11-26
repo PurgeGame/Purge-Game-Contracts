@@ -82,7 +82,7 @@ contract JackpotCoinModuleMock is IPurgeCoinModule {
 
     function resetAffiliateLeaderboard(uint24) external pure override {}
 
-    function burnie(uint256) external payable override {}
+    function burnie(uint256, address) external payable override {}
 
     function primeMintEthQuest(uint48 day) external override {
         lastPrimeDay = day;

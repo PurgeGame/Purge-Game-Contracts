@@ -92,6 +92,10 @@ async function deploySystem() {
   const jackpotModule = await PurgeGameJackpotModule.deploy();
   await jackpotModule.waitForDeployment();
 
+  const MockStETH = await ethers.getContractFactory("MockStETH");
+  const steth = await MockStETH.deploy();
+  await steth.waitForDeployment();
+
   const PurgeGame = await ethers.getContractFactory("PurgeGame");
   const purgeGame = await PurgeGame.deploy(
     await purgecoin.getAddress(),
@@ -103,7 +107,8 @@ async function deploySystem() {
     await vrf.getAddress(),
     ethers.ZeroHash,
     1n,
-    await link.getAddress()
+    await link.getAddress(),
+    await steth.getAddress()
   );
   await purgeGame.waitForDeployment();
 

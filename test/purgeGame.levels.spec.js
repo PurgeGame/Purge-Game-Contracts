@@ -42,7 +42,11 @@ async function deploySystem() {
   await purgecoin.waitForDeployment();
 
   const PurgeGameNFT = await ethers.getContractFactory("PurgeGameNFT");
-  const purgeNFT = await PurgeGameNFT.deploy(await deployer.getAddress());
+  const purgeNFT = await PurgeGameNFT.deploy(
+    await renderer.getAddress(),
+    await renderer.getAddress(),
+    await purgecoin.getAddress()
+  );
   await purgeNFT.waitForDeployment();
 
   const PurgeGameTrophies = await ethers.getContractFactory("PurgeGameTrophies");
@@ -57,6 +61,10 @@ async function deploySystem() {
   const jackpotModule = await PurgeGameJackpotModule.deploy();
   await jackpotModule.waitForDeployment();
 
+  const MockStETH = await ethers.getContractFactory("MockStETH");
+  const steth = await MockStETH.deploy();
+  await steth.waitForDeployment();
+
   const PurgeGame = await ethers.getContractFactory("PurgeGame");
   const purgeGame = await PurgeGame.deploy(
     await purgecoin.getAddress(),
@@ -64,7 +72,12 @@ async function deploySystem() {
     await purgeNFT.getAddress(),
     await purgeTrophies.getAddress(),
     await endgameModule.getAddress(),
-    await jackpotModule.getAddress()
+    await jackpotModule.getAddress(),
+    await vrf.getAddress(),
+    ethers.ZeroHash,
+    1n,
+    await link.getAddress(),
+    await steth.getAddress()
   );
   await purgeGame.waitForDeployment();
 
