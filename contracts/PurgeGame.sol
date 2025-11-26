@@ -404,6 +404,13 @@ contract PurgeGame is PurgeGameStorage {
                         coinContract.processCoinflipPayouts(lvl, cap, false, rngWord, day, priceCoin);
                         break;
                     }
+
+                    if (lvl == 100) {
+                        if (!_runDecimatorHundredJackpot(lvl, cap, rngWord)) {
+                            break;
+                        }
+                    }
+
                     uint256 mapEffectiveWei = _calcPrizePoolForJackpot(lvl, rngWord);
                     if (payMapJackpot(lvl, rngWord, mapEffectiveWei)) {
                         phase = 5;
@@ -713,12 +720,6 @@ contract PurgeGame is PurgeGameStorage {
         }
         trophies.prepareNextLevel(levelSnapshot);
 
-        if (level == 100 && !decimatorHundredReady) {
-            decimatorHundredPool = rewardPool;
-            rewardPool = 0;
-            decimatorHundredReady = true;
-        }
-
         traitRebuildCursor = 0;
         jackpotCounter = 0;
         // Reset daily purge counters so the next level's jackpots start fresh.
@@ -992,6 +993,20 @@ contract PurgeGame is PurgeGameStorage {
     }
 
     // --- Shared jackpot helpers ----------------------------------------------------------------------
+
+    function _runDecimatorHundredJackpot(uint24 lvl, uint32 cap, uint256 rngWord) internal returns (bool finished) {
+        (bool ok, bytes memory data) = jackpotModule.delegatecall(
+            abi.encodeWithSelector(
+                IPurgeGameJackpotModule.runDecimatorHundredJackpot.selector,
+                lvl,
+                cap,
+                rngWord,
+                IPurgeCoinModule(address(coin))
+            )
+        );
+        if (!ok) revert E();
+        return abi.decode(data, (bool));
+    }
 
     // --- Map jackpot payout (end of purchase phase) -------------------------------------------------
 

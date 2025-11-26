@@ -197,6 +197,51 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         return true;
     }
 
+    function runDecimatorHundredJackpot(
+        uint24 lvl,
+        uint32 cap,
+        uint256 rngWord,
+        IPurgeCoinModule coinContract
+    ) external returns (bool finished) {
+        if (!decimatorHundredReady) {
+            uint256 decPool = rewardPool / 2;
+            decimatorHundredPool = decPool;
+            rewardPool -= decPool;
+            decimatorHundredReady = true;
+        }
+
+        uint256 pool = decimatorHundredPool;
+
+        (
+            bool done,
+            address[] memory winnersArr,
+            uint256[] memory amountsArr,
+            uint256 trophyPoolDelta,
+            uint256 returnWei
+        ) = coinContract.runExternalJackpot(1, pool, cap, lvl, rngWord);
+
+        for (uint256 i; i < winnersArr.length; ) {
+            _addClaimableEth(winnersArr[i], amountsArr[i]);
+            unchecked {
+                ++i;
+            }
+        }
+
+        if (trophyPoolDelta != 0) {
+            trophyPool += trophyPoolDelta;
+        }
+
+        if (done) {
+            if (returnWei != 0) {
+                rewardPool += returnWei;
+            }
+            decimatorHundredPool = 0;
+            decimatorHundredReady = false;
+        }
+
+        return done;
+    }
+
     function calcPrizePoolForJackpot(
         uint24 lvl,
         uint256 rngWord,

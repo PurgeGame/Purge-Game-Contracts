@@ -31,6 +31,13 @@ interface IPurgeGameJackpotModule {
         IPurgeGameTrophiesModule trophiesContract
     ) external returns (bool finished);
 
+    function runDecimatorHundredJackpot(
+        uint24 lvl,
+        uint32 cap,
+        uint256 rngWord,
+        IPurgeCoinModule coinContract
+    ) external returns (bool finished);
+
     function calcPrizePoolForJackpot(
         uint24 lvl,
         uint256 rngWord,

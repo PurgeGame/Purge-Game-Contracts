@@ -56,25 +56,7 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
                 if (!bafFinished) return;
             }
             bool decWindow = prevLevel % 10 == 5 && prevLevel >= 25 && prevLevel % 100 != 95;
-            bool bigDecWindow = decimatorHundredReady && prevLevel == 100;
-            if (bigDecWindow) {
-                uint256 bigPool = decimatorHundredPool;
-                (bool decFinished, uint256 returnWei) = _progressExternal(
-                    1,
-                    bigPool,
-                    cap,
-                    prevLevel,
-                    rngWord,
-                    coinContract,
-                    false
-                );
-                if (!decFinished) return;
-                decimatorHundredPool = 0;
-                decimatorHundredReady = false;
-                if (returnWei != 0) {
-                    rewardPool += returnWei;
-                }
-            } else if (decWindow) {
+            if (decWindow) {
                 uint256 decPoolWei = (rewardPool * 15) / 100;
                 (bool decFinished, ) = _progressExternal(1, decPoolWei, cap, prevLevel, rngWord, coinContract, true);
                 if (!decFinished) return;

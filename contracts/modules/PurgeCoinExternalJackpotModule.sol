@@ -397,29 +397,38 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
                     continue;
                 }
 
-                uint256 step = (denom - ((uint256(acc) + 1) % denom)) % denom;
-                uint256 winnerIdx = uint256(idx) + step;
-                if (winnerIdx >= len) {
-                    decBucketAccumulator[denom] = uint32((uint256(acc) + (len - idx)) % denom);
-                    decScanDenom = denom + 1;
-                    decScanIndex = 0;
-                    continue;
-                }
+                bool exhaustedBucket;
+                while (winnersBudget != 0) {
+                    uint256 step = (denom - ((uint256(acc) + 1) % denom)) % denom;
+                    uint256 winnerIdx = uint256(idx) + step;
+                    if (winnerIdx >= len) {
+                        decBucketAccumulator[denom] = uint32((uint256(acc) + (len - idx)) % denom);
+                        exhaustedBucket = true;
+                        break;
+                    }
 
-                address p = roster[winnerIdx];
-                DecEntry storage e = decBurn[p];
-                if (e.level == lvl && e.bucket == denom && e.burn != 0) {
-                    extVar += e.burn;
-                    decWinners.push(p);
-                    unchecked {
-                        --winnersBudget;
+                    address p = roster[winnerIdx];
+                    DecEntry storage e = decBurn[p];
+                    if (e.level == lvl && e.bucket == denom && e.burn != 0) {
+                        extVar += e.burn;
+                        decWinners.push(p);
+                        unchecked {
+                            --winnersBudget;
+                        }
+                    }
+
+                    acc = 0;
+                    idx = uint32(winnerIdx + 1);
+                    if (idx >= len) {
+                        exhaustedBucket = true;
+                        break;
                     }
                 }
 
-                decBucketAccumulator[denom] = 0;
-                decScanIndex = uint32(winnerIdx + 1);
+                decBucketAccumulator[denom] = acc;
+                decScanIndex = idx;
 
-                if (decScanIndex >= len) {
+                if (exhaustedBucket) {
                     decScanDenom = denom + 1;
                     decScanIndex = 0;
                 }
@@ -499,7 +508,20 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
             if (uint256(end) == totalWinners) {
                 bool hasPlaceholder = _hasDecPlaceholder(lvl);
                 if (hasPlaceholder) {
-                    address trophyOwner = topBettors[0].player;
+                    address trophyOwner;
+                    uint256 bestBurn;
+                    uint256 lenW = decWinners.length;
+                    for (uint256 i; i < lenW; ) {
+                        address candidate = decWinners[i];
+                        DecEntry storage e = decBurn[candidate];
+                        if (e.level == lvl && e.burn > bestBurn) {
+                            bestBurn = e.burn;
+                            trophyOwner = candidate;
+                        }
+                        unchecked {
+                            ++i;
+                        }
+                    }
                     if (trophyOwner != address(0)) {
                         uint256 trophyData = (uint256(DECIMATOR_TRAIT_SENTINEL) << 152) |
                             (uint256(lvl) << TROPHY_BASE_LEVEL_SHIFT) |
