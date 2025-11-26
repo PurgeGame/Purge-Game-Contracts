@@ -46,7 +46,6 @@ interface IPurgeGameNFT {
     function clearPlaceholderPadding(uint256 startTokenId, uint256 endTokenId) external;
     function purchaseWithClaimable(address buyer, uint256 quantity) external;
     function mintAndPurgeWithClaimable(address buyer, uint256 quantity) external;
-    function mapMinimumQuantity(uint24 lvl) external pure returns (uint32);
 }
 
 contract PurgeGameNFT {
@@ -408,13 +407,6 @@ contract PurgeGameNFT {
         _mintAndPurge(buyer, quantity, false, bytes32(0), true);
     }
 
-    function mapMinimumQuantity(uint24 lvl) public pure returns (uint32) {
-        uint24 mod = lvl % 100;
-        if (mod >= 60) return 1;
-        if (mod >= 40) return 2;
-        return 4;
-    }
-
     function _mintAndPurge(
         address buyer,
         uint256 quantity,
@@ -431,8 +423,7 @@ contract PurgeGameNFT {
             uint256 priceUnit
         ) = game.purchaseInfo();
         if (state == 3 && payInCoin) revert NotTimeYet();
-        uint32 minQuantity = mapMinimumQuantity(lvl);
-        if (quantity < minQuantity || quantity > type(uint32).max) revert InvalidQuantity();
+        if (quantity == 0 || quantity > type(uint32).max) revert InvalidQuantity();
         if (rngLocked_) revert RngNotReady();
 
         _enforceCenturyLuckbox(buyer, lvl, priceUnit);
@@ -522,12 +513,13 @@ contract PurgeGameNFT {
         }
 
         uint32 mintedQuantity = mapPurchase ? uint32(scaledQty / 25) : uint32(scaledQty / 100);
+        uint32 mintUnits = mapPurchase ? mintedQuantity : 4;
 
         uint256 streakBonus;
         if (useClaimable) {
-            streakBonus = game.recordMint(payer, lvl, creditNextPool, false, expectedWei);
+            streakBonus = game.recordMint(payer, lvl, creditNextPool, false, expectedWei, mintUnits);
         } else {
-            streakBonus = game.recordMint{value: expectedWei}(payer, lvl, creditNextPool, false, expectedWei);
+            streakBonus = game.recordMint{value: expectedWei}(payer, lvl, creditNextPool, false, expectedWei, mintUnits);
         }
 
         if (mintedQuantity != 0) {
@@ -579,7 +571,7 @@ contract PurgeGameNFT {
         else if (stepMod == 18) amount = (amount * 9) / 10;
         if (discount != 0) amount -= discount;
         coin.burnCoin(payer, amount);
-        game.recordMint(payer, lvl, false, true, 0);
+        game.recordMint(payer, lvl, false, true, 0, 0);
         if (quantity != 0) {
             coin.notifyQuestMint(payer, quantity, false);
         }

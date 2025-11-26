@@ -103,7 +103,8 @@ contract QuestGameMock is IPurgeGame {
         uint24 /*lvl*/,
         bool /*creditNext*/,
         bool /*coinMint*/,
-        uint256 /*costWei*/
+        uint256 /*costWei*/,
+        uint32 /*mintUnits*/
     ) external payable override returns (uint256 coinReward) {
         coinReward = 0;
     }

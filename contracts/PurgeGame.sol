@@ -93,6 +93,7 @@ contract PurgeGame is PurgeGameStorage {
     uint16 private constant VRF_REQUEST_CONFIRMATIONS = 10;
 
     uint256 private constant MINT_MASK_24 = (uint256(1) << 24) - 1;
+    uint256 private constant MINT_MASK_16 = (uint256(1) << 16) - 1;
     uint256 private constant MINT_MASK_20 = (uint256(1) << 20) - 1;
     uint256 private constant MINT_MASK_32 = (uint256(1) << 32) - 1;
     uint256 private constant ETH_LAST_LEVEL_SHIFT = 0;
@@ -104,6 +105,7 @@ contract PurgeGame is PurgeGameStorage {
     uint256 private constant COIN_DAY_STREAK_SHIFT = 156;
     uint256 private constant AGG_DAY_SHIFT = 176;
     uint256 private constant AGG_DAY_STREAK_SHIFT = 208;
+    uint256 private constant ETH_LEVEL_UNITS_SHIFT = 228;
 
     // -----------------------
     // Constructor
@@ -280,13 +282,14 @@ contract PurgeGame is PurgeGameStorage {
         uint24 lvl,
         bool creditNext,
         bool coinMint,
-        uint256 costWei
+        uint256 costWei,
+        uint32 mintUnits
     ) external payable returns (uint256 coinReward) {
         if (msg.sender != address(nft)) revert E();
 
         if (coinMint) {
             if (creditNext || msg.value != 0) revert E();
-            return _recordMintData(player, lvl, true);
+            return _recordMintData(player, lvl, true, 0);
         }
 
         uint256 amount = costWei;
@@ -301,7 +304,7 @@ contract PurgeGame is PurgeGameStorage {
         }
         nextPrizePool += amount;
 
-        coinReward = _recordMintData(player, lvl, false);
+        coinReward = _recordMintData(player, lvl, false, mintUnits);
     }
 
     /// @notice Advances the game state machine. Anyone can call, but standard flows
@@ -655,7 +658,7 @@ contract PurgeGame is PurgeGameStorage {
     /// - Split prize pool: 90% to participants (including the exterminator slice below) and 10% as a bonus
     ///   split across three winning tickets weighted by ETH mint streaks (even split if all streaks are zero);
     ///   affiliate/stake trophy rewards are now funded from the reward pool.
-    ///   From within the 90%, the “exterminator” gets 20% (or 40% for 7th steps since L25),
+    ///   From within the 90%, the “exterminator” gets 20% (or 40% on levels where `prevLevel % 10 == 4` and `prevLevel > 4`),
     ///   and the rest is divided evenly per ticket for the exterminated trait.
     /// - Mint the level trophy (transfers the placeholder token owned by the contract).
     ///
@@ -803,15 +806,8 @@ contract PurgeGame is PurgeGameStorage {
             if (qty == 0) revert E();
             nft.purchaseWithClaimable(buyer, qty);
         } else {
-            uint24 lvl = level;
-            if (gameState == 3) {
-                unchecked {
-                    ++lvl;
-                }
-            }
             uint256 qty = (available * 4) / priceWei;
-            uint32 minQty = nft.mapMinimumQuantity(lvl);
-            if (qty < minQty) revert E();
+            if (qty == 0) revert E();
             nft.mintAndPurgeWithClaimable(buyer, qty);
         }
     }
@@ -828,7 +824,10 @@ contract PurgeGame is PurgeGameStorage {
         emit PlayerCredited(beneficiary, weiAmount);
     }
 
-    function _recordMintData(address player, uint24 lvl, bool coinMint) private returns (uint256 coinReward) {
+    function _recordMintData(address player, uint24 lvl, bool coinMint, uint32 mintUnits)
+        private
+        returns (uint256 coinReward)
+    {
         uint256 prevData = mintPacked_[player];
         uint32 day = _currentMintDay();
         uint256 data;
@@ -840,10 +839,27 @@ contract PurgeGame is PurgeGameStorage {
             uint24 prevLevel = uint24((prevData >> ETH_LAST_LEVEL_SHIFT) & MINT_MASK_24);
             uint24 total = uint24((prevData >> ETH_LEVEL_COUNT_SHIFT) & MINT_MASK_24);
             uint24 streak = uint24((prevData >> ETH_LEVEL_STREAK_SHIFT) & MINT_MASK_24);
+            uint256 levelUnitsBefore = (prevData >> ETH_LEVEL_UNITS_SHIFT) & MINT_MASK_16;
+            if (prevLevel != lvl && prevLevel + 1 != lvl) {
+                levelUnitsBefore = 0;
+            }
+            uint256 levelUnitsAfter = levelUnitsBefore + uint256(mintUnits);
+            if (levelUnitsAfter > MINT_MASK_16) {
+                levelUnitsAfter = MINT_MASK_16;
+            }
+
+            if (prevLevel != lvl && levelUnitsAfter < 4) {
+                data = _setPacked(prevData, ETH_LEVEL_UNITS_SHIFT, MINT_MASK_16, levelUnitsAfter);
+                if (data != prevData) {
+                    mintPacked_[player] = data;
+                }
+                return coinReward;
+            }
 
             data = _applyMintDay(prevData, day, ETH_DAY_SHIFT, MINT_MASK_32, ETH_DAY_STREAK_SHIFT, MINT_MASK_20);
 
             if (prevLevel == lvl) {
+                data = _setPacked(data, ETH_LEVEL_UNITS_SHIFT, MINT_MASK_16, levelUnitsAfter);
                 if (data != prevData) {
                     mintPacked_[player] = data;
                 }
@@ -869,6 +885,7 @@ contract PurgeGame is PurgeGameStorage {
             data = _setPacked(data, ETH_LAST_LEVEL_SHIFT, MINT_MASK_24, lvl);
             data = _setPacked(data, ETH_LEVEL_COUNT_SHIFT, MINT_MASK_24, total);
             data = _setPacked(data, ETH_LEVEL_STREAK_SHIFT, MINT_MASK_24, streak);
+            data = _setPacked(data, ETH_LEVEL_UNITS_SHIFT, MINT_MASK_16, levelUnitsAfter);
 
             uint256 rewardUnit = priceCoinLocal / 10;
             uint256 streakReward;
