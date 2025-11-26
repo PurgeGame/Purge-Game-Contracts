@@ -106,6 +106,7 @@ contract PurgeGame is PurgeGameStorage {
     uint256 private constant AGG_DAY_SHIFT = 176;
     uint256 private constant AGG_DAY_STREAK_SHIFT = 208;
     uint256 private constant ETH_LEVEL_UNITS_SHIFT = 228;
+    uint256 private constant ETH_LEVEL_BONUS_SHIFT = 244;
 
     // -----------------------
     // Constructor
@@ -839,17 +840,25 @@ contract PurgeGame is PurgeGameStorage {
             uint24 prevLevel = uint24((prevData >> ETH_LAST_LEVEL_SHIFT) & MINT_MASK_24);
             uint24 total = uint24((prevData >> ETH_LEVEL_COUNT_SHIFT) & MINT_MASK_24);
             uint24 streak = uint24((prevData >> ETH_LEVEL_STREAK_SHIFT) & MINT_MASK_24);
+            bool sameLevel = prevLevel == lvl;
             uint256 levelUnitsBefore = (prevData >> ETH_LEVEL_UNITS_SHIFT) & MINT_MASK_16;
-            if (prevLevel != lvl && prevLevel + 1 != lvl) {
+            if (!sameLevel && prevLevel + 1 != lvl) {
                 levelUnitsBefore = 0;
             }
+            bool bonusPaid = sameLevel && (((prevData >> ETH_LEVEL_BONUS_SHIFT) & 1) == 1);
             uint256 levelUnitsAfter = levelUnitsBefore + uint256(mintUnits);
             if (levelUnitsAfter > MINT_MASK_16) {
                 levelUnitsAfter = MINT_MASK_16;
             }
+            bool awardBonus = (!bonusPaid) && levelUnitsAfter >= 400;
+            if (awardBonus) {
+                coinReward += (priceCoinLocal * 5) / 2;
+                bonusPaid = true;
+            }
 
-            if (prevLevel != lvl && levelUnitsAfter < 4) {
+            if (!sameLevel && levelUnitsAfter < 4) {
                 data = _setPacked(prevData, ETH_LEVEL_UNITS_SHIFT, MINT_MASK_16, levelUnitsAfter);
+                data = _setPacked(data, ETH_LEVEL_BONUS_SHIFT, 1, bonusPaid ? 1 : 0);
                 if (data != prevData) {
                     mintPacked_[player] = data;
                 }
@@ -858,8 +867,9 @@ contract PurgeGame is PurgeGameStorage {
 
             data = _applyMintDay(prevData, day, ETH_DAY_SHIFT, MINT_MASK_32, ETH_DAY_STREAK_SHIFT, MINT_MASK_20);
 
-            if (prevLevel == lvl) {
+            if (sameLevel) {
                 data = _setPacked(data, ETH_LEVEL_UNITS_SHIFT, MINT_MASK_16, levelUnitsAfter);
+                data = _setPacked(data, ETH_LEVEL_BONUS_SHIFT, 1, bonusPaid ? 1 : 0);
                 if (data != prevData) {
                     mintPacked_[player] = data;
                 }
@@ -886,6 +896,7 @@ contract PurgeGame is PurgeGameStorage {
             data = _setPacked(data, ETH_LEVEL_COUNT_SHIFT, MINT_MASK_24, total);
             data = _setPacked(data, ETH_LEVEL_STREAK_SHIFT, MINT_MASK_24, streak);
             data = _setPacked(data, ETH_LEVEL_UNITS_SHIFT, MINT_MASK_16, levelUnitsAfter);
+            data = _setPacked(data, ETH_LEVEL_BONUS_SHIFT, 1, bonusPaid ? 1 : 0);
 
             uint256 rewardUnit = priceCoinLocal / 10;
             uint256 streakReward;

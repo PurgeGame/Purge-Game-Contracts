@@ -512,7 +512,8 @@ contract PurgeGameNFT {
             revert E();
         }
 
-        uint32 mintedQuantity = mapPurchase ? uint32(scaledQty / 25) : uint32(scaledQty / 100);
+        // Quest progress tracks full-price equivalents (4 map mints = 1 unit).
+        uint32 mintedQuantity = uint32(scaledQty / 100);
         uint32 mintUnits = mapPurchase ? mintedQuantity : 4;
 
         uint256 streakBonus;
@@ -572,8 +573,9 @@ contract PurgeGameNFT {
         if (discount != 0) amount -= discount;
         coin.burnCoin(payer, amount);
         game.recordMint(payer, lvl, false, true, 0, 0);
-        if (quantity != 0) {
-            coin.notifyQuestMint(payer, quantity, false);
+        uint32 questQuantity = quantity / 4; // coin mints track full-price equivalents for quests
+        if (questQuantity != 0) {
+            coin.notifyQuestMint(payer, questQuantity, false);
         }
     }
 
