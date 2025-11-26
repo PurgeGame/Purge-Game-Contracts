@@ -387,8 +387,11 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
 
         if (extMode == 2) {
             uint32 winnersBudget = batch;
+            uint32 ops;
+            uint32 opsLimit = batch * 4;
+            if (opsLimit < 5000) opsLimit = 5000;
 
-            for (; decScanDenom <= 20 && winnersBudget != 0; ) {
+            for (; decScanDenom <= 20 && winnersBudget != 0 && ops < opsLimit; ) {
                 uint8 denom = decScanDenom;
                 uint32 acc = decBucketAccumulator[denom];
                 address[] storage roster = decBucketRoster[lvl][denom];
@@ -404,7 +407,8 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
                 }
 
                 bool exhaustedBucket;
-                while (winnersBudget != 0) {
+                while (winnersBudget != 0 && ops < opsLimit) {
+                    unchecked { ++ops; }
                     uint256 step = (denom - ((uint256(acc) + 1) % denom)) % denom;
                     uint256 winnerIdx = uint256(idx) + step;
                     if (winnerIdx >= len) {
@@ -487,11 +491,15 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
             uint256 remainingBurn = decPayoutRemainingBurn;
             uint256 paidTotal = uint256(bafState.returnAmountWei);
 
+            uint32 ops;
+            uint32 opsLimit = batch * 4;
+            if (opsLimit < 5000) opsLimit = 5000;
+
             address[] memory winnersBuf = new address[](winnersBudget);
             uint256[] memory amountsBuf = new uint256[](winnersBudget);
             uint256 n2;
 
-            for (; decScanDenom <= 20 && winnersBudget != 0; ) {
+            for (; decScanDenom <= 20 && winnersBudget != 0 && ops < opsLimit; ) {
                 uint8 denom = decScanDenom;
                 uint32 acc = decBucketAccumulator[denom];
                 address[] storage roster = decBucketRoster[lvl][denom];
@@ -507,7 +515,8 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
                 }
 
                 bool exhaustedBucket;
-                while (winnersBudget != 0 && remainingBurn != 0) {
+                while (winnersBudget != 0 && remainingBurn != 0 && ops < opsLimit) {
+                    unchecked { ++ops; }
                     uint256 step = (denom - ((uint256(acc) + 1) % denom)) % denom;
                     uint256 winnerIdx = uint256(idx) + step;
                     if (winnerIdx >= len) {
