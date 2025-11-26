@@ -1449,8 +1449,18 @@ contract Purgecoin is PurgeCoinStorage {
     /// @return lvl Current game level.
     function _decWindow() internal view returns (bool on, uint24 lvl) {
         lvl = purgeGame.level();
+        uint8 gs = purgeGame.gameState();
+
         bool standard = (lvl >= 25 && (lvl % 10) == 5 && (lvl % 100) != 95);
         bool special = (lvl == DECIMATOR_SPECIAL_LEVEL);
+
+        // For the special level 100 Decimator, open the window as soon as level 99 enters purge
+        // so burns can accumulate before the level 100 settlement run begins.
+        if (!special && gs == 3 && (lvl + 1) == DECIMATOR_SPECIAL_LEVEL) {
+            special = true;
+            lvl = DECIMATOR_SPECIAL_LEVEL;
+        }
+
         on = standard || special;
     }
 
