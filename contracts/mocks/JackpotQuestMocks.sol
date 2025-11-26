@@ -124,9 +124,7 @@ contract JackpotTrophiesModuleMock is IPurgeGameTrophiesModule {
         return (0, address(0));
     }
 
-    function trophyToken(uint24, uint8) external pure override returns (uint256 tokenId, address owner) {
-        return (0, address(0));
-    }
+    function trophyToken(uint24, uint8) external pure override returns (uint256 tokenId) { return 0; }
 
     function trophyOwner(uint256) external pure override returns (address owner) {
         return address(0);
@@ -138,7 +136,7 @@ contract JackpotTrophiesModuleMock is IPurgeGameTrophiesModule {
 
     function burnDecPlaceholder(uint24) external pure override {}
 
-    function rewardRandomStaked(uint256, uint256, uint24) external pure override returns (uint256 tokenIdA, uint256 tokenIdB) {
-        return (0, 0);
-    }
+    function rewardRandomStaked(uint256, uint256, uint24) external pure override returns (bool) { return false; }
+    function rewardTrophy(uint24, uint8, uint256) external pure override returns (bool) { return false; }
+    function rewardEndgame(uint24, uint256, uint256) external pure override returns (uint256) { return 0; }
 }

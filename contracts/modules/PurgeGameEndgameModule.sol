@@ -41,38 +41,28 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
     ) external {
         PendingEndLevel storage pend = pendingEndLevel;
 
+        bool traitWin = pend.exterminator != address(0);
+
         uint8 _phase = phase;
         uint24 prevLevel = lvl - 1;
         uint8 prevMod10 = uint8(prevLevel % 10);
         uint8 prevMod100 = uint8(prevLevel % 100);
+        bool bafLevel = prevLevel != 0 && (prevLevel % 20) == 0 && (prevLevel % 100) != 0;
 
         if (_phase > 3) {
-            if (lastExterminatedTrait != TRAIT_ID_TIMEOUT) {
+            if (traitWin) {
                 if (currentPrizePool != 0) {
                     _payoutParticipants(cap, prevLevel);
                     return;
                 }
             }
 
-            if (pend.level != 0 && pend.exterminator == address(0)) {
-                phase = 0;
-                return;
-            }
-            bool bafPending = prevLevel != 0 && (prevLevel % 20) == 0 && (prevLevel % 100) != 0;
-            bool gateCoinflip = !bafPending && (_phase >= 3 || (lvl % 20) != 0);
-            if (gateCoinflip && coinContract.coinflipWorkPending(lvl)) {
-                coinContract.processCoinflipPayouts(lvl, cap, false, rngWord, day, priceCoin);
-                return;
-            }
-            phase = 0;
-            return;
-        } else {
-            bool decWindow = prevLevel >= 25 && prevMod10 == 5 && prevMod100 != 95;
-            if (prevLevel != 0 && (prevLevel % 20) == 0 && (prevLevel % 100) != 0) {
+            if (bafLevel) {
                 uint256 bafPoolWei = (rewardPool * 24) / 100;
                 (bool bafFinished, ) = _progressExternal(0, bafPoolWei, cap, prevLevel, rngWord, coinContract, true);
                 if (!bafFinished) return;
             }
+            bool decWindow = prevLevel >= 25 && prevMod10 == 5 && prevMod100 != 95;
             bool bigDecWindow = decimatorHundredReady && prevLevel == 100;
             if (bigDecWindow) {
                 uint256 bigPool = decimatorHundredPool;
@@ -97,22 +87,19 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
                 if (!decFinished) return;
             }
 
-            if (lvl > 1) {
-                currentPrizePool = 0;
-                phase = 0;
-            }
-            // Next-level purchase phase starts with an empty currentPrizePool; new funds accumulate in nextPrizePool.
-            gameState = 2;
-            traitRebuildCursor = 0;
+            phase = 0;
+            return;
         }
-
-        if (pend.level == 0) {
+        gameState = 2;
+        if (lvl == 1) {
+            return;
+        }
+        if (coinContract.coinflipWorkPending(lvl)) {
+            coinContract.processCoinflipPayouts(lvl, cap, false, rngWord, day, priceCoin);
             return;
         }
 
-        bool traitWin = pend.exterminator != address(0);
         uint24 prevLevelPending = pend.level;
-        uint256 poolValue = pend.sidePool;
 
         IPurgeGameTrophies.EndLevelRequest memory req = IPurgeGameTrophies.EndLevelRequest({
             exterminator: pend.exterminator,
@@ -123,6 +110,7 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         });
 
         if (traitWin) {
+            uint256 poolValue = pend.sidePool;
             uint256 exterminatorShare = (prevLevelPending % 10 == 4 && prevLevelPending != 4)
                 ? (poolValue * 40) / 100
                 : (poolValue * 20) / 100;
@@ -176,9 +164,6 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
                 // Defensive: if no tickets exist (unexpected), roll the bonus back into the reward pool.
                 rewardPool += ticketBonus;
             }
-        } else {
-            // Timeout path: the final daily jackpot already forwarded any leftovers; clear stale base and settle bonuses.
-            dailyJackpotBase = 0;
         }
 
         trophiesContract.processEndLevel(req);
@@ -271,56 +256,15 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
     }
 
     function _payTrophyRewards(uint24 lvl, uint256 rngWord, IPurgeGameTrophiesModule trophiesContract) private {
-        uint256 rewardBudgetAffiliate = _scaledRewardSlice(rewardPool, AFFILIATE_CARRY_BPS, lvl);
-        uint256 rewardBudgetStake = _scaledRewardSlice(rewardPool, STAKE_CARRY_BPS, lvl);
-        uint256 rewardBudgetRandom = _scaledRewardSlice(rewardPool, STAKED_RANDOM_BPS, lvl);
-        if (rewardBudgetAffiliate == 0 && rewardBudgetStake == 0 && rewardBudgetRandom == 0) return;
+        uint256 scale = _rewardBonusScaleBps(lvl);
+        uint256 scaledPool = (rewardPool * scale) / 10_000;
 
-        uint256 rewardSpent;
-        uint256 trophyDelta;
+        uint256 rewardsTotal = trophiesContract.rewardEndgame(lvl, rngWord, scaledPool);
 
-        (uint256 affiliateTokenId, address affiliateOwner) = trophiesContract.trophyToken(
-            lvl,
-            PURGE_TROPHY_KIND_AFFILIATE
-        );
-        if (affiliateTokenId != 0 && affiliateOwner != address(0) && rewardBudgetAffiliate != 0) {
-            trophiesContract.rewardTrophyByToken(affiliateTokenId, rewardBudgetAffiliate, lvl);
-            rewardSpent += rewardBudgetAffiliate;
-            trophyDelta += rewardBudgetAffiliate;
+        if (rewardsTotal != 0) {
+            rewardPool -= rewardsTotal;
+            trophyPool += rewardsTotal;
         }
-
-        (uint256 stakeTokenId, address stakeOwner) = trophiesContract.trophyToken(lvl, PURGE_TROPHY_KIND_STAKE);
-        if (stakeTokenId != 0 && stakeOwner != address(0) && rewardBudgetStake != 0) {
-            trophiesContract.rewardTrophyByToken(stakeTokenId, rewardBudgetStake, lvl);
-            rewardSpent += rewardBudgetStake;
-            trophyDelta += rewardBudgetStake;
-        }
-
-        if (rewardBudgetRandom != 0) {
-            (uint256 tokenA, uint256 tokenB) = trophiesContract.rewardRandomStaked(
-                rngWord,
-                rewardBudgetRandom,
-                lvl
-            );
-            if (tokenA != 0 || tokenB != 0) {
-                rewardSpent += rewardBudgetRandom;
-                trophyDelta += rewardBudgetRandom;
-            }
-        }
-
-        if (rewardSpent != 0) {
-            rewardPool -= rewardSpent;
-        }
-        if (trophyDelta != 0) {
-            trophyPool += trophyDelta;
-        }
-    }
-
-    function _scaledRewardSlice(uint256 rewardBudget, uint16 sliceBps, uint24 lvl) private pure returns (uint256) {
-        if (rewardBudget == 0 || sliceBps == 0) return 0;
-        uint256 base = (rewardBudget * sliceBps) / 10_000;
-        if (base == 0) return 0;
-        return (base * _rewardBonusScaleBps(lvl)) / 10_000;
     }
 
     function _rewardBonusScaleBps(uint24 lvl) private pure returns (uint16) {

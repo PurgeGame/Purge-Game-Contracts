@@ -331,7 +331,7 @@ contract PurgeGame is PurgeGameStorage {
             if (cap == 0) {
                 uint256 mintData = mintPacked_[caller];
                 uint32 lastEthDay = uint32((mintData >> ETH_DAY_SHIFT) & MINT_MASK_32);
-                if ((lastEthDay < minAllowedDay && cap == 0)) revert MustMintToday();
+                if (lastEthDay < minAllowedDay) revert MustMintToday();
             }
 
             // Allow dormant cleanup bounty even before the daily gate unlocks. If no work is done,
@@ -350,7 +350,7 @@ contract PurgeGame is PurgeGameStorage {
             // --- State 1 - Pregame ---
             if (_gameState == 1) {
                 _runEndgameModule(lvl, cap, day, rngWord); // handles payouts, wipes, endgame dist, and jackpots
-                if (gameState == 2 && pendingEndLevel.level == 0 && rngLockedFlag) {
+                if (gameState == 2) {
                     if (lastExterminatedTrait != TRAIT_ID_TIMEOUT) {
                         payDailyJackpot(false, level, rngWord);
                     }
@@ -363,16 +363,10 @@ contract PurgeGame is PurgeGameStorage {
             // --- State 2 - Purchase / Airdrop ---
             if (_gameState == 2) {
                 if (_phase <= 2) {
-                    bool advanceToAirdrop;
                     bool flipsPending = coinContract.coinflipWorkPending(lvl);
-                    if (_phase == 2 && nextPrizePool >= lastPrizePool) {
-                        if (flipsPending) {
-                            coinContract.processCoinflipPayouts(lvl, cap, true, rngWord, day, priceCoin);
-                            break;
-                        }
-                        advanceToAirdrop = true;
-                    } else if (flipsPending) {
-                        coinContract.processCoinflipPayouts(lvl, cap, false, rngWord, day, priceCoin);
+                    bool advanceToAirdrop = (_phase == 2 && nextPrizePool >= lastPrizePool);
+                    if (flipsPending) {
+                        coinContract.processCoinflipPayouts(lvl, cap, advanceToAirdrop, rngWord, day, priceCoin);
                         break;
                     }
 
@@ -464,7 +458,8 @@ contract PurgeGame is PurgeGameStorage {
             if (_gameState == 3) {
                 // Purge begins only after phase 6 is latched during purchase finalization.
                 uint24 coinflipLevel = uint24(lvl + (jackpotCounter >= 9 ? 1 : 0));
-                if (coinContract.coinflipWorkPending(coinflipLevel)) {
+                bool finalDaily = jackpotCounter >= JACKPOT_LEVEL_CAP - 1;
+                if (!finalDaily && coinContract.coinflipWorkPending(coinflipLevel)) {
                     coinContract.processCoinflipPayouts(coinflipLevel, cap, false, rngWord, day, priceCoin);
                     break;
                 }

@@ -51,11 +51,15 @@ interface IPurgeGameTrophiesModule {
 
     function awardTrophy(address to, uint24 level, uint8 kind, uint256 data, uint256 deferredWei) external;
 
-    function trophyToken(uint24 level, uint8 kind) external view returns (uint256 tokenId, address owner);
+    function trophyToken(uint24 level, uint8 kind) external view returns (uint256 tokenId);
     function rewardTrophyByToken(uint256 tokenId, uint256 amountWei, uint24 level) external;
-    function rewardRandomStaked(uint256 rngSeed, uint256 amountWei, uint24 level)
-        external
-        returns (uint256 tokenIdA, uint256 tokenIdB);
+    function rewardTrophy(uint24 level, uint8 kind, uint256 amountWei) external returns (bool paid);
+    function rewardRandomStaked(uint256 rngSeed, uint256 amountWei, uint24 level) external returns (bool paid);
+    function rewardEndgame(
+        uint24 level,
+        uint256 rngSeed,
+        uint256 scaledPool
+    ) external returns (uint256 paidTotal);
     function trophyOwner(uint256 tokenId) external view returns (address owner);
 
     function burnBafPlaceholder(uint24 level) external;

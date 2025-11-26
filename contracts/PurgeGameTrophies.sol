@@ -72,15 +72,17 @@ interface IPurgeGameTrophies {
 
     function stakedTrophySampleWithId(uint256 rngSeed) external view returns (uint256 tokenId, address owner);
 
-    function trophyToken(uint24 level, uint8 kind) external view returns (uint256 tokenId, address owner);
+    function trophyToken(uint24 level, uint8 kind) external view returns (uint256 tokenId);
 
     function trophyOwner(uint256 tokenId) external view returns (address owner);
 
     function rewardTrophyByToken(uint256 tokenId, uint256 amountWei, uint24 level) external;
 
-    function rewardRandomStaked(uint256 rngSeed, uint256 amountWei, uint24 level)
-        external
-        returns (uint256 tokenIdA, uint256 tokenIdB);
+    function rewardTrophy(uint24 level, uint8 kind, uint256 amountWei) external returns (bool paid);
+
+    function rewardRandomStaked(uint256 rngSeed, uint256 amountWei, uint24 level) external returns (bool paid);
+
+    function rewardEndgame(uint24 level, uint256 rngSeed, uint256 scaledPool) external returns (uint256 paidTotal);
 
     function isTrophy(uint256 tokenId) external view returns (bool);
 
@@ -1328,12 +1330,15 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         owner = address(uint160(nft.packedOwnershipOf(tokenId)));
     }
 
-    function trophyToken(uint24 level, uint8 kind) external view override returns (uint256 tokenId, address owner) {
+    function trophyToken(uint24 level, uint8 kind) external view override returns (uint256 tokenId) {
         (uint256 previousBase, uint256 currentBase) = nft.getBasePointers();
         uint24 currentLevel = game.level();
         tokenId = _placeholderTokenId(level, kind, previousBase, currentBase, currentLevel);
-        if (tokenId == 0) return (0, address(0));
-        owner = address(uint160(nft.packedOwnershipOf(tokenId)));
+        if (tokenId == 0) return 0;
+        address owner = address(uint160(nft.packedOwnershipOf(tokenId)));
+        if (owner == address(0)) {
+            return 0; // burned placeholder
+        }
     }
 
     function trophyOwner(uint256 tokenId) external view override returns (address owner) {
@@ -1344,25 +1349,36 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         _addTrophyRewardInternal(tokenId, amountWei, level);
     }
 
+    function rewardTrophy(uint24 level, uint8 kind, uint256 amountWei) public override onlyGameOrCoin returns (bool paid) {
+        (uint256 previousBase, uint256 currentBase) = nft.getBasePointers();
+        uint24 currentLevel = game.level();
+        uint256 tokenId = _placeholderTokenId(level, kind, previousBase, currentBase, currentLevel);
+        if (tokenId == 0) return false;
+        address owner = address(uint160(nft.packedOwnershipOf(tokenId)));
+        if (owner == address(0)) return false; // burned placeholder
+        _addTrophyRewardInternal(tokenId, amountWei, level);
+        return true;
+    }
+
     function rewardRandomStaked(uint256 rngSeed, uint256 amountWei, uint24 level)
-        external
+        public
         override
         onlyGameOrCoin
-        returns (uint256 tokenIdA, uint256 tokenIdB)
+        returns (bool paid)
     {
-        (tokenIdA, ) = stakedTrophySampleWithId(rngSeed);
-        (tokenIdB, ) = stakedTrophySampleWithId(uint256(keccak256(abi.encodePacked(rngSeed, uint256(7777)))));
+        (uint256 tokenIdA, ) = stakedTrophySampleWithId(rngSeed);
+        (uint256 tokenIdB, ) = stakedTrophySampleWithId(uint256(keccak256(abi.encodePacked(rngSeed, uint256(7777)))));
 
         if (tokenIdA == 0 && tokenIdB == 0) {
-            return (0, 0);
+            return false;
         }
         if (tokenIdA != 0 && (tokenIdB == 0 || tokenIdB == tokenIdA)) {
             _addTrophyRewardInternal(tokenIdA, amountWei, level);
-            return (tokenIdA, 0);
+            return true;
         }
         if (tokenIdA == 0) {
             _addTrophyRewardInternal(tokenIdB, amountWei, level);
-            return (0, tokenIdB);
+            return true;
         }
 
         if (tokenIdB < tokenIdA) {
@@ -1374,6 +1390,29 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         uint256 rem = amountWei - half;
         _addTrophyRewardInternal(tokenIdA, half, level);
         _addTrophyRewardInternal(tokenIdB, rem, level);
+        return true;
+    }
+
+    function rewardEndgame(uint24 level, uint256 rngSeed, uint256 scaledPool)
+        external
+        override
+        onlyGameOrCoin
+        returns (uint256 paidTotal)
+    {
+        uint256 halfPercent = scaledPool / 200; // 0.5% of the scaled pool
+        uint256 affiliateAmount = halfPercent << 1; // 1%
+        uint256 stakeAmount = halfPercent;
+        uint256 randomAmount = halfPercent;
+
+        if (rewardTrophy(level, PURGE_TROPHY_KIND_AFFILIATE, affiliateAmount)) {
+            paidTotal += affiliateAmount;
+        }
+        if (rewardTrophy(level, PURGE_TROPHY_KIND_STAKE, stakeAmount)) {
+            paidTotal += stakeAmount;
+        }
+        if (rewardRandomStaked(rngSeed, randomAmount, level)) {
+            paidTotal += randomAmount;
+        }
     }
 
     function isTrophyStaked(uint256 tokenId) external view override returns (bool) {
