@@ -54,6 +54,7 @@ contract PurgeGame is PurgeGameStorage {
     error MustMintToday(); // Caller must have completed an ETH mint for the current day before advancing
     error NotTimeYet(); // Called in a phase where the action is not permitted
     error RngNotReady(); // VRF request still pending
+    error RngLocked(); // RNG is already locked; nudge not allowed
     error InvalidQuantity(); // Invalid quantity or token count for the action
     error CoinPaused(); // LINK top-ups unavailable while RNG is locked
 
@@ -64,6 +65,7 @@ contract PurgeGame is PurgeGameStorage {
     event Jackpot(uint256 traits); // Encodes jackpot metadata
     event Purge(address indexed player, uint256[] tokenIds);
     event Advance(uint8 gameState, uint8 phase);
+    event ReverseFlip(address indexed caller, uint256 totalQueued);
 
     // -----------------------
     // Immutable Addresses
@@ -91,6 +93,7 @@ contract PurgeGame is PurgeGameStorage {
     uint16 private constant LUCK_PER_LINK_PERCENT = 22; // flip credit per LINK before multiplier (as % of priceCoin)
     uint32 private constant VRF_CALLBACK_GAS_LIMIT = 200_000;
     uint16 private constant VRF_REQUEST_CONFIRMATIONS = 10;
+    uint256 private constant RNG_NUDGE_COST = 100 * 1e6; // PURGE has 6 decimals
 
     uint256 private constant MINT_MASK_24 = (uint256(1) << 24) - 1;
     uint256 private constant MINT_MASK_16 = (uint256(1) << 16) - 1;
@@ -1080,6 +1083,16 @@ contract PurgeGame is PurgeGameStorage {
         return currentWord;
     }
 
+    /// @notice Pay 100 PURGE to nudge the next RNG word by +1.
+    /// @dev Only available while RNG is unlocked (before a VRF request is in-flight).
+    function reverseFlip() external {
+        if (rngLockedFlag) revert RngLocked();
+        coin.burnCoin(msg.sender, RNG_NUDGE_COST);
+        uint256 newCount = totalFlipReversals + 1;
+        totalFlipReversals = newCount;
+        emit ReverseFlip(msg.sender, newCount);
+    }
+
     /// @notice Handle ETH payments for purchases; forwards affiliate rewards as coinflip credits.
     /// @param scaledQty Quantity scaled by 100 (to keep integer math with `price`).
     /// @param affiliateCode Affiliate/referral code provided by the buyer.
@@ -1195,8 +1208,13 @@ contract PurgeGame is PurgeGameStorage {
     function rawFulfillRandomWords(uint256 requestId, uint256[] calldata randomWords) external {
         if (msg.sender != address(vrfCoordinator)) revert E();
         if (requestId != vrfRequestId || rngFulfilled) return;
+        uint256 word = randomWords[0];
+        uint256 rngNudge = totalFlipReversals;
+        if (rngNudge != 0) {
+            word += rngNudge;
+        }
         rngFulfilled = true;
-        rngWordCurrent = randomWords[0];
+        rngWordCurrent = word;
     }
 
     function _creditPurgeFlip(

@@ -71,4 +71,5 @@ abstract contract PurgeGameStorage {
     mapping(address => uint256) internal mintPacked_;
 
     uint256 internal trophyPool;
+    uint256 internal totalFlipReversals;
 }
