@@ -93,8 +93,8 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
 
             if (kind == 0) {
                 uint256 P = poolWei;
-                address[] memory tmpW = new address[](8);
-                uint256[] memory tmpA = new uint256[](8);
+                address[] memory tmpW = new address[](10);
+                uint256[] memory tmpA = new uint256[](10);
                 uint256 n;
                 uint256 credited;
                 uint256 toReturn;
