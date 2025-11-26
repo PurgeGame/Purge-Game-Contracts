@@ -214,6 +214,9 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         uint256 participantShare = ((poolValue * 90) / 100) - exterminatorShare;
         if (arr.length == 0) {
             currentPrizePool = 0;
+            // Defensive: if no trait tickets exist, roll the participant slice back into the reward pool.
+            rewardPool += participantShare;
+            airdropIndex = 0;
         } else {
             currentPrizePool = participantShare;
             airdropIndex = 0;
