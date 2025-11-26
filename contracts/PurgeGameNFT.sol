@@ -36,7 +36,6 @@ interface IPurgeGameNFT {
     function wireAll(address game_, address trophies_) external;
     function tokenTraitsPacked(uint256 tokenId) external view returns (uint32);
     function purchaseCount() external view returns (uint32);
-    function resetPurchaseCount() external;
     function finalizePurchasePhase(uint32 minted, uint256 rngWord) external;
     function purge(address owner, uint256[] calldata tokenIds) external;
     function currentBaseTokenId() external view returns (uint256);
@@ -458,9 +457,8 @@ contract PurgeGameNFT {
                 bonus += coinCost / 5;
             }
             if (useClaimable) {
-                unchecked {
-                    claimableBonus = (quantity * priceUnit) / CLAIMABLE_MAP_BONUS_DIVISOR;
-                }
+                // Claimable MAP purchases earn the same bonus as the standard map rebate.
+                claimableBonus = mapRebate;
             }
         }
 
@@ -1377,10 +1375,6 @@ contract PurgeGameNFT {
 
     function tokensOwed(address player) external view returns (uint32) {
         return _tokensOwed[player];
-    }
-
-    function resetPurchaseCount() external onlyGame {
-        _purchaseCount = 0;
     }
 
     function getTrophyData(
