@@ -11,7 +11,7 @@ const BUCKETS = [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
 const ENTRIES_PER_BUCKET = 5000;
 const RNG_WORD = 0x123456789abcdefn;
 const POOL_WEI = ethers.parseEther("1000");
-const SELECTION_CAP = 500; // winners processed per call during selection
+const SELECTION_CAP = 1900; // winners processed per call during selection
 const DEC_PLAYERS_COUNT_SLOT = 49;
 const DEC_BURN_SLOT = 47;
 const DEC_BUCKET_ROSTER_SLOT = 54;
@@ -92,6 +92,22 @@ const simulateSelection = (rosters, rngWord, cap) => {
   }
 
   return { winners, extVar };
+};
+
+const streamingPayout = (poolWei, winners) => {
+  let remainingPool = poolWei;
+  let remainingBurn = winners.reduce((acc, w) => acc + w.burn, 0n);
+  const payouts = [];
+
+  for (const w of winners) {
+    const amount =
+      remainingBurn === 0n ? 0n : w.burn === remainingBurn ? remainingPool : (remainingPool * w.burn) / remainingBurn;
+    payouts.push(amount);
+    remainingPool -= amount;
+    remainingBurn -= w.burn;
+  }
+
+  return payouts;
 };
 
 describe("Decimator jackpot heavy bucket sweep", function () {
@@ -189,7 +205,11 @@ describe("Decimator jackpot heavy bucket sweep", function () {
     const totalWinnerBurn = expectedWinners.reduce((acc, w) => acc + w.burn, 0n);
     expect(totalWinnerBurn).to.equal(extVar);
 
-    const expectedAmounts = expectedWinners.map((w) => (POOL_WEI * w.burn) / totalWinnerBurn);
+    const payPool = (POOL_WEI * 95n) / 100n;
+    const expectedAmounts = streamingPayout(payPool, expectedWinners);
+    const expectedTopWinner = expectedWinners.reduce((best, w) => (best === null || w.burn > best.burn ? w : best), null)
+      ?.addr;
+    const expectedTrophyAmount = POOL_WEI - payPool;
 
     // --- Execute jackpot selection + payout on-chain ---
     await network.provider.request({
@@ -211,55 +231,53 @@ describe("Decimator jackpot heavy bucket sweep", function () {
       console.log("init tx revert data", e.data || e);
       throw e;
     }
-    let decScanDenomVal = 0n;
     let iterations = 0;
-    while (decScanDenomVal <= 20n) {
-      iterations += 1;
+    let finished = false;
+    let finalReturn = 0n;
+    const actualWinners = [];
+    const actualAmounts = [];
+
+    while (!finished) {
+      const [stepFinished, winnersStep, amountsStep, , returnWeiStep] = await purgecoin
+        .connect(gameSigner)
+        .runExternalJackpot.staticCall(1, POOL_WEI, SELECTION_CAP, LEVEL, RNG_WORD);
+
       try {
         await purgecoin
           .connect(gameSigner)
-          .runExternalJackpot(1, POOL_WEI, SELECTION_CAP, LEVEL, RNG_WORD, { gasLimit }); // selection sweep
+          .runExternalJackpot(1, POOL_WEI, SELECTION_CAP, LEVEL, RNG_WORD, { gasLimit });
       } catch (e) {
         // eslint-disable-next-line no-console
-        console.log("selection tx revert data", e.data || e);
+        console.log("jackpot tx revert data", e.data || e);
         throw e;
       }
-      const scanSlotRaw = await network.provider.send("eth_getStorageAt", [
-        await purgecoin.getAddress(),
-        pad32(56n),
-        "latest",
-      ]);
-      const scanSlot = BigInt(scanSlotRaw);
-      decScanDenomVal = scanSlot & 0xffn;
-      if (iterations > 50) throw new Error("selection batching did not finish");
-    }
-    const decWinnersLenRaw = await network.provider.send("eth_getStorageAt", [
-      await purgecoin.getAddress(),
-      pad32(55n),
-      "latest",
-    ]);
 
-    const winnersDataBase = BigInt(ethers.keccak256(abi.encode(["uint256"], [55])));
-    const decWinnersLen = Number(BigInt(decWinnersLenRaw));
-    const actualWinners = [];
-    for (let i = 0; i < decWinnersLen; i += 1) {
-      const slot = winnersDataBase + BigInt(i);
-      const raw = await network.provider.send("eth_getStorageAt", [
-        await purgecoin.getAddress(),
-        pad32(slot),
-        "latest",
-      ]);
-      actualWinners.push(ethers.getAddress("0x" + raw.slice(26)));
-    }
-    const actualAmounts = actualWinners.map((addr) => (POOL_WEI * burnByAddr[addr]) / extVar);
+      for (let i = 0; i < winnersStep.length; i += 1) {
+        actualWinners.push(winnersStep[i]);
+        actualAmounts.push(amountsStep[i]);
+      }
 
-    expect(actualWinners.length).to.equal(expectedWinners.length);
-    expect(ethers.keccak256(abi.encode(["address[]"], [actualWinners]))).to.equal(
+      if (stepFinished) {
+        finished = true;
+        finalReturn = returnWeiStep;
+      }
+
+      iterations += 1;
+      if (iterations > 250) throw new Error("jackpot batching did not finish");
+    }
+
+    const burnWinners = actualWinners.slice(0, expectedWinners.length);
+    const burnAmounts = actualAmounts.slice(0, expectedWinners.length);
+
+    expect(actualWinners.length).to.equal(expectedWinners.length + 1);
+    expect(ethers.keccak256(abi.encode(["address[]"], [burnWinners]))).to.equal(
       ethers.keccak256(abi.encode(["address[]"], [expectedWinners.map((w) => w.addr)]))
     );
-    expect(ethers.keccak256(abi.encode(["uint256[]"], [actualAmounts]))).to.equal(
+    expect(ethers.keccak256(abi.encode(["uint256[]"], [burnAmounts]))).to.equal(
       ethers.keccak256(abi.encode(["uint256[]"], [expectedAmounts]))
     );
+    expect(actualWinners[expectedWinners.length]).to.equal(expectedTopWinner);
+    expect(actualAmounts[expectedWinners.length]).to.equal(expectedTrophyAmount);
 
     // Bucket-level sanity: winner counts per bucket match expectation.
     const expectedCounts = {};
@@ -267,14 +285,17 @@ describe("Decimator jackpot heavy bucket sweep", function () {
       expectedCounts[w.bucket] = (expectedCounts[w.bucket] || 0) + 1;
     }
     const actualCounts = {};
-    for (const addr of actualWinners) {
+    for (const addr of burnWinners) {
       const b = bucketByAddr[addr];
       actualCounts[b] = (actualCounts[b] || 0) + 1;
     }
     expect(actualCounts).to.deep.equal(expectedCounts);
 
-    // Sum of payouts should not exceed pool (integer division dust is returned).
-    const paid = actualAmounts.reduce((acc, v) => acc + v, 0n);
-    expect(paid).to.be.lte(POOL_WEI);
+    // Sum of payouts should consume the full pool with streaming division.
+    const paidBurn = burnAmounts.reduce((acc, v) => acc + v, 0n);
+    expect(paidBurn).to.equal(payPool);
+    const paidTotal = actualAmounts.reduce((acc, v) => acc + v, 0n);
+    expect(paidTotal + finalReturn).to.equal(POOL_WEI);
+    expect(finalReturn).to.equal(0n);
   });
 });

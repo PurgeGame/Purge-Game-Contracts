@@ -120,4 +120,10 @@ abstract contract PurgeCoinStorage {
     address[] internal decWinners;
     uint8 internal decScanDenom;
     uint32 internal decScanIndex;
+    uint256 internal decTotalBurn;
+    uint256 internal decPayoutRemainingBurn;
+    uint256 internal decPayoutRemainingPool;
+    uint256 internal decBucketSeed;
+    address internal decTopWinner;
+    uint192 internal decTopBurn;
 }

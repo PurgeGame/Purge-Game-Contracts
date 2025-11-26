@@ -569,13 +569,7 @@ contract PurgeGame is PurgeGameStorage {
                     uint16(trait2) == prevExterminated ||
                     uint16(trait3) == prevExterminated);
 
-            if (levelNinety) {
-                if (!tokenHasPrevExterminated) {
-                    unchecked {
-                        bonusTenths += 4;
-                    }
-                }
-            } else if (tokenHasPrevExterminated) {
+            if ((tokenHasPrevExterminated && !levelNinety) || (levelNinety && !tokenHasPrevExterminated)) {
                 unchecked {
                     bonusTenths += 4;
                 }
@@ -826,10 +820,12 @@ contract PurgeGame is PurgeGameStorage {
         emit PlayerCredited(beneficiary, weiAmount);
     }
 
-    function _recordMintData(address player, uint24 lvl, bool coinMint, uint32 mintUnits)
-        private
-        returns (uint256 coinReward)
-    {
+    function _recordMintData(
+        address player,
+        uint24 lvl,
+        bool coinMint,
+        uint32 mintUnits
+    ) private returns (uint256 coinReward) {
         uint256 prevData = mintPacked_[player];
         uint32 day = _currentMintDay();
         uint256 data;
