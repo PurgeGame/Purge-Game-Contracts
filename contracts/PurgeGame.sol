@@ -800,6 +800,7 @@ contract PurgeGame is PurgeGameStorage {
         address player = msg.sender;
         uint256 amount = claimableWinnings[player];
         if (amount <= 1) revert E();
+        coin.burnCoin(player, priceCoin / 10); // Burn cost = 10% of current coin unit price
         uint256 payout;
         unchecked {
             claimableWinnings[player] = 1;
