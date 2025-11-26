@@ -48,7 +48,7 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
             uint256[] memory amounts,
             uint256 trophyPoolDelta,
             uint256 returnAmountWei
-    )
+        )
     {
         uint32 batch;
         if (cap == 0) {
@@ -96,23 +96,27 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
                 address[] memory tmpW = new address[](10);
                 uint256[] memory tmpA = new uint256[](10);
                 uint256 n;
-                uint256 credited;
                 uint256 toReturn;
-                bool coinflipWin = (rngWord & 1) == 1;
                 address trophyRecipient;
+                bool trophyAwarded;
 
                 uint256 entropy = rngWord;
                 uint256 salt;
 
                 {
-                    uint256 prize = P / 5;
+                    uint256 prize = P / 10;
+
                     address w = topBettors[0].player;
                     if (_creditOrRefund(w, prize, tmpW, tmpA, n)) {
                         unchecked {
                             ++n;
                         }
-                        credited += prize;
                         trophyRecipient = w;
+                        uint256 trophyData = (uint256(BAF_TRAIT_SENTINEL) << 152) |
+                            (uint256(lvl) << TROPHY_BASE_LEVEL_SHIFT) |
+                            TROPHY_FLAG_BAF;
+                        purgeGameTrophies.awardTrophy(trophyRecipient, lvl, PURGE_TROPHY_KIND_BAF, trophyData, prize);
+                        trophyAwarded = true;
                     } else {
                         toReturn += prize;
                     }
@@ -129,7 +133,6 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
                         unchecked {
                             ++n;
                         }
-                        credited += prize;
                     } else {
                         toReturn += prize;
                     }
@@ -187,7 +190,6 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
                             unchecked {
                                 ++n;
                             }
-                            credited += prize;
                         } else if (prize != 0) {
                             toReturn += prize;
                         }
@@ -252,7 +254,6 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
                         if (eligibleOwner && prize != 0) {
                             purgeGameTrophies.rewardTrophyByToken(tokenId, prize, lvl);
                             trophyDelta += prize;
-                            credited += prize;
                         } else if (prize != 0) {
                             toReturn += prize;
                         }
@@ -272,7 +273,6 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
                             unchecked {
                                 ++n;
                             }
-                            credited += prizeLuckbox;
                         } else {
                             toReturn += prizeLuckbox;
                         }
@@ -282,28 +282,19 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
                 }
 
                 uint256 scatter = (P * 2) / 5;
-                uint256 unallocated = P - credited - toReturn - scatter;
-                if (unallocated != 0) {
-                    toReturn += unallocated;
-                }
                 if (limit >= 10 && bs.offset < limit) {
                     uint256 occurrences = 1 + (uint256(limit) - 1 - bs.offset) / 10;
                     uint256 perWei = scatter / occurrences;
                     bs.per = uint120(perWei);
 
-                    uint256 rem = toReturn + (scatter - perWei * occurrences);
-                    bafState.returnAmountWei = uint120(rem);
+                    uint256 rem = scatter - perWei * occurrences;
+                    bafState.returnAmountWei = uint120(toReturn + rem);
                 } else {
                     bs.per = 0;
                     bafState.returnAmountWei = uint120(toReturn + scatter);
                 }
 
-                if (coinflipWin && trophyRecipient != address(0)) {
-                    uint256 trophyData = (uint256(BAF_TRAIT_SENTINEL) << 152) |
-                        (uint256(lvl) << TROPHY_BASE_LEVEL_SHIFT) |
-                        TROPHY_FLAG_BAF;
-                    purgeGameTrophies.awardTrophy(trophyRecipient, lvl, PURGE_TROPHY_KIND_BAF, trophyData, 0);
-                } else {
+                if (!trophyAwarded) {
                     purgeGameTrophies.burnBafPlaceholder(lvl);
                 }
 
@@ -408,7 +399,9 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
 
                 bool exhaustedBucket;
                 while (winnersBudget != 0 && ops < opsLimit) {
-                    unchecked { ++ops; }
+                    unchecked {
+                        ++ops;
+                    }
                     uint256 step = (denom - ((uint256(acc) + 1) % denom)) % denom;
                     uint256 winnerIdx = uint256(idx) + step;
                     if (winnerIdx >= len) {
@@ -516,7 +509,9 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
 
                 bool exhaustedBucket;
                 while (winnersBudget != 0 && remainingBurn != 0 && ops < opsLimit) {
-                    unchecked { ++ops; }
+                    unchecked {
+                        ++ops;
+                    }
                     uint256 step = (denom - ((uint256(acc) + 1) % denom)) % denom;
                     uint256 winnerIdx = uint256(idx) + step;
                     if (winnerIdx >= len) {
