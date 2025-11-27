@@ -46,8 +46,6 @@ interface IPurgeCoin {
 
     function playerLuckbox(address player) external view returns (uint256);
 
-    function primeMintEthQuest(uint48 day) external;
-
     function rollDailyQuest(uint48 day, uint256 entropy) external;
     function rollDailyQuestWithOverrides(uint48 day, uint256 entropy, bool forceMintEth, bool forcePurge) external;
 

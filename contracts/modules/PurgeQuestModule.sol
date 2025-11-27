@@ -60,7 +60,6 @@ contract PurgeQuestModule is IPurgeQuestModule {
 
     DailyQuest[QUEST_SLOT_COUNT] private activeQuests;
     mapping(address => PlayerQuestState) private questPlayerState;
-    uint48 private forcedMintEthQuestDay;
 
     uint256 private constant QUEST_MINT_ANY_PACKED = 0x0000000000000000000000080008000800080008000700060005000400030002;
     uint256 private constant QUEST_MINT_ETH_PACKED = 0x0000000000000000000000050005000400040004000300030002000200020001;
@@ -85,10 +84,6 @@ contract PurgeQuestModule is IPurgeQuestModule {
     modifier onlyCoin() {
         if (msg.sender != coin) revert OnlyCoin();
         _;
-    }
-
-    function primeMintEthQuest(uint48 day) external onlyCoin {
-        forcedMintEthQuestDay = day;
     }
 
     function rollDailyQuest(
@@ -116,11 +111,6 @@ contract PurgeQuestModule is IPurgeQuestModule {
         if (day == 0) revert InvalidQuestDay();
         if (entropy == 0) revert InvalidEntropy();
         DailyQuest[QUEST_SLOT_COUNT] storage quests = activeQuests;
-        uint48 forcedDay = forcedMintEthQuestDay;
-        if (forcedDay != 0 && day >= forcedDay) {
-            forceMintEth = day == forcedDay;
-            forcedMintEthQuestDay = 0;
-        }
         bool purgeAllowed = _canRollPurgeQuest(day) || forcePurge;
         bool decAllowed = _canRollDecimatorQuest();
         _normalizeActivePurgeQuestsStorage(quests, purgeAllowed);

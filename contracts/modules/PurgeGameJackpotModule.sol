@@ -174,7 +174,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         uint256 effectiveWei,
         IPurgeCoinModule coinContract,
         IPurgeGameTrophiesModule trophiesContract
-    ) external returns (bool finished) {
+    ) external {
         uint8[4] memory winningTraits = _getRandomTraits(rngWord);
         uint32 winningTraitsPacked = _packWinningTraits(winningTraits);
         uint256 paidWeiMap;
@@ -194,11 +194,6 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         currentPrizePool += (effectiveWei - paidWeiMap);
 
         _rollQuestForJackpot(coinContract, rngWord, true);
-
-        uint48 questDay = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
-        coinContract.primeMintEthQuest(questDay + 1);
-
-        return true;
     }
 
     function runDecimatorHundredJackpot(

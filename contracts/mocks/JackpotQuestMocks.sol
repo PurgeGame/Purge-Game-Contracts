@@ -11,7 +11,6 @@ contract JackpotCoinModuleMock is IPurgeCoinModule {
     uint256 public rollCount;
     bool public lastRollForceMint;
     bool public lastRollForcePurge;
-    uint48 public lastPrimeDay;
 
     function setLeaderboard(address[] calldata addrs) external {
         leaderboard = addrs;
@@ -83,10 +82,6 @@ contract JackpotCoinModuleMock is IPurgeCoinModule {
     function resetAffiliateLeaderboard(uint24) external pure override {}
 
     function burnie(uint256, address) external payable override {}
-
-    function primeMintEthQuest(uint48 day) external override {
-        lastPrimeDay = day;
-    }
 
     function rollDailyQuest(uint48 day, uint256 entropy) external override {
         lastRollDay = day;

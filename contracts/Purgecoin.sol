@@ -848,11 +848,6 @@ contract Purgecoin is PurgeCoinStorage {
     // Daily quest wiring (delegated to quest module)
     // ---------------------------------------------------------------------
 
-    function primeMintEthQuest(uint48 day) external onlyPurgeGameContract {
-        IPurgeQuestModule module = questModule;
-        module.primeMintEthQuest(day);
-    }
-
     function rollDailyQuest(uint48 day, uint256 entropy) external onlyPurgeGameContract {
         IPurgeQuestModule module = questModule;
         (bool rolled, , , , ) = module.rollDailyQuest(day, entropy);

@@ -5,7 +5,6 @@ import "../interfaces/IPurgeQuestModule.sol";
 
 contract MockQuestModule is IPurgeQuestModule {
     function wireGame(address) external override {}
-    function primeMintEthQuest(uint48) external override {}
     function rollDailyQuest(uint48, uint256) external override returns (bool, uint8, bool, uint8, uint8) {
         return (false, 0, false, 0, 0);
     }

@@ -468,9 +468,8 @@ contract PurgeGame is PurgeGameStorage {
                     }
 
                     uint256 mapEffectiveWei = _calcPrizePoolForJackpot(lvl, rngWord);
-                    if (payMapJackpot(lvl, rngWord, mapEffectiveWei)) {
-                        phase = 5;
-                    }
+                    payMapJackpot(lvl, rngWord, mapEffectiveWei);
+                    phase = 5;
                     break;
                 }
                 uint32 purchaseCountRaw = nft.purchaseCount();
@@ -1073,8 +1072,8 @@ contract PurgeGame is PurgeGameStorage {
 
     // --- Map jackpot payout (end of purchase phase) -------------------------------------------------
 
-    function payMapJackpot(uint24 lvl, uint256 rngWord, uint256 effectiveWei) internal returns (bool finished) {
-        (bool ok, bytes memory data) = jackpotModule.delegatecall(
+    function payMapJackpot(uint24 lvl, uint256 rngWord, uint256 effectiveWei) internal {
+        (bool ok, ) = jackpotModule.delegatecall(
             abi.encodeWithSelector(
                 IPurgeGameJackpotModule.payMapJackpot.selector,
                 lvl,
@@ -1085,7 +1084,6 @@ contract PurgeGame is PurgeGameStorage {
             )
         );
         if (!ok) revert E();
-        return abi.decode(data, (bool));
     }
 
     function _calcPrizePoolForJackpot(uint24 lvl, uint256 rngWord) internal returns (uint256 effectiveWei) {

@@ -29,7 +29,7 @@ interface IPurgeGameJackpotModule {
         uint256 effectiveWei,
         IPurgeCoinModule coinContract,
         IPurgeGameTrophiesModule trophiesContract
-    ) external returns (bool finished);
+    ) external;
 
     function runDecimatorHundredJackpot(
         uint24 lvl,

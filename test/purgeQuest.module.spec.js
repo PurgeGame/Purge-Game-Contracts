@@ -213,16 +213,6 @@ describe("PurgeQuestModule", function () {
       ).to.not.be.reverted;
     });
 
-    it("only allows the coin to prime a forced mint quest", async function () {
-      const setup = await loadFixture(deployQuestWithGameFixture);
-      const { questModule, coin, player } = setup;
-      await expect(
-        questModule.connect(player).primeMintEthQuest(5)
-      ).to.be.revertedWithCustomError(questModule, "OnlyCoin");
-      await expect(
-        questModule.connect(coin).primeMintEthQuest(5)
-      ).to.not.be.reverted;
-    });
   });
 
   describe("rolling quests", function () {
@@ -267,19 +257,6 @@ describe("PurgeQuestModule", function () {
         const quests = await questModule.getActiveQuests();
         expect(Number(quests[0].questType)).to.not.equal(Number(quests[1].questType));
       }
-    });
-
-    it("forces a mint-ETH quest when primed for a day", async function () {
-      const setup = await loadFixture(deployQuestWithGameFixture);
-      const { questModule, coin } = setup;
-      const flipEntropy = findEntropy({ questType: QUEST_TYPES.FLIP });
-      await (
-        await questModule.connect(coin).primeMintEthQuest(5)
-      ).wait();
-      let quests = await rollDay(questModule, coin, 5, flipEntropy);
-      expect(Number(quests[0].questType)).to.equal(QUEST_TYPES.MINT_ETH);
-      quests = await rollDay(questModule, coin, 6, flipEntropy);
-      expect(Number(quests[0].questType)).to.equal(QUEST_TYPES.FLIP);
     });
 
     it("converts purge quests outside of purge phase but locks completed days", async function () {

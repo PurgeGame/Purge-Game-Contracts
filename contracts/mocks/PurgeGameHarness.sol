@@ -100,7 +100,8 @@ contract PurgeGameHarness is PurgeGame {
     }
 
     function harnessRunMapJackpot(uint24 lvl, uint256 rngWord, uint256 effectiveWei) external returns (bool) {
-        return payMapJackpot(lvl, rngWord, effectiveWei);
+        payMapJackpot(lvl, rngWord, effectiveWei);
+        return true;
     }
 
     function harnessRunDailyJackpot(uint256 rngWord) external returns (bool) {
