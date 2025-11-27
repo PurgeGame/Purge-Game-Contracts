@@ -93,7 +93,8 @@ contract PurgeGame is PurgeGameStorage {
     // -----------------------
     uint48 private constant JACKPOT_RESET_TIME = 82620; // Offset anchor for "daily" windows
     uint32 private constant WRITES_BUDGET_SAFE = 800; // Keeps map batching within the ~15M gas budget
-    uint32 private constant TRAIT_REBUILD_TOKENS_PER_TX = 1800; // Max tokens processed per trait rebuild slice
+    uint32 private constant TRAIT_REBUILD_TOKENS_PER_TX = 2500; // Max tokens processed per trait rebuild slice (post-level-1)
+    uint32 private constant TRAIT_REBUILD_TOKENS_LEVEL1 = 1800; // Level 1 first-slice cap
     uint64 private constant MAP_LCG_MULT = 0x5851F42D4C957F2D; // LCG multiplier for map RNG slices
     uint8 private constant JACKPOT_LEVEL_CAP = 10;
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
@@ -1411,14 +1412,15 @@ contract PurgeGame is PurgeGameStorage {
     /// @notice Rebuild `traitRemaining` by scanning scheduled token traits in capped slices.
     /// @param tokenBudget Max tokens to process this call (0 => default 4,096).
     /// @return finished True when all tokens for the level have been incorporated.
-    function _rebuildTraitCounts(uint32 tokenBudget, uint32 target) private returns (bool finished) {
+    function _rebuildTraitCounts(uint32 tokenBudget, uint32 target) internal returns (bool finished) {
         uint32 cursor = traitRebuildCursor;
         if (cursor >= target) return true;
 
         uint32 batch = (tokenBudget == 0) ? TRAIT_REBUILD_TOKENS_PER_TX : tokenBudget;
         bool startingSlice = cursor == 0;
         if (startingSlice) {
-            batch = TRAIT_REBUILD_TOKENS_PER_TX;
+            uint32 firstBatch = (level == 1) ? TRAIT_REBUILD_TOKENS_LEVEL1 : TRAIT_REBUILD_TOKENS_PER_TX;
+            batch = firstBatch;
         }
         uint32 remaining = target - cursor;
         if (batch > remaining) batch = remaining;

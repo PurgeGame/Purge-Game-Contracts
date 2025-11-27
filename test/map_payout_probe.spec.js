@@ -53,9 +53,9 @@ async function fulfillPendingVrfRequest(vrf, consumer) {
   }
 }
 
-async function runAdvanceGameTick(purgeGame, vrf, vrfConsumer, operator) {
+async function runAdvanceGameTick(purgeGame, vrf, vrfConsumer, operator, cap) {
   try {
-    await purgeGame.connect(operator).advanceGame(1500);
+    await purgeGame.connect(operator).advanceGame(cap);
     await fulfillPendingVrfRequest(vrf, vrfConsumer);
   } catch (e) {
     if (e.message.includes("NotTimeYet") || e.message.includes("RngNotReady")) {
@@ -138,21 +138,27 @@ describe("Map Payout Probe", function () {
       // Advance to ~50% pool (Mid Phase)
       // Need to pump pool. Minting increases pool.
       // Target is small in L1 (~125 ETH).
-      // Just mint a bunch from owner to fill it.
-      
+      // Pump in larger batches to reach targets quickly.
+      const pumpQty = 200; // maps per pump (cost ~1.25 ETH at L1 price)
+      const maxPumps = 60; // safety to avoid long loops
+
       let info = await purgeGame.gameInfo();
-      while (info.prizePoolCurrent < info.prizePoolTarget / 2n) {
-          const cost = (info.price_ * 100n * 25n) / 100n; // 100 maps
-          await system.purgeNFT.connect(owner).mintAndPurge(100, false, ethers.ZeroHash, { value: cost });
+      let pumps = 0;
+      while (info.prizePoolCurrent < info.prizePoolTarget / 2n && pumps < maxPumps) {
+          const cost = (info.price_ * BigInt(pumpQty) * 25n) / 100n; // pumpQty maps
+          await system.purgeNFT.connect(owner).mintAndPurge(pumpQty, false, ethers.ZeroHash, { value: cost });
           info = await purgeGame.gameInfo();
+          pumps++;
       }
       await probePurchase("Mid (50% Pool)");
 
       // Advance to ~100% pool (Late Phase)
-      while (info.prizePoolCurrent < info.prizePoolTarget) {
-          const cost = (info.price_ * 100n * 25n) / 100n;
-          await system.purgeNFT.connect(owner).mintAndPurge(100, false, ethers.ZeroHash, { value: cost });
+      pumps = 0;
+      while (info.prizePoolCurrent < info.prizePoolTarget && pumps < maxPumps) {
+          const cost = (info.price_ * BigInt(pumpQty) * 25n) / 100n;
+          await system.purgeNFT.connect(owner).mintAndPurge(pumpQty, false, ethers.ZeroHash, { value: cost });
           info = await purgeGame.gameInfo();
+          pumps++;
       }
       await probePurchase("Late (100% Pool)");
       
@@ -160,7 +166,7 @@ describe("Map Payout Probe", function () {
       // Must advance ticks to trigger state change
       let state = Number(info.gameState_);
       while (state !== 3) {
-          await runAdvanceGameTick(purgeGame, vrf, vrfConsumer, owner);
+          await runAdvanceGameTick(purgeGame, vrf, vrfConsumer, owner, 3000);
           info = await purgeGame.gameInfo();
           state = Number(info.gameState_);
       }

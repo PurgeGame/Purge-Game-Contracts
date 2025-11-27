@@ -376,7 +376,8 @@ contract IconRendererTrophy32 {
             isBaf,
             isDec,
             statusFlags,
-            lvl
+            lvl,
+            invertFlag
         );
         return _pack(tokenId, true, img, lvl, desc, trophyType, attrs);
     }
@@ -427,7 +428,8 @@ contract IconRendererTrophy32 {
         bool isBaf,
         bool isDec,
         uint32 statusFlags,
-        uint24 lvl
+        uint24 lvl,
+        bool invertFlag
     ) private view returns (string memory) {
         uint32 innerSide = _innerSquareSide();
         string memory diamondPath = icons.diamond();

@@ -112,4 +112,30 @@ contract PurgeGameHarness is PurgeGame {
     function harnessSetJackpotCounter(uint8 value) external {
         jackpotCounter = value;
     }
+
+    function harnessSetRebuildCursor(uint32 cursor) external {
+        traitRebuildCursor = cursor;
+    }
+
+    function harnessSetTraitRemaining(uint8 traitId, uint32 value) external {
+        traitRemaining[traitId] = value;
+    }
+
+    function harnessResetTraits(uint32 value) external {
+        for (uint16 i; i < 256; ) {
+            traitRemaining[i] = value;
+            unchecked {
+                ++i;
+            }
+        }
+        traitRebuildCursor = 0;
+    }
+
+    function harnessRebuild(uint32 tokenBudget, uint32 target) external returns (bool) {
+        return _rebuildTraitCounts(tokenBudget, target);
+    }
+
+    function harnessTraitRemaining(uint8 traitId) external view returns (uint32) {
+        return traitRemaining[traitId];
+    }
 }
