@@ -65,12 +65,13 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
             phase = 0;
             return;
         }
-        gameState = 2;
-        if (lvl == 1) {
-            return;
-        }
+
         if (coinContract.coinflipWorkPending(lvl)) {
             coinContract.processCoinflipPayouts(lvl, cap, false, rngWord, day, priceCoin);
+            return;
+        }
+        gameState = 2;
+        if (lvl == 1) {
             return;
         }
 
@@ -131,11 +132,7 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         }
     }
 
-    function _primeTraitPayouts(
-        uint24 prevLevel,
-        uint256 rngWord,
-        IPurgeGameTrophiesModule trophiesContract
-    ) private {
+    function _primeTraitPayouts(uint24 prevLevel, uint256 rngWord, IPurgeGameTrophiesModule trophiesContract) private {
         address ex = exterminator;
         if (ex == address(0)) return;
 
