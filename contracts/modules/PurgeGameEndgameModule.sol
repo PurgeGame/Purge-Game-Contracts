@@ -81,7 +81,8 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
                 traitId: lastExterminatedTrait,
                 level: prevLevel,
                 rngWord: rngWord,
-                deferredWei: 0
+                deferredWei: 0,
+                invertTrophy: false
             });
 
             uint256 scale = _rewardBonusScaleBps(prevLevel);
@@ -206,7 +207,8 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
             traitId: lastExterminatedTrait,
             level: prevLevel,
             rngWord: rngWord,
-            deferredWei: deferredWei
+            deferredWei: deferredWei,
+            invertTrophy: exterminationInvertFlag
         });
 
         uint256 scale = _rewardBonusScaleBps(prevLevel);

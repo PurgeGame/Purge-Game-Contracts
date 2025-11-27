@@ -733,9 +733,10 @@ contract PurgeGame is PurgeGameStorage {
         uint24 levelSnapshot = level;
         if (exterminated < 256) {
             uint8 exTrait = uint8(exterminated);
-            bool repeatOrNinety = (levelSnapshot == 90)
-                ? (uint16(exTrait) != lastExterminatedTrait)
-                : (uint16(exTrait) == lastExterminatedTrait);
+            uint16 prevTrait = lastExterminatedTrait;
+            bool repeatTrait = prevTrait == uint16(exTrait);
+            exterminationInvertFlag = repeatTrait;
+            bool repeatOrNinety = (levelSnapshot == 90) ? !repeatTrait : repeatTrait;
             uint256 pool = currentPrizePool;
 
             if (repeatOrNinety) {
@@ -749,6 +750,7 @@ contract PurgeGame is PurgeGameStorage {
 
             lastExterminatedTrait = exTrait;
         } else {
+            exterminationInvertFlag = false;
             exterminator = address(0);
 
             currentPrizePool = 0;

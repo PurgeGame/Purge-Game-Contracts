@@ -31,6 +31,7 @@ abstract contract PurgeGameStorage {
     bool internal traitCountsSeedQueued;
     bool internal traitCountsShouldOverwrite;
     bool internal decimatorHundredReady;
+    bool internal exterminationInvertFlag;
 
     // -----------------------
     // Price

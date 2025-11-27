@@ -31,6 +31,7 @@ interface IPurgeGameTrophies {
         uint24 level;
         uint256 rngWord;
         uint256 deferredWei;
+        bool invertTrophy;
     }
 
     function wire(address game_, address coin_) external;
@@ -210,6 +211,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     uint256 private constant TROPHY_FLAG_DECIMATOR = uint256(1) << 204;
     uint256 private constant TROPHY_STAKE_LEVEL_SHIFT = 205;
     uint256 private constant TROPHY_STAKE_LEVEL_MASK = uint256(0xFFFFFF) << TROPHY_STAKE_LEVEL_SHIFT;
+    uint256 private constant TROPHY_FLAG_INVERT = uint256(1) << 229;
     uint256 private constant TROPHY_OWED_MASK = (uint256(1) << 128) - 1;
     uint256 private constant TROPHY_BASE_LEVEL_SHIFT = 128;
     uint256 private constant TROPHY_LAST_CLAIM_SHIFT = 168;
@@ -904,6 +906,9 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             TraitWinContext memory ctx;
             ctx.levelBits = uint256(req.level) << TROPHY_BASE_LEVEL_SHIFT;
             ctx.traitData = (uint256(req.traitId) << 152) | ctx.levelBits;
+            if (req.invertTrophy) {
+                ctx.traitData |= TROPHY_FLAG_INVERT;
+            }
             ctx.deferredAward = req.deferredWei;
             _awardTrophyInternal(
                 req.exterminator,

@@ -75,6 +75,7 @@ contract IconRendererTrophy32 {
     uint256 private constant STAKE_TROPHY_FLAG = uint256(1) << 202;
     uint256 private constant BAF_TROPHY_FLAG = uint256(1) << 203;
     uint256 private constant DECIMATOR_TROPHY_FLAG = uint256(1) << 204;
+    uint256 private constant TROPHY_FLAG_INVERT = uint256(1) << 229;
     uint256 private constant TROPHY_STAKE_LEVEL_SHIFT = 205;
     uint256 private constant TROPHY_STAKE_LEVEL_MASK =
         uint256(0xFFFFFF) << TROPHY_STAKE_LEVEL_SHIFT;
@@ -98,7 +99,6 @@ contract IconRendererTrophy32 {
         0xab8d3f
     ];
     string private constant STAKE_BADGE_HEX = "#4d2b1f";
-    uint32 private constant STATUS_FLAG_SECOND_EXTERMINATION = 1 << 2;
     string private constant STAKE_STATUS_TRANSFORM =
         "matrix(0.02548 0 0 0.02548 -10.583 -10.500)";
     string private constant ETH_STATUS_TRANSFORM =
@@ -215,6 +215,7 @@ contract IconRendererTrophy32 {
             !isStake &&
             !isBaf &&
             !isDec;
+        bool invertFlag = (data & TROPHY_FLAG_INVERT) != 0;
         uint32 statusFlags = extras[0];
         uint256 ethAttachment = data & TROPHY_OWED_MASK;
         if ((statusFlags & 2) == 0 && ethAttachment != 0) {
@@ -671,11 +672,8 @@ contract IconRendererTrophy32 {
             )
         );
 
-        bool doubleExtermination = (statusFlags &
-            STATUS_FLAG_SECOND_EXTERMINATION) != 0;
-        bool invertTrophy = !isMap &&
-            !isTopAffiliate &&
-            (doubleExtermination || lvl == 90);
+        // Invert exterminator trophies on repeat traits; flip logic on level 90.
+        bool invertTrophy = isExtermination && ((lvl == 90) ? !invertFlag : invertFlag);
         if (invertTrophy) {
             ringsAndSymbol = string(
                 abi.encodePacked(
