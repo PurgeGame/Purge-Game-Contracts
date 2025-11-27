@@ -220,7 +220,6 @@ contract PurgeGameNFT {
         _packedAddressData[owner] = packedData;
     }
 
-
     constructor(address regularRenderer_, address trophyRenderer_, address coin_) {
         regularRenderer = ITokenRenderer(regularRenderer_);
         trophyRenderer = ITokenRenderer(trophyRenderer_);
@@ -316,10 +315,7 @@ contract PurgeGameNFT {
         _purchase(msg.sender, quantity, payInCoin, affiliateCode, false);
     }
 
-    function purchaseWithClaimable(
-        address buyer,
-        uint256 quantity
-    ) external onlyGame {
+    function purchaseWithClaimable(address buyer, uint256 quantity) external onlyGame {
         _purchase(buyer, quantity, false, bytes32(0), true);
     }
 
@@ -332,14 +328,8 @@ contract PurgeGameNFT {
     ) private {
         if (quantity == 0 || quantity > type(uint32).max) revert InvalidQuantity();
 
-        (
-            uint24 targetLevel,
-            uint8 state,
-            uint8 phase,
-            bool rngLocked_,
-            uint256 priceWei,
-            uint256 priceCoinUnit
-        ) = game.purchaseInfo();
+        (uint24 targetLevel, uint8 state, uint8 phase, bool rngLocked_, uint256 priceWei, uint256 priceCoinUnit) = game
+            .purchaseInfo();
 
         if ((targetLevel % 20) == 16) revert NotTimeYet();
         if (rngLocked_) revert RngNotReady();
@@ -362,6 +352,7 @@ contract PurgeGameNFT {
                 quantity * 100,
                 affiliateCode,
                 targetLevel,
+                state,
                 false,
                 creditNext,
                 useClaimable,
@@ -399,10 +390,7 @@ contract PurgeGameNFT {
         _mintAndPurge(msg.sender, quantity, payInCoin, affiliateCode, false);
     }
 
-    function mintAndPurgeWithClaimable(
-        address buyer,
-        uint256 quantity
-    ) external onlyGame {
+    function mintAndPurgeWithClaimable(address buyer, uint256 quantity) external onlyGame {
         _mintAndPurge(buyer, quantity, false, bytes32(0), true);
     }
 
@@ -413,14 +401,8 @@ contract PurgeGameNFT {
         bytes32 affiliateCode,
         bool useClaimable
     ) private {
-        (
-            uint24 lvl,
-            uint8 state,
-            uint8 phase,
-            bool rngLocked_,
-            uint256 priceWei,
-            uint256 priceUnit
-        ) = game.purchaseInfo();
+        (uint24 lvl, uint8 state, uint8 phase, bool rngLocked_, uint256 priceWei, uint256 priceUnit) = game
+            .purchaseInfo();
         if (state == 3 && payInCoin) revert NotTimeYet();
         if (quantity == 0 || quantity > type(uint32).max) revert InvalidQuantity();
         if (rngLocked_) revert RngNotReady();
@@ -447,6 +429,7 @@ contract PurgeGameNFT {
                 scaledQty,
                 affiliateCode,
                 lvl,
+                state,
                 true,
                 creditNext,
                 useClaimable,
@@ -484,6 +467,7 @@ contract PurgeGameNFT {
         uint256 scaledQty,
         bytes32 affiliateCode,
         uint24 lvl,
+        uint8 gameState,
         bool mapPurchase,
         bool creditNextPool,
         bool useClaimable,
@@ -518,27 +502,31 @@ contract PurgeGameNFT {
         if (useClaimable) {
             streakBonus = game.recordMint(payer, lvl, creditNextPool, false, expectedWei, mintUnits);
         } else {
-            streakBonus = game.recordMint{value: expectedWei}(payer, lvl, creditNextPool, false, expectedWei, mintUnits);
+            streakBonus = game.recordMint{value: expectedWei}(
+                payer,
+                lvl,
+                creditNextPool,
+                false,
+                expectedWei,
+                mintUnits
+            );
         }
 
         if (mintedQuantity != 0) {
             coin.notifyQuestMint(payer, mintedQuantity, true);
         }
 
-        // scaledQty tracks fractional mint units (map purchases use quarter-price increments),
-        // so normalize by 100 to align affiliate rewards with the effective ETH mints.
-        uint256 affiliateBaseUnits = (scaledQty * priceUnit) / 100;
-        uint8 percentReached = game.getEarlyPurgePercent();
-        bool affiliateBonus = percentReached >= 50 || (lvl % 25) == 1;
-
-        uint256 affiliateAmount = (affiliateBaseUnits * 15) / 100;
+        // Flat affiliate payout baseline and bonus conditions.
+        uint256 affiliateAmount = priceUnit / 10; // 0.1 priceCoin
+        bool affiliateBonus = lvl <= 3 || gameState == 2; // first 3 levels or any purchase phase
         if (affiliateBonus) {
-            affiliateAmount += (affiliateAmount * 60) / 100;
+            affiliateAmount = (affiliateAmount * 250) / 100; // +150% => 0.25 priceCoin
         }
 
         uint256 rakebackMint = coin.payAffiliate(affiliateAmount, affiliateCode, payer, lvl);
 
         if (!mapPurchase) {
+            uint8 percentReached = game.getEarlyPurgePercent();
             uint256 epPercent = percentReached;
             if (epPercent < 20) {
                 uint256 bonusPct = 20 - epPercent;
