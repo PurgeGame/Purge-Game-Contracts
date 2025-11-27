@@ -274,8 +274,7 @@ describe("Quest System Comprehensive Test", function () {
       console.log(`Inactive Player Streak: ${s.streak}`);
       console.log(`Inactive Player LastCompleted: ${s.lastCompletedDay}`);
       
-      // If forced quest completed, streak increments (or starts) and lastCompletedDay updates.
-      // `_questCompleteForced` sets streak = streak + 1.
-      expect(s.lastCompletedDay).to.equal(20);
+      // Forced quest should not touch streak/lastCompletedDay, it only primes access to daily quests.
+      expect(s.lastCompletedDay).to.equal(0);
   });
 });

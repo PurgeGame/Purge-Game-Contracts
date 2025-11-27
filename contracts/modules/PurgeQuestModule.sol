@@ -29,6 +29,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
     uint32 private constant QUEST_TIER_STREAK_SPAN = 7;
     uint8 private constant QUEST_STATE_COMPLETED_SLOTS_MASK = (uint8(1) << QUEST_SLOT_COUNT) - 1;
     uint8 private constant QUEST_STATE_STREAK_CREDITED = 1 << 7;
+    uint8 private constant QUEST_STATE_ETH_PRIMED = 1 << 5;
     uint16 private constant QUEST_MIN_TOKEN = 250;
     uint16 private constant QUEST_MIN_FLIP_STAKE_TOKEN = 1_000;
     uint16 private constant QUEST_MIN_MINT = 1;
@@ -161,7 +162,6 @@ contract PurgeQuestModule is IPurgeQuestModule {
         DailyQuest[QUEST_SLOT_COUNT] memory quests = activeQuests;
         uint48 currentDay = _currentQuestDay(quests);
         PlayerQuestState storage state = questPlayerState[player];
-        bool mintedRecently = _hasRecentEthMint(player);
         if (player == address(0) || quantity == 0 || currentDay == 0) {
             return (0, false, quests[0].questType, state.streak, false);
         }
@@ -169,7 +169,9 @@ contract PurgeQuestModule is IPurgeQuestModule {
         _questSyncState(state, currentDay);
         uint8 tier = _questTier(state.baseStreak);
 
-        if (!mintedRecently) {
+        bool mintedReady = _ethMintReady(state, player);
+
+        if (!mintedReady) {
             if (!paidWithEth) {
                 return (0, false, QUEST_TYPE_MINT_ETH, state.streak, false);
             }
@@ -242,6 +244,9 @@ contract PurgeQuestModule is IPurgeQuestModule {
             return (0, false, quests[0].questType, state.streak, false);
         }
         _questSyncState(state, currentDay);
+        if (!_ethMintReady(state, player)) {
+            return (0, false, QUEST_TYPE_MINT_ETH, state.streak, false);
+        }
         uint8 tier = _questTier(state.baseStreak);
         uint256 priceUnit = questGame.coinPriceUnit();
 
@@ -285,6 +290,9 @@ contract PurgeQuestModule is IPurgeQuestModule {
             return (0, false, quests[0].questType, state.streak, false);
         }
         _questSyncState(state, currentDay);
+        if (!_ethMintReady(state, player)) {
+            return (0, false, QUEST_TYPE_MINT_ETH, state.streak, false);
+        }
         uint8 tier = _questTier(state.baseStreak);
         uint256 priceUnit = questGame.coinPriceUnit();
 
@@ -330,6 +338,9 @@ contract PurgeQuestModule is IPurgeQuestModule {
         }
         PlayerQuestState storage state = questPlayerState[player];
         _questSyncState(state, currentDay);
+        if (!_ethMintReady(state, player)) {
+            return (0, false, QUEST_TYPE_MINT_ETH, state.streak, false);
+        }
         uint8 tier = _questTier(state.baseStreak);
         uint256 priceUnit = questGame.coinPriceUnit();
 
@@ -379,6 +390,9 @@ contract PurgeQuestModule is IPurgeQuestModule {
             return (0, false, quests[0].questType, state.streak, false);
         }
         _questSyncState(state, currentDay);
+        if (!_ethMintReady(state, player)) {
+            return (0, false, QUEST_TYPE_MINT_ETH, state.streak, false);
+        }
         uint8 tier = _questTier(state.baseStreak);
         uint256 priceUnit = questGame.coinPriceUnit();
 
@@ -419,6 +433,9 @@ contract PurgeQuestModule is IPurgeQuestModule {
             return (0, false, quests[0].questType, state.streak, false);
         }
         _questSyncState(state, currentDay);
+        if (!_ethMintReady(state, player)) {
+            return (0, false, QUEST_TYPE_MINT_ETH, state.streak, false);
+        }
         uint8 tier = _questTier(state.baseStreak);
         uint256 priceUnit = questGame.coinPriceUnit();
 
@@ -477,16 +494,11 @@ contract PurgeQuestModule is IPurgeQuestModule {
         for (uint8 slot; slot < QUEST_SLOT_COUNT; ) {
             if (local[slot].questType == QUEST_TYPE_PURGE) {
                 uint8 otherSlot = slot == 0 ? uint8(1) : uint8(0);
-                if ((local[slot].flags & QUEST_FLAG_FORCE_PURGE) != 0) {
-                    // Keep as-is
-                } else if (local[otherSlot].questType == QUEST_TYPE_MINT_ETH) {
-                    local[slot].questType = QUEST_TYPE_STAKE;
-                    (local[slot].stakeMask, local[slot].stakeRisk) = _stakeQuestMaskAndRisk(local[slot].entropy);
-                } else {
-                    local[slot].questType = QUEST_TYPE_MINT_ETH;
-                    local[slot].stakeMask = 0;
-                    local[slot].stakeRisk = 0;
-                }
+                bool otherMintEth = local[otherSlot].questType == QUEST_TYPE_MINT_ETH;
+                local[slot].questType = otherMintEth ? QUEST_TYPE_AFFILIATE : QUEST_TYPE_MINT_ETH;
+                local[slot].stakeMask = 0;
+                local[slot].stakeRisk = 0;
+                local[slot].flags &= ~QUEST_FLAG_FORCE_PURGE;
             }
             unchecked {
                 ++slot;
@@ -604,7 +616,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         if (purgeAllowed) return;
         for (uint8 slot; slot < QUEST_SLOT_COUNT; ) {
             DailyQuest storage quest = quests[slot];
-            if (quest.questType == QUEST_TYPE_PURGE && (quest.flags & QUEST_FLAG_FORCE_PURGE) == 0) {
+            if (quest.questType == QUEST_TYPE_PURGE) {
                 _convertPurgeQuest(quests, slot);
             }
             unchecked {
@@ -617,14 +629,10 @@ contract PurgeQuestModule is IPurgeQuestModule {
         DailyQuest storage quest = quests[slot];
         uint8 otherSlot = slot == 0 ? uint8(1) : uint8(0);
         DailyQuest storage other = quests[otherSlot];
-        if (other.questType == QUEST_TYPE_MINT_ETH) {
-            quest.questType = QUEST_TYPE_STAKE;
-            (quest.stakeMask, quest.stakeRisk) = _stakeQuestMaskAndRisk(quest.entropy);
-        } else {
-            quest.questType = QUEST_TYPE_MINT_ETH;
-            quest.stakeMask = 0;
-            quest.stakeRisk = 0;
-        }
+        bool otherMintEth = other.questType == QUEST_TYPE_MINT_ETH;
+        quest.questType = otherMintEth ? QUEST_TYPE_AFFILIATE : QUEST_TYPE_MINT_ETH;
+        quest.stakeMask = 0;
+        quest.stakeRisk = 0;
         quest.flags &= ~QUEST_FLAG_FORCE_PURGE;
     }
 
@@ -855,13 +863,9 @@ contract PurgeQuestModule is IPurgeQuestModule {
         PlayerQuestState storage state,
         uint48 currentDay
     ) private returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) {
-        if ((state.completionMask & QUEST_STATE_STREAK_CREDITED) == 0) {
-            state.completionMask |= QUEST_STATE_STREAK_CREDITED;
-            uint32 newStreak = state.streak + 1;
-            state.streak = newStreak;
-            state.lastCompletedDay = uint32(currentDay);
-        }
-        return (0, false, QUEST_TYPE_MINT_ETH, state.streak, true);
+        state.completionMask |= QUEST_STATE_ETH_PRIMED;
+        state.forcedProgressDay = uint32(currentDay);
+        return (0, false, QUEST_TYPE_MINT_ETH, state.streak, false);
     }
 
     function _questComplete(
@@ -983,5 +987,12 @@ contract PurgeQuestModule is IPurgeQuestModule {
             return true;
         }
         return currentLevel - lastLevel <= 3;
+    }
+
+    function _ethMintReady(PlayerQuestState storage state, address player) private view returns (bool) {
+        if ((state.completionMask & QUEST_STATE_ETH_PRIMED) != 0) {
+            return true;
+        }
+        return _hasRecentEthMint(player);
     }
 }

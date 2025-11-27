@@ -267,7 +267,7 @@ describe("PurgeQuestModule", function () {
       let quests = await rollDay(questModule, coin, 1, purgeEntropy);
       const fallbackDay1 =
         Number(quests[1].questType) === QUEST_TYPES.MINT_ETH
-          ? QUEST_TYPES.STAKE
+          ? QUEST_TYPES.AFFILIATE
           : QUEST_TYPES.MINT_ETH;
       expect(Number(quests[0].questType)).to.equal(fallbackDay1);
       await (await game.setGameState(3)).wait();
@@ -275,7 +275,7 @@ describe("PurgeQuestModule", function () {
       expect(Number(quests[0].questType)).to.equal(QUEST_TYPES.PURGE);
       const fallbackConverted =
         Number(quests[1].questType) === QUEST_TYPES.MINT_ETH
-          ? QUEST_TYPES.STAKE
+          ? QUEST_TYPES.AFFILIATE
           : QUEST_TYPES.MINT_ETH;
       await (
         await questModule
@@ -283,8 +283,8 @@ describe("PurgeQuestModule", function () {
           .handlePurge(await player.getAddress(), LARGE_PURGE)
       ).wait();
       await (await game.setGameState(1)).wait();
-      const active = await questModule.getActiveQuest();
-      expect(Number(active.questType)).to.equal(fallbackConverted);
+      const active = await questModule.getActiveQuests();
+      expect(Number(active[0].questType)).to.equal(fallbackConverted);
     });
 
     it("enforces the decimator unlock schedule", async function () {
@@ -340,18 +340,18 @@ describe("PurgeQuestModule", function () {
       const forced = await questModule
         .connect(coin)
         .handleMint.staticCall(await player.getAddress(), 1, true);
-      expect(forced.completed).to.equal(true);
+      expect(forced.completed).to.equal(false);
       expect(forced.reward).to.equal(0n);
       expect(Number(forced.questType)).to.equal(QUEST_TYPES.MINT_ETH);
-      expect(forced.streak).to.equal(1n);
+      expect(forced.streak).to.equal(0n);
       await (
         await questModule
           .connect(coin)
           .handleMint(await player.getAddress(), 1, true)
       ).wait();
       let state = await questModule.playerQuestState(await player.getAddress());
-      expect(state.streak).to.equal(1n);
-      expect(state.lastCompletedDay).to.equal(1n);
+      expect(state.streak).to.equal(0n);
+      expect(state.lastCompletedDay).to.equal(0n);
       expect(state.completedToday).to.equal(false);
       await ensureMintHistory(game, player);
       const questReward = await questModule
@@ -598,7 +598,7 @@ describe("PurgeQuestModule", function () {
       }
       const fallbackConverted =
         Number(otherSlot.questType) === QUEST_TYPES.MINT_ETH
-          ? QUEST_TYPES.STAKE
+          ? QUEST_TYPES.AFFILIATE
           : QUEST_TYPES.MINT_ETH;
       const res = await questModule
         .connect(coin)
@@ -611,8 +611,8 @@ describe("PurgeQuestModule", function () {
           .handlePurge(await player.getAddress(), LARGE_PURGE)
       ).wait();
       await (await game.setGameState(1)).wait();
-      const info = await questModule.getActiveQuest();
-      expect(Number(info.questType)).to.equal(fallbackConverted);
+      const info = await questModule.getActiveQuests();
+      expect(Number(info[0].questType)).to.equal(fallbackConverted);
     });
   });
 
