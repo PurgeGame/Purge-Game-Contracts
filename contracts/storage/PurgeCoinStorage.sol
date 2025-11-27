@@ -117,7 +117,6 @@ abstract contract PurgeCoinStorage {
 
     // Decimator bucketed rosters and scan state
     mapping(uint24 => mapping(uint8 => address[])) internal decBucketRoster;
-    address[] internal decWinners;
     uint8 internal decScanDenom;
     uint32 internal decScanIndex;
     uint256 internal decTotalBurn;

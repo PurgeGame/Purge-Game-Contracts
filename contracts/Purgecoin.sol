@@ -305,13 +305,6 @@ contract Purgecoin is PurgeCoinStorage {
         return normalized | (uint256(risk) << STAKE_LANE_RISK_SHIFT);
     }
 
-    function _decodeStakeLane(uint256 lane) private pure returns (uint256 principalRounded, uint8 risk) {
-        if (lane == 0) return (0, 0);
-        uint256 units = lane & STAKE_LANE_PRINCIPAL_MASK;
-        principalRounded = units * STAKE_PRINCIPAL_FACTOR;
-        risk = uint8((lane & STAKE_LANE_RISK_MASK) >> STAKE_LANE_RISK_SHIFT);
-    }
-
     function _laneAt(uint256 encoded, uint8 index) private pure returns (uint256) {
         if (index >= STAKE_MAX_LANES) return 0;
         uint256 shift = uint256(index) * STAKE_LANE_BITS;
@@ -322,19 +315,6 @@ contract Purgecoin is PurgeCoinStorage {
         uint256 shift = uint256(index) * STAKE_LANE_BITS;
         uint256 mask = STAKE_LANE_MASK << shift;
         return (encoded & ~mask) | (laneValue << shift);
-    }
-
-    function _ensureCompatible(uint256 encoded, uint8 expectRisk) private pure returns (uint8 lanes) {
-        for (uint8 i; i < STAKE_MAX_LANES; ) {
-            uint256 lane = _laneAt(encoded, i);
-            if (lane == 0) break;
-            lanes++;
-            uint8 haveRisk = uint8((lane & STAKE_LANE_RISK_MASK) >> STAKE_LANE_RISK_SHIFT);
-            if (haveRisk != expectRisk) revert StakeInvalid();
-            unchecked {
-                ++i;
-            }
-        }
     }
 
     function _insertLane(uint256 encoded, uint256 laneValue) private pure returns (uint256) {
@@ -368,14 +348,9 @@ contract Purgecoin is PurgeCoinStorage {
         revert StakeInvalid();
     }
 
-    function _capStakePrincipal(uint256 principal) private pure returns (uint72) {
-        if (principal > type(uint72).max) return type(uint72).max;
-        return uint72(principal);
-    }
-
     function _recordStakeTrophyCandidate(uint24 level, address player, uint256 principal) private {
         if (player == address(0) || principal == 0) return;
-        uint72 principalCapped = _capStakePrincipal(principal);
+        uint72 principalCapped = principal > type(uint72).max ? type(uint72).max : uint72(principal);
         StakeTrophyCandidate storage cand = stakeTrophyCandidate;
         if (cand.level != level) {
             stakeTrophyCandidate = StakeTrophyCandidate({player: player, principal: principalCapped, level: level});
@@ -456,7 +431,17 @@ contract Purgecoin is PurgeCoinStorage {
             existingEncoded = stakeAmt[checkLevel][sender];
             if (existingEncoded != 0) {
                 uint8 wantRisk = risk - offset;
-                uint8 lanes = _ensureCompatible(existingEncoded, wantRisk);
+                uint8 lanes;
+                for (uint8 i; i < STAKE_MAX_LANES; ) {
+                    uint256 lane = _laneAt(existingEncoded, i);
+                    if (lane == 0) break;
+                    lanes++;
+                    uint8 haveRisk = uint8((lane & STAKE_LANE_RISK_MASK) >> STAKE_LANE_RISK_SHIFT);
+                    if (haveRisk != wantRisk) revert StakeInvalid();
+                    unchecked {
+                        ++i;
+                    }
+                }
                 if (lanes >= STAKE_MAX_LANES) revert StakeInvalid();
             }
             unchecked {
@@ -475,7 +460,7 @@ contract Purgecoin is PurgeCoinStorage {
                 for (uint8 li; li < STAKE_MAX_LANES; ) {
                     uint256 lane = _laneAt(existingAtScan, li);
                     if (lane == 0) break;
-                    (, uint8 existingRisk) = _decodeStakeLane(lane);
+                    uint8 existingRisk = uint8((lane & STAKE_LANE_RISK_MASK) >> STAKE_LANE_RISK_SHIFT);
                     uint24 reachLevel = scanLevel + uint24(existingRisk) - 1;
                     if (reachLevel >= placeLevel) {
                         uint24 impliedRiskAtPlace = uint24(existingRisk) - (placeLevel - scanLevel);
@@ -810,8 +795,7 @@ contract Purgecoin is PurgeCoinStorage {
         address externalJackpotModule_
     ) external {
         if (msg.sender != creator) revert OnlyDeployer();
-        if (address(purgeGameNFT) != address(0) || address(purgeGame) != address(0)) revert OnlyDeployer();
-        if (questModule_ == address(0) || externalJackpotModule_ == address(0)) revert ZeroAddress();
+
         purgeGame = IPurgeGame(game_);
         bytes32 h = H;
         assembly {

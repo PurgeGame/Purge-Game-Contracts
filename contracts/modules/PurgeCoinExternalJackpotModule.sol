@@ -19,7 +19,6 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
     // ---------------------------------------------------------------------
     uint256 private constant MILLION = 1e6;
     uint32 private constant BAF_BATCH = 5000;
-    uint256 private constant BUCKET_SIZE = 1500;
     uint32 private constant SS_IDLE = type(uint32).max;
     uint8 private constant PURGE_TROPHY_KIND_BAF = 4;
     uint8 private constant PURGE_TROPHY_KIND_DECIMATOR = 5;
@@ -77,7 +76,6 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
                 decBucketSeed = rngWord;
                 decTopWinner = address(0);
                 decTopBurn = 0;
-                delete decWinners;
             }
             bs.limit = limit;
 
@@ -447,7 +445,6 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
                     if (_hasDecPlaceholder(lvl)) {
                         purgeGameTrophies.burnDecPlaceholder(lvl);
                     }
-                    delete decWinners;
                     delete bafState;
                     delete bs;
                     extMode = 0;
@@ -625,7 +622,6 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
             }
 
             uint256 ret = totalPool > paidForRet ? (totalPool - paidForRet) : 0;
-            delete decWinners;
             delete bafState;
             delete bs;
             extMode = 0;
@@ -677,15 +673,6 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
         if (capacity == 0) return address(0);
         uint256 physical = (uint256(cfHead) + idx) % capacity;
         return cfPlayers[physical];
-    }
-
-    function _srcPlayer(uint8 kind, uint24 lvl, uint256 idx) internal view returns (address) {
-        if (kind == 0) {
-            return _playerAt(idx);
-        }
-        uint256 bucketIdx = idx / BUCKET_SIZE;
-        uint256 offsetInBucket = idx - bucketIdx * BUCKET_SIZE;
-        return decBuckets[lvl][uint24(bucketIdx)][offsetInBucket];
     }
 
     function _seedDecBucketState(uint256 entropy) internal {
