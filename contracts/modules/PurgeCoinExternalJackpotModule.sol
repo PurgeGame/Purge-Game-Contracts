@@ -695,7 +695,7 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
     }
 
     function _hasDecPlaceholder(uint24 lvl) internal pure returns (bool) {
-        if (lvl == DECIMATOR_SPECIAL_LEVEL) return true;
+        if (lvl != 0 && (lvl % DECIMATOR_SPECIAL_LEVEL) == 0) return true;
         if (lvl < 25) return false;
         if ((lvl % 10) != 5) return false;
         if ((lvl % 100) == 95) return false;

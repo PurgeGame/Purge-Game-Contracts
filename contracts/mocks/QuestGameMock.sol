@@ -4,6 +4,8 @@ pragma solidity ^0.8.26;
 import "../interfaces/IPurgeGame.sol";
 
 contract QuestGameMock is IPurgeGame {
+    uint24 private constant DECIMATOR_SPECIAL_LEVEL = 100;
+
     uint8 private phase;
     uint8 private state;
     uint24 private currentLevel;
@@ -55,6 +57,30 @@ contract QuestGameMock is IPurgeGame {
 
     function getEarlyPurgePercent() external pure override returns (uint8) {
         return 0;
+    }
+
+    function decWindow() external view override returns (bool on, uint24 lvl) {
+        uint24 curLvl = currentLevel;
+        lvl = curLvl;
+
+        bool special = (curLvl != 0) && (curLvl % DECIMATOR_SPECIAL_LEVEL == 0);
+        if (!special && state == 3 && curLvl < type(uint24).max) {
+            uint24 next = curLvl + 1;
+            if (next % DECIMATOR_SPECIAL_LEVEL == 0) {
+                special = true;
+                lvl = next;
+            }
+        }
+
+        bool standard = (curLvl >= 25 && (curLvl % 10) == 5 && (curLvl % 100) != 95);
+        on = standard || special;
+    }
+
+    function isBafLevelActive(uint24 lvl) external view override returns (bool) {
+        if (lvl == 0) return false;
+        if ((lvl % 20) != 0) return false;
+        if ((lvl % 100) == 0) return false;
+        return state == 3;
     }
 
     function purchaseInfo()

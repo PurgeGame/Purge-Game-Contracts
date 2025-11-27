@@ -97,6 +97,7 @@ contract PurgeGame is PurgeGameStorage {
     uint64 private constant MAP_LCG_MULT = 0x5851F42D4C957F2D; // LCG multiplier for map RNG slices
     uint8 private constant JACKPOT_LEVEL_CAP = 10;
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
+    uint24 private constant DECIMATOR_SPECIAL_LEVEL = 100;
     uint16 private constant LUCK_PER_LINK_PERCENT = 22; // flip credit per LINK before multiplier (as % of priceCoin)
     uint32 private constant VRF_CALLBACK_GAS_LIMIT = 200_000;
     uint16 private constant VRF_REQUEST_CONFIRMATIONS = 10;
@@ -227,6 +228,31 @@ contract PurgeGame is PurgeGameStorage {
 
     function isRngFulfilled() external view returns (bool) {
         return rngFulfilled;
+    }
+
+    function decWindow() external view returns (bool on, uint24 lvl) {
+        uint24 curLvl = level;
+        lvl = curLvl;
+        uint8 gs = gameState;
+
+        bool special = (curLvl != 0) && (curLvl % DECIMATOR_SPECIAL_LEVEL == 0);
+        if (!special && gs == 3 && curLvl < type(uint24).max) {
+            uint24 next = curLvl + 1;
+            if (next % DECIMATOR_SPECIAL_LEVEL == 0) {
+                special = true;
+                lvl = next;
+            }
+        }
+
+        bool standard = (curLvl >= 25 && (curLvl % 10) == 5 && (curLvl % 100) != 95);
+        on = standard || special;
+    }
+
+    function isBafLevelActive(uint24 lvl) external view returns (bool) {
+        if (lvl == 0) return false;
+        if ((lvl % 20) != 0) return false;
+        if ((lvl % 100) == 0) return false;
+        return gameState == 3;
     }
 
     function purchaseInfo()
@@ -435,7 +461,7 @@ contract PurgeGame is PurgeGameStorage {
                         break;
                     }
 
-                    if (lvl == 100) {
+                    if (lvl % 100 == 0) {
                         if (!_runDecimatorHundredJackpot(lvl, cap, rngWord)) {
                             break;
                         }
@@ -704,8 +730,6 @@ contract PurgeGame is PurgeGameStorage {
     /// - Reset per-level state, mint the next level’s trophy placeholder,
     ///   set default exterminated sentinel to TRAIT_ID_TIMEOUT, and request fresh VRF.
     function _endLevel(uint16 exterminated) private {
-        uint256 prizeSnapshot = currentPrizePool;
-
         address callerExterminator = msg.sender;
         uint24 levelSnapshot = level;
         if (exterminated < 256) {

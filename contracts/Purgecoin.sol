@@ -204,7 +204,7 @@ contract Purgecoin is PurgeCoinStorage {
     /// @notice Burn PURGE during an active Decimator window to accrue weighted participation.
     /// @param amount Amount (6 decimals) to burn; must satisfy the global minimum.
     function decimatorBurn(uint256 amount) external {
-        (bool decOn, uint24 lvl) = _decWindow();
+        (bool decOn, uint24 lvl) = purgeGame.decWindow();
         if (purgeGame.rngLocked()) revert BettingPaused();
         if (!decOn) revert NotDecimatorWindow();
         if (amount < MIN) revert AmountLTMin();
@@ -212,7 +212,7 @@ contract Purgecoin is PurgeCoinStorage {
         address caller = msg.sender;
         _burn(caller, amount);
 
-        bool specialDec = (lvl == DECIMATOR_SPECIAL_LEVEL);
+        bool specialDec = (lvl % DECIMATOR_SPECIAL_LEVEL) == 0;
         uint8 bucket = specialDec
             ? _decBucketDenominatorFromLevels(purgeGame.ethMintLevelCount(caller))
             : _decBucketDenominator(purgeGame.ethMintStreakCount(caller));
@@ -998,7 +998,7 @@ contract Purgecoin is PurgeCoinStorage {
         uint32 stepPayout = (cap == 0) ? 420 : cap;
         uint32 stepStake = (cap == 0) ? 200 : (cap > 200 ? 200 : cap);
 
-        bool bafActive = _isBafLevelActive(level);
+        bool bafActive = purgeGame.isBafLevelActive(level);
         bool win = (word & 1) == 1;
         if (!win) {
             stepPayout *= 3;
@@ -1189,7 +1189,7 @@ contract Purgecoin is PurgeCoinStorage {
         uint256 queued = _coinflipCount();
         if (queued == 0) return false;
 
-        bool bafActive = _isBafLevelActive(level);
+        bool bafActive = purgeGame.isBafLevelActive(level);
         if (bafActive) {
             // During purge on BAF levels, keep re-running queued flips each tick; wins stay queued and
             // compound until a loss or until the game leaves purge (BAF main event pays out normally).
@@ -1400,17 +1400,6 @@ contract Purgecoin is PurgeCoinStorage {
         return reward;
     }
 
-    function _isBafLevelActive(uint24 lvl) private view returns (bool) {
-        if (!_isBafLevel(lvl)) return false;
-        return purgeGame.gameState() == 3;
-    }
-
-    function _isBafLevel(uint24 lvl) private pure returns (bool) {
-        if (lvl == 0) return false;
-        if ((lvl % 20) != 0) return false;
-        return (lvl % 100) != 0;
-    }
-
     function _decBucketDenominator(uint256 streak) internal pure returns (uint8) {
         if (streak <= 5) {
             return uint8(15 - streak);
@@ -1443,26 +1432,6 @@ contract Purgecoin is PurgeCoinStorage {
             if (denom < 4) denom = 4; // should only hit for >=80 but guard anyway
         }
         return uint8(denom);
-    }
-
-    /// @notice Check whether the Decimator window is active for the current level.
-    /// @return on  True if level >= 25 and `level % 10 == 5` (Decimator checkpoint).
-    /// @return lvl Current game level.
-    function _decWindow() internal view returns (bool on, uint24 lvl) {
-        lvl = purgeGame.level();
-        uint8 gs = purgeGame.gameState();
-
-        bool standard = (lvl >= 25 && (lvl % 10) == 5 && (lvl % 100) != 95);
-        bool special = (lvl == DECIMATOR_SPECIAL_LEVEL);
-
-        // For the special level 100 Decimator, open the window as soon as level 99 enters purge
-        // so burns can accumulate before the level 100 settlement run begins.
-        if (!special && gs == 3 && (lvl + 1) == DECIMATOR_SPECIAL_LEVEL) {
-            special = true;
-            lvl = DECIMATOR_SPECIAL_LEVEL;
-        }
-
-        on = standard || special;
     }
 
     /// @notice Append a player to the Decimator roster for a given level.

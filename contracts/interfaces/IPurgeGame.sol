@@ -18,6 +18,10 @@ interface IPurgeGame {
 
     function getEarlyPurgePercent() external view returns (uint8);
 
+    function decWindow() external view returns (bool on, uint24 lvl);
+
+    function isBafLevelActive(uint24 lvl) external view returns (bool);
+
     function purchaseInfo()
         external
         view

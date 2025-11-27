@@ -348,7 +348,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     }
 
     function _shouldMintDec(uint24 level) private pure returns (bool) {
-        if (level == DECIMATOR_SPECIAL_LEVEL) return true;
+        if (level != 0 && (level % DECIMATOR_SPECIAL_LEVEL) == 0) return true;
         if (level < 25) return false;
         if ((level % 10) != 5) return false;
         if ((level % 100) == 95) return false;

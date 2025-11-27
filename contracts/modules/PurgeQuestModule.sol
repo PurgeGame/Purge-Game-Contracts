@@ -652,7 +652,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
             return false;
         }
         uint24 lvl = game_.level();
-        if (lvl == DECIMATOR_SPECIAL_LEVEL) {
+        if (lvl != 0 && (lvl % DECIMATOR_SPECIAL_LEVEL) == 0) {
             return true;
         }
         if (lvl < 25) {
