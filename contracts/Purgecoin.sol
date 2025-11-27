@@ -1406,7 +1406,7 @@ contract Purgecoin is PurgeCoinStorage {
             return uint8(denom);
         }
 
-        if (streak <= 25) {
+        if (streak < 25) {
             return 5;
         }
 
