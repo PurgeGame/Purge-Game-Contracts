@@ -1416,10 +1416,12 @@ contract PurgeGame is PurgeGameStorage {
         if (cursor >= target) return true;
 
         uint32 batch = (tokenBudget == 0) ? TRAIT_REBUILD_TOKENS_PER_TX : tokenBudget;
+        bool startingSlice = cursor == 0;
+        if (startingSlice) {
+            batch = TRAIT_REBUILD_TOKENS_PER_TX;
+        }
         uint32 remaining = target - cursor;
         if (batch > remaining) batch = remaining;
-
-        bool startingSlice = cursor == 0;
 
         uint32[256] memory localCounts;
 
