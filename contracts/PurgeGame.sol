@@ -735,7 +735,7 @@ contract PurgeGame is PurgeGameStorage {
         if (levelSnapshot % 100 == 0) {
             price = 0.05 ether;
             priceCoin >>= 1;
-            lastPrizePool = prizeSnapshot >> 3;
+            lastPrizePool = rewardPool;
         }
 
         unchecked {
