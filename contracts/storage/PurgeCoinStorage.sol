@@ -8,7 +8,7 @@ import {IPurgeQuestModule} from "../interfaces/IPurgeQuestModule.sol";
 
 /**
  * @title PurgeCoinStorage
- * @notice Shared storage layout for Purgecoin and its delegatecall modules.
+ * @notice Shared storage layout for Purgecoin and lightweight helper view functions.
  */
 abstract contract PurgeCoinStorage {
     // ---------------------------------------------------------------------
@@ -26,24 +26,6 @@ abstract contract PurgeCoinStorage {
     struct PlayerScore {
         address player;
         uint96 score;
-    }
-
-    struct BAFState {
-        uint128 totalPrizePoolWei;
-        uint120 returnAmountWei;
-        bool inProgress;
-    }
-
-    struct BAFScan {
-        uint120 per;
-        uint32 limit;
-        uint8 offset;
-    }
-
-    struct DecEntry {
-        uint192 burn;
-        uint24 level;
-        uint8 bucket;
     }
 
     struct AffiliateCodeInfo {
@@ -64,10 +46,9 @@ abstract contract PurgeCoinStorage {
     PurgeGameNFT internal purgeGameNFT;
     IPurgeGameTrophies internal purgeGameTrophies;
     IPurgeQuestModule internal questModule;
-    address internal externalJackpotModule;
+    address public jackpots;
 
     bool internal bonusActive;
-    uint8 internal extMode;
 
     uint8 internal affiliateLen;
     uint8 internal topLen;
@@ -105,23 +86,4 @@ abstract contract PurgeCoinStorage {
     uint96 public totalPresaleSold;
 
     uint256 internal coinflipRewardPercent;
-
-    BAFState internal bafState;
-    BAFScan internal bs;
-    uint256 internal extVar;
-
-    mapping(address => DecEntry) internal decBurn;
-    mapping(uint24 => uint32) internal decPlayersCount;
-    uint32[32] internal decBucketAccumulator;
-
-    // Decimator bucketed rosters and scan state
-    mapping(uint24 => mapping(uint8 => address[])) internal decBucketRoster;
-    uint8 internal decScanDenom;
-    uint32 internal decScanIndex;
-    uint256 internal decTotalBurn;
-    uint256 internal decPayoutRemainingBurn;
-    uint256 internal decPayoutRemainingPool;
-    uint256 internal decBucketSeed;
-    address internal decTopWinner;
-    uint192 internal decTopBurn;
 }

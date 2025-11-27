@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {IPurgeCoinModule, IPurgeGameTrophiesModule} from "./PurgeGameModuleInterfaces.sol";
+import {IPurgeJackpots} from "../interfaces/IPurgeJackpots.sol";
 import {PurgeGameStorage} from "../storage/PurgeGameStorage.sol";
 
 interface IStETH {
@@ -211,20 +212,14 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
 
         uint256 pool = decimatorHundredPool;
 
-        (
-            bool done,
-            address[] memory winnersArr,
-            uint256[] memory amountsArr,
-            uint256 trophyPoolDelta,
-            uint256 returnWei
-        ) = coinContract.runExternalJackpot(1, pool, cap, lvl, rngWord);
-
-        for (uint256 i; i < winnersArr.length; ) {
-            _addClaimableEth(winnersArr[i], amountsArr[i]);
-            unchecked {
-                ++i;
-            }
-        }
+        address jackpots = coinContract.jackpots();
+        (bool done, , , uint256 trophyPoolDelta, uint256 returnWei) = IPurgeJackpots(jackpots).runExternalJackpot(
+            1,
+            pool,
+            cap,
+            lvl,
+            rngWord
+        );
 
         if (trophyPoolDelta != 0) {
             trophyPool += trophyPoolDelta;

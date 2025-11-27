@@ -79,7 +79,7 @@ describe("Quest System Comprehensive Test", function () {
     const trophies = await MockTrophies.deploy();
     await trophies.waitForDeployment();
     
-    const ExternalJackpot = await ethers.getContractFactory("PurgeCoinExternalJackpotModule");
+    const ExternalJackpot = await ethers.getContractFactory("PurgeJackpots");
     const extJackpot = await ExternalJackpot.deploy();
     await extJackpot.waitForDeployment();
 

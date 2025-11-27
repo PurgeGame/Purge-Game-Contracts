@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-interface IPurgeGame {
+import {IPurgeGameExternal} from "./IPurgeGameExternal.sol";
+
+interface IPurgeGame is IPurgeGameExternal {
     function getTraitRemainingQuad(
         uint8[4] calldata traitIds
     ) external view returns (uint16 lastExterminated, uint24 currentLevel, uint32[4] memory remaining);

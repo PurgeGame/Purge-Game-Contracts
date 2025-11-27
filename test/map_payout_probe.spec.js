@@ -24,7 +24,7 @@ async function deploySystem() {
   const purgecoin = await Purgecoin.deploy();
   const QuestModule = await ethers.getContractFactory("PurgeQuestModule");
   const questModule = await QuestModule.deploy(await purgecoin.getAddress());
-  const ExternalJackpot = await ethers.getContractFactory("PurgeCoinExternalJackpotModule");
+  const ExternalJackpot = await ethers.getContractFactory("PurgeJackpots");
   const externalJackpot = await ExternalJackpot.deploy();
   const PurgeGameNFT = await ethers.getContractFactory("PurgeGameNFT");
   const purgeNFT = await PurgeGameNFT.deploy(await renderer.getAddress(), await trophyRenderer.getAddress(), await purgecoin.getAddress());

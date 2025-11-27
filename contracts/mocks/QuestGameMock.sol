@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+import {PurgeGameExternalOp} from "../interfaces/IPurgeGameExternal.sol";
 import "../interfaces/IPurgeGame.sol";
 
 contract QuestGameMock is IPurgeGame {
@@ -140,6 +141,13 @@ contract QuestGameMock is IPurgeGame {
     }
 
     function purchaseWithClaimable(bool /*mapPurchase*/) external pure override {}
+
+    function applyExternalOp(
+        PurgeGameExternalOp,
+        address,
+        uint256,
+        uint24
+    ) external pure override {}
 
     function stEthToken() external pure returns (address) {
         return address(0);

@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import "../PurgeGameTrophies.sol";
+import {PurgeGameExternalOp} from "../interfaces/IPurgeGameExternal.sol";
 
 contract TrophyGameHarness is IPurgeGameMinimal {
     uint24 private _level = 1;
@@ -49,17 +50,26 @@ contract TrophyGameHarness is IPurgeGameMinimal {
         return _coinPriceUnit;
     }
 
-    function payoutTrophy(address to, uint256 amount) external override {
-        if (amount > trophyPool) revert();
-        trophyPool -= amount;
-        (bool ok, ) = payable(to).call{value: amount}("");
-        require(ok, "payout");
-    }
-
-    function recycleTrophyEth(uint256 amount) external override {
-        if (amount > trophyPool) revert();
-        trophyPool -= amount;
-        rewardPool += amount;
+    function applyExternalOp(
+        PurgeGameExternalOp op,
+        address account,
+        uint256 amount,
+        uint24 /*lvl*/
+    ) external override {
+        if (op == PurgeGameExternalOp.TrophyPayout) {
+            if (amount > trophyPool) revert();
+            trophyPool -= amount;
+            (bool ok, ) = payable(account).call{value: amount}("");
+            require(ok, "payout");
+        } else if (op == PurgeGameExternalOp.TrophyRecycle) {
+            if (amount > trophyPool) revert();
+            trophyPool -= amount;
+            rewardPool += amount;
+        } else {
+            // For jackpot claims, just attempt to pay out directly during tests.
+            (bool ok, ) = payable(account).call{value: amount}("");
+            require(ok, "jackpot");
+        }
     }
 
     function processEndLevel(address trophies, IPurgeGameTrophies.EndLevelRequest calldata req) external payable {

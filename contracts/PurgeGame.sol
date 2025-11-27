@@ -8,6 +8,7 @@ import {IPurgeCoinModule, IPurgeGameTrophiesModule} from "./modules/PurgeGameMod
 import {IPurgeCoin} from "./interfaces/IPurgeCoin.sol";
 import {IPurgeRendererLike} from "./interfaces/IPurgeRendererLike.sol";
 import {IPurgeGameEndgameModule, IPurgeGameJackpotModule} from "./interfaces/IPurgeGameModules.sol";
+import {PurgeGameExternalOp} from "./interfaces/IPurgeGameExternal.sol";
 import {PurgeGameStorage} from "./storage/PurgeGameStorage.sol";
 
 interface IStETH {
@@ -793,6 +794,8 @@ contract PurgeGame is PurgeGameStorage {
 
     /// @notice Delegatecall into the endgame module to resolve slow settlement paths.
     function _runEndgameModule(uint24 lvl, uint32 cap, uint48 day, uint256 rngWord) internal {
+        address jackpots = coin.jackpots();
+        if (jackpots == address(0)) revert E();
         (bool ok, ) = endgameModule.delegatecall(
             abi.encodeWithSelector(
                 IPurgeGameEndgameModule.finalizeEndgame.selector,
@@ -800,6 +803,7 @@ contract PurgeGame is PurgeGameStorage {
                 cap,
                 day,
                 rngWord,
+                jackpots,
                 coin,
                 trophies
             )
@@ -807,16 +811,28 @@ contract PurgeGame is PurgeGameStorage {
         if (!ok) revert E();
     }
 
-    function payoutTrophy(address recipient, uint256 amount) external {
-        if (msg.sender != address(trophies)) revert E();
-        trophyPool -= amount;
-        _addClaimableEth(recipient, amount);
-    }
-
-    function recycleTrophyEth(uint256 amount) external {
-        if (msg.sender != address(trophies)) revert E();
-        trophyPool -= amount;
-        rewardPool += amount;
+    /// @notice Unified external hook for trusted modules to adjust PurgeGame accounting.
+    /// @param op      Operation selector.
+    /// @param account Player to credit (when applicable).
+    /// @param amount  Wei amount associated with the operation.
+    /// @param lvl     Level context for the operation (unused by the game, used by callers).
+    function applyExternalOp(PurgeGameExternalOp op, address account, uint256 amount, uint24 lvl) external {
+        lvl;
+        if (op == PurgeGameExternalOp.TrophyPayout) {
+            if (msg.sender != address(trophies)) revert E();
+            trophyPool -= amount;
+            _addClaimableEth(account, amount);
+        } else if (op == PurgeGameExternalOp.TrophyRecycle) {
+            if (msg.sender != address(trophies)) revert E();
+            trophyPool -= amount;
+            rewardPool += amount;
+        } else if (op == PurgeGameExternalOp.DecJackpotClaim || op == PurgeGameExternalOp.BafJackpotClaim) {
+            address jackpots = coin.jackpots();
+            if (jackpots == address(0) || msg.sender != jackpots) revert E();
+            _addClaimableEth(account, amount);
+        } else {
+            revert E();
+        }
     }
 
     // --- Claiming winnings (ETH) --------------------------------------------------------------------

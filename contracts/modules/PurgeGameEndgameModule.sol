@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import {IPurgeGameTrophies} from "../PurgeGameTrophies.sol";
 import {IPurgeCoinModule, IPurgeGameTrophiesModule} from "./PurgeGameModuleInterfaces.sol";
+import {IPurgeJackpots} from "../interfaces/IPurgeJackpots.sol";
 import {PurgeGameStorage} from "../storage/PurgeGameStorage.sol";
 
 /**
@@ -36,9 +37,11 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         uint32 cap,
         uint48 day,
         uint256 rngWord,
+        address jackpots,
         IPurgeCoinModule coinContract,
         IPurgeGameTrophiesModule trophiesContract
     ) external {
+        if (jackpots == address(0)) revert E();
         uint24 prevLevel = lvl - 1;
         bool traitWin = lastExterminatedTrait != TRAIT_ID_TIMEOUT;
         if (traitWin) {
@@ -52,13 +55,29 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
             }
             if (prevLevel != 0 && (prevLevel % 20) == 0 && (prevLevel % 100) != 0) {
                 uint256 bafPoolWei = (rewardPool * 24) / 100;
-                (bool bafFinished, ) = _progressExternal(0, bafPoolWei, cap, prevLevel, rngWord, coinContract, true);
+                (bool bafFinished, ) = _progressExternal(
+                    0,
+                    bafPoolWei,
+                    cap,
+                    prevLevel,
+                    rngWord,
+                    jackpots,
+                    true
+                );
                 if (!bafFinished) return;
             }
             bool decWindow = prevLevel % 10 == 5 && prevLevel >= 25 && prevLevel % 100 != 95;
             if (decWindow) {
                 uint256 decPoolWei = (rewardPool * 15) / 100;
-                (bool decFinished, ) = _progressExternal(1, decPoolWei, cap, prevLevel, rngWord, coinContract, true);
+                (bool decFinished, ) = _progressExternal(
+                    1,
+                    decPoolWei,
+                    cap,
+                    prevLevel,
+                    rngWord,
+                    jackpots,
+                    true
+                );
                 if (!decFinished) return;
             }
 
@@ -237,7 +256,7 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         uint32 cap,
         uint24 lvl,
         uint256 rngWord,
-        IPurgeCoinModule coinContract,
+        address jackpots,
         bool consumeCarry
     ) private returns (bool finished, uint256 returnedWei) {
         (
@@ -246,7 +265,7 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
             uint256[] memory amountsArr,
             uint256 trophyPoolDelta,
             uint256 returnWei
-        ) = coinContract.runExternalJackpot(kind, poolWei, cap, lvl, rngWord);
+        ) = IPurgeJackpots(jackpots).runExternalJackpot(kind, poolWei, cap, lvl, rngWord);
 
         for (uint256 i; i < winnersArr.length; ) {
             _addClaimableEth(winnersArr[i], amountsArr[i]);

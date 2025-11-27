@@ -68,12 +68,12 @@ async function main() {
   }
 
   try {
-      const PurgeCoinExternalJackpotModule = await ethers.getContractFactory("contracts/modules/PurgeCoinExternalJackpotModule.sol:PurgeCoinExternalJackpotModule");
-      const externalJackpotModule = await PurgeCoinExternalJackpotModule.deploy();
-      await externalJackpotModule.waitForDeployment();
-      console.log("   ExternalJackpotModule deployed.");
+      const PurgeJackpots = await ethers.getContractFactory("contracts/modules/PurgeJackpots.sol:PurgeJackpots");
+      const jackpots = await PurgeJackpots.deploy();
+      await jackpots.waitForDeployment();
+      console.log("   Jackpots module deployed.");
   } catch (e) {
-      console.log("   ExternalJackpotModule deployment failed.", e.message);
+      console.log("   Jackpots module deployment failed.", e.message);
   }
 
   console.log("8. Deploying PurgeGame...");

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+import {IPurgeGameExternal, PurgeGameExternalOp} from "./interfaces/IPurgeGameExternal.sol";
+
 interface IPurgeGameNftModule {
     function nextTokenId() external view returns (uint256);
     function mintPlaceholders(uint256 quantity) external returns (uint256 startTokenId);
@@ -93,13 +95,11 @@ interface IPurgeGameTrophies {
     function handleExterminatorTraitPurge(address player, uint16 traitId) external view returns (uint8 newPercent);
 }
 
-interface IPurgeGameMinimal {
+interface IPurgeGameMinimal is IPurgeGameExternal {
     function level() external view returns (uint24);
     function gameState() external view returns (uint8);
     function rngLocked() external view returns (bool);
     function coinPriceUnit() external view returns (uint256);
-    function payoutTrophy(address to, uint256 amount) external;
-    function recycleTrophyEth(uint256 amount) external;
 }
 
 interface IPurgecoinMinimal {
@@ -122,7 +122,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     error AlreadyWired();
     error ZeroAddress();
     error Unauthorized();
-    error TransferFailed();
 
     // ---------------------------------------------------------------------
     // Events
@@ -1166,9 +1165,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         _setTrophyData(tokenId, newInfo);
 
         if (ctx.ethClaimed) {
-            try game.payoutTrophy(msg.sender, ctx.payout) {} catch {
-                revert TransferFailed();
-            }
+            game.applyExternalOp(PurgeGameExternalOp.TrophyPayout, msg.sender, ctx.payout, ctx.currentLevel);
             emit TrophyRewardClaimed(tokenId, msg.sender, ctx.payout);
         }
 
@@ -1296,6 +1293,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         if (_isTrophyStaked(tokenId)) revert TrophyStakeViolation(_STAKE_ERR_TRANSFER_BLOCKED);
         uint256 info = trophyData_[tokenId];
         if (info == 0) revert InvalidToken();
+        uint24 baseLevel = uint24((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF);
 
         address sender = msg.sender;
         if (address(uint160(nft.packedOwnershipOf(tokenId))) != sender) revert Unauthorized();
@@ -1307,7 +1305,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         _eraseTrophy(tokenId, kind, true);
 
         if (owed != 0) {
-            game.recycleTrophyEth(owed);
+            game.applyExternalOp(PurgeGameExternalOp.TrophyRecycle, address(0), owed, baseLevel);
         }
 
         uint256 priceUnit = game.coinPriceUnit();

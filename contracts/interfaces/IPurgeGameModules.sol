@@ -9,6 +9,7 @@ interface IPurgeGameEndgameModule {
         uint32 cap,
         uint48 day,
         uint256 rngWord,
+        address jackpots,
         IPurgeCoinModule coinContract,
         IPurgeGameTrophiesModule trophiesContract
     ) external;

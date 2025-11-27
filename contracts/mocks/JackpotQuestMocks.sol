@@ -16,6 +16,10 @@ contract JackpotCoinModuleMock is IPurgeCoinModule {
         leaderboard = addrs;
     }
 
+    function jackpots() external pure override returns (address) {
+        return address(0);
+    }
+
     function coinflipWorkPending(uint24) external pure override returns (bool) {
         return false;
     }
@@ -29,31 +33,6 @@ contract JackpotCoinModuleMock is IPurgeCoinModule {
         uint256
     ) external pure override returns (bool) {
         return false;
-    }
-
-    function runExternalJackpot(
-        uint8,
-        uint256,
-        uint32,
-        uint24,
-        uint256
-    )
-        external
-        pure
-        override
-        returns (
-            bool finished,
-            address[] memory winners,
-            uint256[] memory amounts,
-            uint256 trophyPoolDelta,
-            uint256 returnAmountWei
-        )
-    {
-        finished = true;
-        winners = new address[](0);
-        amounts = new uint256[](0);
-        trophyPoolDelta = 0;
-        returnAmountWei = 0;
     }
 
     function getLeaderboardAddresses(uint8) external view override returns (address[] memory) {

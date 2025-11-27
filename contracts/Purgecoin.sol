@@ -6,7 +6,7 @@ import {IPurgeGameTrophies, PURGE_TROPHY_KIND_STAKE} from "./PurgeGameTrophies.s
 import {IPurgeGame} from "./interfaces/IPurgeGame.sol";
 import {IPurgeRenderer} from "./interfaces/IPurgeRenderer.sol";
 import {IPurgeQuestModule, QuestInfo, PlayerQuestView} from "./interfaces/IPurgeQuestModule.sol";
-import {IPurgeCoinExternalJackpotModule} from "./interfaces/IPurgeCoinExternalJackpotModule.sol";
+import {IPurgeJackpots} from "./interfaces/IPurgeJackpots.sol";
 import {PurgeCoinStorage} from "./storage/PurgeCoinStorage.sol";
 
 interface IStETH {
@@ -209,6 +209,9 @@ contract Purgecoin is PurgeCoinStorage {
         if (!decOn) revert NotDecimatorWindow();
         if (amount < MIN) revert AmountLTMin();
 
+        address moduleAddr = jackpots;
+        if (moduleAddr == address(0)) revert ZeroAddress();
+
         address caller = msg.sender;
         _burn(caller, amount);
 
@@ -216,21 +219,7 @@ contract Purgecoin is PurgeCoinStorage {
         uint8 bucket = specialDec
             ? _decBucketDenominatorFromLevels(purgeGame.ethMintLevelCount(caller))
             : _decBucketDenominator(purgeGame.ethMintStreakCount(caller));
-        DecEntry storage e = decBurn[caller];
-
-        if (e.level != lvl) {
-            e.level = lvl;
-            e.burn = 0;
-            e.bucket = bucket;
-            _decPush(lvl, bucket, caller);
-        } else if (e.bucket == 0) {
-            e.bucket = bucket;
-            _decPush(lvl, bucket, caller);
-        }
-
-        uint256 updated = uint256(e.burn) + amount;
-        if (updated > type(uint192).max) updated = type(uint192).max;
-        e.burn = uint192(updated);
+        uint8 bucketUsed = IPurgeJackpots(moduleAddr).recordDecBurn(caller, lvl, bucket, amount);
 
         IPurgeQuestModule module = questModule;
         (uint32 streak, , , ) = module.playerQuestStates(caller);
@@ -238,9 +227,7 @@ contract Purgecoin is PurgeCoinStorage {
             uint256 bonusBps = uint256(streak) * 25; // (streak/4)%
             if (bonusBps > 2500) bonusBps = 2500; // cap at 25%
             uint256 streakBonus = (amount * bonusBps) / BPS_DENOMINATOR;
-            updated = uint256(e.burn) + streakBonus;
-            if (updated > type(uint192).max) updated = type(uint192).max;
-            e.burn = uint192(updated);
+            IPurgeJackpots(moduleAddr).recordDecBurn(caller, lvl, bucketUsed, streakBonus);
         }
 
         (uint256 reward, bool hardMode, uint8 questType, uint32 streak2, bool completed) = module.handleDecimator(
@@ -252,7 +239,7 @@ contract Purgecoin is PurgeCoinStorage {
             addFlip(caller, questReward, false, false, false);
         }
 
-        emit DecimatorBurn(caller, amount, e.bucket);
+        emit DecimatorBurn(caller, amount, bucketUsed);
     }
 
     // Affiliate code management
@@ -792,9 +779,9 @@ contract Purgecoin is PurgeCoinStorage {
         address regularRenderer_,
         address trophyRenderer_,
         address questModule_,
-        address externalJackpotModule_
+        address jackpots_
     ) external {
-        if (msg.sender != creator || externalJackpotModule != address(0)) revert OnlyDeployer();
+        if (msg.sender != creator || jackpots != address(0)) revert OnlyDeployer();
 
         purgeGame = IPurgeGame(game_);
         bytes32 h = H;
@@ -805,7 +792,8 @@ contract Purgecoin is PurgeCoinStorage {
         purgeGameTrophies = IPurgeGameTrophies(trophies_);
         questModule = IPurgeQuestModule(questModule_);
         questModule.wireGame(game_);
-        externalJackpotModule = externalJackpotModule_;
+        jackpots = jackpots_;
+        IPurgeJackpots(jackpots_).wire(address(this), game_, trophies_);
         IPurgeRenderer(regularRenderer_).wireContracts(game_, nft_);
         IPurgeRenderer(trophyRenderer_).wireContracts(game_, nft_);
         purgeGameNFT.wireAll(game_, trophies_);
@@ -1205,59 +1193,6 @@ contract Purgecoin is PurgeCoinStorage {
 
         addFlip(top, amount, false, false, true);
     }
-    /// @notice Progress an external jackpot: BAF (kind=0) or Decimator (kind=1).
-    /// @dev
-    /// Lifecycle:
-    /// - First call (not in progress): arms the run based on `kind`, snapshots limits, computes offsets,
-    ///   and optionally performs BAF "headline" allocations (largest bettor, etc.). When more work is
-    ///   required, returns (finished=false, partial winners/amounts, 0).
-    /// - Subsequent calls stream through the remaining work in windowed batches until finished=true.
-    /// Storage/Modes:
-    /// - `bafState.inProgress` gates the run. `extMode` encodes the sub-phase:
-    ///     0 = idle, 1 = BAF scatter pass, 2 = Decimator denom accumulation, 3 = Decimator payouts.
-    /// - `scanCursor` walks the population starting at `bs.offset` then advancing in steps of 10.
-    /// Returns:
-    /// - `finished` signals completion of the whole external run.
-    /// - `winners/amounts` are the credits to be applied by the caller on this step only.
-    /// - `returnAmountWei` is any ETH to send back to the game (unused mid-run).
-    function runExternalJackpot(
-        uint8 kind,
-        uint256 poolWei,
-        uint32 cap,
-        uint24 lvl,
-        uint256 rngWord
-    )
-        external
-        onlyPurgeGameContract
-        returns (
-            bool finished,
-            address[] memory winners,
-            uint256[] memory amounts,
-            uint256 trophyPoolDelta,
-            uint256 returnAmountWei
-        )
-    {
-        address module = externalJackpotModule;
-        if (module == address(0)) revert ZeroAddress();
-
-        (bool ok, bytes memory ret) = module.delegatecall(
-            abi.encodeWithSelector(
-                IPurgeCoinExternalJackpotModule.runExternalJackpot.selector,
-                kind,
-                poolWei,
-                cap,
-                lvl,
-                rngWord
-            )
-        );
-        if (!ok) {
-            assembly {
-                revert(add(ret, 0x20), mload(ret))
-            }
-        }
-        return abi.decode(ret, (bool, address[], uint256[], uint256, uint256));
-    }
-
     /// @notice Return addresses from a leaderboard.
     /// @param which 1 = affiliate (<=8), 2 = top bettors (<=8).
     function getLeaderboardAddresses(uint8 which) external view returns (address[] memory out) {
@@ -1353,6 +1288,15 @@ contract Purgecoin is PurgeCoinStorage {
         uint256 eligibleStake = bountyEligible ? newStake : prevStake;
 
         coinflipAmount[player] = newStake;
+
+        // When BAF is active, capture a persistent roster entry + index for scatter.
+        if (purgeGame.isBafLevelActive(purgeGame.level())) {
+            uint24 lvl = purgeGame.level();
+            address module = jackpots;
+            if (module == address(0)) revert ZeroAddress();
+            IPurgeJackpots(module).recordBafFlip(player, lvl);
+        }
+
         if (!skipLuckboxCheck && playerLuckbox[player] == 0) {
             playerLuckbox[player] = 1;
         }
@@ -1427,16 +1371,6 @@ contract Purgecoin is PurgeCoinStorage {
             if (denom < 4) denom = 4; // should only hit for >=80 but guard anyway
         }
         return uint8(denom);
-    }
-
-    /// @notice Append a player to the Decimator roster for a given level.
-    /// @param lvl Level bucket to push into.
-    /// @param p   Player address.
-    function _decPush(uint24 lvl, uint8 bucket, address p) internal {
-        decBucketRoster[lvl][bucket].push(p);
-        unchecked {
-            decPlayersCount[lvl] = decPlayersCount[lvl] + 1;
-        }
     }
 
     /// @notice Route a player score update to the appropriate leaderboard.

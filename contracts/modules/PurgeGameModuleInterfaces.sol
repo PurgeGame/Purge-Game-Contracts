@@ -4,6 +4,8 @@ pragma solidity ^0.8.26;
 import {IPurgeGameTrophies} from "../PurgeGameTrophies.sol";
 
 interface IPurgeCoinModule {
+    function jackpots() external view returns (address);
+
     function coinflipWorkPending(uint24 level) external view returns (bool);
 
     function processCoinflipPayouts(
@@ -14,16 +16,6 @@ interface IPurgeCoinModule {
         uint48 epoch,
         uint256 priceCoinUnit
     ) external returns (bool);
-
-    function runExternalJackpot(
-        uint8 kind,
-        uint256 poolWei,
-        uint32 cap,
-        uint24 lvl,
-        uint256 rngWord
-    )
-        external
-        returns (bool finished, address[] memory winners, uint256[] memory amounts, uint256 trophyPoolDelta, uint256 returnAmountWei);
 
     function getLeaderboardAddresses(uint8 which) external view returns (address[] memory);
     function getTopAffiliate() external view returns (address);

@@ -35,7 +35,7 @@ describe("Massive System Benchmark (Gas & Calls)", function () {
     quest = await QuestModule.deploy(purgecoin.target);
     await quest.waitForDeployment();
 
-    const ExternalJackpot = await ethers.getContractFactory("PurgeCoinExternalJackpotModule");
+    const ExternalJackpot = await ethers.getContractFactory("PurgeJackpots");
     extJackpot = await ExternalJackpot.deploy();
     await extJackpot.waitForDeployment();
 
@@ -200,7 +200,7 @@ describe("Massive System Benchmark (Gas & Calls)", function () {
       renderer = await MockRenderer.deploy();
       const Purgecoin = await ethers.getContractFactory("Purgecoin");
       purgecoin = await Purgecoin.deploy();
-      const ExternalJackpot = await ethers.getContractFactory("PurgeCoinExternalJackpotModule");
+      const ExternalJackpot = await ethers.getContractFactory("PurgeJackpots");
       extJackpot = await ExternalJackpot.deploy();
       const PurgeGameNFT = await ethers.getContractFactory("PurgeGameNFT");
       nft = await PurgeGameNFT.deploy(renderer.target, renderer.target, purgecoin.target);
@@ -258,7 +258,7 @@ describe("Massive System Benchmark (Gas & Calls)", function () {
       renderer = await MockRenderer.deploy();
       const Purgecoin = await ethers.getContractFactory("Purgecoin");
       purgecoin = await Purgecoin.deploy();
-      const ExternalJackpot = await ethers.getContractFactory("PurgeCoinExternalJackpotModule");
+      const ExternalJackpot = await ethers.getContractFactory("PurgeJackpots");
       extJackpot = await ExternalJackpot.deploy();
       const PurgeGameNFT = await ethers.getContractFactory("PurgeGameNFT");
       nft = await PurgeGameNFT.deploy(renderer.target, renderer.target, purgecoin.target);
@@ -312,7 +312,7 @@ describe("Massive System Benchmark (Gas & Calls)", function () {
       renderer = await MockRenderer.deploy();
       const Purgecoin = await ethers.getContractFactory("Purgecoin");
       purgecoin = await Purgecoin.deploy();
-      const ExternalJackpot = await ethers.getContractFactory("PurgeCoinExternalJackpotModule");
+      const ExternalJackpot = await ethers.getContractFactory("PurgeJackpots");
       extJackpot = await ExternalJackpot.deploy();
       const PurgeGameNFT = await ethers.getContractFactory("PurgeGameNFT");
       nft = await PurgeGameNFT.deploy(renderer.target, renderer.target, purgecoin.target);

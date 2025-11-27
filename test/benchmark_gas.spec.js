@@ -1,5 +1,6 @@
 const { expect } = require("chai");
 const { ethers, network } = require("hardhat");
+const { getJackpotSlots } = require("./helpers/jackpotSlots");
 
 const abi = ethers.AbiCoder.defaultAbiCoder();
 
@@ -7,9 +8,9 @@ const LEVEL = 25;
 const ENTRIES_PER_BUCKET = 5000;
 const RNG_WORD = 0x123456789abcdefn;
 const POOL_WEI = ethers.parseEther("1000");
-const DEC_PLAYERS_COUNT_SLOT = 49;
-const DEC_BURN_SLOT = 47;
-const DEC_BUCKET_ROSTER_SLOT = 54;
+let DEC_PLAYERS_COUNT_SLOT;
+let DEC_BURN_SLOT;
+let DEC_BUCKET_ROSTER_SLOT;
 
 const pad32 = (value) => ethers.toBeHex(value, 32);
 const padAddr = (addr) => ethers.zeroPadValue(addr, 32);
@@ -39,9 +40,16 @@ const chunkedSet = async (target, writes, chunkSize = 64) => {
 describe("Gas Benchmark", function () {
   this.timeout(0);
 
-  let purgecoin, mockGame, gameSigner;
+  let purgecoin, mockGame, gameSigner, extJackpot;
 
   beforeEach(async function () {
+    if (!DEC_BURN_SLOT) {
+      const slots = await getJackpotSlots();
+      DEC_BURN_SLOT = slots.decBurnSlot;
+      DEC_PLAYERS_COUNT_SLOT = slots.decPlayersCountSlot;
+      DEC_BUCKET_ROSTER_SLOT = slots.decBucketRosterSlot;
+    }
+
     const [deployer] = await ethers.getSigners();
 
     const MockGame = await ethers.getContractFactory("MockPurgeGame");
@@ -66,8 +74,8 @@ describe("Gas Benchmark", function () {
     const trophies = await MockTrophies.deploy();
     await trophies.waitForDeployment();
 
-    const ExternalJackpot = await ethers.getContractFactory("PurgeCoinExternalJackpotModule");
-    const extJackpot = await ExternalJackpot.deploy();
+    const ExternalJackpot = await ethers.getContractFactory("PurgeJackpots");
+    extJackpot = await ExternalJackpot.deploy();
     await extJackpot.waitForDeployment();
 
     const PurgeGameNFT = await ethers.getContractFactory("PurgeGameNFT");
@@ -114,14 +122,16 @@ describe("Gas Benchmark", function () {
       writes.push({ slot: dataBase + BigInt(i), value: padAddr(addr) });
       writes.push({ slot: decBurnSlot, value: pad32(packed) });
     }
-    await chunkedSet(await purgecoin.getAddress(), writes, 500);
+    await chunkedSet(await extJackpot.getAddress(), writes, 500);
+    const decPlayersCountSlot = mappingSlot(LEVEL, DEC_PLAYERS_COUNT_SLOT);
+    await setStorage(await extJackpot.getAddress(), decPlayersCountSlot, pad32(BigInt(ENTRIES_PER_BUCKET)));
 
     // Start jackpot
     // Init call
-    await purgecoin.connect(gameSigner).runExternalJackpot(1, POOL_WEI, CAP, LEVEL, RNG_WORD);
-    
+    await extJackpot.connect(gameSigner).runExternalJackpot(1, POOL_WEI, CAP, LEVEL, RNG_WORD);
+
     // Measure next step (Selection)
-    const tx = await purgecoin.connect(gameSigner).runExternalJackpot(1, POOL_WEI, CAP, LEVEL, RNG_WORD);
+    const tx = await extJackpot.connect(gameSigner).runExternalJackpot(1, POOL_WEI, CAP, LEVEL, RNG_WORD);
     const receipt = await tx.wait();
     console.log(`Gas used for Dense Selection (Cap ${CAP}): ${receipt.gasUsed.toString()}`);
   });
@@ -151,14 +161,16 @@ describe("Gas Benchmark", function () {
       writes.push({ slot: dataBase + BigInt(i), value: padAddr(addr) });
       writes.push({ slot: decBurnSlot, value: pad32(packed) });
     }
-    await chunkedSet(await purgecoin.getAddress(), writes, 500);
+    await chunkedSet(await extJackpot.getAddress(), writes, 500);
+    const decPlayersCountSlot = mappingSlot(LEVEL, DEC_PLAYERS_COUNT_SLOT);
+    await setStorage(await extJackpot.getAddress(), decPlayersCountSlot, pad32(BigInt(ENTRIES_PER_BUCKET)));
 
     // Start jackpot
-    await purgecoin.connect(gameSigner).runExternalJackpot(1, POOL_WEI, CAP, LEVEL, RNG_WORD);
+    await extJackpot.connect(gameSigner).runExternalJackpot(1, POOL_WEI, CAP, LEVEL, RNG_WORD);
 
     // Measure next step (Selection)
     // It should scan ~5000 entries, find 0 winners, and return because of OPS limit.
-    const tx = await purgecoin.connect(gameSigner).runExternalJackpot(1, POOL_WEI, CAP, LEVEL, RNG_WORD);
+    const tx = await extJackpot.connect(gameSigner).runExternalJackpot(1, POOL_WEI, CAP, LEVEL, RNG_WORD);
     const receipt = await tx.wait();
     console.log(`Gas used for Sparse Scanning (Ops ~5000): ${receipt.gasUsed.toString()}`);
   });

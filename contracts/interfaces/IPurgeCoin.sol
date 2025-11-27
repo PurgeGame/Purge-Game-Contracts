@@ -4,6 +4,8 @@ pragma solidity ^0.8.26;
 import {QuestInfo, PlayerQuestView} from "./IPurgeQuestModule.sol";
 
 interface IPurgeCoin {
+    function jackpots() external view returns (address);
+
     function bonusCoinflip(address player, uint256 amount, bool rngReady) external;
 
     function burnie(uint256 amount, address stethToken) external payable;
@@ -26,16 +28,6 @@ interface IPurgeCoin {
     function addToBounty(uint256 amount) external;
 
     function rewardTopFlipBonus(uint256 amount) external;
-
-    function runExternalJackpot(
-        uint8 kind,
-        uint256 poolWei,
-        uint32 cap,
-        uint24 lvl,
-        uint256 rngWord
-    )
-        external
-        returns (bool finished, address[] memory winners, uint256[] memory amounts, uint256 trophyPoolDelta, uint256 returnAmountWei);
 
     function resetAffiliateLeaderboard(uint24 lvl) external;
 

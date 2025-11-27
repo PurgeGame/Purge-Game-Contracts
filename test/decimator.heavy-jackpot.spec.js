@@ -1,5 +1,6 @@
 const { expect } = require("chai");
 const { ethers, network } = require("hardhat");
+const { getJackpotSlots } = require("./helpers/jackpotSlots");
 
 const abi = ethers.AbiCoder.defaultAbiCoder();
 
@@ -12,9 +13,12 @@ const ENTRIES_PER_BUCKET = 5000;
 const RNG_WORD = 0x123456789abcdefn;
 const POOL_WEI = ethers.parseEther("1000");
 const SELECTION_CAP = 1900; // winners processed per call during selection
-const DEC_PLAYERS_COUNT_SLOT = 49;
-const DEC_BURN_SLOT = 47;
-const DEC_BUCKET_ROSTER_SLOT = 54;
+let DEC_PLAYERS_COUNT_SLOT;
+let DEC_BURN_SLOT;
+let DEC_BUCKET_ROSTER_SLOT;
+let DEC_BUCKET_INDEX_SLOT;
+let DEC_BUCKET_OFFSET_SLOT;
+let DEC_CLAIM_ROUND_SLOT;
 
 const pad32 = (value) => ethers.toBeHex(value, 32);
 const padAddr = (addr) => ethers.zeroPadValue(addr, 32);
@@ -42,79 +46,20 @@ const chunkedSet = async (target, writes, chunkSize = 64) => {
   }
 };
 
-// Simulate the selection phase (extMode == 2) using the exact contract math.
-const simulateSelection = (rosters, rngWord, cap) => {
-  let entropy = BigInt(rngWord);
-  const accumulators = {};
-  for (let denom = 2; denom <= 20; denom += 1) {
-    entropy = BigInt(ethers.keccak256(abi.encode(["uint256", "uint8"], [entropy, denom])));
-    accumulators[denom] = Number(entropy % BigInt(denom));
-  }
-
-  const winners = [];
-  let extVar = 0n;
-  let winnersBudget = cap;
-  let denom = 2;
-  let idx = 0;
-
-  while (denom <= 20 && winnersBudget !== 0) {
-    const roster = rosters[denom] || [];
-    const len = roster.length;
-    let acc = accumulators[denom];
-
-    if (idx >= len) {
-      const advanced = len - idx;
-      accumulators[denom] = Number((BigInt(acc) + BigInt(advanced)) % BigInt(denom));
-      denom += 1;
-      idx = 0;
-      continue;
-    }
-
-    const step = (denom - ((acc + 1) % denom)) % denom;
-    const winnerIdx = idx + step;
-    if (winnerIdx >= len) {
-      accumulators[denom] = Number((BigInt(acc) + BigInt(len - idx)) % BigInt(denom));
-      denom += 1;
-      idx = 0;
-      continue;
-    }
-
-    const entry = roster[winnerIdx];
-    winners.push(entry);
-    extVar += entry.burn;
-    winnersBudget -= 1;
-    accumulators[denom] = 0;
-    idx = winnerIdx + 1;
-    if (idx >= len) {
-      denom += 1;
-      idx = 0;
-    }
-  }
-
-  return { winners, extVar };
-};
-
-const streamingPayout = (poolWei, winners) => {
-  let remainingPool = poolWei;
-  let remainingBurn = winners.reduce((acc, w) => acc + w.burn, 0n);
-  const payouts = [];
-
-  for (const w of winners) {
-    const amount =
-      remainingBurn === 0n ? 0n : w.burn === remainingBurn ? remainingPool : (remainingPool * w.burn) / remainingBurn;
-    payouts.push(amount);
-    remainingPool -= amount;
-    remainingBurn -= w.burn;
-  }
-
-  return payouts;
-};
-
 describe("Decimator jackpot heavy bucket sweep", function () {
   this.timeout(0);
 
   it("selects the correct winners and proportional payouts with 5k entrants per bucket", async function () {
     const [deployer] = await ethers.getSigners();
+    if (!DEC_BURN_SLOT) {
+      const slots = await getJackpotSlots();
+      DEC_BURN_SLOT = slots.decBurnSlot;
+      DEC_PLAYERS_COUNT_SLOT = slots.decPlayersCountSlot;
+      DEC_BUCKET_ROSTER_SLOT = slots.decBucketRosterSlot;
+      DEC_BUCKET_INDEX_SLOT = slots.decBucketIndexSlot;
+      DEC_BUCKET_OFFSET_SLOT = slots.decBucketOffsetSlot;
+      DEC_CLAIM_ROUND_SLOT = slots.decClaimRoundSlot;
+    }
 
     // --- Deploy minimal system with mocks ---
     const MockGame = await ethers.getContractFactory("MockPurgeGame");
@@ -139,7 +84,7 @@ describe("Decimator jackpot heavy bucket sweep", function () {
     const trophies = await MockTrophies.deploy();
     await trophies.waitForDeployment();
 
-    const ExternalJackpot = await ethers.getContractFactory("PurgeCoinExternalJackpotModule");
+    const ExternalJackpot = await ethers.getContractFactory("PurgeJackpots");
     const extJackpot = await ExternalJackpot.deploy();
     await extJackpot.waitForDeployment();
 
@@ -166,6 +111,7 @@ describe("Decimator jackpot heavy bucket sweep", function () {
     const bucketByAddr = {};
     const rosters = {};
     let totalEntries = 0;
+    const decBucketIndexBase = mappingSlot(LEVEL, DEC_BUCKET_INDEX_SLOT);
 
     for (const bucket of BUCKETS) {
       const { bucketSlot, dataBase } = rosterSlots(LEVEL, bucket);
@@ -182,34 +128,30 @@ describe("Decimator jackpot heavy bucket sweep", function () {
 
         const packed = burn + (BigInt(LEVEL) << 192n) + (BigInt(bucket) << 216n);
         const decBurnSlot = mappingSlotAddr(addr, DEC_BURN_SLOT);
+        const decIndexSlot = mappingSlotAddr(addr, decBucketIndexBase);
 
         writes.push({ slot: dataBase + BigInt(i), value: padAddr(addr) });
         writes.push({ slot: decBurnSlot, value: pad32(packed) });
+        writes.push({ slot: decIndexSlot, value: pad32(BigInt(i)) });
 
         burnByAddr[addr] = burn;
         bucketByAddr[addr] = bucket;
         roster.push({ addr, burn, bucket });
       }
 
-      await chunkedSet(await purgecoin.getAddress(), writes, 128);
+      await chunkedSet(await extJackpot.getAddress(), writes, 128);
       rosters[bucket] = roster;
       totalEntries += ENTRIES_PER_BUCKET;
     }
 
     const decPlayersCountSlot = mappingSlot(LEVEL, DEC_PLAYERS_COUNT_SLOT);
-    await setStorage(await purgecoin.getAddress(), decPlayersCountSlot, pad32(BigInt(totalEntries)));
-
-    // --- Expected winners + payouts (mirror contract logic) ---
-    const { winners: expectedWinners, extVar } = simulateSelection(rosters, RNG_WORD, 1_000_000_000);
-    expect(extVar).to.be.gt(0n);
-    const totalWinnerBurn = expectedWinners.reduce((acc, w) => acc + w.burn, 0n);
-    expect(totalWinnerBurn).to.equal(extVar);
-
-    const payPool = (POOL_WEI * 95n) / 100n;
-    const expectedAmounts = streamingPayout(payPool, expectedWinners);
-    const expectedTopWinner = expectedWinners.reduce((best, w) => (best === null || w.burn > best.burn ? w : best), null)
-      ?.addr;
-    const expectedTrophyAmount = POOL_WEI - payPool;
+    await setStorage(await extJackpot.getAddress(), decPlayersCountSlot, pad32(BigInt(totalEntries)));
+    const countRaw = await network.provider.send("eth_getStorageAt", [
+      await extJackpot.getAddress(),
+      pad32(decPlayersCountSlot),
+    ]);
+    // eslint-disable-next-line no-console
+    console.log("decPlayersCount", BigInt(countRaw));
 
     // --- Execute jackpot selection + payout on-chain ---
     await network.provider.request({
@@ -219,31 +161,34 @@ describe("Decimator jackpot heavy bucket sweep", function () {
     await network.provider.send("hardhat_setBalance", [await mockGame.getAddress(), "0x1000000000000000000"]);
     const gameSigner = await ethers.getSigner(await mockGame.getAddress());
 
-    await purgecoin
-      .connect(gameSigner)
-      .runExternalJackpot.staticCall(1, POOL_WEI, SELECTION_CAP, LEVEL, RNG_WORD);
+    await extJackpot.connect(gameSigner).runExternalJackpot.staticCall(1, POOL_WEI, SELECTION_CAP, LEVEL, RNG_WORD);
 
     const gasLimit = 25_000_000;
     try {
-      await purgecoin.connect(gameSigner).runExternalJackpot(1, POOL_WEI, SELECTION_CAP, LEVEL, RNG_WORD, { gasLimit }); // init
+      await extJackpot
+        .connect(gameSigner)
+        .runExternalJackpot(1, POOL_WEI, SELECTION_CAP, LEVEL, RNG_WORD, { gasLimit }); // init
     } catch (e) {
       // eslint-disable-next-line no-console
       console.log("init tx revert data", e.data || e);
       throw e;
     }
+    const slot54 = await network.provider.send("eth_getStorageAt", [await purgecoin.getAddress(), pad32(54n)]);
+    const slot55 = await network.provider.send("eth_getStorageAt", [await purgecoin.getAddress(), pad32(55n)]);
+    // eslint-disable-next-line no-console
+    console.log("slot54", slot54);
+    // eslint-disable-next-line no-console
+    console.log("slot55", slot55);
     let iterations = 0;
-    let finished = false;
     let finalReturn = 0n;
-    const actualWinners = [];
-    const actualAmounts = [];
 
-    while (!finished) {
-      const [stepFinished, winnersStep, amountsStep, , returnWeiStep] = await purgecoin
+    while (true) {
+      const [stepFinished, , , , returnWeiStep] = await extJackpot
         .connect(gameSigner)
         .runExternalJackpot.staticCall(1, POOL_WEI, SELECTION_CAP, LEVEL, RNG_WORD);
 
       try {
-        await purgecoin
+        await extJackpot
           .connect(gameSigner)
           .runExternalJackpot(1, POOL_WEI, SELECTION_CAP, LEVEL, RNG_WORD, { gasLimit });
       } catch (e) {
@@ -252,50 +197,91 @@ describe("Decimator jackpot heavy bucket sweep", function () {
         throw e;
       }
 
-      for (let i = 0; i < winnersStep.length; i += 1) {
-        actualWinners.push(winnersStep[i]);
-        actualAmounts.push(amountsStep[i]);
-      }
-
-      if (stepFinished) {
-        finished = true;
-        finalReturn = returnWeiStep;
-      }
-
       iterations += 1;
+      if (stepFinished) {
+        finalReturn = returnWeiStep;
+        break;
+      }
       if (iterations > 250) throw new Error("jackpot batching did not finish");
     }
 
-    const burnWinners = actualWinners.slice(0, expectedWinners.length);
-    const burnAmounts = actualAmounts.slice(0, expectedWinners.length);
+    expect(finalReturn).to.equal(0n);
 
-    expect(actualWinners.length).to.equal(expectedWinners.length + 1);
-    expect(ethers.keccak256(abi.encode(["address[]"], [burnWinners]))).to.equal(
-      ethers.keccak256(abi.encode(["address[]"], [expectedWinners.map((w) => w.addr)]))
-    );
-    expect(ethers.keccak256(abi.encode(["uint256[]"], [burnAmounts]))).to.equal(
+    const roundSlot = mappingSlot(LEVEL, 61);
+    const roundSeed = await network.provider.send("eth_getStorageAt", [await purgecoin.getAddress(), pad32(roundSlot)]);
+    // eslint-disable-next-line no-console
+    console.log("dec round seed", roundSeed);
+
+    const roundBase = mappingSlot(LEVEL, DEC_CLAIM_ROUND_SLOT);
+    const poolWeiRaw = await network.provider.send("eth_getStorageAt", [await extJackpot.getAddress(), pad32(roundBase)]);
+    const totalBurnRaw = await network.provider.send("eth_getStorageAt", [
+      await extJackpot.getAddress(),
+      pad32(roundBase + 1n),
+    ]);
+    const poolWei = BigInt(poolWeiRaw);
+    const totalBurn = BigInt(totalBurnRaw);
+    expect(poolWei).to.equal(POOL_WEI);
+    expect(totalBurn).to.be.gt(0n);
+
+    const offsets = {};
+    const offsetLevelBase = mappingSlot(LEVEL, DEC_BUCKET_OFFSET_SLOT);
+    for (const bucket of BUCKETS) {
+      const offsetSlot = mappingSlot(bucket, offsetLevelBase);
+      const raw = await network.provider.send("eth_getStorageAt", [await extJackpot.getAddress(), pad32(offsetSlot)]);
+      offsets[bucket] = Number(BigInt(raw));
+    }
+
+    const expectedWinners = [];
+    for (const bucket of BUCKETS) {
+      const roster = rosters[bucket];
+      const denom = bucket;
+      const offset = offsets[bucket] % denom;
+      const start = (denom - ((offset + 1) % denom)) % denom;
+      for (let idx = start; idx < roster.length; idx += denom) {
+        expectedWinners.push(roster[idx]);
+      }
+    }
+
+    const expectedAmounts = expectedWinners.map((w) => (poolWei * w.burn) / totalBurn);
+
+    const winnerSet = new Set(expectedWinners.map((w) => w.addr.toLowerCase()));
+    let nonWinner = null;
+    for (const bucket of BUCKETS) {
+      if (nonWinner) break;
+      for (const entry of rosters[bucket]) {
+        if (!winnerSet.has(entry.addr.toLowerCase())) {
+          nonWinner = entry.addr;
+          break;
+        }
+      }
+    }
+
+    if (nonWinner) {
+      await expect(extJackpot.connect(gameSigner).consumeDecClaim(nonWinner, LEVEL)).to.be.revertedWithCustomError(
+        extJackpot,
+        "DecNotWinner"
+      );
+    }
+
+    const actualAmounts = [];
+    for (let i = 0; i < expectedWinners.length; i += 1) {
+      const w = expectedWinners[i];
+      try {
+        const amt = await extJackpot.connect(gameSigner).consumeDecClaim.staticCall(w.addr, LEVEL);
+        await extJackpot.connect(gameSigner).consumeDecClaim(w.addr, LEVEL);
+        actualAmounts.push(amt);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.log("consume failed at", i, w.addr);
+        throw err;
+      }
+    }
+
+    expect(ethers.keccak256(abi.encode(["uint256[]"], [actualAmounts]))).to.equal(
       ethers.keccak256(abi.encode(["uint256[]"], [expectedAmounts]))
     );
-    expect(actualWinners[expectedWinners.length]).to.equal(expectedTopWinner);
-    expect(actualAmounts[expectedWinners.length]).to.equal(expectedTrophyAmount);
-
-    // Bucket-level sanity: winner counts per bucket match expectation.
-    const expectedCounts = {};
-    for (const w of expectedWinners) {
-      expectedCounts[w.bucket] = (expectedCounts[w.bucket] || 0) + 1;
-    }
-    const actualCounts = {};
-    for (const addr of burnWinners) {
-      const b = bucketByAddr[addr];
-      actualCounts[b] = (actualCounts[b] || 0) + 1;
-    }
-    expect(actualCounts).to.deep.equal(expectedCounts);
-
-    // Sum of payouts should consume the full pool with streaming division.
-    const paidBurn = burnAmounts.reduce((acc, v) => acc + v, 0n);
-    expect(paidBurn).to.equal(payPool);
     const paidTotal = actualAmounts.reduce((acc, v) => acc + v, 0n);
-    expect(paidTotal + finalReturn).to.equal(POOL_WEI);
-    expect(finalReturn).to.equal(0n);
+    const expectedPaid = expectedAmounts.reduce((acc, v) => acc + v, 0n);
+    expect(paidTotal).to.equal(expectedPaid);
   });
 });

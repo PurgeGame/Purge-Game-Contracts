@@ -1,5 +1,6 @@
 const { expect } = require("chai");
 const { ethers, network } = require("hardhat");
+const { getJackpotSlots } = require("./helpers/jackpotSlots");
 
 const abi = ethers.AbiCoder.defaultAbiCoder();
 
@@ -11,9 +12,9 @@ const BUCKETS = [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
 const ENTRIES_PER_BUCKET = 5000;
 const RNG_WORD = 0x123456789abcdefn;
 const SELECTION_CAP = 500; // winners processed per call during selection
-const DEC_PLAYERS_COUNT_SLOT = 49;
-const DEC_BURN_SLOT = 47;
-const DEC_BUCKET_ROSTER_SLOT = 54;
+let DEC_PLAYERS_COUNT_SLOT;
+let DEC_BURN_SLOT;
+let DEC_BUCKET_ROSTER_SLOT;
 
 const pad32 = (value) => ethers.toBeHex(value, 32);
 const padAddr = (addr) => ethers.zeroPadValue(addr, 32);
@@ -98,6 +99,12 @@ describe("AdvanceGame Decimator Integration", function () {
 
   it("triggers and completes decimator via advanceGame", async function () {
     const [deployer] = await ethers.getSigners();
+    if (!DEC_BURN_SLOT) {
+      const slots = await getJackpotSlots();
+      DEC_BURN_SLOT = slots.decBurnSlot;
+      DEC_PLAYERS_COUNT_SLOT = slots.decPlayersCountSlot;
+      DEC_BUCKET_ROSTER_SLOT = slots.decBucketRosterSlot;
+    }
 
     // --- Deploy Dependencies ---
     const MockRenderer = await ethers.getContractFactory("MockRenderer");
@@ -116,7 +123,7 @@ describe("AdvanceGame Decimator Integration", function () {
     const trophies = await MockTrophies.deploy();
     await trophies.waitForDeployment();
 
-    const ExternalJackpot = await ethers.getContractFactory("PurgeCoinExternalJackpotModule");
+    const ExternalJackpot = await ethers.getContractFactory("PurgeJackpots");
     const extJackpotModule = await ExternalJackpot.deploy();
     await extJackpotModule.waitForDeployment();
 
@@ -207,13 +214,13 @@ describe("AdvanceGame Decimator Integration", function () {
         roster.push({ addr, burn, bucket });
       }
 
-      await chunkedSet(await purgecoin.getAddress(), writes, 128);
+      await chunkedSet(await extJackpotModule.getAddress(), writes, 128);
       rosters[bucket] = roster;
       totalEntries += ENTRIES_PER_BUCKET;
     }
 
     const decPlayersCountSlot = mappingSlot(decLevel, DEC_PLAYERS_COUNT_SLOT);
-    await setStorage(await purgecoin.getAddress(), decPlayersCountSlot, pad32(BigInt(totalEntries)));
+    await setStorage(await extJackpotModule.getAddress(), decPlayersCountSlot, pad32(BigInt(totalEntries)));
 
     // --- Expected winners + payouts (mirror contract logic) ---
     const expectedPool = (rewardPool * 15n) / 100n;

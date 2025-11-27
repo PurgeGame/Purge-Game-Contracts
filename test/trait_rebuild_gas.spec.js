@@ -15,7 +15,7 @@ describe("trait rebuild gas checks", function () {
     const purgecoin = await Purgecoin.deploy();
     const QuestModule = await ethers.getContractFactory("PurgeQuestModule");
     const quest = await QuestModule.deploy(purgecoin.target);
-    const ExternalJackpot = await ethers.getContractFactory("PurgeCoinExternalJackpotModule");
+    const ExternalJackpot = await ethers.getContractFactory("PurgeJackpots");
     const extJackpot = await ExternalJackpot.deploy();
     const PurgeGameNFT = await ethers.getContractFactory("PurgeGameNFT");
     const nft = await PurgeGameNFT.deploy(renderer.target, renderer.target, purgecoin.target);

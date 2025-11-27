@@ -72,8 +72,8 @@ async function deploySystem() {
   const questModule = await PurgeQuestModule.deploy(await purgecoin.getAddress());
   await questModule.waitForDeployment();
 
-  const PurgeCoinExternalJackpotModule = await ethers.getContractFactory("contracts/modules/PurgeCoinExternalJackpotModule.sol:PurgeCoinExternalJackpotModule");
-  const externalJackpotModule = await PurgeCoinExternalJackpotModule.deploy();
+  const PurgeJackpots = await ethers.getContractFactory("contracts/modules/PurgeJackpots.sol:PurgeJackpots");
+  const externalJackpotModule = await PurgeJackpots.deploy();
   await externalJackpotModule.waitForDeployment();
 
   const MockStETH = await ethers.getContractFactory("MockStETH");

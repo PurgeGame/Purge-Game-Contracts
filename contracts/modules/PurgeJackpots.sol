@@ -1,18 +1,82 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {PurgeCoinStorage} from "../storage/PurgeCoinStorage.sol";
+import {IPurgeGame} from "../interfaces/IPurgeGame.sol";
+import {IPurgeGameTrophies} from "../PurgeGameTrophies.sol";
+import {IPurgeJackpots} from "../interfaces/IPurgeJackpots.sol";
+import {PurgeGameExternalOp} from "../interfaces/IPurgeGameExternal.sol";
+
+interface IPurgeCoinJackpotView {
+    function coinflipAmount(address player) external view returns (uint256);
+    function topBettors(uint256 idx) external view returns (address player, uint96 score);
+    function biggestLuckbox() external view returns (address player, uint96 score);
+    function playerLuckbox(address player) external view returns (uint256);
+}
 
 /**
- * @title PurgeCoinExternalJackpotModule
- * @notice Delegate-call module that hosts the BAF/Decimator external jackpot logic for Purgecoin.
- *         Storage layout mirrors the parent contract so writes land on the main contract via `delegatecall`.
+ * @title PurgeJackpots
+ * @notice Standalone contract that owns BAF/Decimator jackpot state and claim logic.
+ *         Purgecoin forwards flips/burns into this contract and calls it to resolve jackpots.
  */
-contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
+contract PurgeJackpots is IPurgeJackpots {
     // ---------------------------------------------------------------------
     // Errors
     // ---------------------------------------------------------------------
     error InvalidKind();
+    error DecClaimInactive();
+    error DecAlreadyClaimed();
+    error DecNotWinner();
+    error BafClaimInactive();
+    error BafNotWinner();
+    error AlreadyWired();
+    error OnlyCoin();
+    error OnlyGame();
+
+    // ---------------------------------------------------------------------
+    // Structs
+    // ---------------------------------------------------------------------
+    struct PlayerScore {
+        address player;
+        uint96 score;
+    }
+
+    struct BAFState {
+        uint128 totalPrizePoolWei;
+        uint120 returnAmountWei;
+        bool inProgress;
+    }
+
+    struct BAFScan {
+        uint120 per;
+        uint32 limit;
+        uint8 offset;
+    }
+
+    struct DecEntry {
+        uint192 burn;
+        uint24 level;
+        uint8 bucket;
+    }
+
+    struct DecClaimRound {
+        uint256 poolWei;
+        uint256 totalBurn;
+        uint24 level;
+        bool active;
+    }
+
+    struct BafClaimRound {
+        uint256 perWei;
+        uint24 level;
+        bool active;
+    }
+
+    // ---------------------------------------------------------------------
+    // Immutable wiring
+    // ---------------------------------------------------------------------
+    IPurgeCoinJackpotView public coin;
+    IPurgeGame public purgeGame;
+    IPurgeGameTrophies public purgeGameTrophies;
 
     // ---------------------------------------------------------------------
     // Constants
@@ -31,6 +95,116 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
     uint32 private constant DEC_WINNER_BATCH = 1900;
 
     // ---------------------------------------------------------------------
+    // BAF / Decimator state (lives here; Purgecoin storage is unaffected)
+    // ---------------------------------------------------------------------
+    uint8 internal extMode;
+    uint32 internal scanCursor = SS_IDLE;
+    BAFState internal bafState;
+    BAFScan internal bs;
+    uint256 internal extVar;
+
+    mapping(address => DecEntry) internal decBurn;
+    mapping(uint24 => uint32) internal decPlayersCount;
+    uint32[32] internal decBucketAccumulator;
+
+    // Decimator bucketed rosters and scan state
+    mapping(uint24 => mapping(uint8 => address[])) internal decBucketRoster;
+    uint8 internal decScanDenom;
+    uint32 internal decScanIndex;
+    uint256 internal decTotalBurn;
+    uint256 internal decBucketSeed;
+    address internal decTopWinner;
+    uint192 internal decTopBurn;
+
+    // Active Decimator claim round by level.
+    mapping(uint24 => DecClaimRound) internal decClaimRound;
+
+    // Track whether a player has claimed their Decimator share for a level.
+    mapping(uint24 => mapping(address => bool)) internal decClaimed;
+
+    // Position of a player within the Decimator bucket roster for a given level.
+    mapping(uint24 => mapping(address => uint32)) internal decBucketIndex;
+
+    // Winning offset per denominator for a level (derived during selection).
+    mapping(uint24 => mapping(uint8 => uint32)) internal decBucketOffset;
+
+    // Active BAF scatter claim round by level.
+    mapping(uint24 => BafClaimRound) internal bafScatterRound;
+
+    // Snapshot of coinflip roster used for BAF scatter per level.
+    mapping(uint24 => address[]) internal bafScatterRoster;
+    mapping(uint24 => mapping(address => uint32)) internal bafScatterIndex;
+
+    // BAF scatter winner flags per level.
+    mapping(uint24 => mapping(address => bool)) internal bafScatterWinner;
+
+    // Track whether a player has claimed their BAF scatter share for a level.
+    mapping(uint24 => mapping(address => bool)) internal bafScatterClaimed;
+
+    // ---------------------------------------------------------------------
+    // Modifiers / wiring
+    // ---------------------------------------------------------------------
+    modifier onlyCoin() {
+        if (msg.sender != address(coin)) revert OnlyCoin();
+        _;
+    }
+
+    modifier onlyGame() {
+        if (msg.sender != address(purgeGame)) revert OnlyGame();
+        _;
+    }
+
+    modifier onlyGameOrCoin() {
+        address sender = msg.sender;
+        if (sender != address(purgeGame) && sender != address(coin)) revert OnlyGame();
+        _;
+    }
+
+    function wire(address coin_, address purgeGame_, address trophies_) external override {
+        if (address(coin) != address(0)) revert AlreadyWired();
+        if (msg.sender != coin_) revert OnlyCoin();
+        coin = IPurgeCoinJackpotView(coin_);
+        purgeGame = IPurgeGame(purgeGame_);
+        purgeGameTrophies = IPurgeGameTrophies(trophies_);
+    }
+
+    // ---------------------------------------------------------------------
+    // Hooks from Purgecoin
+    // ---------------------------------------------------------------------
+    function recordBafFlip(address player, uint24 lvl) external override onlyCoin {
+        if (bafScatterIndex[lvl][player] == 0) {
+            uint32 idx = uint32(bafScatterRoster[lvl].length);
+            bafScatterRoster[lvl].push(player);
+            bafScatterIndex[lvl][player] = idx + 1; // store index+1 to distinguish unset
+        }
+    }
+
+    function recordDecBurn(
+        address player,
+        uint24 lvl,
+        uint8 bucket,
+        uint256 amount
+    ) external override onlyCoin returns (uint8 bucketUsed) {
+        DecEntry storage e = decBurn[player];
+
+        if (e.level != lvl) {
+            e.level = lvl;
+            e.burn = 0;
+            e.bucket = bucket;
+            _decPush(lvl, bucket, player);
+        } else if (e.bucket == 0) {
+            e.bucket = bucket;
+            _decPush(lvl, bucket, player);
+        }
+
+        uint256 updated = uint256(e.burn) + amount;
+        if (updated > type(uint192).max) updated = type(uint192).max;
+        e.burn = uint192(updated);
+
+        return e.bucket;
+    }
+
+    // ---------------------------------------------------------------------
     // External jackpot logic
     // ---------------------------------------------------------------------
     function runExternalJackpot(
@@ -41,6 +215,8 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
         uint256 rngWord
     )
         external
+        override
+        onlyGameOrCoin
         returns (
             bool finished,
             address[] memory winners,
@@ -61,7 +237,7 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
 
             bafState.inProgress = true;
 
-            uint32 limit = (kind == 0) ? uint32(_coinflipCount()) : uint32(decPlayersCount[lvl]);
+            uint32 limit = (kind == 0) ? uint32(bafScatterRoster[lvl].length) : uint32(decPlayersCount[lvl]);
             if (kind == 0) {
                 bs.offset = uint8(uint256(keccak256(abi.encode(rngWord, 1))) % 10);
                 scanCursor = bs.offset;
@@ -71,8 +247,6 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
                 decScanDenom = 2;
                 decScanIndex = 0;
                 decTotalBurn = 0;
-                decPayoutRemainingBurn = 0;
-                decPayoutRemainingPool = 0;
                 decBucketSeed = rngWord;
                 decTopWinner = address(0);
                 decTopBurn = 0;
@@ -104,7 +278,7 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
                 {
                     uint256 prize = P / 10;
 
-                    address w = topBettors[0].player;
+                    (address w, ) = coin.topBettors(0);
                     if (_creditOrRefund(w, prize, tmpW, tmpA, n)) {
                         unchecked {
                             ++n;
@@ -126,7 +300,7 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
                     }
                     entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
                     uint256 prize = P / 10;
-                    address w = topBettors[2 + (entropy & 1)].player;
+                    (address w, ) = coin.topBettors(2 + (entropy & 1));
                     if (_creditOrRefund(w, prize, tmpW, tmpA, n)) {
                         unchecked {
                             ++n;
@@ -141,60 +315,8 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
                         ++salt;
                     }
                     entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
-
-                    address[4] memory draws;
-                    uint256 entryCount = _coinflipCount();
-                    for (uint8 i; i < 4; ) {
-                        draws[i] = entryCount == 0 ? address(0) : _playerAt(entropy % entryCount);
-                        unchecked {
-                            ++salt;
-                            entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
-                        }
-                    }
-
-                    // Sort by coinflipAmount descending (simple selection sort for up to 4 items)
-                    for (uint8 i; i < 4; ) {
-                        uint8 bestIdx = i;
-                        uint256 best = coinflipAmount[draws[i]];
-                        for (uint8 j = i + 1; j < 4; ) {
-                            uint256 val = coinflipAmount[draws[j]];
-                            if (val > best) {
-                                best = val;
-                                bestIdx = j;
-                            }
-                            unchecked {
-                                ++j;
-                            }
-                        }
-                        if (bestIdx != i) {
-                            address tmp = draws[i];
-                            draws[i] = draws[bestIdx];
-                            draws[bestIdx] = tmp;
-                        }
-                        unchecked {
-                            ++i;
-                        }
-                    }
-
-                    uint256 prize9 = (P * 9) / 100;
-                    uint256 prize6 = (P * 6) / 100;
-                    uint256 prize3 = (P * 3) / 100;
-                    uint256[4] memory prizes = [prize9, prize6, prize3, uint256(0)];
-
-                    for (uint8 i; i < 4; ) {
-                        uint256 prize = prizes[i];
-                        address w = draws[i];
-                        if (_creditOrRefund(w, prize, tmpW, tmpA, n)) {
-                            unchecked {
-                                ++n;
-                            }
-                        } else if (prize != 0) {
-                            toReturn += prize;
-                        }
-                        unchecked {
-                            ++i;
-                        }
-                    }
+                    // Legacy coinflip-queue prizes removed; return this slice to the pool.
+                    toReturn += (P * 18) / 100;
                 }
 
                 {
@@ -219,9 +341,9 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
                     // Sort trophies by owner coinflip size
                     for (uint8 i; i < 4; ) {
                         uint8 bestIdx = i;
-                        uint256 best = coinflipAmount[trophyOwners[i]];
+                        uint256 best = coin.coinflipAmount(trophyOwners[i]);
                         for (uint8 j = i + 1; j < 4; ) {
-                            uint256 val = coinflipAmount[trophyOwners[j]];
+                            uint256 val = coin.coinflipAmount(trophyOwners[j]);
                             if (val > best) {
                                 best = val;
                                 bestIdx = j;
@@ -264,9 +386,8 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
 
                 {
                     uint256 prizeLuckbox = (P * 2) / 100;
-                    PlayerScore memory luckboxRecord = biggestLuckbox;
-                    address luckboxLeader = luckboxRecord.player;
-                    if (luckboxLeader != address(0) && luckboxRecord.score != 0) {
+                    (address luckboxLeader, uint96 luckboxScore) = coin.biggestLuckbox();
+                    if (luckboxLeader != address(0) && luckboxScore != 0) {
                         if (_creditOrRefund(luckboxLeader, prizeLuckbox, tmpW, tmpA, n)) {
                             unchecked {
                                 ++n;
@@ -326,20 +447,35 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
             uint32 end = scanCursor + batch;
             if (end > bs.limit) end = bs.limit;
 
-            uint256 tmpCap = uint256(batch) / 10 + 2;
-            address[] memory winnersBuf = new address[](tmpCap);
-            uint256[] memory amountsBuf = new uint256[](tmpCap);
-            uint256 n2;
             uint256 per = uint256(bs.per);
             uint256 retWei = uint256(bafState.returnAmountWei);
+            address[] storage roster = bafScatterRoster[lvl];
+            BafClaimRound storage round = bafScatterRound[lvl];
+            if (round.level != lvl) {
+                delete bafScatterRound[lvl];
+                delete bafScatterRoster[lvl];
+                round = bafScatterRound[lvl];
+                round.level = lvl;
+                round.perWei = per;
+                round.active = false;
+            }
 
+            bool anyWinner;
             for (uint32 i = scanCursor; i < end; ) {
-                address p = _playerAt(i);
-                if (_eligible(p)) {
-                    winnersBuf[n2] = p;
-                    amountsBuf[n2] = per;
+                if (i >= roster.length) {
+                    retWei += per;
                     unchecked {
-                        ++n2;
+                        i += 10;
+                    }
+                    continue;
+                }
+                address p = roster[i];
+                if (_eligible(p)) {
+                    if (!bafScatterWinner[lvl][p]) {
+                        bafScatterWinner[lvl][p] = true;
+                        anyWinner = true;
+                    } else {
+                        retWei += per;
                     }
                 } else {
                     retWei += per;
@@ -351,18 +487,18 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
             scanCursor = end;
             bafState.returnAmountWei = uint120(retWei);
 
-            winners = new address[](n2);
-            amounts = new uint256[](n2);
-            for (uint256 i; i < n2; ) {
-                winners[i] = winnersBuf[i];
-                amounts[i] = amountsBuf[i];
-                unchecked {
-                    ++i;
-                }
-            }
-
+            winners = new address[](0);
+            amounts = new uint256[](0);
             if (end == bs.limit) {
                 uint256 ret = uint256(bafState.returnAmountWei);
+                if (!anyWinner) {
+                    delete bafScatterRound[lvl];
+                    delete bafScatterRoster[lvl];
+                } else {
+                    round.perWei = per;
+                    round.active = true;
+                    delete bafScatterRoster[lvl];
+                }
                 trophyPoolDelta = extVar;
                 delete bafState;
                 delete bs;
@@ -375,6 +511,11 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
         }
 
         if (extMode == 2) {
+            if (decScanDenom < 2) {
+                decScanDenom = 2;
+                decScanIndex = 0;
+                _seedDecBucketState(decBucketSeed);
+            }
             uint32 winnersBudget = batch;
             uint32 ops;
             uint32 opsLimit = batch * 4;
@@ -450,8 +591,6 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
                     extMode = 0;
                     extVar = 0;
                     decTotalBurn = 0;
-                    decPayoutRemainingBurn = 0;
-                    decPayoutRemainingPool = 0;
                     decBucketSeed = 0;
                     decTopWinner = address(0);
                     decTopBurn = 0;
@@ -462,189 +601,119 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
                     return (true, new address[](0), new uint256[](0), 0, refund);
                 }
 
-                decPayoutRemainingBurn = decTotalBurn;
-                decPayoutRemainingPool = (uint256(bafState.totalPrizePoolWei) * 95) / 100;
-                bafState.returnAmountWei = 0;
-                extMode = 3;
-                decScanDenom = 2;
+                uint256 totalPool = uint256(bafState.totalPrizePoolWei);
+
+                DecClaimRound storage round = decClaimRound[lvl];
+                round.poolWei = totalPool;
+                round.totalBurn = decTotalBurn;
+                round.level = lvl;
+                round.active = true;
+
+                // Derive winning offsets for each bucket for claim-time verification.
+                for (uint8 denom = 2; denom <= 20; ) {
+                    uint256 seed = uint256(keccak256(abi.encode(decBucketSeed, denom)));
+                    decBucketOffset[lvl][denom] = uint32(seed % denom);
+                    unchecked {
+                        ++denom;
+                    }
+                }
+
+                if (_hasDecPlaceholder(lvl)) {
+                    if (decTopWinner != address(0)) {
+                        uint256 trophyData = (uint256(DECIMATOR_TRAIT_SENTINEL) << 152) |
+                            (uint256(lvl) << TROPHY_BASE_LEVEL_SHIFT) |
+                            TROPHY_FLAG_DECIMATOR;
+                        purgeGameTrophies.awardTrophy(decTopWinner, lvl, PURGE_TROPHY_KIND_DECIMATOR, trophyData, 0);
+                    } else {
+                        purgeGameTrophies.burnDecPlaceholder(lvl);
+                    }
+                }
+
+                delete bafState;
+                delete bs;
+                extMode = 0;
+                extVar = 0;
+                decTotalBurn = 0;
+                decBucketSeed = 0;
+                decTopWinner = address(0);
+                decScanDenom = 0;
                 decScanIndex = 0;
-                _seedDecBucketState(decBucketSeed);
-                return (false, new address[](0), new uint256[](0), 0, 0);
+                scanCursor = SS_IDLE;
+                _resetDecBucketState();
+                return (true, new address[](0), new uint256[](0), 0, 0);
             }
 
             return (false, new address[](0), new uint256[](0), 0, 0);
         }
 
         if (extMode == 3) {
-            uint32 winnersBudget = batch;
-            uint256 remainingPool = decPayoutRemainingPool;
-            uint256 remainingBurn = decPayoutRemainingBurn;
-            uint256 paidTotal = uint256(bafState.returnAmountWei);
-
-            uint32 ops;
-            uint32 opsLimit = batch * 4;
-            if (opsLimit < 5000) opsLimit = 5000;
-
-            address[] memory winnersBuf = new address[](winnersBudget);
-            uint256[] memory amountsBuf = new uint256[](winnersBudget);
-            uint256 n2;
-
-            for (; decScanDenom <= 20 && winnersBudget != 0 && ops < opsLimit; ) {
-                uint8 denom = decScanDenom;
-                uint32 acc = decBucketAccumulator[denom];
-                address[] storage roster = decBucketRoster[lvl][denom];
-                uint256 len = roster.length;
-                uint32 idx = decScanIndex;
-
-                if (idx >= len) {
-                    uint256 advanced = len >= idx ? (len - idx) : 0;
-                    decBucketAccumulator[denom] = uint32((uint256(acc) + advanced) % denom);
-                    decScanDenom = denom + 1;
-                    decScanIndex = 0;
-                    continue;
-                }
-
-                bool exhaustedBucket;
-                while (winnersBudget != 0 && remainingBurn != 0 && ops < opsLimit) {
-                    unchecked {
-                        ++ops;
-                    }
-                    uint256 step = (denom - ((uint256(acc) + 1) % denom)) % denom;
-                    uint256 winnerIdx = uint256(idx) + step;
-                    if (winnerIdx >= len) {
-                        decBucketAccumulator[denom] = uint32((uint256(acc) + (len - idx)) % denom);
-                        exhaustedBucket = true;
-                        break;
-                    }
-
-                    address p = roster[winnerIdx];
-                    DecEntry storage e = decBurn[p];
-                    if (e.level == lvl && e.bucket == denom && e.burn != 0) {
-                        uint256 burn = e.burn;
-                        uint256 amt = burn == remainingBurn ? remainingPool : (remainingPool * burn) / remainingBurn;
-                        if (amt > remainingPool) {
-                            amt = remainingPool;
-                        }
-                        if (amt != 0) {
-                            winnersBuf[n2] = p;
-                            amountsBuf[n2] = amt;
-                            unchecked {
-                                ++n2;
-                            }
-                        }
-                        remainingPool -= amt;
-                        remainingBurn -= burn;
-                        paidTotal += amt;
-                        unchecked {
-                            --winnersBudget;
-                        }
-                    }
-
-                    acc = 0;
-                    idx = uint32(winnerIdx + 1);
-                    if (idx >= len) {
-                        exhaustedBucket = true;
-                        break;
-                    }
-                }
-
-                decBucketAccumulator[denom] = acc;
-                decScanIndex = idx;
-
-                if (exhaustedBucket) {
-                    decScanDenom = denom + 1;
-                    decScanIndex = 0;
-                }
-
-                if (remainingBurn == 0) {
-                    decScanDenom = 21;
-                    break;
-                }
-            }
-
-            decPayoutRemainingPool = remainingPool;
-            decPayoutRemainingBurn = remainingBurn;
-            {
-                uint256 cappedPaid = paidTotal;
-                if (cappedPaid > type(uint120).max) cappedPaid = type(uint120).max;
-                bafState.returnAmountWei = uint120(cappedPaid);
-            }
-
-            winners = new address[](n2);
-            amounts = new uint256[](n2);
-            for (uint256 i; i < n2; ) {
-                winners[i] = winnersBuf[i];
-                amounts[i] = amountsBuf[i];
-                unchecked {
-                    ++i;
-                }
-            }
-
-            if (decScanDenom <= 20) {
-                return (false, winners, amounts, 0, 0);
-            }
-
-            uint256 totalPool = uint256(bafState.totalPrizePoolWei);
-            uint256 trophyPaid;
-
-            if (_hasDecPlaceholder(lvl)) {
-                if (decTopWinner != address(0)) {
-                    trophyPaid = totalPool > paidTotal ? (totalPool - paidTotal) : 0;
-                    paidTotal += trophyPaid;
-                    uint256 trophyData = (uint256(DECIMATOR_TRAIT_SENTINEL) << 152) |
-                        (uint256(lvl) << TROPHY_BASE_LEVEL_SHIFT) |
-                        TROPHY_FLAG_DECIMATOR;
-                    purgeGameTrophies.awardTrophy(decTopWinner, lvl, PURGE_TROPHY_KIND_DECIMATOR, trophyData, 0);
-                } else {
-                    purgeGameTrophies.burnDecPlaceholder(lvl);
-                }
-            }
-
-            uint256 paidForRet = paidTotal;
-            if (paidTotal > type(uint120).max) paidTotal = type(uint120).max;
-            bafState.returnAmountWei = uint120(paidTotal);
-
-            uint256 totalCount = n2 + (trophyPaid != 0 ? 1 : 0);
-            if (trophyPaid != 0) {
-                address[] memory winnersTrophy = new address[](totalCount);
-                uint256[] memory amountsTrophy = new uint256[](totalCount);
-                for (uint256 i; i < n2; ) {
-                    winnersTrophy[i] = winners[i];
-                    amountsTrophy[i] = amounts[i];
-                    unchecked {
-                        ++i;
-                    }
-                }
-                winnersTrophy[n2] = decTopWinner;
-                amountsTrophy[n2] = trophyPaid;
-                winners = winnersTrophy;
-                amounts = amountsTrophy;
-            }
-
-            uint256 ret = totalPool > paidForRet ? (totalPool - paidForRet) : 0;
-            delete bafState;
-            delete bs;
-            extMode = 0;
-            extVar = 0;
-            decTotalBurn = 0;
-            decPayoutRemainingBurn = 0;
-            decPayoutRemainingPool = 0;
-            decBucketSeed = 0;
-            decTopWinner = address(0);
-            decTopBurn = 0;
-            decScanDenom = 0;
-            decScanIndex = 0;
-            scanCursor = SS_IDLE;
-            _resetDecBucketState();
-            return (true, winners, amounts, 0, ret);
+            // Legacy Decimator streaming payouts removed; Decimator jackpots are now claim-based.
+            revert InvalidKind();
         }
+    }
+
+    // ---------------------------------------------------------------------
+    // Claims
+    // ---------------------------------------------------------------------
+    function _consumeDecClaim(address player, uint24 lvl) internal returns (uint256 amountWei) {
+        DecClaimRound storage round = decClaimRound[lvl];
+        if (!round.active) revert DecClaimInactive();
+        if (decClaimed[lvl][player]) revert DecAlreadyClaimed();
+
+        (amountWei, ) = _decClaimable(round, player, lvl);
+        if (amountWei == 0) revert DecNotWinner();
+
+        decClaimed[lvl][player] = true;
+    }
+
+    function consumeDecClaim(address player, uint24 lvl) external override onlyGame returns (uint256 amountWei) {
+        return _consumeDecClaim(player, lvl);
+    }
+
+    function claimDecimatorJackpot(uint24 lvl) external {
+        uint256 amountWei = _consumeDecClaim(msg.sender, lvl);
+        purgeGame.applyExternalOp(PurgeGameExternalOp.DecJackpotClaim, msg.sender, amountWei, lvl);
+    }
+
+    function _consumeBafClaim(address player, uint24 lvl) internal returns (uint256 amountWei) {
+        BafClaimRound storage round = bafScatterRound[lvl];
+        if (!round.active || round.level != lvl) revert BafClaimInactive();
+        if (bafScatterClaimed[lvl][player]) revert BafNotWinner();
+        if (!bafScatterWinner[lvl][player]) revert BafNotWinner();
+
+        amountWei = round.perWei;
+        bafScatterClaimed[lvl][player] = true;
+    }
+
+    function consumeBafClaim(address player, uint24 lvl) external override onlyGame returns (uint256 amountWei) {
+        return _consumeBafClaim(player, lvl);
+    }
+
+    function claimBafJackpot(uint24 lvl) external {
+        uint256 amountWei = _consumeBafClaim(msg.sender, lvl);
+        purgeGame.applyExternalOp(PurgeGameExternalOp.BafJackpotClaim, msg.sender, amountWei, lvl);
+    }
+
+    function decClaimable(address player, uint24 lvl) external view override returns (uint256 amountWei, bool winner) {
+        DecClaimRound storage round = decClaimRound[lvl];
+        return _decClaimable(round, player, lvl);
+    }
+
+    function bafClaimable(address player, uint24 lvl) external view override returns (uint256 amountWei, bool winner) {
+        BafClaimRound storage round = bafScatterRound[lvl];
+        if (!round.active || round.level != lvl) return (0, false);
+
+        if (!bafScatterWinner[lvl][player] || bafScatterClaimed[lvl][player]) return (0, false);
+
+        amountWei = round.perWei;
+        winner = amountWei != 0;
     }
 
     // ---------------------------------------------------------------------
     // Helpers
     // ---------------------------------------------------------------------
     function _eligible(address player) internal view returns (bool) {
-        if (coinflipAmount[player] < 5_000 * MILLION) return false;
+        if (coin.coinflipAmount(player) < 5_000 * MILLION) return false;
         return purgeGame.ethMintStreakCount(player) >= 6;
     }
 
@@ -662,17 +731,6 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
             return true;
         }
         return false;
-    }
-
-    function _coinflipCount() internal view returns (uint256) {
-        return uint256(uint128(cfTail) - uint128(cfHead));
-    }
-
-    function _playerAt(uint256 idx) internal view returns (address) {
-        uint256 capacity = cfPlayers.length;
-        if (capacity == 0) return address(0);
-        uint256 physical = (uint256(cfHead) + idx) % capacity;
-        return cfPlayers[physical];
     }
 
     function _seedDecBucketState(uint256 entropy) internal {
@@ -700,5 +758,37 @@ contract PurgeCoinExternalJackpotModule is PurgeCoinStorage {
         if ((lvl % 10) != 5) return false;
         if ((lvl % 100) == 95) return false;
         return true;
+    }
+
+    function _decClaimable(
+        DecClaimRound storage round,
+        address player,
+        uint24 lvl
+    ) internal view returns (uint256 amountWei, bool winner) {
+        if (!round.active || round.totalBurn == 0 || round.level != lvl) return (0, false);
+        if (decClaimed[lvl][player]) return (0, false);
+
+        DecEntry storage e = decBurn[player];
+        uint8 denom = e.bucket;
+        if (e.level != lvl || denom == 0 || e.burn == 0) return (0, false);
+
+        address[] storage roster = decBucketRoster[lvl][denom];
+        uint256 idx = uint256(decBucketIndex[lvl][player]);
+        if (idx >= roster.length || roster[idx] != player) return (0, false);
+
+        uint32 offset = decBucketOffset[lvl][denom];
+        uint256 start = (denom - ((uint256(offset) + 1) % denom)) % denom;
+        if (idx < start || ((idx - start) % denom) != 0) return (0, false);
+
+        amountWei = (round.poolWei * uint256(e.burn)) / round.totalBurn;
+        winner = true;
+    }
+
+    function _decPush(uint24 lvl, uint8 bucket, address p) internal {
+        decBucketIndex[lvl][p] = uint32(decBucketRoster[lvl][bucket].length);
+        decBucketRoster[lvl][bucket].push(p);
+        unchecked {
+            decPlayersCount[lvl] = decPlayersCount[lvl] + 1;
+        }
     }
 }
