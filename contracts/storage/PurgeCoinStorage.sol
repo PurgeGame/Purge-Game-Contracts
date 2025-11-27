@@ -111,7 +111,6 @@ abstract contract PurgeCoinStorage {
     uint256 internal extVar;
 
     mapping(address => DecEntry) internal decBurn;
-    mapping(uint24 => mapping(uint24 => address[])) internal decBuckets;
     mapping(uint24 => uint32) internal decPlayersCount;
     uint32[32] internal decBucketAccumulator;
 
