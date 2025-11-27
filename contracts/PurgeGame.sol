@@ -220,6 +220,10 @@ contract PurgeGame is PurgeGameStorage {
         return priceCoin;
     }
 
+    function rngWordForDay(uint48 day) external view returns (uint256) {
+        return rngWordByDay[day];
+    }
+
     function getEarlyPurgePercent() external view returns (uint8) {
         return earlyPurgePercent;
     }
@@ -1185,6 +1189,10 @@ contract PurgeGame is PurgeGameStorage {
             return 1;
         }
 
+        if (!rngWordRecorded[day]) {
+            rngWordByDay[day] = currentWord;
+            rngWordRecorded[day] = true;
+        }
         return currentWord;
     }
 

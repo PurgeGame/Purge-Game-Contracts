@@ -75,4 +75,10 @@ abstract contract PurgeGameStorage {
     uint256 internal totalFlipReversals;
     uint256 internal principalStEth;
     address internal stethTokenAddress;
+
+    // -----------------------
+    // RNG history
+    // -----------------------
+    mapping(uint48 => uint256) internal rngWordByDay;
+    mapping(uint48 => bool) internal rngWordRecorded;
 }

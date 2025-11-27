@@ -7,14 +7,13 @@ import {IPurgeGame} from "./interfaces/IPurgeGame.sol";
 import {IPurgeRenderer} from "./interfaces/IPurgeRenderer.sol";
 import {IPurgeQuestModule, QuestInfo, PlayerQuestView} from "./interfaces/IPurgeQuestModule.sol";
 import {IPurgeJackpots} from "./interfaces/IPurgeJackpots.sol";
-import {PurgeCoinStorage} from "./storage/PurgeCoinStorage.sol";
 
 interface IStETH {
     function transfer(address to, uint256 amount) external returns (bool);
     function balanceOf(address account) external view returns (uint256);
 }
 
-contract Purgecoin is PurgeCoinStorage {
+contract Purgecoin {
     // ---------------------------------------------------------------------
     // Events
     // ---------------------------------------------------------------------
@@ -48,6 +47,90 @@ contract Purgecoin is PurgeCoinStorage {
     error ZeroAddress();
     error NotDecimatorWindow();
     error InvalidRakeback();
+
+    // ---------------------------------------------------------------------
+    // ERC20 state
+    // ---------------------------------------------------------------------
+    string public name = "Purgecoin";
+    string public symbol = "PURGE";
+    uint256 public totalSupply;
+    mapping(address => uint256) public balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
+
+    // ---------------------------------------------------------------------
+    // Types used in storage
+    // ---------------------------------------------------------------------
+    struct PlayerScore {
+        address player;
+        uint96 score;
+    }
+
+    struct AffiliateCodeInfo {
+        address owner;
+        uint8 rakeback;
+    }
+
+    struct StakeTrophyCandidate {
+        address player;
+        uint72 principal;
+        uint24 level;
+    }
+
+    struct CoinflipDayResult {
+        uint16 rewardPercent;
+        bool win;
+    }
+
+    // ---------------------------------------------------------------------
+    // Game wiring & session state
+    // ---------------------------------------------------------------------
+    IPurgeGame internal purgeGame;
+    PurgeGameNFT internal purgeGameNFT;
+    IPurgeGameTrophies internal purgeGameTrophies;
+    IPurgeQuestModule internal questModule;
+    address public jackpots;
+
+    bool internal bonusActive;
+
+    uint8 internal affiliateLen;
+    uint8 internal topLen;
+
+    uint24 internal stakeLevelComplete;
+    uint32 internal scanCursor = type(uint32).max;
+    uint32 internal payoutIndex;
+
+    address[] internal cfPlayers;
+    uint128 internal cfHead;
+    uint128 internal cfTail;
+    uint24 internal lastBafFlipLevel;
+
+    mapping(uint48 => mapping(address => uint256)) internal coinflipBalance;
+    mapping(uint48 => CoinflipDayResult) internal coinflipDayResult;
+    mapping(address => uint48) internal lastCoinflipClaim;
+    uint48 internal currentFlipDay;
+
+    PlayerScore[8] public topBettors;
+
+    mapping(bytes32 => AffiliateCodeInfo) internal affiliateCode;
+    mapping(uint24 => mapping(address => uint256)) public affiliateCoinEarned;
+    mapping(address => bytes32) internal playerReferralCode;
+    mapping(address => uint256) public playerLuckbox;
+    PlayerScore public biggestLuckbox;
+    PlayerScore[8] public affiliateLeaderboard;
+
+    mapping(uint24 => address[]) internal stakeAddr;
+    mapping(uint24 => mapping(address => uint256)) internal stakeAmt;
+    StakeTrophyCandidate internal stakeTrophyCandidate;
+
+    mapping(address => uint8) internal affiliatePos;
+    mapping(address => uint8) internal topPos;
+
+    uint128 public currentBounty = 1_000_000_000;
+    uint128 public biggestFlipEver = 1_000_000_000;
+    address internal bountyOwedTo;
+    uint96 public totalPresaleSold;
+
+    uint256 internal coinflipRewardPercent;
 
     // ---------------------------------------------------------------------
     // ERC20 state
@@ -126,6 +209,7 @@ contract Purgecoin is PurgeCoinStorage {
     uint256 private constant PRESALE_MAX_ETH_PER_TX = 0.25 ether;
     bytes32 private constant REF_CODE_LOCKED = bytes32(uint256(1));
     uint24 private constant DECIMATOR_SPECIAL_LEVEL = 100;
+    uint48 private constant JACKPOT_RESET_TIME = 82620;
 
     // Scan sentinels
     // ---------------------------------------------------------------------
@@ -160,6 +244,7 @@ contract Purgecoin is PurgeCoinStorage {
      */
     constructor() {
         creator = msg.sender;
+        currentFlipDay = _currentDay();
         uint256 presaleAmount = PRESALE_SUPPLY_TOKENS * MILLION;
         _mint(address(this), presaleAmount);
         _mint(creator, presaleAmount);
@@ -929,6 +1014,97 @@ contract Purgecoin is PurgeCoinStorage {
         _burn(target, amount);
     }
 
+    function coinflipAmount(address player) external view returns (uint256) {
+        uint48 day = _viewFlipDay();
+        return coinflipBalance[day][player];
+    }
+
+    function coinflipDayInfo(
+        uint48 day
+    ) external view returns (uint16 rewardPercent, bool win) {
+        CoinflipDayResult storage result = coinflipDayResult[day];
+        return (result.rewardPercent, result.win);
+    }
+
+    function claimCoinflips(uint8 maxDays) external {
+        _claimCoinflips(msg.sender, maxDays);
+    }
+
+    function _claimCoinflips(address player, uint8 maxDays) internal returns (uint256 claimed) {
+        _syncFlipDay();
+
+        uint48 latest = _latestClaimableDay();
+        uint48 start = lastCoinflipClaim[player];
+        if (start >= latest) return 0;
+
+        uint48 cursor;
+        unchecked {
+            cursor = start + 1;
+        }
+        uint48 processed;
+
+        uint8 remaining = (maxDays == 0 || maxDays > 30) ? 30 : maxDays;
+
+        while (remaining != 0 && cursor <= latest) {
+            CoinflipDayResult storage result = coinflipDayResult[cursor];
+
+            uint256 stake = coinflipBalance[cursor][player];
+            if (stake != 0) {
+                if (result.win) {
+                    uint256 payout = stake + (stake * uint256(result.rewardPercent) * 100) / BPS_DENOMINATOR;
+                    claimed += payout;
+                }
+                coinflipBalance[cursor][player] = 0;
+            }
+
+            processed = cursor;
+            unchecked {
+                ++cursor;
+                --remaining;
+            }
+        }
+
+        if (processed != 0 && processed != lastCoinflipClaim[player]) {
+            lastCoinflipClaim[player] = processed;
+        }
+        if (claimed != 0) {
+            _mint(player, claimed);
+            playerLuckbox[player] += claimed;
+        }
+    }
+
+    function _viewFlipDay() internal view returns (uint48) {
+        uint48 target = currentFlipDay;
+        if (target == 0) {
+            target = _currentDay();
+        }
+        return target;
+    }
+
+    function _syncFlipDay() internal returns (uint48 activeDay) {
+        activeDay = currentFlipDay;
+        if (activeDay == 0) {
+            activeDay = _currentDay();
+            currentFlipDay = activeDay;
+        }
+    }
+
+    function _latestClaimableDay() internal view returns (uint48) {
+        uint48 day = currentFlipDay;
+        if (day == 0) return 0;
+        unchecked {
+            return day - 1;
+        }
+    }
+
+    function _currentDay() internal view returns (uint48) {
+        uint256 ts = block.timestamp;
+        if (ts <= JACKPOT_RESET_TIME) {
+            return 0;
+        }
+        return uint48((ts - JACKPOT_RESET_TIME) / 1 days);
+    }
+
     /// @notice Progress coinflip payouts for the current level in bounded slices.
     /// @dev Called by PurgeGame; runs in four phases per settlement:
     ///      1. Optionally propagate stakes when the flip outcome is a win.
@@ -947,6 +1123,13 @@ contract Purgecoin is PurgeCoinStorage {
         uint48 epoch,
         uint256 priceCoinUnit
     ) external onlyPurgeGameContract returns (bool finished) {
+        _syncFlipDay();
+        uint48 day = epoch;
+        uint48 syncDay = _viewFlipDay();
+        if (day < syncDay) {
+            day = syncDay;
+        }
+        currentFlipDay = day;
         uint256 word = rngWord;
         uint16 rewardPercent = uint16(coinflipRewardPercent);
         if (payoutIndex == 0) {
@@ -981,11 +1164,14 @@ contract Purgecoin is PurgeCoinStorage {
         uint32 stepPayout = (cap == 0) ? 420 : cap;
         uint32 stepStake = (cap == 0) ? 200 : (cap > 200 ? 200 : cap);
 
-        bool bafActive = purgeGame.isBafLevelActive(level);
         bool win = (word & 1) == 1;
         if (!win) {
             stepPayout *= 3;
         }
+
+        CoinflipDayResult storage dayResult = coinflipDayResult[day];
+        dayResult.rewardPercent = rewardPercent;
+        dayResult.win = win;
         // --- Phase 1: stake propagation (only processed on wins) --------
         if (payoutIndex == 0 && stakeLevelComplete < level) {
             uint24 settleLevel = level - 1;
@@ -1108,30 +1294,12 @@ contract Purgecoin is PurgeCoinStorage {
         for (uint256 i = start; i < end; ) {
             address p = _playerAt(i);
 
-            uint256 credit; // accumulate bonus + flip payout
-
             // Flip payout: double on win, zero out stake in all cases.
-            uint256 amt = coinflipAmount[p];
+            uint256 amt = coinflipBalance[day][p];
             if (amt != 0) {
                 if (!win) {
-                    coinflipAmount[p] = 0;
-                } else {
-                    uint256 workingAmt = amt;
-                    uint256 payout = workingAmt + (workingAmt * uint256(rewardPercent) * 100) / BPS_DENOMINATOR;
-                    if (bafActive) {
-                        coinflipAmount[p] = payout;
-                    } else {
-                        coinflipAmount[p] = 0;
-                        unchecked {
-                            credit += payout;
-                        }
-                    }
+                    coinflipBalance[day][p] = 0;
                 }
-            }
-
-            if (credit != 0) {
-                _mint(p, credit);
-                playerLuckbox[p] += credit;
             }
 
             unchecked {
@@ -1141,17 +1309,12 @@ contract Purgecoin is PurgeCoinStorage {
         payoutIndex = uint32(end);
         // --- Phase 4: cleanup (single shot) -------------------------------------------
         if (end >= totalPlayers) {
-            bool clearQueue = !win || !bafActive;
-            if (clearQueue) {
-                cfHead = cfTail;
-            }
+            cfHead = cfTail;
             payoutIndex = 0;
 
             scanCursor = SS_IDLE;
             coinflipRewardPercent = 0;
-            if (bafActive) {
-                lastBafFlipLevel = level;
-            }
+            currentFlipDay = day + 1;
 
             if (priceCoinUnit != 0) {
                 _addToBounty(priceCoinUnit);
@@ -1171,13 +1334,6 @@ contract Purgecoin is PurgeCoinStorage {
 
         uint256 queued = _coinflipCount();
         if (queued == 0) return false;
-
-        bool bafActive = purgeGame.isBafLevelActive(level);
-        if (bafActive) {
-            // During purge on BAF levels, keep re-running queued flips each tick; wins stay queued and
-            // compound until a loss or until the game leaves purge (BAF main event pays out normally).
-            return true;
-        }
 
         return true;
     }
@@ -1281,13 +1437,16 @@ contract Purgecoin is PurgeCoinStorage {
         bool bountyEligible,
         bool skipLuckboxCheck
     ) internal {
-        uint256 prevStake = coinflipAmount[player];
+        _claimCoinflips(player, 30);
+
+        uint48 day = _syncFlipDay();
+        uint256 prevStake = coinflipBalance[day][player];
         if (prevStake == 0) _pushPlayer(player);
 
         uint256 newStake = prevStake + coinflipDeposit;
         uint256 eligibleStake = bountyEligible ? newStake : prevStake;
 
-        coinflipAmount[player] = newStake;
+        coinflipBalance[day][player] = newStake;
 
         // When BAF is active, capture a persistent roster entry + index for scatter.
         if (purgeGame.isBafLevelActive(purgeGame.level())) {
