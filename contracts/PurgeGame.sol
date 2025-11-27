@@ -71,7 +71,7 @@ contract PurgeGame is PurgeGameStorage {
     event Jackpot(uint256 traits); // Encodes jackpot metadata
     event Purge(address indexed player, uint256[] tokenIds);
     event Advance(uint8 gameState, uint8 phase);
-    event ReverseFlip(address indexed caller, uint256 totalQueued);
+    event ReverseFlip(address indexed caller, uint256 totalQueued, uint256 cost);
 
     // -----------------------
     // Immutable Addresses
@@ -100,7 +100,7 @@ contract PurgeGame is PurgeGameStorage {
     uint16 private constant LUCK_PER_LINK_PERCENT = 22; // flip credit per LINK before multiplier (as % of priceCoin)
     uint32 private constant VRF_CALLBACK_GAS_LIMIT = 200_000;
     uint16 private constant VRF_REQUEST_CONFIRMATIONS = 10;
-    uint256 private constant RNG_NUDGE_COST = 100 * 1e6; // PURGE has 6 decimals
+    uint256 private constant RNG_NUDGE_BASE_COST = 100 * 1e6; // PURGE has 6 decimals
     uint256 private constant REWARD_POOL_MIN_STAKE = 0.5 ether;
 
     uint256 private constant MINT_MASK_24 = (uint256(1) << 24) - 1;
@@ -1147,14 +1147,16 @@ contract PurgeGame is PurgeGameStorage {
         return currentWord;
     }
 
-    /// @notice Pay 100 PURGE to nudge the next RNG word by +1.
+    /// @notice Pay PURGE to nudge the next RNG word by +1; cost scales +10% per queued nudge and resets after fulfillment.
     /// @dev Only available while RNG is unlocked (before a VRF request is in-flight).
     function reverseFlip() external {
         if (rngLockedFlag) revert RngLocked();
-        coin.burnCoin(msg.sender, RNG_NUDGE_COST);
-        uint256 newCount = totalFlipReversals + 1;
+        uint256 reversals = totalFlipReversals;
+        uint256 cost = _currentNudgeCost(reversals);
+        coin.burnCoin(msg.sender, cost);
+        uint256 newCount = reversals + 1;
         totalFlipReversals = newCount;
-        emit ReverseFlip(msg.sender, newCount);
+        emit ReverseFlip(msg.sender, newCount, cost);
     }
 
     /// @notice Handle ETH payments for purchases; forwards affiliate rewards as coinflip credits.
@@ -1276,9 +1278,20 @@ contract PurgeGame is PurgeGameStorage {
         uint256 rngNudge = totalFlipReversals;
         if (rngNudge != 0) {
             word += rngNudge;
+            totalFlipReversals = 0;
         }
         rngFulfilled = true;
         rngWordCurrent = word;
+    }
+
+    function _currentNudgeCost(uint256 reversals) private pure returns (uint256 cost) {
+        cost = RNG_NUDGE_BASE_COST;
+        while (reversals != 0) {
+            cost = (cost * 11) / 10; // compound 10% per queued reversal
+            unchecked {
+                --reversals;
+            }
+        }
     }
 
     function _creditPurgeFlip(
