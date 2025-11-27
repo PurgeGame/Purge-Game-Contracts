@@ -1337,7 +1337,6 @@ contract PurgeGame is PurgeGameStorage {
     function onTokenTransfer(address from, uint256 amount, bytes calldata) external {
         if (msg.sender != linkToken) revert E();
         if (amount == 0) revert E();
-        if (rngLockedFlag) revert CoinPaused();
 
         try
             ILinkToken(linkToken).transferAndCall(address(vrfCoordinator), amount, abi.encode(vrfSubscriptionId))
@@ -1353,16 +1352,15 @@ contract PurgeGame is PurgeGameStorage {
         uint256 baseCredit = (amount * luckPerLink) / 1 ether;
         uint256 credit = (baseCredit * mult) / 1000;
         if (credit != 0) {
-            coin.bonusCoinflip(from, credit, true);
+            coin.bonusCoinflip(from, credit, !rngLockedFlag);
         }
     }
 
     function _tierMultPermille(uint256 subBal) private pure returns (uint16) {
         if (subBal < 100 ether) return 2000;
         if (subBal < 200 ether) return 1500;
-        if (subBal < 600 ether) return 1000;
-        if (subBal < 1000 ether) return 500;
-        if (subBal < 2000 ether) return 100;
+        if (subBal < 400 ether) return 1000;
+        if (subBal < 600 ether) return 200;
         return 0;
     }
 
