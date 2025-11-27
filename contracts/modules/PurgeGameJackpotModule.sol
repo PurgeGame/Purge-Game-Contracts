@@ -4,6 +4,10 @@ pragma solidity ^0.8.26;
 import {IPurgeCoinModule, IPurgeGameTrophiesModule} from "./PurgeGameModuleInterfaces.sol";
 import {PurgeGameStorage} from "../storage/PurgeGameStorage.sol";
 
+interface IStETH {
+    function balanceOf(address account) external view returns (uint256);
+}
+
 /**
  * @title PurgeGameJackpotModule
  * @notice Delegate-called module that hosts the jackpot distribution logic for `PurgeGame`.
@@ -257,15 +261,18 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         uint256 burnieAmount = (totalWei * priceCoin) / (10 * price);
         coinContract.burnie(burnieAmount, address(0));
 
+        uint256 mapPct;
+        uint256 mapWei;
+        uint256 mainWei;
+
         uint256 savePctTimes2 = _mapRewardPoolPercent(lvl, rngWord);
         uint256 _rewardPool = (totalWei * savePctTimes2) / 200;
         rewardPool = _rewardPool;
 
         uint256 jackpotBase = totalWei - _rewardPool;
-        uint256 mapPct = _mapJackpotPercent(lvl);
-        uint256 mapWei = (jackpotBase * mapPct) / 100;
+        mapPct = _mapJackpotPercent(lvl);
+        mapWei = (jackpotBase * mapPct) / 100;
 
-        uint256 mainWei;
         unchecked {
             mainWei = jackpotBase - mapWei;
         }
@@ -275,6 +282,17 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         dailyJackpotBase = mainWei;
 
         effectiveWei = mapWei;
+
+        if ((lvl % 100) == 0) {
+            address stAddr = stethTokenAddress;
+            if (stAddr != address(0)) {
+                uint256 stBal = IStETH(stAddr).balanceOf(address(this));
+                if (stBal > principalStEth) {
+                    uint256 yieldPool = stBal - principalStEth;
+                    rewardPool += yieldPool;
+                }
+            }
+        }
     }
 
     function _addClaimableEth(address beneficiary, uint256 weiAmount) private {
@@ -299,12 +317,12 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
     }
 
     function _mapRewardPoolPercent(uint24 lvl, uint256 rngWord) private pure returns (uint256) {
+        if ((lvl % 100) == 0) {
+            uint256 pct = rngWord % 11; // 0-10%
+            return pct * 2; // returned as times two
+        }
         if ((rngWord % 1_000_000_000) == DEGENERATE_ENTROPY_CHECK_VALUE) {
             return 20; // 10% fallback when trait entropy is degenerate (returned as times two).
-        }
-        if (lvl % 100 == 0) {
-            uint256 pct = 3 + (uint256(lvl) / 50) + _rollSum(rngWord, CARRYOVER_3D6_SALT, 6, 3);
-            return _clampPctTimes2(pct);
         }
         if (lvl >= 80 && lvl <= 98) {
             uint256 base = 75 + (uint256(lvl) - 80) + ((lvl % 10 == 9) ? 5 : 0);

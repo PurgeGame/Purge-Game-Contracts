@@ -162,6 +162,7 @@ contract PurgeGame is PurgeGameStorage {
         vrfSubscriptionId = vrfSubscriptionId_;
         linkToken = linkToken_;
         steth = IStETH(stEthToken_);
+        stethTokenAddress = stEthToken_;
     }
 
     // --- View: lightweight game status -------------------------------------------------
