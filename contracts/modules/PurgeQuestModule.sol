@@ -263,10 +263,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
             matched = true;
             fallbackType = quest.questType;
             _questSyncProgress(state, slot, currentDay);
-            uint128 clamped = _clampToUint128(flipCredit);
-            if (clamped > state.progress[slot]) {
-                state.progress[slot] = clamped;
-            }
+            state.progress[slot] = _clampedAdd128(state.progress[slot], flipCredit);
             uint256 target = uint256(_questFlipTargetTokens(tier, quest.entropy)) * MILLION;
             if (state.progress[slot] >= target) {
                 return _questComplete(state, slot, quest, priceUnit);
@@ -309,10 +306,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
             matched = true;
             fallbackType = quest.questType;
             _questSyncProgress(state, slot, currentDay);
-            uint128 clamped = _clampToUint128(burnAmount);
-            if (clamped > state.progress[slot]) {
-                state.progress[slot] = clamped;
-            }
+            state.progress[slot] = _clampedAdd128(state.progress[slot], burnAmount);
             uint256 target = uint256(_questDecimatorTargetTokens(tier, quest.entropy)) * MILLION;
             if (state.progress[slot] >= target) {
                 return _questComplete(state, slot, quest, priceUnit);
