@@ -1311,7 +1311,7 @@ contract PurgeGame is PurgeGameStorage {
     function _currentNudgeCost(uint256 reversals) private pure returns (uint256 cost) {
         cost = RNG_NUDGE_BASE_COST;
         while (reversals != 0) {
-            cost = (cost * 11) / 10; // compound 10% per queued reversal
+            cost = (cost * 15) / 10; // compound 10% per queued reversal
             unchecked {
                 --reversals;
             }

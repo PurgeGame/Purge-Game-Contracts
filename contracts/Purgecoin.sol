@@ -794,7 +794,7 @@ contract Purgecoin is PurgeCoinStorage {
         address questModule_,
         address externalJackpotModule_
     ) external {
-        if (msg.sender != creator) revert OnlyDeployer();
+        if (msg.sender != creator || externalJackpotModule != address(0)) revert OnlyDeployer();
 
         purgeGame = IPurgeGame(game_);
         bytes32 h = H;
