@@ -273,7 +273,7 @@ contract PurgeGame is PurgeGameStorage {
         priceWei = price;
         priceCoinUnit = priceCoin;
 
-        if (gameState_ == 3) {
+        if (gameState_ == 3 || (gameState_ == 2 && phase_ >= 5)) {
             unchecked {
                 ++lvl;
             }
@@ -408,7 +408,7 @@ contract PurgeGame is PurgeGameStorage {
                 }
             }
 
-            uint256 rngWord = rngAndTimeGate(day);
+            uint256 rngWord = rngAndTimeGate(day, lvl);
             if (rngWord == 1) {
                 break;
             }
@@ -416,6 +416,9 @@ contract PurgeGame is PurgeGameStorage {
             if (_gameState == 1) {
                 _runEndgameModule(lvl, cap, day, rngWord); // handles payouts, wipes, endgame dist, and jackpots
                 if (gameState == 2) {
+                    if (lvl != 0) {
+                        coinContract.recordStakeResolution(lvl, day);
+                    }
                     if (lastExterminatedTrait != TRAIT_ID_TIMEOUT) {
                         payDailyJackpot(false, level, rngWord);
                     }
@@ -428,12 +431,7 @@ contract PurgeGame is PurgeGameStorage {
             // --- State 2 - Purchase / Airdrop ---
             if (_gameState == 2) {
                 if (_phase <= 2) {
-                    bool flipsPending = coinContract.coinflipWorkPending(lvl);
                     bool advanceToAirdrop = (_phase == 2 && nextPrizePool >= lastPrizePool);
-                    if (flipsPending) {
-                        coinContract.processCoinflipPayouts(lvl, cap, advanceToAirdrop, rngWord, day, priceCoin);
-                        break;
-                    }
 
                     bool batchesPending = airdropIndex < pendingMapMints.length;
                     if (batchesPending) {
@@ -453,33 +451,34 @@ contract PurgeGame is PurgeGameStorage {
                 }
 
                 if (_phase == 3) {
-                    if (_processMapBatch(cap)) {
-                        phase = 4;
-                        airdropIndex = 0;
-                        airdropMapsProcessedCount = 0;
+                    if (lvl % 100 == 0) {
+                        if (!_runDecimatorHundredJackpot(lvl, cap, rngWord)) {
+                            break; // keep working this jackpot slice before moving on
+                        }
                     }
+                    phase = 4;
                     break;
                 }
 
                 if (_phase == 4) {
-                    if (coinContract.coinflipWorkPending(lvl)) {
-                        coinContract.processCoinflipPayouts(lvl, cap, false, rngWord, day, priceCoin);
+                    if (!_processMapBatch(cap)) {
                         break;
                     }
-
-                    if (lvl % 100 == 0) {
-                        if (!_runDecimatorHundredJackpot(lvl, cap, rngWord)) {
-                            break;
-                        }
-                    }
-
                     uint256 mapEffectiveWei = _calcPrizePoolForJackpot(lvl, rngWord);
                     payMapJackpot(lvl, rngWord, mapEffectiveWei);
+
+                    coinContract.rollDailyQuest(day, rngWord);
+                    airdropMapsProcessedCount = 0;
+                    if (airdropIndex >= pendingMapMints.length) {
+                        airdropIndex = 0;
+                        delete pendingMapMints;
+                    }
                     phase = 5;
                     break;
                 }
-                uint32 purchaseCountRaw = nft.purchaseCount();
+
                 if (_phase == 5) {
+                    uint32 purchaseCountRaw = nft.purchaseCount();
                     if (!traitCountsSeedQueued) {
                         uint32 multiplier_ = airdropMultiplier;
                         if (!nft.processPendingMints(cap, multiplier_)) {
@@ -501,38 +500,25 @@ contract PurgeGame is PurgeGameStorage {
                         traitCountsSeedQueued = false;
                     }
 
-                    delete pendingMapMints;
-                    airdropIndex = 0;
-                    airdropMapsProcessedCount = 0;
+                    uint32 mintedCount = _purchaseTargetCountFromRaw(purchaseCountRaw);
+                    nft.finalizePurchasePhase(mintedCount, rngWordCurrent);
+                    if ((rngWordCurrent & 1) == 1) {
+                        coinContract.rewardTopFlipBonus(priceCoin);
+                    }
+                    coinContract.resetCoinflipLeaderboard();
+                    traitRebuildCursor = 0;
+                    airdropMultiplier = 1;
                     earlyPurgePercent = 0;
-                    phase = 6;
-                    break;
+                    levelStartTime = ts;
+                    gameState = 3;
+                    _unlockRng(day); // open RNG after map jackpot is finalized
                 }
-
-                levelStartTime = ts;
-                uint32 mintedCount = _purchaseTargetCountFromRaw(nft.purchaseCount());
-                nft.finalizePurchasePhase(mintedCount, rngWordCurrent);
-                if ((rngWordCurrent & 1) == 1) {
-                    coinContract.rewardTopFlipBonus(priceCoin);
-                }
-                coinContract.resetCoinflipLeaderboard();
-                traitRebuildCursor = 0;
-                airdropMultiplier = 1;
-                gameState = 3;
-                _unlockRng(day);
                 break;
             }
 
             // --- State 3 - Purge ---
             if (_gameState == 3) {
-                // Purge begins only after phase 6 is latched during purchase finalization.
-                uint24 coinflipLevel = uint24(lvl + (jackpotCounter >= 9 ? 1 : 0));
-                bool finalDaily = jackpotCounter >= JACKPOT_LEVEL_CAP - 1;
-                if (!finalDaily && coinContract.coinflipWorkPending(coinflipLevel)) {
-                    coinContract.processCoinflipPayouts(coinflipLevel, cap, false, rngWord, day, priceCoin);
-                    break;
-                }
-
+                // Purge begins only after phase 5 is latched during purchase finalization.
                 bool batchesPending = airdropIndex < pendingMapMints.length;
                 if (batchesPending) {
                     bool batchesFinished = _processMapBatch(cap);
@@ -540,17 +526,9 @@ contract PurgeGame is PurgeGameStorage {
                 }
 
                 payDailyJackpot(true, lvl, rngWord);
-                if (!_handleJackpotLevelCap() || gameState != 3) break;
+                if (!_handleJackpotLevelCap()) break;
                 _unlockRng(day);
                 break;
-            }
-
-            // --- State 0 ---
-            if (_gameState == 0) {
-                if (coinContract.coinflipWorkPending(lvl)) {
-                    coinContract.processCoinflipPayouts(lvl, cap, false, rngWord, day, priceCoin);
-                    break;
-                }
             }
         } while (false);
 
@@ -1172,7 +1150,7 @@ contract PurgeGame is PurgeGameStorage {
 
     // --- Flips, VRF, payments, rarity ----------------------------------------------------------------
 
-    function rngAndTimeGate(uint48 day) internal returns (uint256 word) {
+    function rngAndTimeGate(uint48 day, uint24 lvl) internal returns (uint256 word) {
         if (day == dailyIdx) revert NotTimeYet();
 
         uint256 currentWord = rngFulfilled ? rngWordCurrent : 0;
@@ -1192,6 +1170,9 @@ contract PurgeGame is PurgeGameStorage {
         if (!rngWordRecorded[day]) {
             rngWordByDay[day] = currentWord;
             rngWordRecorded[day] = true;
+            if (lvl != 0) {
+                coin.processCoinflipPayouts(lvl, 0, false, currentWord, day, priceCoin);
+            }
         }
         return currentWord;
     }

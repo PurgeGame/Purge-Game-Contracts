@@ -20,6 +20,7 @@ contract Purgecoin {
     event Transfer(address indexed from, address indexed to, uint256 amount);
     event Approval(address indexed owner, address indexed spender, uint256 amount);
     event StakeCreated(address indexed player, uint24 targetLevel, uint8 risk, uint256 principal);
+    event StakeClaimed(address indexed player, uint24 targetLevel, uint8 risk, uint256 payout, bool won);
     event CoinflipDeposit(address indexed player, uint256 creditedFlip);
     event DecimatorBurn(address indexed player, uint256 amountBurned, uint8 bucket);
     event Affiliate(uint256 amount, bytes32 indexed code, address sender);
@@ -102,6 +103,10 @@ contract Purgecoin {
     address[] internal cfPlayers;
     uint128 internal cfHead;
     uint128 internal cfTail;
+    address[] internal cfPlayersNext;
+    uint128 internal cfHeadNext;
+    uint128 internal cfTailNext;
+    uint48 internal nextFlipDay;
     uint24 internal lastBafFlipLevel;
 
     mapping(uint48 => mapping(address => uint256)) internal coinflipBalance;
@@ -118,8 +123,10 @@ contract Purgecoin {
     PlayerScore public biggestLuckbox;
     PlayerScore[8] public affiliateLeaderboard;
 
+    uint8 private constant STAKE_BUCKETS = 12;
+
     mapping(uint24 => address[]) internal stakeAddr;
-    mapping(uint24 => mapping(address => uint256)) internal stakeAmt;
+    mapping(uint24 => mapping(address => uint256[STAKE_BUCKETS])) internal stakeAmt;
     StakeTrophyCandidate internal stakeTrophyCandidate;
 
     mapping(address => uint8) internal affiliatePos;
@@ -131,6 +138,8 @@ contract Purgecoin {
     uint96 public totalPresaleSold;
 
     uint256 internal coinflipRewardPercent;
+    mapping(uint24 => uint48) internal stakeResolutionDay;
+    mapping(uint24 => bool) internal stakeTrophyAwarded;
 
     // ---------------------------------------------------------------------
     // ERC20 state
@@ -191,14 +200,6 @@ contract Purgecoin {
     uint16 private constant COINFLIP_EXTRA_RANGE = 38;
     uint16 private constant BPS_DENOMINATOR = 10_000;
     bytes32 private constant H = 0x9aeceb0bff1d88815fac67760a5261a814d06dfaedc391fdf4cf62afac3f10b5;
-    uint8 private constant STAKE_MAX_LANES = 3;
-    uint256 private constant STAKE_LANE_BITS = 86;
-    uint256 private constant STAKE_LANE_MASK = (uint256(1) << STAKE_LANE_BITS) - 1;
-    uint256 private constant STAKE_LANE_RISK_BITS = 8;
-    uint256 private constant STAKE_LANE_PRINCIPAL_BITS = STAKE_LANE_BITS - STAKE_LANE_RISK_BITS;
-    uint256 private constant STAKE_LANE_PRINCIPAL_MASK = (uint256(1) << STAKE_LANE_PRINCIPAL_BITS) - 1;
-    uint256 private constant STAKE_LANE_RISK_SHIFT = STAKE_LANE_PRINCIPAL_BITS;
-    uint256 private constant STAKE_LANE_RISK_MASK = ((uint256(1) << STAKE_LANE_RISK_BITS) - 1) << STAKE_LANE_RISK_SHIFT;
     uint256 private constant STAKE_PRINCIPAL_FACTOR = MILLION;
     uint256 private constant TROPHY_BASE_LEVEL_SHIFT = 128;
     uint256 private constant TROPHY_FLAG_STAKE = uint256(1) << 202;
@@ -255,7 +256,6 @@ contract Purgecoin {
     /// @notice Burn PURGE to increase the caller’s coinflip stake, applying streak bonuses when eligible.
     /// @param amount Amount (6 decimals) to burn; must satisfy the global minimum.
     function depositCoinflip(uint256 amount) external {
-        if (purgeGame.rngLocked()) revert BettingPaused();
         if (amount < MIN) revert AmountLTMin();
 
         address caller = msg.sender;
@@ -364,107 +364,83 @@ contract Purgecoin {
         return affiliateCode[code].owner;
     }
 
-    // Stake with encoded risk window
-    function _encodeStakeLane(uint256 principalRounded, uint8 risk) private pure returns (uint256) {
-        if (risk == 0 || risk > MAX_RISK) revert StakeInvalid();
-        if (principalRounded == 0) revert StakeInvalid();
-
-        uint256 normalized = principalRounded / STAKE_PRINCIPAL_FACTOR;
-        if (normalized == 0) normalized = 1;
-        if (normalized > STAKE_LANE_PRINCIPAL_MASK) {
-            normalized = STAKE_LANE_PRINCIPAL_MASK;
-        }
-        return normalized | (uint256(risk) << STAKE_LANE_RISK_SHIFT);
-    }
-
-    function _laneAt(uint256 encoded, uint8 index) private pure returns (uint256) {
-        if (index >= STAKE_MAX_LANES) return 0;
-        uint256 shift = uint256(index) * STAKE_LANE_BITS;
-        return (encoded >> shift) & STAKE_LANE_MASK;
-    }
-
-    function _setLane(uint256 encoded, uint8 index, uint256 laneValue) private pure returns (uint256) {
-        uint256 shift = uint256(index) * STAKE_LANE_BITS;
-        uint256 mask = STAKE_LANE_MASK << shift;
-        return (encoded & ~mask) | (laneValue << shift);
-    }
-
-    function _insertLane(uint256 encoded, uint256 laneValue) private pure returns (uint256) {
-        uint8 riskNew = uint8((laneValue & STAKE_LANE_RISK_MASK) >> STAKE_LANE_RISK_SHIFT);
-
-        uint8 lanes;
-
-        // Try to merge with an existing lane carrying the same risk
-        for (uint8 idx; idx < STAKE_MAX_LANES; ) {
-            uint256 target = _laneAt(encoded, idx);
-            if (target == 0) break;
-            lanes++;
-            uint8 riskExisting = uint8((target & STAKE_LANE_RISK_MASK) >> STAKE_LANE_RISK_SHIFT);
-            if (riskExisting == riskNew) {
-                uint256 unitsExisting = target & STAKE_LANE_PRINCIPAL_MASK;
-                uint256 unitsNew = laneValue & STAKE_LANE_PRINCIPAL_MASK;
-                uint256 totalUnits = unitsExisting + unitsNew;
-                if (totalUnits >> STAKE_LANE_PRINCIPAL_BITS != 0) revert StakeInvalid();
-                uint256 mergedLane = (target & ~STAKE_LANE_PRINCIPAL_MASK) | totalUnits;
-                return _setLane(encoded, idx, mergedLane);
-            }
-            unchecked {
-                ++idx;
-            }
-        }
-
-        if (lanes < STAKE_MAX_LANES) {
-            return _setLane(encoded, lanes, laneValue);
-        }
-        // all slots occupied with different maturities
-        revert StakeInvalid();
-    }
-
-    function _recordStakeTrophyCandidate(uint24 level, address player, uint256 principal) private {
+    function _awardStakeTrophy(uint24 level, address player, uint256 principal) private {
         if (player == address(0) || principal == 0) return;
-        uint72 principalCapped = principal > type(uint72).max ? type(uint72).max : uint72(principal);
-        StakeTrophyCandidate storage cand = stakeTrophyCandidate;
-        if (cand.level != level) {
-            stakeTrophyCandidate = StakeTrophyCandidate({player: player, principal: principalCapped, level: level});
-            return;
-        }
-        if (principalCapped > cand.principal) {
-            cand.player = player;
-            cand.principal = principalCapped;
-        }
+        if (stakeTrophyAwarded[level]) return;
+        stakeTrophyAwarded[level] = true;
+
+        uint256 dataWord = (uint256(0xFFFF) << 152) | (uint256(level) << TROPHY_BASE_LEVEL_SHIFT) | TROPHY_FLAG_STAKE;
+        purgeGameTrophies.awardTrophy(player, level, PURGE_TROPHY_KIND_STAKE, dataWord, 0);
     }
 
-    function _finalizeStakeTrophy(uint24 level, bool award) private {
-        StakeTrophyCandidate storage cand = stakeTrophyCandidate;
-        address player = cand.player;
-        uint24 candLevel = cand.level;
-        uint72 principal = cand.principal;
-
-        if (award && candLevel == level && player != address(0) && principal != 0) {
-            uint256 dataWord = (uint256(0xFFFF) << 152) |
-                (uint256(level) << TROPHY_BASE_LEVEL_SHIFT) |
-                TROPHY_FLAG_STAKE;
-            purgeGameTrophies.awardTrophy(player, level, PURGE_TROPHY_KIND_STAKE, dataWord, 0);
+    function _hasAnyStake(uint256[STAKE_BUCKETS] storage buckets) private view returns (bool) {
+        for (uint8 i = 1; i <= MAX_RISK; ) {
+            if (buckets[i] != 0) return true;
+            unchecked {
+                ++i;
+            }
         }
-
-        if (!award) {
-            purgeGameTrophies.clearStakePreview(level);
-        }
-        if (candLevel == level || !award) {
-            delete stakeTrophyCandidate;
-        }
+        return false;
     }
 
-    /// @notice Burn PURGED to open a future "stake window" targeting `targetLevel` with a risk radius.
+    /// @notice Claim a matured stake recorded for `targetLevel` with the provided `risk` lane.
+    /// @dev Reverts if resolution days are not yet recorded or the specified lane does not exist.
+    function claimStake(uint24 targetLevel, uint8 risk) external returns (uint256 payout) {
+        payout = _claimStake(msg.sender, targetLevel, risk);
+    }
+
+    function _claimStake(address player, uint24 targetLevel, uint8 risk) internal returns (uint256 payout) {
+        if (player == address(0)) revert ZeroAddress();
+        if (risk == 0 || risk > MAX_RISK) revert StakeInvalid();
+        if (targetLevel == 0 || risk > targetLevel) revert StakeInvalid();
+
+        uint256[STAKE_BUCKETS] storage stakes = stakeAmt[targetLevel][player];
+        uint256 principal = stakes[risk];
+        if (principal == 0) revert StakeInvalid();
+
+        payout = principal;
+        bool allWon = true;
+
+        for (uint8 step; step < risk; ) {
+            uint24 checkLevel = targetLevel - uint24(step);
+            uint48 day = stakeResolutionDay[checkLevel];
+            if (day == 0) revert StakeInvalid();
+
+            CoinflipDayResult storage result = coinflipDayResult[day];
+            if (!result.win) {
+                allWon = false;
+                break;
+            }
+
+            payout += (payout * uint256(result.rewardPercent) * 100) / BPS_DENOMINATOR;
+            unchecked {
+                ++step;
+            }
+        }
+
+        stakes[risk] = 0;
+
+        if (!allWon) {
+            emit StakeClaimed(player, targetLevel, risk, 0, false);
+            return 0;
+        }
+
+        _mint(player, payout);
+        playerLuckbox[player] += payout;
+        _awardStakeTrophy(targetLevel, player, principal);
+
+        emit StakeClaimed(player, targetLevel, risk, payout, true);
+    }
+
+    /// @notice Burn PURGED to open a future stake targeting `targetLevel` with a risk radius.
     /// @dev
     /// - `burnAmt` must be at least 250e6 base units (token has 6 decimals).
-    /// - `targetLevel` must be at least 11 levels ahead of the current game level.
+    /// - `targetLevel` must be ahead of the current effective game level.
     /// - `risk` must be between 1 and `MAX_RISK` and cannot exceed the distance to `targetLevel`.
-    /// - Encodes stake as whole-token principal (6-decimal trimmed) plus an 8-bit risk code.
-    /// - Enforces no overlap/collision with caller's existing stakes.
+    /// - Stores stake principal per level/risk bucket (whole-token rounded).
+    /// - Stakes are recorded on their maturity level and later claimed via `claimStake`.
     function stake(uint256 burnAmt, uint24 targetLevel, uint8 risk) external {
         if (burnAmt < 250 * MILLION) revert AmountLTMin();
-        if (purgeGame.rngLocked()) revert BettingPaused();
         address sender = msg.sender;
         uint24 currLevel = purgeGame.level();
         if (targetLevel < currLevel) revert StakeInvalid();
@@ -488,65 +464,10 @@ contract Purgecoin {
         if (distance > 500) revert Insufficient();
 
         if (risk == 0 || risk > MAX_RISK) revert Insufficient();
+        if (risk > targetLevel) revert StakeInvalid();
 
         uint256 maxRiskForTarget = uint256(targetLevel) + 1 - uint256(effectiveLevel);
         if (risk > maxRiskForTarget) revert Insufficient();
-
-        // Starting level where this stake is placed (inclusive)
-        uint24 placeLevel = uint24(uint256(targetLevel) + 1 - uint256(risk));
-        if (placeLevel < effectiveLevel) revert StakeInvalid();
-
-        // 1) Guard against direct collisions in the risk window [placeLevel .. placeLevel+risk-1]
-        uint256 existingEncoded;
-        for (uint8 offset; offset < risk; ) {
-            uint24 checkLevel = placeLevel + uint24(offset);
-            existingEncoded = stakeAmt[checkLevel][sender];
-            if (existingEncoded != 0) {
-                uint8 wantRisk = risk - offset;
-                uint8 lanes;
-                for (uint8 i; i < STAKE_MAX_LANES; ) {
-                    uint256 lane = _laneAt(existingEncoded, i);
-                    if (lane == 0) break;
-                    lanes++;
-                    uint8 haveRisk = uint8((lane & STAKE_LANE_RISK_MASK) >> STAKE_LANE_RISK_SHIFT);
-                    if (haveRisk != wantRisk) revert StakeInvalid();
-                    unchecked {
-                        ++i;
-                    }
-                }
-                if (lanes >= STAKE_MAX_LANES) revert StakeInvalid();
-            }
-            unchecked {
-                ++offset;
-            }
-        }
-
-        // 2) Guard against overlap from earlier stakes that extend into placeLevel
-        uint24 scanStart = currLevel;
-        uint24 scanFloor = placeLevel > (MAX_RISK - 1) ? uint24(placeLevel - (MAX_RISK - 1)) : uint24(1);
-        if (scanStart < scanFloor) scanStart = scanFloor;
-
-        for (uint24 scanLevel = scanStart; scanLevel < placeLevel; ) {
-            uint256 existingAtScan = stakeAmt[scanLevel][sender];
-            if (existingAtScan != 0) {
-                for (uint8 li; li < STAKE_MAX_LANES; ) {
-                    uint256 lane = _laneAt(existingAtScan, li);
-                    if (lane == 0) break;
-                    uint8 existingRisk = uint8((lane & STAKE_LANE_RISK_MASK) >> STAKE_LANE_RISK_SHIFT);
-                    uint24 reachLevel = scanLevel + uint24(existingRisk) - 1;
-                    if (reachLevel >= placeLevel) {
-                        uint24 impliedRiskAtPlace = uint24(existingRisk) - (placeLevel - scanLevel);
-                        if (uint8(impliedRiskAtPlace) != risk) revert StakeInvalid();
-                    }
-                    unchecked {
-                        ++li;
-                    }
-                }
-            }
-            unchecked {
-                ++scanLevel;
-            }
-        }
 
         if (playerLuckbox[sender] == 0) {
             playerLuckbox[sender] = 1;
@@ -615,14 +536,11 @@ contract Purgecoin {
             }
         }
 
-        uint256 newLane = _encodeStakeLane(principalRounded, risk);
-
-        uint256 existingAtPlace = stakeAmt[placeLevel][sender];
-        if (existingAtPlace == 0) {
-            stakeAmt[placeLevel][sender] = newLane;
-            stakeAddr[placeLevel].push(sender);
-        } else {
-            stakeAmt[placeLevel][sender] = _insertLane(existingAtPlace, newLane);
+        uint256[STAKE_BUCKETS] storage stakes = stakeAmt[targetLevel][sender];
+        bool hadStake = _hasAnyStake(stakes);
+        stakes[risk] += principalRounded;
+        if (!hadStake) {
+            stakeAddr[targetLevel].push(sender);
         }
 
         emit StakeCreated(sender, targetLevel, risk, principalRounded);
@@ -1030,6 +948,40 @@ contract Purgecoin {
         _claimCoinflips(msg.sender, maxDays);
     }
 
+    /// @notice Record the stake resolution day for a level (invoked by PurgeGame at end of state 1).
+    /// @dev The first call at the start of level 2 is considered the level-1 resolution.
+    function recordStakeResolution(uint24 level, uint48 day) external onlyPurgeGameContract {
+        if (level == 0) return;
+        uint48 setDay = day == 0 ? _currentDay() : day;
+        if (setDay == 0) return;
+        stakeResolutionDay[level] = setDay;
+        stakeLevelComplete = level;
+    }
+
+    /// @notice Claim both coinflip winnings (for up to `maxDays`) and specified stakes in one call.
+    /// @param maxDays Maximum days of coinflips to claim (bounded to 30 in practice).
+    /// @param stakeLevels Levels of the stakes to claim.
+    /// @param stakeRisks  Risk buckets (1..MAX_RISK) corresponding to `stakeLevels`.
+    /// @return flipClaimed Total flip amount minted.
+    /// @return stakeClaimed Total stake amount minted (sum of successful stake payouts).
+    function claimRewards(
+        uint8 maxDays,
+        uint24[] calldata stakeLevels,
+        uint8[] calldata stakeRisks
+    ) external returns (uint256 flipClaimed, uint256 stakeClaimed) {
+        flipClaimed = _claimCoinflips(msg.sender, maxDays);
+
+        uint256 len = stakeLevels.length;
+        if (len != stakeRisks.length) revert StakeInvalid();
+
+        for (uint256 i; i < len; ) {
+            stakeClaimed += _claimStake(msg.sender, stakeLevels[i], stakeRisks[i]);
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
     function _claimCoinflips(address player, uint8 maxDays) internal returns (uint256 claimed) {
         _syncFlipDay();
 
@@ -1048,10 +1000,10 @@ contract Purgecoin {
         while (remaining != 0 && cursor <= latest) {
             CoinflipDayResult storage result = coinflipDayResult[cursor];
 
-            uint256 stake = coinflipBalance[cursor][player];
-            if (stake != 0) {
+            uint256 flipStake = coinflipBalance[cursor][player];
+            if (flipStake != 0) {
                 if (result.win) {
-                    uint256 payout = stake + (stake * uint256(result.rewardPercent) * 100) / BPS_DENOMINATOR;
+                    uint256 payout = flipStake + (flipStake * uint256(result.rewardPercent) * 100) / BPS_DENOMINATOR;
                     claimed += payout;
                 }
                 coinflipBalance[cursor][player] = 0;
@@ -1106,11 +1058,10 @@ contract Purgecoin {
     }
 
     /// @notice Progress coinflip payouts for the current level in bounded slices.
-    /// @dev Called by PurgeGame; runs in four phases per settlement:
-    ///      1. Optionally propagate stakes when the flip outcome is a win.
+    /// @dev Called by PurgeGame; runs in three phases per settlement:
+    ///      1. Record the stake resolution day for the level being processed.
     ///      2. Arm bounties on the first payout window.
-    ///      3. Pay player flips in batches.
-    ///      4. Perform cleanup and reopen betting.
+    ///      3. Perform cleanup and reopen betting (flip claims happen lazily per player).
     /// @param level Current PurgeGame level (used to gate 1/run and propagate stakes).
     /// @param cap   Work cap hint. cap==0 uses defaults; otherwise applies directly.
     /// @param bonusFlip Adds 6 percentage points to the payout roll for the last flip of the purchase phase.
@@ -1123,13 +1074,18 @@ contract Purgecoin {
         uint48 epoch,
         uint256 priceCoinUnit
     ) external onlyPurgeGameContract returns (bool finished) {
+        cap; // cap no longer affects work sizing
+        level; // retained in signature for interface compatibility
         _syncFlipDay();
-        uint48 day = epoch;
-        uint48 syncDay = _viewFlipDay();
-        if (day < syncDay) {
-            day = syncDay;
+        uint48 day = currentFlipDay;
+        if (day == 0) {
+            day = _currentDay();
+            currentFlipDay = day;
         }
-        currentFlipDay = day;
+        if (epoch > day) {
+            day = epoch;
+            currentFlipDay = day;
+        }
         uint256 word = rngWord;
         uint16 rewardPercent = uint16(coinflipRewardPercent);
         if (payoutIndex == 0) {
@@ -1159,115 +1115,17 @@ contract Purgecoin {
         } else if (rewardPercent == 0) {
             rewardPercent = COINFLIP_EXTRA_MIN_PERCENT;
         }
-        // --- Step sizing (bounded work) ----------------------------------------------------
-
-        uint32 stepPayout = (cap == 0) ? 420 : cap;
-        uint32 stepStake = (cap == 0) ? 200 : (cap > 200 ? 200 : cap);
 
         bool win = (word & 1) == 1;
-        if (!win) {
-            stepPayout *= 3;
-        }
 
         CoinflipDayResult storage dayResult = coinflipDayResult[day];
         dayResult.rewardPercent = rewardPercent;
         dayResult.win = win;
-        // --- Phase 1: stake propagation (only processed on wins) --------
-        if (payoutIndex == 0 && stakeLevelComplete < level) {
-            uint24 settleLevel = level - 1;
-            if (settleLevel == 0) {
-                scanCursor = SS_DONE;
-                stakeLevelComplete = level;
-            } else {
-                uint32 st = scanCursor;
-                if (st == SS_IDLE) {
-                    st = 0;
-                    scanCursor = 0;
-                    if (stakeTrophyCandidate.level != settleLevel) {
-                        delete stakeTrophyCandidate;
-                    }
-                }
-
-                if (st != SS_DONE) {
-                    // If loss: mark complete; no propagation.
-                    if (!win) {
-                        scanCursor = SS_DONE;
-                        stakeLevelComplete = level;
-                        _finalizeStakeTrophy(settleLevel, false);
-                    } else {
-                        // Win: process stakers at this level in slices.
-                        address[] storage roster = stakeAddr[settleLevel];
-                        uint32 len = uint32(roster.length);
-                        if (len == 0) {
-                            scanCursor = SS_DONE;
-                            stakeLevelComplete = level;
-                            _finalizeStakeTrophy(settleLevel, false);
-                            return false;
-                        }
-                        if (st < len) {
-                            uint32 en = st + stepStake;
-                            if (en > len) en = len;
-
-                            for (uint32 i = st; i < en; ) {
-                                address player = roster[i];
-                                uint256 enc = stakeAmt[settleLevel][player];
-                                for (uint8 li; li < STAKE_MAX_LANES; ) {
-                                    uint256 lane = _laneAt(enc, li);
-                                    if (lane == 0) break;
-
-                                    uint256 principalRounded = (lane & STAKE_LANE_PRINCIPAL_MASK) *
-                                        STAKE_PRINCIPAL_FACTOR;
-                                    uint8 riskFactor = uint8((lane & STAKE_LANE_RISK_MASK) >> STAKE_LANE_RISK_SHIFT);
-
-                                    if (riskFactor <= 1) {
-                                        _recordStakeTrophyCandidate(settleLevel, player, principalRounded);
-                                        if (principalRounded != 0) {
-                                            addFlip(player, principalRounded, false, false, true);
-                                        }
-                                    } else {
-                                        uint24 nextL = settleLevel + 1;
-                                        uint8 newRf = riskFactor - 1;
-                                        uint256 units = (lane & STAKE_LANE_PRINCIPAL_MASK) << 1; // double principal units
-                                        if (units > STAKE_LANE_PRINCIPAL_MASK) units = STAKE_LANE_PRINCIPAL_MASK;
-                                        uint256 laneValue = (units & STAKE_LANE_PRINCIPAL_MASK) |
-                                            (uint256(newRf) << STAKE_LANE_RISK_SHIFT);
-                                        uint256 nextEnc = stakeAmt[nextL][player];
-                                        if (nextEnc == 0) {
-                                            stakeAmt[nextL][player] = laneValue;
-                                            stakeAddr[nextL].push(player);
-                                        } else {
-                                            stakeAmt[nextL][player] = _insertLane(nextEnc, laneValue);
-                                        }
-                                    }
-                                    unchecked {
-                                        ++li;
-                                    }
-                                }
-                                unchecked {
-                                    ++i;
-                                }
-                            }
-
-                            bool sliceFinished = (en == len);
-                            scanCursor = sliceFinished ? SS_DONE : en;
-                            if (sliceFinished) {
-                                stakeLevelComplete = level;
-                                _finalizeStakeTrophy(settleLevel, true);
-                            }
-                            return false; // more stake processing remains
-                        }
-
-                        // Finished this phase.
-                        scanCursor = SS_DONE;
-                        stakeLevelComplete = level;
-                        _finalizeStakeTrophy(settleLevel, true);
-                        return false; // allow caller to continue in a subsequent call
-                    }
-                }
-            }
+        if (payoutIndex == 0) {
+            scanCursor = SS_IDLE;
         }
 
-        // --- Phase 2: bounty payout (first window only) -------
+        // --- Phase 2: bounty payout (first window only; flip claims are player-driven) -------
         uint256 totalPlayers = _coinflipCount();
 
         // Bounty: convert any owed bounty into a flip credit on the first window.
@@ -1286,55 +1144,20 @@ contract Purgecoin {
             bountyOwedTo = address(0);
         }
 
-        // --- Phase 3: player payouts (windowed by stepPayout) -----------------------------------
-        uint256 start = payoutIndex;
-        uint256 end = start + stepPayout;
-        if (end > totalPlayers) end = totalPlayers;
+        // --- Phase 3: cleanup (claims happen lazily; clear queue markers) -------------------
+        cfHead = cfTail;
+        payoutIndex = 0;
 
-        for (uint256 i = start; i < end; ) {
-            address p = _playerAt(i);
+        scanCursor = SS_IDLE;
+        coinflipRewardPercent = 0;
+        currentFlipDay = day + 1;
+        _promoteNextQueue(currentFlipDay);
 
-            // Flip payout: double on win, zero out stake in all cases.
-            uint256 amt = coinflipBalance[day][p];
-            if (amt != 0) {
-                if (!win) {
-                    coinflipBalance[day][p] = 0;
-                }
-            }
-
-            unchecked {
-                ++i;
-            }
-        }
-        payoutIndex = uint32(end);
-        // --- Phase 4: cleanup (single shot) -------------------------------------------
-        if (end >= totalPlayers) {
-            cfHead = cfTail;
-            payoutIndex = 0;
-
-            scanCursor = SS_IDLE;
-            coinflipRewardPercent = 0;
-            currentFlipDay = day + 1;
-
-            if (priceCoinUnit != 0) {
-                _addToBounty(priceCoinUnit);
-            }
-
-            emit CoinflipFinished(win);
-            return true;
+        if (priceCoinUnit != 0) {
+            _addToBounty(priceCoinUnit);
         }
 
-        return false;
-    }
-
-    function coinflipWorkPending(uint24 level) external view onlyPurgeGameContract returns (bool) {
-        if (payoutIndex != 0) return true;
-
-        if (stakeLevelComplete < level) return true;
-
-        uint256 queued = _coinflipCount();
-        if (queued == 0) return false;
-
+        emit CoinflipFinished(win);
         return true;
     }
 
@@ -1424,6 +1247,53 @@ contract Purgecoin {
         }
     }
 
+    function _resetNextQueue() internal {
+        delete cfPlayersNext;
+        cfHeadNext = 0;
+        cfTailNext = 0;
+    }
+
+    function _ensureNextFlipDay(uint48 targetDay) internal {
+        uint48 queuedDay = nextFlipDay;
+        if (queuedDay != targetDay) {
+            _resetNextQueue();
+            nextFlipDay = targetDay;
+        }
+    }
+
+    // Append to the "next day" queue, reusing storage slots while advancing the ring tail.
+    function _pushPlayerNext(address p) internal {
+        uint128 tail = cfTailNext;
+        uint128 head = cfHeadNext;
+        uint256 capacity = cfPlayersNext.length;
+        uint256 inQueue = uint256(tail) - uint256(head);
+
+        if (capacity == 0 || inQueue == capacity) {
+            cfPlayersNext.push(p);
+        } else {
+            uint256 slot = uint256(tail) % capacity;
+            cfPlayersNext[slot] = p;
+        }
+
+        unchecked {
+            cfTailNext = tail + 1;
+        }
+    }
+
+    function _promoteNextQueue(uint48 newActiveDay) internal {
+        if (nextFlipDay != newActiveDay) {
+            cfHead = cfTail;
+            return;
+        }
+
+        cfPlayers = cfPlayersNext;
+        cfHead = cfHeadNext;
+        cfTail = cfTailNext;
+
+        _resetNextQueue();
+        nextFlipDay = 0;
+    }
+
     /// @notice Increase a player's pending coinflip stake and possibly arm a bounty.
     /// @param player               Target player.
     /// @param coinflipDeposit      Amount to add to their current pending flip stake.
@@ -1439,14 +1309,21 @@ contract Purgecoin {
     ) internal {
         _claimCoinflips(player, 30);
 
-        uint48 day = _syncFlipDay();
-        uint256 prevStake = coinflipBalance[day][player];
-        if (prevStake == 0) _pushPlayer(player);
+        uint48 settleDay = _syncFlipDay();
+        uint48 targetDay = settleDay + 1;
+        uint48 nowDay = _currentDay();
+        if (targetDay <= nowDay) {
+            targetDay = nowDay + 1;
+        }
+        _ensureNextFlipDay(targetDay);
+
+        uint256 prevStake = coinflipBalance[targetDay][player];
+        if (prevStake == 0) _pushPlayerNext(player);
 
         uint256 newStake = prevStake + coinflipDeposit;
         uint256 eligibleStake = bountyEligible ? newStake : prevStake;
 
-        coinflipBalance[day][player] = newStake;
+        coinflipBalance[targetDay][player] = newStake;
 
         // When BAF is active, capture a persistent roster entry + index for scatter.
         if (purgeGame.isBafLevelActive(purgeGame.level())) {

@@ -23,7 +23,7 @@ interface IPurgeCoin {
         uint256 priceCoinUnit
     ) external returns (bool);
 
-    function coinflipWorkPending(uint24 level) external view returns (bool);
+    function recordStakeResolution(uint24 level, uint48 day) external;
 
     function addToBounty(uint256 amount) external;
 

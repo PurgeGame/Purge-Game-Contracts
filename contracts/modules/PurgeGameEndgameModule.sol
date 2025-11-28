@@ -35,7 +35,7 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
     function finalizeEndgame(
         uint24 lvl,
         uint32 cap,
-        uint48 day,
+        uint48 /*day*/,
         uint256 rngWord,
         address jackpots,
         IPurgeCoinModule coinContract,
@@ -85,10 +85,6 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
             return;
         }
 
-        if (coinContract.coinflipWorkPending(lvl)) {
-            coinContract.processCoinflipPayouts(lvl, cap, false, rngWord, day, priceCoin);
-            return;
-        }
         gameState = 2;
         if (lvl == 1) {
             return;

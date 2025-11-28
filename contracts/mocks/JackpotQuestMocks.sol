@@ -20,10 +20,6 @@ contract JackpotCoinModuleMock is IPurgeCoinModule {
         return address(0);
     }
 
-    function coinflipWorkPending(uint24) external pure override returns (bool) {
-        return false;
-    }
-
     function processCoinflipPayouts(
         uint24,
         uint32,

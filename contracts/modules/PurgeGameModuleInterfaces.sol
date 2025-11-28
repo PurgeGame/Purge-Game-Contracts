@@ -6,8 +6,6 @@ import {IPurgeGameTrophies} from "../PurgeGameTrophies.sol";
 interface IPurgeCoinModule {
     function jackpots() external view returns (address);
 
-    function coinflipWorkPending(uint24 level) external view returns (bool);
-
     function processCoinflipPayouts(
         uint24 level,
         uint32 cap,
