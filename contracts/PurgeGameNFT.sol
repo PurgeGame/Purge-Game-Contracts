@@ -517,10 +517,16 @@ contract PurgeGameNFT {
         }
 
         // Flat affiliate payout baseline and bonus conditions.
-        uint256 affiliateAmount = priceUnit / 10; // 0.1 priceCoin
-        bool affiliateBonus = lvl <= 3 || gameState == 2; // first 3 levels or any purchase phase
-        if (affiliateBonus) {
-            affiliateAmount = (affiliateAmount * 250) / 100; // +150% => 0.25 priceCoin
+        uint256 affiliateAmount;
+        if (lvl > 40) {
+            uint256 pct = gameState != 3 ? 30 : 5;
+            affiliateAmount = (priceUnit * pct) / 100;
+        } else {
+            affiliateAmount = priceUnit / 10; // 0.1 priceCoin
+            bool affiliateBonus = lvl <= 3 || gameState != 3; // first 3 levels or any purchase phase
+            if (affiliateBonus) {
+                affiliateAmount = (affiliateAmount * 250) / 100; // +150% => 0.25 priceCoin
+            }
         }
 
         uint256 rakebackMint = coin.payAffiliate(affiliateAmount, affiliateCode, payer, lvl);
