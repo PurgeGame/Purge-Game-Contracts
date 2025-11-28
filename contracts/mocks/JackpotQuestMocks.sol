@@ -46,7 +46,7 @@ contract JackpotCoinModuleMock is IPurgeCoinModule {
         return address(0);
     }
 
-    function bonusCoinflip(address, uint256, bool) external pure override {}
+    function bonusCoinflip(address, uint256) external pure override {}
 
     function addToBounty(uint256) external pure override {}
 

@@ -97,17 +97,6 @@ contract Purgecoin {
     uint8 internal topLen;
 
     uint24 internal stakeLevelComplete;
-    uint32 internal scanCursor = type(uint32).max;
-    uint32 internal payoutIndex;
-
-    address[] internal cfPlayers;
-    uint128 internal cfHead;
-    uint128 internal cfTail;
-    address[] internal cfPlayersNext;
-    uint128 internal cfHeadNext;
-    uint128 internal cfTailNext;
-    uint48 internal nextFlipDay;
-    uint24 internal lastBafFlipLevel;
 
     mapping(uint48 => mapping(address => uint256)) internal coinflipBalance;
     mapping(uint48 => CoinflipDayResult) internal coinflipDayResult;
@@ -123,6 +112,12 @@ contract Purgecoin {
     PlayerScore public biggestLuckbox;
     PlayerScore[8] public affiliateLeaderboard;
 
+    /// @notice View-only helper to estimate claimable coin (flips + stakes) for the caller.
+    function claimableCoin() external view returns (uint256) {
+        address player = msg.sender;
+        return _viewClaimableCoin(player);
+    }
+
     uint8 private constant STAKE_BUCKETS = 12;
 
     mapping(uint24 => address[]) internal stakeAddr;
@@ -137,7 +132,6 @@ contract Purgecoin {
     address internal bountyOwedTo;
     uint96 public totalPresaleSold;
 
-    uint256 internal coinflipRewardPercent;
     mapping(uint24 => uint48) internal stakeResolutionDay;
     mapping(uint24 => bool) internal stakeTrophyAwarded;
 
@@ -211,11 +205,6 @@ contract Purgecoin {
     bytes32 private constant REF_CODE_LOCKED = bytes32(uint256(1));
     uint24 private constant DECIMATOR_SPECIAL_LEVEL = 100;
     uint48 private constant JACKPOT_RESET_TIME = 82620;
-
-    // Scan sentinels
-    // ---------------------------------------------------------------------
-    uint32 private constant SS_IDLE = type(uint32).max; // not started
-    uint32 private constant SS_DONE = type(uint32).max - 1; // finished
 
     // ---------------------------------------------------------------------
     // Immutables / external wiring
@@ -386,6 +375,87 @@ contract Purgecoin {
         }
         if (mask != 0) {
             buckets[0] = mask;
+        }
+    }
+
+    function _viewClaimableCoin(address player) internal view returns (uint256 total) {
+        // Pending flip winnings since last claim (up to 30 days)
+        uint48 latestDay = _latestClaimableDayView();
+        uint48 startDay = lastCoinflipClaim[player];
+        uint8 remaining = 30;
+        if (startDay < latestDay) {
+            uint48 cursor = startDay + 1;
+            while (remaining != 0 && cursor <= latestDay) {
+                CoinflipDayResult storage result = coinflipDayResult[cursor];
+                if (result.rewardPercent == 0 && !result.win) break;
+
+                uint256 flipStake = coinflipBalance[cursor][player];
+                if (flipStake != 0 && result.win) {
+                    uint256 payout = flipStake + (flipStake * uint256(result.rewardPercent) * 100) / BPS_DENOMINATOR;
+                    total += payout;
+                }
+                unchecked {
+                    ++cursor;
+                    --remaining;
+                }
+            }
+        }
+
+        // Pending stakes in the last 30 days of resolved levels
+        uint48 currentDay = _currentDay();
+        uint48 windowStart = currentDay > 30 ? currentDay - 30 : 0;
+        uint24 lvl = stakeLevelComplete;
+        uint24 scanned;
+        while (lvl != 0 && scanned < 400) {
+            uint48 resDay = stakeResolutionDay[lvl];
+            if (resDay == 0 || resDay < windowStart) break;
+
+            uint256[STAKE_BUCKETS] storage stakes = stakeAmt[lvl][player];
+            uint256 mask = stakes[0];
+            if (mask == 0) {
+                for (uint8 i = 1; i <= MAX_RISK; ) {
+                    if (stakes[i] != 0) mask |= (uint256(1) << i);
+                    unchecked {
+                        ++i;
+                    }
+                }
+            }
+
+            uint256 tmpMask = mask;
+            while (tmpMask != 0) {
+                uint8 risk = _lowestSetBitIndex(tmpMask);
+                uint256 principal = stakes[risk];
+                if (principal != 0) {
+                    uint256 payout = principal;
+                    bool allWon = true;
+                    for (uint8 step; step < risk; ) {
+                        uint24 checkLevel = lvl - uint24(step);
+                        uint48 day = stakeResolutionDay[checkLevel];
+                        if (day == 0) {
+                            allWon = false;
+                            break;
+                        }
+                        CoinflipDayResult storage result2 = coinflipDayResult[day];
+                        if (!result2.win) {
+                            allWon = false;
+                            break;
+                        }
+                        payout += (payout * uint256(result2.rewardPercent) * 100) / BPS_DENOMINATOR;
+                        unchecked {
+                            ++step;
+                        }
+                    }
+                    if (allWon) {
+                        total += payout;
+                    }
+                }
+                tmpMask &= (tmpMask - 1);
+            }
+
+            unchecked {
+                --lvl;
+                ++scanned;
+            }
         }
     }
 
@@ -876,14 +946,10 @@ contract Purgecoin {
 
     /// @notice Grant a pending coinflip stake during gameplay flows instead of minting PURGE.
     /// @dev Access: PurgeGame, NFT, or trophy module only. Zero address is ignored. Optional luckbox bonus credited directly.
-    function bonusCoinflip(address player, uint256 amount, bool rngReady) external onlyGameplayContracts {
+    function bonusCoinflip(address player, uint256 amount) external onlyGameplayContracts {
         if (player == address(0)) return;
         if (amount != 0) {
-            if (!rngReady) {
-                _mint(player, amount);
-            } else {
-                addFlip(player, amount, false, false, false);
-            }
+            addFlip(player, amount, false, false, false);
         }
     }
 
@@ -989,11 +1055,6 @@ contract Purgecoin {
         return coinflipBalance[day][player];
     }
 
-    function coinflipDayInfo(uint48 day) external view returns (uint16 rewardPercent, bool win) {
-        CoinflipDayResult storage result = coinflipDayResult[day];
-        return (result.rewardPercent, result.win);
-    }
-
     /// @notice Record the stake resolution day for a level (invoked by PurgeGame at end of state 1).
     /// @dev The first call at the start of level 2 is considered the level-1 resolution.
     function recordStakeResolution(uint24 level, uint48 day) external onlyPurgeGameContract {
@@ -1002,10 +1063,6 @@ contract Purgecoin {
         if (setDay == 0) return;
         stakeResolutionDay[level] = setDay;
         stakeLevelComplete = level;
-    }
-
-    function _claimCoinflips(address player, uint8 maxDays) internal returns (uint256 claimed) {
-        return _claimCoinflipsInternal(player, maxDays, true);
     }
 
     function _claimCoinflipsInternal(
@@ -1083,6 +1140,14 @@ contract Purgecoin {
         }
     }
 
+    function _latestClaimableDayView() internal view returns (uint48) {
+        uint48 day = currentFlipDay;
+        if (day == 0) return 0;
+        unchecked {
+            return day - 1;
+        }
+    }
+
     function _currentDay() internal view returns (uint48) {
         uint256 ts = block.timestamp;
         if (ts <= JACKPOT_RESET_TIME) {
@@ -1108,8 +1173,8 @@ contract Purgecoin {
         uint48 epoch,
         uint256 priceCoinUnit
     ) external onlyPurgeGameContract returns (bool finished) {
-        cap; // cap no longer affects work sizing
-        level; // retained in signature for interface compatibility
+        cap;
+        level;
         _syncFlipDay();
         uint48 day = currentFlipDay;
         if (day == 0) {
@@ -1120,50 +1185,41 @@ contract Purgecoin {
             day = epoch;
             currentFlipDay = day;
         }
-        uint256 word = rngWord;
-        uint16 rewardPercent = uint16(coinflipRewardPercent);
-        if (payoutIndex == 0) {
-            uint256 seedWord = word;
-            if (epoch != 0) {
-                seedWord = uint256(keccak256(abi.encodePacked(word, epoch)));
-            }
-            uint256 roll = seedWord % 20; // ~5% each for the low/high outliers
-            if (roll == 0) {
-                rewardPercent = 50;
-            } else if (roll == 1) {
-                rewardPercent = 150;
-            } else {
-                rewardPercent = uint16((seedWord % COINFLIP_EXTRA_RANGE) + COINFLIP_EXTRA_MIN_PERCENT);
-            }
-            if (bonusFlip) {
-                unchecked {
-                    rewardPercent += 7;
-                }
-            }
-            coinflipRewardPercent = rewardPercent;
-            if (bonusActive && ((word & 1) == 0)) {
-                unchecked {
-                    ++word;
-                }
-            }
-        } else if (rewardPercent == 0) {
-            rewardPercent = COINFLIP_EXTRA_MIN_PERCENT;
+
+        uint256 seedWord = rngWord;
+        if (epoch != 0) {
+            seedWord = uint256(keccak256(abi.encodePacked(rngWord, epoch)));
         }
 
+        uint256 roll = seedWord % 20; // ~5% each for the low/high outliers
+        uint16 rewardPercent;
+        if (roll == 0) {
+            rewardPercent = 50;
+        } else if (roll == 1) {
+            rewardPercent = 150;
+        } else {
+            rewardPercent = uint16((seedWord % COINFLIP_EXTRA_RANGE) + COINFLIP_EXTRA_MIN_PERCENT);
+        }
+        if (bonusFlip) {
+            unchecked {
+                rewardPercent += 7;
+            }
+        }
+
+        uint256 word = rngWord;
+        if (bonusActive && ((word & 1) == 0)) {
+            unchecked {
+                ++word;
+            }
+        }
         bool win = (word & 1) == 1;
 
         CoinflipDayResult storage dayResult = coinflipDayResult[day];
         dayResult.rewardPercent = rewardPercent;
         dayResult.win = win;
-        if (payoutIndex == 0) {
-            scanCursor = SS_IDLE;
-        }
 
-        // --- Phase 2: bounty payout (first window only; flip claims are player-driven) -------
-        uint256 totalPlayers = _coinflipCount();
-
-        // Bounty: convert any owed bounty into a flip credit on the first window.
-        if (totalPlayers != 0 && payoutIndex == 0 && bountyOwedTo != address(0) && currentBounty > 0) {
+        // Bounty: convert any owed bounty into a flip credit once per window.
+        if (bountyOwedTo != address(0) && currentBounty > 0) {
             address to = bountyOwedTo;
             uint256 slice = currentBounty >> 1; // pay/delete half of the bounty pool
             if (slice != 0) {
@@ -1178,14 +1234,7 @@ contract Purgecoin {
             bountyOwedTo = address(0);
         }
 
-        // --- Phase 3: cleanup (claims happen lazily; clear queue markers) -------------------
-        cfHead = cfTail;
-        payoutIndex = 0;
-
-        scanCursor = SS_IDLE;
-        coinflipRewardPercent = 0;
         currentFlipDay = day + 1;
-        _promoteNextQueue(currentFlipDay);
 
         if (priceCoinUnit != 0) {
             _addToBounty(priceCoinUnit);
@@ -1248,97 +1297,6 @@ contract Purgecoin {
         topLen = 0;
     }
 
-    function _coinflipCount() internal view returns (uint256) {
-        return uint256(uint128(cfTail) - uint128(cfHead));
-    }
-
-    /// @notice Return player address at global coinflip index `idx`.
-    /// @dev Ring buffer backed by `cfPlayers`. Callers must ensure 0 <= idx < `_coinflipCount()`.
-    function _playerAt(uint256 idx) internal view returns (address) {
-        uint256 capacity = cfPlayers.length;
-        if (capacity == 0) return address(0);
-        uint256 physical = (uint256(cfHead) + idx) % capacity;
-        return cfPlayers[physical];
-    }
-
-    // Append to the queue, reusing storage slots while advancing the ring tail.
-    function _pushPlayer(address p) internal {
-        uint128 tail = cfTail;
-        uint128 head = cfHead;
-        uint256 capacity = cfPlayers.length;
-        uint256 inQueue = uint256(tail) - uint256(head);
-
-        if (capacity == 0 || inQueue == capacity) {
-            // Grow (first entry or fully utilized capacity).
-            cfPlayers.push(p);
-        } else {
-            uint256 slot = uint256(tail) % capacity;
-            cfPlayers[slot] = p;
-        }
-
-        unchecked {
-            cfTail = tail + 1;
-        }
-    }
-
-    function _resetNextQueue() internal {
-        delete cfPlayersNext;
-        cfHeadNext = 0;
-        cfTailNext = 0;
-    }
-
-    function _ensureNextFlipDay(uint48 targetDay) internal returns (uint48 lockedDay) {
-        uint48 queuedDay = nextFlipDay;
-        if (queuedDay == 0) {
-            nextFlipDay = targetDay;
-            return targetDay;
-        }
-
-        if (queuedDay == targetDay) return targetDay;
-
-        // If a roster is already queued, keep targeting that day to avoid orphaning it.
-        if (cfTailNext != cfHeadNext) {
-            return queuedDay;
-        }
-
-        _resetNextQueue();
-        nextFlipDay = targetDay;
-        return targetDay;
-    }
-
-    // Append to the "next day" queue, reusing storage slots while advancing the ring tail.
-    function _pushPlayerNext(address p) internal {
-        uint128 tail = cfTailNext;
-        uint128 head = cfHeadNext;
-        uint256 capacity = cfPlayersNext.length;
-        uint256 inQueue = uint256(tail) - uint256(head);
-
-        if (capacity == 0 || inQueue == capacity) {
-            cfPlayersNext.push(p);
-        } else {
-            uint256 slot = uint256(tail) % capacity;
-            cfPlayersNext[slot] = p;
-        }
-
-        unchecked {
-            cfTailNext = tail + 1;
-        }
-    }
-
-    function _promoteNextQueue(uint48 newActiveDay) internal {
-        if (nextFlipDay != newActiveDay) {
-            cfHead = cfTail;
-            return;
-        }
-
-        cfPlayers = cfPlayersNext;
-        cfHead = cfHeadNext;
-        cfTail = cfTailNext;
-
-        _resetNextQueue();
-        nextFlipDay = 0;
-    }
-
     /// @notice Increase a player's pending coinflip stake and possibly arm a bounty.
     /// @param player               Target player.
     /// @param coinflipDeposit      Amount to add to their current pending flip stake.
@@ -1379,10 +1337,8 @@ contract Purgecoin {
         if (targetDay <= nowDay) {
             targetDay = nowDay + 1;
         }
-        targetDay = _ensureNextFlipDay(targetDay);
 
         uint256 prevStake = coinflipBalance[targetDay][player];
-        if (prevStake == 0) _pushPlayerNext(player);
 
         uint256 newStake = prevStake + coinflipDeposit;
         uint256 eligibleStake = bountyEligible ? newStake : prevStake;

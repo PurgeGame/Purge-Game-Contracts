@@ -527,7 +527,7 @@ contract PurgeGame is PurgeGameStorage {
 
         emit Advance(_gameState, _phase);
 
-        if (_gameState != 0 && cap == 0) coinContract.bonusCoinflip(caller, priceCoin, false);
+        if (_gameState != 0 && cap == 0) coinContract.bonusCoinflip(caller, priceCoin);
     }
 
     // --- Purchases: schedule NFT mints (traits precomputed) ----------------------------------------
@@ -1333,7 +1333,7 @@ contract PurgeGame is PurgeGameStorage {
             flipCredit += (count + bonusTenths) * priceUnit;
         }
 
-        coin.bonusCoinflip(caller, flipCredit, true);
+        coin.bonusCoinflip(caller, flipCredit);
     }
 
     function onTokenTransfer(address from, uint256 amount, bytes calldata) external {
@@ -1354,7 +1354,7 @@ contract PurgeGame is PurgeGameStorage {
         uint256 baseCredit = (amount * luckPerLink) / 1 ether;
         uint256 credit = (baseCredit * mult) / 1000;
         if (credit != 0) {
-            coin.bonusCoinflip(from, credit, !rngLockedFlag);
+            coin.bonusCoinflip(from, credit);
         }
     }
 

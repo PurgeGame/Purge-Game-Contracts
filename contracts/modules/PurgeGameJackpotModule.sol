@@ -712,7 +712,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
     ) private returns (bool) {
         if (beneficiary == address(0) || amount == 0) return false;
         if (payInCoin) {
-            coinContract.bonusCoinflip(beneficiary, amount, true);
+            coinContract.bonusCoinflip(beneficiary, amount);
         } else {
             _addClaimableEth(beneficiary, amount);
         }

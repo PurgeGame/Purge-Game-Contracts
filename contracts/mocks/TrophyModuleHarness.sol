@@ -112,10 +112,10 @@ contract TrophyCoinHarness is IPurgecoinMinimal {
         return leaderboard;
     }
 
-    function bonusCoinflip(address player, uint256 amount, bool rngReady) external override {
+    function bonusCoinflip(address player, uint256 amount) external override {
         lastCoinflipPlayer = player;
         lastCoinflipAmount = amount;
-        lastCoinflipRngReady = rngReady;
+        lastCoinflipRngReady = true;
     }
 
     function burnCoin(address target, uint256 amount) external override {
