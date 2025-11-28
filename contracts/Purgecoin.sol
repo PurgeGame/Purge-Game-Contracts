@@ -372,23 +372,42 @@ contract Purgecoin {
         purgeGameTrophies.awardTrophy(player, level, PURGE_TROPHY_KIND_STAKE, dataWord, 0);
     }
 
-    function _hasAnyStake(uint256[STAKE_BUCKETS] storage buckets) private view returns (bool) {
+    function _stakeMask(uint256[STAKE_BUCKETS] storage buckets) private returns (uint256 mask) {
+        mask = buckets[0];
+        if (mask != 0) return mask;
+
         for (uint8 i = 1; i <= MAX_RISK; ) {
-            if (buckets[i] != 0) return true;
+            if (buckets[i] != 0) {
+                mask |= (uint256(1) << i);
+            }
             unchecked {
                 ++i;
             }
         }
-        return false;
+        if (mask != 0) {
+            buckets[0] = mask;
+        }
     }
 
-    /// @notice Claim a matured stake recorded for `targetLevel` with the provided `risk` lane.
-    /// @dev Reverts if resolution days are not yet recorded or the specified lane does not exist.
-    function claimStake(uint24 targetLevel, uint8 risk) external returns (uint256 payout) {
-        payout = _claimStake(msg.sender, targetLevel, risk);
+    function _hasAnyStake(uint256[STAKE_BUCKETS] storage buckets) private returns (bool) {
+        return _stakeMask(buckets) != 0;
     }
 
-    function _claimStake(address player, uint24 targetLevel, uint8 risk) internal returns (uint256 payout) {
+    function _lowestSetBitIndex(uint256 mask) private pure returns (uint8 idx) {
+        while ((mask & 1) == 0) {
+            mask >>= 1;
+            unchecked {
+                ++idx;
+            }
+        }
+    }
+
+    function _claimStake(
+        address player,
+        uint24 targetLevel,
+        uint8 risk,
+        bool mintPayout
+    ) internal returns (uint256 payout) {
         if (player == address(0)) revert ZeroAddress();
         if (risk == 0 || risk > MAX_RISK) revert StakeInvalid();
         if (targetLevel == 0 || risk > targetLevel) revert StakeInvalid();
@@ -396,6 +415,7 @@ contract Purgecoin {
         uint256[STAKE_BUCKETS] storage stakes = stakeAmt[targetLevel][player];
         uint256 principal = stakes[risk];
         if (principal == 0) revert StakeInvalid();
+        uint256 mask = _stakeMask(stakes);
 
         payout = principal;
         bool allWon = true;
@@ -418,17 +438,45 @@ contract Purgecoin {
         }
 
         stakes[risk] = 0;
+        mask &= ~(uint256(1) << risk);
+        stakes[0] = mask;
 
         if (!allWon) {
             emit StakeClaimed(player, targetLevel, risk, 0, false);
             return 0;
         }
 
-        _mint(player, payout);
-        playerLuckbox[player] += payout;
+        if (mintPayout) {
+            _mint(player, payout);
+            playerLuckbox[player] += payout;
+        }
         _awardStakeTrophy(targetLevel, player, principal);
 
         emit StakeClaimed(player, targetLevel, risk, payout, true);
+    }
+
+    function _claimRecentStakes(address player, uint48 windowStartDay) internal returns (uint256 total) {
+        uint24 lvl = stakeLevelComplete;
+        if (lvl == 0) return 0;
+
+        uint24 scanned;
+        while (lvl != 0 && scanned < 400) {
+            uint48 resDay = stakeResolutionDay[lvl];
+            if (resDay == 0 || resDay < windowStartDay) break;
+
+            uint256[STAKE_BUCKETS] storage stakes = stakeAmt[lvl][player];
+            uint256 mask = _stakeMask(stakes);
+            while (mask != 0) {
+                uint8 risk = _lowestSetBitIndex(mask);
+                total += _claimStake(player, lvl, risk, false);
+                mask &= (mask - 1);
+            }
+
+            unchecked {
+                --lvl;
+                ++scanned;
+            }
+        }
     }
 
     /// @notice Burn PURGED to open a future stake targeting `targetLevel` with a risk radius.
@@ -437,7 +485,7 @@ contract Purgecoin {
     /// - `targetLevel` must be ahead of the current effective game level.
     /// - `risk` must be between 1 and `MAX_RISK` and cannot exceed the distance to `targetLevel`.
     /// - Stores stake principal per level/risk bucket (whole-token rounded).
-    /// - Stakes are recorded on their maturity level and later claimed via `claimStake`.
+    /// - Stakes are recorded on their maturity level and later auto-claimed during flip deposits.
     function stake(uint256 burnAmt, uint24 targetLevel, uint8 risk) external {
         if (burnAmt < 250 * MILLION) revert AmountLTMin();
         address sender = msg.sender;
@@ -536,8 +584,13 @@ contract Purgecoin {
         }
 
         uint256[STAKE_BUCKETS] storage stakes = stakeAmt[targetLevel][sender];
-        bool hadStake = _hasAnyStake(stakes);
+        uint256 mask = _stakeMask(stakes);
+        bool hadStake = mask != 0;
+
         stakes[risk] += principalRounded;
+        mask |= (uint256(1) << risk);
+        stakes[0] = mask;
+
         if (!hadStake) {
             stakeAddr[targetLevel].push(sender);
         }
@@ -941,10 +994,6 @@ contract Purgecoin {
         return (result.rewardPercent, result.win);
     }
 
-    function claimCoinflips(uint8 maxDays) external {
-        _claimCoinflips(msg.sender, maxDays);
-    }
-
     /// @notice Record the stake resolution day for a level (invoked by PurgeGame at end of state 1).
     /// @dev The first call at the start of level 2 is considered the level-1 resolution.
     function recordStakeResolution(uint24 level, uint48 day) external onlyPurgeGameContract {
@@ -955,31 +1004,15 @@ contract Purgecoin {
         stakeLevelComplete = level;
     }
 
-    /// @notice Claim both coinflip winnings (for up to `maxDays`) and specified stakes in one call.
-    /// @param maxDays Maximum days of coinflips to claim (bounded to 30 in practice).
-    /// @param stakeLevels Levels of the stakes to claim.
-    /// @param stakeRisks  Risk buckets (1..MAX_RISK) corresponding to `stakeLevels`.
-    /// @return flipClaimed Total flip amount minted.
-    /// @return stakeClaimed Total stake amount minted (sum of successful stake payouts).
-    function claimRewards(
-        uint8 maxDays,
-        uint24[] calldata stakeLevels,
-        uint8[] calldata stakeRisks
-    ) external returns (uint256 flipClaimed, uint256 stakeClaimed) {
-        flipClaimed = _claimCoinflips(msg.sender, maxDays);
-
-        uint256 len = stakeLevels.length;
-        if (len != stakeRisks.length) revert StakeInvalid();
-
-        for (uint256 i; i < len; ) {
-            stakeClaimed += _claimStake(msg.sender, stakeLevels[i], stakeRisks[i]);
-            unchecked {
-                ++i;
-            }
-        }
+    function _claimCoinflips(address player, uint8 maxDays) internal returns (uint256 claimed) {
+        return _claimCoinflipsInternal(player, maxDays, true);
     }
 
-    function _claimCoinflips(address player, uint8 maxDays) internal returns (uint256 claimed) {
+    function _claimCoinflipsInternal(
+        address player,
+        uint8 maxDays,
+        bool mintPayout
+    ) internal returns (uint256 claimed) {
         _syncFlipDay();
 
         uint48 latest = _latestClaimableDay();
@@ -1020,7 +1053,7 @@ contract Purgecoin {
         if (processed != 0 && processed != lastCoinflipClaim[player]) {
             lastCoinflipClaim[player] = processed;
         }
-        if (claimed != 0) {
+        if (mintPayout && claimed != 0) {
             _mint(player, claimed);
             playerLuckbox[player] += claimed;
         }
@@ -1319,7 +1352,26 @@ contract Purgecoin {
         bool bountyEligible,
         bool skipLuckboxCheck
     ) internal {
-        _claimCoinflips(player, 30);
+        uint256 claimedFlips = _claimCoinflipsInternal(player, 30, false);
+        uint48 currentDay = _currentDay();
+        uint48 windowStart = currentDay > 30 ? currentDay - 30 : 0;
+        uint256 claimedStakes = _claimRecentStakes(player, windowStart);
+        uint256 totalClaimed = claimedFlips + claimedStakes;
+        uint256 mintRemainder;
+
+        if (coinflipDeposit > totalClaimed) {
+            uint256 recycled = coinflipDeposit - totalClaimed;
+            uint256 bonus = recycled / 100;
+            uint256 bonusCap = 500 * MILLION;
+            if (bonus > bonusCap) bonus = bonusCap;
+            coinflipDeposit += bonus;
+        } else if (totalClaimed > coinflipDeposit) {
+            mintRemainder = totalClaimed - coinflipDeposit;
+        }
+        if (mintRemainder != 0) {
+            _mint(player, mintRemainder);
+            playerLuckbox[player] += mintRemainder;
+        }
 
         uint48 settleDay = _syncFlipDay();
         uint48 targetDay = settleDay + (purgeGame.rngLocked() ? 2 : 1);

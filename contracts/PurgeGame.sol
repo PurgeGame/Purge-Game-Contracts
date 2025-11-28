@@ -260,7 +260,7 @@ contract PurgeGame is PurgeGameStorage {
         priceWei = price;
         priceCoinUnit = priceCoin;
 
-        if (gameState_ == 3 || (gameState_ == 2 && phase_ >= 5)) {
+        if (gameState_ == 3) {
             unchecked {
                 ++lvl;
             }
