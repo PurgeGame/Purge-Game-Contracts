@@ -98,18 +98,18 @@ contract TrophyCoinHarness is IPurgecoinMinimal {
         uint256 amount;
     }
 
-    address[] private leaderboard;
+    address public mockTopAffiliate;
     Burn[] public burns;
     address public lastCoinflipPlayer;
     uint256 public lastCoinflipAmount;
     bool public lastCoinflipRngReady;
 
-    function setLeaderboard(address[] calldata addrs) external {
-        leaderboard = addrs;
+    function setTopAffiliate(address who) external {
+        mockTopAffiliate = who;
     }
 
-    function getLeaderboardAddresses(uint8) external view override returns (address[] memory) {
-        return leaderboard;
+    function getTopAffiliate() external view override returns (address) {
+        return mockTopAffiliate;
     }
 
     function bonusCoinflip(address player, uint256 amount) external override {

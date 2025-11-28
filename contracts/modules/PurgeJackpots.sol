@@ -8,7 +8,7 @@ import {PurgeGameExternalOp} from "../interfaces/IPurgeGameExternal.sol";
 
 interface IPurgeCoinJackpotView {
     function coinflipAmount(address player) external view returns (uint256);
-    function topBettors(uint256 idx) external view returns (address player, uint96 score);
+    function coinflipTop(uint24 lvl) external view returns (address player, uint96 score);
     function biggestLuckbox() external view returns (address player, uint96 score);
     function playerLuckbox(address player) external view returns (uint256);
 }
@@ -32,9 +32,6 @@ contract PurgeJackpots is IPurgeJackpots {
     error OnlyCoin();
     error OnlyGame();
 
-    // ---------------------------------------------------------------------
-    // Structs
-    // ---------------------------------------------------------------------
     struct PlayerScore {
         address player;
         uint96 score;
@@ -141,6 +138,10 @@ contract PurgeJackpots is IPurgeJackpots {
     // Track whether a player has claimed their BAF scatter share for a level.
     mapping(uint24 => mapping(address => bool)) internal bafScatterClaimed;
 
+    // Top-4 coinflip bettors for BAF per level.
+    mapping(uint24 => PlayerScore[4]) internal bafTop;
+    mapping(uint24 => uint8) internal bafTopLen;
+
     // ---------------------------------------------------------------------
     // Modifiers / wiring
     // ---------------------------------------------------------------------
@@ -176,6 +177,10 @@ contract PurgeJackpots is IPurgeJackpots {
             uint32 idx = uint32(bafScatterRoster[lvl].length);
             bafScatterRoster[lvl].push(player);
             bafScatterIndex[lvl][player] = idx + 1; // store index+1 to distinguish unset
+        }
+        uint256 stake = coin.coinflipAmount(player);
+        if (stake != 0) {
+            _updateBafTop(lvl, player, stake);
         }
     }
 
@@ -278,7 +283,7 @@ contract PurgeJackpots is IPurgeJackpots {
                 {
                     uint256 prize = P / 10;
 
-                    (address w, ) = coin.topBettors(0);
+                    (address w, ) = _bafTop(lvl, 0);
                     if (_creditOrRefund(w, prize, tmpW, tmpA, n)) {
                         unchecked {
                             ++n;
@@ -300,7 +305,11 @@ contract PurgeJackpots is IPurgeJackpots {
                     }
                     entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
                     uint256 prize = P / 10;
-                    (address w, ) = coin.topBettors(2 + (entropy & 1));
+                    uint8 pick = uint8(entropy & 3);
+                    (address w, ) = _bafTop(lvl, pick);
+                    if (w == address(0) && pick != 0) {
+                        (w, ) = _bafTop(lvl, 0);
+                    }
                     if (_creditOrRefund(w, prize, tmpW, tmpA, n)) {
                         unchecked {
                             ++n;
@@ -430,6 +439,7 @@ contract PurgeJackpots is IPurgeJackpots {
                 if (bs.per == 0 || limit < 10 || bs.offset >= limit) {
                     uint256 ret = uint256(bafState.returnAmountWei);
                     trophyPoolDelta = extVar;
+                    _clearBafTop(lvl);
                     delete bafState;
                     delete bs;
                     extMode = 0;
@@ -499,6 +509,7 @@ contract PurgeJackpots is IPurgeJackpots {
                     round.active = true;
                     delete bafScatterRoster[lvl];
                 }
+                _clearBafTop(lvl);
                 trophyPoolDelta = extVar;
                 delete bafState;
                 delete bs;
@@ -789,6 +800,89 @@ contract PurgeJackpots is IPurgeJackpots {
         decBucketRoster[lvl][bucket].push(p);
         unchecked {
             decPlayersCount[lvl] = decPlayersCount[lvl] + 1;
+        }
+    }
+
+    function _score96(uint256 s) private pure returns (uint96) {
+        uint256 wholeTokens = s / MILLION;
+        if (wholeTokens > type(uint96).max) {
+            wholeTokens = type(uint96).max;
+        }
+        return uint96(wholeTokens);
+    }
+
+    function _updateBafTop(uint24 lvl, address player, uint256 stake) private {
+        uint96 score = _score96(stake);
+        PlayerScore[4] storage board = bafTop[lvl];
+        uint8 len = bafTopLen[lvl];
+
+        uint8 existing = 4;
+        for (uint8 i; i < len; ) {
+            if (board[i].player == player) {
+                existing = i;
+                break;
+            }
+            unchecked {
+                ++i;
+            }
+        }
+
+        if (existing < 4) {
+            if (score <= board[existing].score) return;
+            board[existing].score = score;
+            uint8 idx = existing;
+            while (idx > 0 && board[idx].score > board[idx - 1].score) {
+                PlayerScore memory tmp = board[idx - 1];
+                board[idx - 1] = board[idx];
+                board[idx] = tmp;
+                unchecked {
+                    --idx;
+                }
+            }
+            return;
+        }
+
+        if (len < 4) {
+            uint8 insert = len;
+            while (insert > 0 && score > board[insert - 1].score) {
+                board[insert] = board[insert - 1];
+                unchecked {
+                    --insert;
+                }
+            }
+            board[insert] = PlayerScore({player: player, score: score});
+            bafTopLen[lvl] = len + 1;
+            return;
+        }
+
+        if (score <= board[3].score) return;
+        uint8 idx2 = 3;
+        while (idx2 > 0 && score > board[idx2 - 1].score) {
+            board[idx2] = board[idx2 - 1];
+            unchecked {
+                --idx2;
+            }
+        }
+        board[idx2] = PlayerScore({player: player, score: score});
+    }
+
+    function _bafTop(uint24 lvl, uint8 idx) private view returns (address player, uint96 score) {
+        uint8 len = bafTopLen[lvl];
+        if (idx >= len) return (address(0), 0);
+        PlayerScore memory entry = bafTop[lvl][idx];
+        return (entry.player, entry.score);
+    }
+
+    function _clearBafTop(uint24 lvl) private {
+        uint8 len = bafTopLen[lvl];
+        if (len != 0) {
+            delete bafTopLen[lvl];
+        }
+        for (uint8 i; i < len; ) {
+            delete bafTop[lvl][i];
+            unchecked {
+                ++i;
+            }
         }
     }
 }

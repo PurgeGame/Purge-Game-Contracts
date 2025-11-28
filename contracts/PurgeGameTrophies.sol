@@ -106,7 +106,7 @@ interface IPurgecoinMinimal {
     function bonusCoinflip(address player, uint256 amount) external;
     function burnCoin(address target, uint256 amount) external;
 
-    function getLeaderboardAddresses(uint8 which) external view returns (address[] memory);
+    function getTopAffiliate() external view returns (address);
 }
 
 contract PurgeGameTrophies is IPurgeGameTrophies {
@@ -923,13 +923,9 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         }
 
         // Affiliate trophy: same handling for both paths (fall back to exterminator if leaderboard winner absent).
-        address affiliateWinner;
-        address[] memory leaders = coin.getLeaderboardAddresses(1);
-        if (leaders.length != 0) {
-            affiliateWinner = leaders[0];
-            if (affiliateWinner == address(0)) {
-                affiliateWinner = req.exterminator;
-            }
+        address affiliateWinner = coin.getTopAffiliate();
+        if (affiliateWinner == address(0)) {
+            affiliateWinner = req.exterminator;
         }
 
         uint256 affiliateData = (uint256(0xFFFE) << 152) |

@@ -40,7 +40,6 @@ contract Purgecoin {
     error Insufficient();
     error AmountLTMin();
     error E();
-    error InvalidLeaderboard();
     error PresaleExceedsRemaining();
     error PresalePerTxLimit();
     error InvalidKind();
@@ -87,9 +86,6 @@ contract Purgecoin {
 
     bool internal bonusActive;
 
-    uint8 internal affiliateLen;
-    uint8 internal topLen;
-
     uint24 internal stakeLevelComplete;
 
     mapping(uint48 => mapping(address => uint256)) internal coinflipBalance;
@@ -97,14 +93,15 @@ contract Purgecoin {
     mapping(address => uint48) internal lastCoinflipClaim;
     uint48 internal currentFlipDay;
 
-    PlayerScore[8] public topBettors;
+    PlayerScore public topBettor;
+    mapping(uint24 => PlayerScore) internal coinflipTopByLevel;
 
     mapping(bytes32 => AffiliateCodeInfo) internal affiliateCode;
     mapping(uint24 => mapping(address => uint256)) public affiliateCoinEarned;
     mapping(address => bytes32) internal playerReferralCode;
     mapping(address => uint256) public playerLuckbox;
     PlayerScore public biggestLuckbox;
-    PlayerScore[8] public affiliateLeaderboard;
+    PlayerScore public topAffiliate;
 
     /// @notice View-only helper to estimate claimable coin (flips + stakes) for the caller.
     function claimableCoin() external view returns (uint256) {
@@ -112,14 +109,11 @@ contract Purgecoin {
         return _viewClaimableCoin(player);
     }
 
-    uint8 private constant STAKE_BUCKETS = 12;
+    uint8 private constant STAKE_BUCKETS = 26;
 
     mapping(uint24 => mapping(address => uint256[STAKE_BUCKETS])) internal stakeAmt;
     mapping(address => uint24) internal lastStakeScanLevel;
     mapping(address => uint48) internal lastStakeScanDay;
-
-    mapping(address => uint8) internal affiliatePos;
-    mapping(address => uint8) internal topPos;
 
     uint128 public currentBounty = 1_000_000_000;
     uint128 public biggestFlipEver = 1_000_000_000;
@@ -182,7 +176,7 @@ contract Purgecoin {
     // ---------------------------------------------------------------------
     uint256 private constant MILLION = 1e6; // token has 6 decimals
     uint256 private constant MIN = 100 * MILLION; // min burn / min flip (100 PURGED)
-    uint8 private constant MAX_RISK = 11; // staking risk 1..11
+    uint8 private constant MAX_RISK = 25; // staking risk 1..25
     uint256 private constant BUCKET_SIZE = 1500;
     uint16 private constant COINFLIP_EXTRA_MIN_PERCENT = 78;
     uint16 private constant COINFLIP_EXTRA_RANGE = 38;
@@ -743,7 +737,7 @@ contract Purgecoin {
         uint256 totalFlipAward = affiliateShare + questReward;
         addFlip(affiliateAddr, totalFlipAward, false, false, false);
 
-        _updatePlayerScore(1, affiliateAddr, newTotal);
+        _updateTopAffiliate(affiliateAddr, newTotal);
 
         playerRakeback = rakebackShare;
 
@@ -773,7 +767,6 @@ contract Purgecoin {
             uint256 uplineTotal = earned[upline] + bonus;
             earned[upline] = uplineTotal;
             addFlip(upline, bonus + questRewardUpline, false, false, false);
-            _updatePlayerScore(1, upline, uplineTotal);
 
             // Second upline bonus (20%)
             address upline2 = _referrerAddress(upline);
@@ -789,7 +782,6 @@ contract Purgecoin {
                 uint256 upline2Total = earned[upline2] + bonus2;
                 earned[upline2] = upline2Total;
                 addFlip(upline2, bonus2 + questReward2, false, false, false);
-                _updatePlayerScore(1, upline2, upline2Total);
             }
         }
 
@@ -797,16 +789,8 @@ contract Purgecoin {
         return playerRakeback;
     }
 
-    /// @notice Clear the affiliate leaderboard and index for the next cycle (invoked by the game).
+    /// @notice Clear affiliate tracking for the next cycle (invoked by the game).
     function resetAffiliateLeaderboard(uint24 lvl) external onlyPurgeGameContract {
-        uint8 len = affiliateLen;
-        PlayerScore[8] storage board = affiliateLeaderboard;
-        for (uint8 i; i < len; ) {
-            delete affiliatePos[board[i].player];
-            unchecked {
-                ++i;
-            }
-        }
         if (lvl == 3) {
             bytes32 bonus;
             assembly {
@@ -823,7 +807,7 @@ contract Purgecoin {
             }
             bonusActive = aff;
         }
-        affiliateLen = 0;
+        delete topAffiliate;
     }
     /// @notice Buy PURGE during the presale; price increases linearly as tokens are sold.
     /// @dev
@@ -1247,51 +1231,42 @@ contract Purgecoin {
     }
 
     function rewardTopFlipBonus(uint256 amount) external onlyPurgeGameContract {
-        address top = topBettors[0].player;
+        address top = topBettor.player;
         if (top == address(0)) return;
 
         addFlip(top, amount, false, false, true);
     }
-    /// @notice Return addresses from a leaderboard.
-    /// @param which 1 = affiliate (<=8), 2 = top bettors (<=8).
-    function getLeaderboardAddresses(uint8 which) external view returns (address[] memory out) {
-        PlayerScore[8] storage board;
-        uint8 len;
-        if (which == 1) {
-            board = affiliateLeaderboard;
-            len = affiliateLen;
-        } else if (which == 2) {
-            board = topBettors;
-            len = topLen;
-        } else {
-            revert InvalidLeaderboard();
-        }
-        out = new address[](len);
-        for (uint8 i; i < len; ) {
-            out[i] = board[i].player;
-            unchecked {
-                ++i;
-            }
-        }
+    function getTopAffiliate() external view returns (address) {
+        return topAffiliate.player;
     }
 
-    function getTopAffiliate() external view returns (address) {
-        if (affiliateLen == 0) return address(0);
-        return affiliateLeaderboard[0].player;
+    /// @notice Return the top coinflip bettor recorded for a given level.
+    /// @dev Uses live leaderboard when requesting the current level; otherwise returns the archived top.
+    function coinflipTop(uint24 lvl) external view returns (address player, uint96 score) {
+        if (lvl == purgeGame.level()) {
+            PlayerScore memory entry = topBettor;
+            return (entry.player, entry.score);
+        }
+        PlayerScore memory stored = coinflipTopByLevel[lvl];
+        return (stored.player, stored.score);
     }
 
     function resetCoinflipLeaderboard() external onlyPurgeGameContract {
-        uint8 len = topLen;
-        for (uint8 k; k < len; ) {
-            address player = topBettors[k].player;
-            if (player != address(0)) {
-                topPos[player] = 0;
-            }
-            unchecked {
-                ++k;
-            }
+        _archiveCoinflipTop(purgeGame.level());
+        _clearActiveCoinflipLeaderboard();
+    }
+
+    function _archiveCoinflipTop(uint24 lvl) internal {
+        PlayerScore memory leader = topBettor;
+        if (leader.player != address(0) && leader.score != 0) {
+            coinflipTopByLevel[lvl] = leader;
+        } else {
+            delete coinflipTopByLevel[lvl];
         }
-        topLen = 0;
+    }
+
+    function _clearActiveCoinflipLeaderboard() internal {
+        delete topBettor;
     }
 
     /// @notice Increase a player's pending coinflip stake and possibly arm a bounty.
@@ -1354,12 +1329,12 @@ contract Purgecoin {
         if (!skipLuckboxCheck && playerLuckbox[player] == 0) {
             playerLuckbox[player] = 1;
         }
-        // Freeze leaderboard-related state while RNG is locked to prevent post-RNG manipulation.
+        // Freeze top tracking while RNG is locked to prevent post-RNG manipulation.
         if (!rngLocked) {
-            _updatePlayerScore(2, player, newStake);
+            _updateTopBettor(player, newStake);
 
             uint256 record = biggestFlipEver;
-            address leader = topBettors[0].player;
+            address leader = topBettor.player;
             if (newStake > record && leader == player) {
                 biggestFlipEver = uint128(newStake);
 
@@ -1430,82 +1405,29 @@ contract Purgecoin {
         return uint8(denom);
     }
 
-    /// @notice Route a player score update to the appropriate leaderboard.
-    /// @param lid 1 = affiliate top8, else = top bettor top8.
-    /// @param p   Player address.
-    /// @param s   New score for that board.
-    function _updatePlayerScore(uint8 lid, address p, uint256 s) internal {
+    function _score96(uint256 s) private pure returns (uint96) {
         uint256 wholeTokens = s / MILLION;
         if (wholeTokens > type(uint96).max) {
             wholeTokens = type(uint96).max;
         }
-        uint96 score = uint96(wholeTokens);
-        if (lid == 1) {
-            affiliateLen = _updateBoard8(affiliateLeaderboard, affiliatePos, affiliateLen, p, score);
-        } else {
-            topLen = _updateBoard8(topBettors, topPos, topLen, p, score);
+        return uint96(wholeTokens);
+    }
+
+    function _updateTopAffiliate(address player, uint256 total) private {
+        uint96 score = _score96(total);
+        PlayerScore memory current = topAffiliate;
+        if (score > current.score) {
+            topAffiliate = PlayerScore({player: player, score: score});
         }
     }
-    /// @notice Insert/update `p` with score `s` on a top-8 board.
-    /// @dev Keeps a 1-based position map in `pos`. Returns the new length for the board.
-    function _updateBoard8(
-        PlayerScore[8] storage board,
-        mapping(address => uint8) storage pos,
-        uint8 curLen,
-        address p,
-        uint96 s
-    ) internal returns (uint8) {
-        uint8 len = curLen;
-        uint8 prevPos = pos[p];
-        uint8 idx;
 
-        if (prevPos != 0) {
-            idx = prevPos - 1;
-            if (s <= board[idx].score) return len;
-            for (; idx > 0 && s > board[idx - 1].score; ) {
-                PlayerScore memory prev = board[idx - 1];
-                board[idx] = prev;
-                pos[prev.player] = idx + 1;
-                unchecked {
-                    --idx;
-                }
-            }
-            board[idx] = PlayerScore({player: p, score: s});
-            pos[p] = idx + 1;
-            return len;
+    function _updateTopBettor(address player, uint256 stakeScore) private {
+        uint96 score = _score96(stakeScore);
+        PlayerScore memory current = topBettor;
+        if (score > current.score) {
+            topBettor = PlayerScore({player: player, score: score});
+        } else if (current.player == address(0)) {
+            topBettor = PlayerScore({player: player, score: score});
         }
-
-        if (len < 8) {
-            idx = len;
-            for (; idx > 0 && s > board[idx - 1].score; ) {
-                PlayerScore memory prev = board[idx - 1];
-                board[idx] = prev;
-                pos[prev.player] = idx + 1;
-                unchecked {
-                    --idx;
-                }
-            }
-            board[idx] = PlayerScore({player: p, score: s});
-            pos[p] = idx + 1;
-            unchecked {
-                return len + 1;
-            }
-        }
-
-        if (s <= board[7].score) return len;
-        address dropped = board[7].player;
-        idx = 7;
-        for (; idx > 0 && s > board[idx - 1].score; ) {
-            PlayerScore memory prev = board[idx - 1];
-            board[idx] = prev;
-            pos[prev.player] = idx + 1;
-            unchecked {
-                --idx;
-            }
-        }
-        board[idx] = PlayerScore({player: p, score: s});
-        pos[p] = idx + 1;
-        if (dropped != address(0)) pos[dropped] = 0;
-        return len;
     }
 }

@@ -4,17 +4,11 @@ pragma solidity ^0.8.26;
 import "../modules/PurgeGameModuleInterfaces.sol";
 
 contract JackpotCoinModuleMock is IPurgeCoinModule {
-    address[] private leaderboard;
-
     uint48 public lastRollDay;
     uint256 public lastRollEntropy;
     uint256 public rollCount;
     bool public lastRollForceMint;
     bool public lastRollForcePurge;
-
-    function setLeaderboard(address[] calldata addrs) external {
-        leaderboard = addrs;
-    }
 
     function jackpots() external pure override returns (address) {
         return address(0);
@@ -29,17 +23,6 @@ contract JackpotCoinModuleMock is IPurgeCoinModule {
         uint256
     ) external pure override returns (bool) {
         return false;
-    }
-
-    function getLeaderboardAddresses(uint8) external view override returns (address[] memory) {
-        address[] memory copy = new address[](leaderboard.length);
-        for (uint256 i; i < leaderboard.length; ) {
-            copy[i] = leaderboard[i];
-            unchecked {
-                ++i;
-            }
-        }
-        return copy;
     }
 
     function getTopAffiliate() external pure override returns (address) {
