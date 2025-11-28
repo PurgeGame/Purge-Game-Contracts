@@ -411,7 +411,10 @@ contract PurgeGame is PurgeGameStorage {
                     }
                     _stakeForTargetRatio(lvl);
                     bool decOpen = ((lvl >= 25) && ((lvl % 10) == 5) && ((lvl % 100) != 95));
-                    decWindowOpen = decOpen;
+                    // Preserve an already-open window for the level-100 decimator special until its RNG request closes it.
+                    if (!decWindowOpen && decOpen) {
+                        decWindowOpen = true;
+                    }
                     _unlockRng(day);
                 }
                 break;
