@@ -24,6 +24,8 @@ interface IPurgeGame is IPurgeGameExternal {
 
     function isBafLevelActive(uint24 lvl) external view returns (bool);
 
+    function principalStEthBalance() external view returns (uint256);
+
     function purchaseInfo()
         external
         view

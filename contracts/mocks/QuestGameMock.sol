@@ -60,6 +60,10 @@ contract QuestGameMock is IPurgeGame {
         return 0;
     }
 
+    function principalStEthBalance() external pure override returns (uint256) {
+        return 0;
+    }
+
     function decWindow() external view override returns (bool on, uint24 lvl) {
         uint24 curLvl = currentLevel;
         lvl = curLvl;

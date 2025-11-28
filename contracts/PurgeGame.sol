@@ -15,6 +15,7 @@ interface IStETH {
     function submit(address referral) external payable returns (uint256);
     function balanceOf(address account) external view returns (uint256);
     function transfer(address to, uint256 amount) external returns (bool);
+    function approve(address spender, uint256 amount) external returns (bool);
 }
 
 /**
@@ -166,6 +167,8 @@ contract PurgeGame is PurgeGameStorage {
         linkToken = linkToken_;
         steth = IStETH(stEthToken_);
         stethTokenAddress = stEthToken_;
+        // Allow Purgecoin to pull stETH for yield skims during Burnie.
+        IStETH(stEthToken_).approve(purgeCoinContract, type(uint256).max);
     }
 
     // --- View: lightweight game status -------------------------------------------------
@@ -218,6 +221,10 @@ contract PurgeGame is PurgeGameStorage {
 
     function coinPriceUnit() external view returns (uint256) {
         return priceCoin;
+    }
+
+    function principalStEthBalance() external view returns (uint256) {
+        return principalStEth;
     }
 
     function rngWordForDay(uint48 day) external view returns (uint256) {
@@ -359,9 +366,7 @@ contract PurgeGame is PurgeGameStorage {
             gameState = 0;
             address stethAddress = address(steth);
             uint256 stBal = steth.balanceOf(address(this));
-            if (stBal != 0) {
-                if (!steth.transfer(address(coinContract), stBal)) revert E();
-            } else stethAddress = address(0);
+            if (stBal == 0) stethAddress = address(0);
 
             uint256 bal = address(this).balance;
             if (bal > 0) {
