@@ -34,6 +34,7 @@ interface IPurgeCoin {
     function resetCoinflipLeaderboard() external;
 
     function getTopAffiliate() external view returns (address);
+    function affiliateTop(uint24 level) external view returns (address player, uint96 score);
 
     function coinflipTop(uint24 level) external view returns (address player, uint96 score);
 

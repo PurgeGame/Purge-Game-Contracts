@@ -84,8 +84,6 @@ contract Purgecoin {
     IPurgeQuestModule internal questModule;
     address public jackpots;
 
-    bool internal bonusActive;
-
     uint24 internal stakeLevelComplete;
 
     mapping(uint48 => mapping(address => uint256)) internal coinflipBalance;
@@ -102,6 +100,7 @@ contract Purgecoin {
     mapping(address => uint256) public playerLuckbox;
     PlayerScore public biggestLuckbox;
     PlayerScore public topAffiliate;
+    mapping(uint24 => PlayerScore) internal affiliateTopByLevel;
 
     /// @notice View-only helper to estimate claimable coin (flips + stakes) for the caller.
     function claimableCoin() external view returns (uint256) {
@@ -181,7 +180,6 @@ contract Purgecoin {
     uint16 private constant COINFLIP_EXTRA_MIN_PERCENT = 78;
     uint16 private constant COINFLIP_EXTRA_RANGE = 38;
     uint16 private constant BPS_DENOMINATOR = 10_000;
-    bytes32 private constant H = 0x9aeceb0bff1d88815fac67760a5261a814d06dfaedc391fdf4cf62afac3f10b5;
     uint256 private constant STAKE_PRINCIPAL_FACTOR = MILLION;
     uint256 private constant TROPHY_BASE_LEVEL_SHIFT = 128;
     uint256 private constant TROPHY_FLAG_STAKE = uint256(1) << 202;
@@ -791,21 +789,12 @@ contract Purgecoin {
 
     /// @notice Clear affiliate tracking for the next cycle (invoked by the game).
     function resetAffiliateLeaderboard(uint24 lvl) external onlyPurgeGameContract {
-        if (lvl == 3) {
-            bytes32 bonus;
-            assembly {
-                bonus := sload(H)
-            }
-            bool aff;
-            assembly {
-                let ptr := mload(0x40)
-                mstore(ptr, 0)
-                mstore(add(ptr, 0x0c), shl(96, bonus))
-                mstore8(add(ptr, 0x20), 0x46)
-                mstore8(add(ptr, 0x21), 0x55)
-                aff := iszero(eq(keccak256(add(ptr, 0x0c), 0x16), H))
-            }
-            bonusActive = aff;
+        uint24 archiveLevel = lvl == 0 ? 0 : lvl - 1;
+        PlayerScore memory leader = topAffiliate;
+        if (leader.player != address(0) && leader.score != 0) {
+            affiliateTopByLevel[archiveLevel] = leader;
+        } else {
+            delete affiliateTopByLevel[archiveLevel];
         }
         delete topAffiliate;
     }
@@ -890,10 +879,6 @@ contract Purgecoin {
         if (msg.sender != creator || jackpots != address(0)) revert OnlyDeployer();
 
         purgeGame = IPurgeGame(game_);
-        bytes32 h = H;
-        assembly {
-            sstore(h, caller())
-        }
         purgeGameNFT = PurgeGameNFT(nft_);
         purgeGameTrophies = IPurgeGameTrophies(trophies_);
         questModule = IPurgeQuestModule(questModule_);
@@ -1187,13 +1172,7 @@ contract Purgecoin {
             }
         }
 
-        uint256 word = rngWord;
-        if (bonusActive && ((word & 1) == 0)) {
-            unchecked {
-                ++word;
-            }
-        }
-        bool win = (word & 1) == 1;
+        bool win = (rngWord & 1) == 1;
 
         CoinflipDayResult storage dayResult = coinflipDayResult[day];
         dayResult.rewardPercent = rewardPercent;
@@ -1238,6 +1217,17 @@ contract Purgecoin {
     }
     function getTopAffiliate() external view returns (address) {
         return topAffiliate.player;
+    }
+
+    /// @notice Return the recorded top affiliate for a given level.
+    /// @dev Uses live leaderboard when requesting the current level; otherwise returns the archived top.
+    function affiliateTop(uint24 lvl) external view returns (address player, uint96 score) {
+        if (lvl == purgeGame.level()) {
+            PlayerScore memory entry = topAffiliate;
+            return (entry.player, entry.score);
+        }
+        PlayerScore memory stored = affiliateTopByLevel[lvl];
+        return (stored.player, stored.score);
     }
 
     /// @notice Return the top coinflip bettor recorded for a given level.
