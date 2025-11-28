@@ -5,6 +5,7 @@ import {IPurgeGameTrophies} from "../PurgeGameTrophies.sol";
 
 interface IPurgeCoinModule {
     function jackpots() external view returns (address);
+    function affiliateProgram() external view returns (address);
 
     function processCoinflipPayouts(
         uint24 level,
@@ -15,8 +16,6 @@ interface IPurgeCoinModule {
         uint256 priceCoinUnit
     ) external returns (bool);
 
-    function getTopAffiliate() external view returns (address);
-
     function bonusCoinflip(address player, uint256 amount) external;
 
     function addToBounty(uint256 amount) external;
@@ -24,8 +23,6 @@ interface IPurgeCoinModule {
     function rewardTopFlipBonus(uint256 amount) external;
 
     function resetCoinflipLeaderboard() external;
-
-    function resetAffiliateLeaderboard(uint24 lvl) external;
 
     function burnie(uint256 amount, address stethToken) external payable;
 

@@ -5,6 +5,7 @@ import {PurgeTraitUtils} from "./PurgeTraitUtils.sol";
 import {IPurgeGameTrophies} from "./PurgeGameTrophies.sol";
 import {IPurgeGame} from "./interfaces/IPurgeGame.sol";
 import {IPurgeCoin} from "./interfaces/IPurgeCoin.sol";
+import {IPurgeAffiliate} from "./interfaces/IPurgeAffiliate.sol";
 
 enum TrophyKind {
     Map,
@@ -529,7 +530,11 @@ contract PurgeGameNFT {
             }
         }
 
-        uint256 rakebackMint = coin.payAffiliate(affiliateAmount, affiliateCode, payer, lvl);
+        uint256 rakebackMint;
+        address affiliateAddr = coin.affiliateProgram();
+        if (affiliateAddr != address(0)) {
+            rakebackMint = IPurgeAffiliate(affiliateAddr).payAffiliate(affiliateAmount, affiliateCode, payer, lvl);
+        }
 
         if (!mapPurchase) {
             uint8 percentReached = game.getEarlyPurgePercent();

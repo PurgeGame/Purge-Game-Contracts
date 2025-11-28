@@ -5,6 +5,7 @@ import {QuestInfo, PlayerQuestView} from "./IPurgeQuestModule.sol";
 
 interface IPurgeCoin {
     function jackpots() external view returns (address);
+    function affiliateProgram() external view returns (address);
 
     function bonusCoinflip(address player, uint256 amount) external;
 
@@ -12,7 +13,7 @@ interface IPurgeCoin {
 
     function burnCoin(address target, uint256 amount) external;
 
-    function payAffiliate(uint256 amount, bytes32 code, address sender, uint24 lvl) external returns (uint256);
+    function claimPresaleAffiliateBonus() external;
 
     function processCoinflipPayouts(
         uint24 level,
@@ -29,12 +30,7 @@ interface IPurgeCoin {
 
     function rewardTopFlipBonus(uint256 amount) external;
 
-    function resetAffiliateLeaderboard(uint24 lvl) external;
-
     function resetCoinflipLeaderboard() external;
-
-    function getTopAffiliate() external view returns (address);
-    function affiliateTop(uint24 level) external view returns (address player, uint96 score);
 
     function coinflipTop(uint24 level) external view returns (address player, uint96 score);
 

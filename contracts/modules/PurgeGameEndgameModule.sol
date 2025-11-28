@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {IPurgeGameTrophies} from "../PurgeGameTrophies.sol";
+import {IPurgeAffiliate} from "../interfaces/IPurgeAffiliate.sol";
 import {IPurgeCoinModule, IPurgeGameTrophiesModule} from "./PurgeGameModuleInterfaces.sol";
 import {IPurgeJackpots} from "../interfaces/IPurgeJackpots.sol";
 import {PurgeGameStorage} from "../storage/PurgeGameStorage.sol";
@@ -111,7 +112,10 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
             }
         }
 
-        coinContract.resetAffiliateLeaderboard(lvl);
+        address affiliateAddr = coinContract.affiliateProgram();
+        if (affiliateAddr != address(0)) {
+            IPurgeAffiliate(affiliateAddr).resetAffiliateLeaderboard(lvl);
+        }
     }
 
     function _payoutParticipants(uint32 capHint, uint24 prevLevel) private {

@@ -6,7 +6,7 @@ interface IERC721Lite {
 }
 
 interface IPurgedRead {
-    function getReferrer(address user) external view returns (address);
+    function affiliateProgram() external view returns (address);
 }
 
 interface IIconRendererWire {
@@ -128,14 +128,14 @@ contract MockNFT is IERC721Lite {
 }
 
 contract MockCoin is IPurgedRead {
-    mapping(address => address) private _referrer;
+    address private _affiliate;
 
-    function setReferrer(address user, address ref) external {
-        _referrer[user] = ref;
+    function setAffiliate(address affiliate) external {
+        _affiliate = affiliate;
     }
 
-    function getReferrer(address user) external view override returns (address) {
-        return _referrer[user];
+    function affiliateProgram() external view override returns (address) {
+        return _affiliate;
     }
 
     function callWire(address renderer, address game_, address nft_) external {

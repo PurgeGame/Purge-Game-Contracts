@@ -14,6 +14,10 @@ contract JackpotCoinModuleMock is IPurgeCoinModule {
         return address(0);
     }
 
+    function affiliateProgram() external pure override returns (address) {
+        return address(0);
+    }
+
     function processCoinflipPayouts(
         uint24,
         uint32,
@@ -25,10 +29,6 @@ contract JackpotCoinModuleMock is IPurgeCoinModule {
         return false;
     }
 
-    function getTopAffiliate() external pure override returns (address) {
-        return address(0);
-    }
-
     function bonusCoinflip(address, uint256) external pure override {}
 
     function addToBounty(uint256) external pure override {}
@@ -36,8 +36,6 @@ contract JackpotCoinModuleMock is IPurgeCoinModule {
     function rewardTopFlipBonus(uint256) external pure override {}
 
     function resetCoinflipLeaderboard() external pure override {}
-
-    function resetAffiliateLeaderboard(uint24) external pure override {}
 
     function burnie(uint256, address) external payable override {}
 

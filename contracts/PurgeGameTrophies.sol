@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {IPurgeGameExternal, PurgeGameExternalOp} from "./interfaces/IPurgeGameExternal.sol";
+import {IPurgeAffiliate} from "./interfaces/IPurgeAffiliate.sol";
 
 interface IPurgeGameNftModule {
     function nextTokenId() external view returns (uint256);
@@ -106,7 +107,7 @@ interface IPurgecoinMinimal {
     function bonusCoinflip(address player, uint256 amount) external;
     function burnCoin(address target, uint256 amount) external;
 
-    function getTopAffiliate() external view returns (address);
+    function affiliateProgram() external view returns (address);
 }
 
 contract PurgeGameTrophies is IPurgeGameTrophies {
@@ -923,7 +924,11 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         }
 
         // Affiliate trophy: same handling for both paths (fall back to exterminator if leaderboard winner absent).
-        address affiliateWinner = coin.getTopAffiliate();
+        address affiliateWinner;
+        address affiliateAddr = coin.affiliateProgram();
+        if (affiliateAddr != address(0)) {
+            affiliateWinner = IPurgeAffiliate(affiliateAddr).getTopAffiliate();
+        }
         if (affiliateWinner == address(0)) {
             affiliateWinner = req.exterminator;
         }

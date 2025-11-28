@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import {PurgeGameNFT} from "./PurgeGameNFT.sol";
 import {IPurgeGameTrophies, PURGE_TROPHY_KIND_STAKE} from "./PurgeGameTrophies.sol";
+import {PurgeAffiliate} from "./PurgeAffiliate.sol";
 import {IPurgeGame} from "./interfaces/IPurgeGame.sol";
 import {IPurgeRenderer} from "./interfaces/IPurgeRenderer.sol";
 import {IPurgeQuestModule, QuestInfo, PlayerQuestView} from "./interfaces/IPurgeQuestModule.sol";
@@ -24,7 +25,6 @@ contract Purgecoin {
     event StakeClaimed(address indexed player, uint24 targetLevel, uint8 risk, uint256 payout, bool won);
     event CoinflipDeposit(address indexed player, uint256 creditedFlip);
     event DecimatorBurn(address indexed player, uint256 amountBurned, uint8 bucket);
-    event Affiliate(uint256 amount, bytes32 indexed code, address sender);
     event CoinflipFinished(bool result);
     event BountyOwed(address indexed to, uint256 bountyAmount, uint256 newRecordFlip);
     event BountyPaid(address indexed to, uint256 amount);
@@ -41,13 +41,11 @@ contract Purgecoin {
     error Insufficient();
     error AmountLTMin();
     error E();
-    error PresaleExceedsRemaining();
-    error PresalePerTxLimit();
     error InvalidKind();
     error StakeInvalid();
     error ZeroAddress();
     error NotDecimatorWindow();
-    error InvalidRakeback();
+    error OnlyAffiliate();
 
     // ---------------------------------------------------------------------
     // ERC20 state
@@ -66,11 +64,6 @@ contract Purgecoin {
         uint96 score;
     }
 
-    struct AffiliateCodeInfo {
-        address owner;
-        uint8 rakeback;
-    }
-
     struct CoinflipDayResult {
         uint16 rewardPercent;
         bool win;
@@ -83,6 +76,8 @@ contract Purgecoin {
     PurgeGameNFT internal purgeGameNFT;
     IPurgeGameTrophies internal purgeGameTrophies;
     IPurgeQuestModule internal questModule;
+    PurgeAffiliate public affiliateProgram;
+    bool private affiliateOverride;
     address public jackpots;
 
     uint24 internal stakeLevelComplete;
@@ -95,13 +90,8 @@ contract Purgecoin {
     PlayerScore public topBettor;
     mapping(uint24 => PlayerScore) internal coinflipTopByLevel;
 
-    mapping(bytes32 => AffiliateCodeInfo) internal affiliateCode;
-    mapping(uint24 => mapping(address => uint256)) public affiliateCoinEarned;
-    mapping(address => bytes32) internal playerReferralCode;
     mapping(address => uint256) public playerLuckbox;
     PlayerScore public biggestLuckbox;
-    PlayerScore public topAffiliate;
-    mapping(uint24 => PlayerScore) internal affiliateTopByLevel;
 
     /// @notice View-only helper to estimate claimable coin (flips + stakes) for the caller.
     function claimableCoin() external view returns (uint256) {
@@ -118,8 +108,6 @@ contract Purgecoin {
     uint128 public currentBounty = 1_000_000_000;
     uint128 public biggestFlipEver = 1_000_000_000;
     address internal bountyOwedTo;
-    uint96 public totalPresaleSold;
-
     mapping(uint24 => uint48) internal stakeResolutionDay;
     mapping(uint24 => bool) internal stakeTrophyAwarded;
 
@@ -185,11 +173,6 @@ contract Purgecoin {
     uint256 private constant TROPHY_BASE_LEVEL_SHIFT = 128;
     uint256 private constant TROPHY_FLAG_STAKE = uint256(1) << 202;
     uint256 private constant PRESALE_SUPPLY_TOKENS = 4_000_000;
-    uint256 private constant PRESALE_START_PRICE = 0.000012 ether;
-    uint256 private constant PRESALE_END_PRICE = 0.000018 ether;
-    uint256 private constant PRESALE_PRICE_SLOPE = (PRESALE_END_PRICE - PRESALE_START_PRICE) / PRESALE_SUPPLY_TOKENS;
-    uint256 private constant PRESALE_MAX_ETH_PER_TX = 0.25 ether;
-    bytes32 private constant REF_CODE_LOCKED = bytes32(uint256(1));
     uint24 private constant DECIMATOR_SPECIAL_LEVEL = 100;
     uint48 private constant JACKPOT_RESET_TIME = 82620;
 
@@ -203,6 +186,11 @@ contract Purgecoin {
     // ---------------------------------------------------------------------
     modifier onlyPurgeGameContract() {
         if (msg.sender != address(purgeGame)) revert OnlyGame();
+        _;
+    }
+
+    modifier onlyAffiliateContract() {
+        if (msg.sender != address(affiliateProgram)) revert OnlyAffiliate();
         _;
     }
 
@@ -221,6 +209,7 @@ contract Purgecoin {
      */
     constructor() {
         creator = msg.sender;
+        affiliateProgram = new PurgeAffiliate(msg.sender);
         currentFlipDay = _currentDay();
         uint256 presaleAmount = PRESALE_SUPPLY_TOKENS * MILLION;
         _mint(address(this), presaleAmount);
@@ -300,43 +289,6 @@ contract Purgecoin {
         }
 
         emit DecimatorBurn(caller, amount, bucketUsed);
-    }
-
-    // Affiliate code management
-    /// @notice Create a new affiliate code mapping to the caller.
-    /// @dev Reverts if `code_` is zero, reserved, or already taken.
-    function createAffiliateCode(bytes32 code_, uint8 rakebackPct) external {
-        if (code_ == bytes32(0) || code_ == REF_CODE_LOCKED) revert Zero();
-        if (rakebackPct > 25) revert InvalidRakeback();
-        AffiliateCodeInfo storage info = affiliateCode[code_];
-        if (info.owner != address(0)) revert Insufficient();
-        affiliateCode[code_] = AffiliateCodeInfo({owner: msg.sender, rakeback: rakebackPct});
-        emit Affiliate(1, code_, msg.sender); // 1 = code created
-    }
-
-    /// @notice Set the caller's referrer once using a valid affiliate code.
-    /// @dev Reverts if code is unknown, self-referral, or caller already has a referrer.
-    function referPlayer(bytes32 code_) external {
-        AffiliateCodeInfo storage info = affiliateCode[code_];
-        address referrer = info.owner;
-        if (referrer == address(0) || referrer == msg.sender) revert Insufficient();
-        bytes32 existing = playerReferralCode[msg.sender];
-        if (existing != bytes32(0)) revert Insufficient();
-        playerReferralCode[msg.sender] = code_;
-        emit Affiliate(0, code_, msg.sender); // 0 = player referred
-    }
-
-    function _referralCode(address player) private view returns (bytes32 code) {
-        code = playerReferralCode[player];
-        if (code == bytes32(0) || code == REF_CODE_LOCKED) return bytes32(0);
-        if (affiliateCode[code].owner == address(0)) return bytes32(0);
-        return code;
-    }
-
-    function _referrerAddress(address player) private view returns (address) {
-        bytes32 code = _referralCode(player);
-        if (code == bytes32(0)) return address(0);
-        return affiliateCode[code].owner;
     }
 
     function _awardStakeTrophy(uint24 level, address player, uint256 principal) private {
@@ -658,212 +610,19 @@ contract Purgecoin {
         emit StakeCreated(sender, targetLevel, risk, principalRounded);
     }
 
-    /// @notice Return the recorded referrer for `player` (zero address if none).
-    function getReferrer(address player) external view returns (address) {
-        return _referrerAddress(player);
-    }
-    /// @notice Credit affiliate rewards for a purchase (invoked by trusted gameplay contracts).
-    /// @dev
-    /// Referral rules:
-    /// - If `playerReferralCode[sender]` is the locked sentinel, we no-op.
-    /// - Else if a referrer code already exists: use that code’s owner.
-    /// - Else if `code` resolves to a valid owner different from `sender`: bind it and use it.
-    /// - Else: lock the sender to disallow future attempts.
-    /// Payout rules:
-    /// - Caller can pre-apply any purchase bonus (e.g., early-purge or level checkpoint) to `amount`.
-    /// - Direct ref gets a coinflip credit equal to `amount` (plus stake bonus), but the configured rakeback%
-    ///   is diverted to the buyer as flip credit.
-    /// - Their upline (if any) receives a 20% bonus coinflip credit of the same (post-doubling) amount.
-    /// - A second upline (if any) receives another 20% credit of the upline’s bonus.
-    function payAffiliate(
-        uint256 amount,
-        bytes32 code,
-        address sender,
-        uint24 lvl
-    ) external onlyGameplayContracts returns (uint256 playerRakeback) {
-        bytes32 storedCode = playerReferralCode[sender];
-        if (storedCode == REF_CODE_LOCKED) return 0;
-
-        AffiliateCodeInfo storage info;
-        if (storedCode == bytes32(0)) {
-            AffiliateCodeInfo storage candidate = affiliateCode[code];
-            if (candidate.owner == address(0) || candidate.owner == sender) {
-                playerReferralCode[sender] = REF_CODE_LOCKED;
-                return 0;
-            }
-            playerReferralCode[sender] = code;
-            info = candidate;
-            storedCode = code;
-        } else {
-            info = affiliateCode[storedCode];
-            if (info.owner == address(0)) {
-                playerReferralCode[sender] = REF_CODE_LOCKED;
-                return 0;
-            }
-        }
-
-        address affiliateAddr = info.owner;
-        if (affiliateAddr == address(0) || affiliateAddr == sender) {
-            playerReferralCode[sender] = REF_CODE_LOCKED;
-            return 0;
-        }
-        uint8 rakebackPct = info.rakeback;
-
-        uint256 baseAmount = amount;
-
-        mapping(address => uint256) storage earned = affiliateCoinEarned[lvl];
-        IPurgeQuestModule module = questModule;
-        IPurgeGameTrophies trophies = purgeGameTrophies;
-        // Pay direct affiliate
-        uint256 payout = baseAmount;
-        uint8 stakeBonus = trophies.affiliateStakeBonus(affiliateAddr);
-        if (stakeBonus != 0) {
-            payout += (payout * stakeBonus) / 100;
-        }
-
-        uint256 rakebackShare = (payout * uint256(rakebackPct)) / 100;
-        uint256 affiliateShare = payout - rakebackShare;
-
-        uint256 newTotal = earned[affiliateAddr] + affiliateShare;
-        earned[affiliateAddr] = newTotal;
-
-        (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleAffiliate(
-            affiliateAddr,
-            affiliateShare
-        );
-        uint256 questReward = _questApplyReward(affiliateAddr, reward, hardMode, questType, streak, completed);
-
-        uint256 totalFlipAward = affiliateShare + questReward;
-        addFlip(affiliateAddr, totalFlipAward, false, false, false);
-
-        _updateTopAffiliate(affiliateAddr, newTotal);
-
-        playerRakeback = rakebackShare;
-
-        // Upline bonus (20%)
-        address upline = _referrerAddress(affiliateAddr);
-        if (upline != address(0) && upline != sender) {
-            uint256 bonus = baseAmount / 5;
-            uint8 stakeBonusUpline = trophies.affiliateStakeBonus(upline);
-            if (stakeBonusUpline != 0) {
-                bonus += (bonus * stakeBonusUpline) / 100;
-            }
-            (
-                uint256 rewardUpline,
-                bool hardModeUpline,
-                uint8 questTypeUpline,
-                uint32 streakUpline,
-                bool completedUpline
-            ) = module.handleAffiliate(upline, bonus);
-            uint256 questRewardUpline = _questApplyReward(
-                upline,
-                rewardUpline,
-                hardModeUpline,
-                questTypeUpline,
-                streakUpline,
-                completedUpline
-            );
-            uint256 uplineTotal = earned[upline] + bonus;
-            earned[upline] = uplineTotal;
-            addFlip(upline, bonus + questRewardUpline, false, false, false);
-
-            // Second upline bonus (20%)
-            address upline2 = _referrerAddress(upline);
-            if (upline2 != address(0)) {
-                uint256 bonus2 = bonus / 5;
-                uint8 stakeBonusUpline2 = trophies.affiliateStakeBonus(upline2);
-                if (stakeBonusUpline2 != 0) {
-                    bonus2 += (bonus2 * stakeBonusUpline2) / 100;
-                }
-                (uint256 reward2, bool hardMode2, uint8 questType2, uint32 streak2, bool completed2) = module
-                    .handleAffiliate(upline2, bonus2);
-                uint256 questReward2 = _questApplyReward(upline2, reward2, hardMode2, questType2, streak2, completed2);
-                uint256 upline2Total = earned[upline2] + bonus2;
-                earned[upline2] = upline2Total;
-                addFlip(upline2, bonus2 + questReward2, false, false, false);
-            }
-        }
-
-        emit Affiliate(amount, code, sender);
-        return playerRakeback;
+    /// @notice Claim presale/early affiliate bonuses that were deferred to the affiliate contract.
+    function claimPresaleAffiliateBonus() external {
+        PurgeAffiliate program = affiliateProgram;
+        if (address(program) == address(0)) revert ZeroAddress();
+        uint256 amount = program.consumePresaleCoin(msg.sender);
+        if (amount == 0) return;
+        _mint(msg.sender, amount);
     }
 
-    /// @notice Clear affiliate tracking for the next cycle (invoked by the game).
-    function resetAffiliateLeaderboard(uint24 lvl) external onlyPurgeGameContract {
-        uint24 archiveLevel = lvl == 0 ? 0 : lvl - 1;
-        PlayerScore memory leader = topAffiliate;
-        if (leader.player != address(0) && leader.score != 0) {
-            affiliateTopByLevel[archiveLevel] = leader;
-        } else {
-            delete affiliateTopByLevel[archiveLevel];
-        }
-        delete topAffiliate;
-    }
-    /// @notice Buy PURGE during the presale; price increases linearly as tokens are sold.
-    /// @dev
-    /// - Purchases are limited to 0.25 ETH per transaction for gas/UX bounds.
-    /// - Every token in the order uses the current price of the next unsold token (no intra-order averaging).
-    /// - Reverts if no whole token can be purchased or allocation is exhausted.
-    function presale() external payable {
-        uint256 ethIn = msg.value;
-        if (ethIn < 0.001 ether) revert Insufficient();
-        if (ethIn > PRESALE_MAX_ETH_PER_TX) revert PresalePerTxLimit();
-
-        uint256 inventoryTokens = balanceOf[address(this)] / MILLION;
-        if (inventoryTokens == 0) revert PresaleExceedsRemaining();
-
-        uint256 tokensSold = PRESALE_SUPPLY_TOKENS - inventoryTokens;
-        uint256 price = PRESALE_START_PRICE + PRESALE_PRICE_SLOPE * tokensSold;
-        if (price > PRESALE_END_PRICE) price = PRESALE_END_PRICE;
-        if (price == 0 || price > ethIn) revert Insufficient();
-
-        uint256 tokensOut = ethIn / price;
-        if (tokensOut == 0) revert Insufficient();
-        if (tokensOut > inventoryTokens) {
-            tokensOut = inventoryTokens;
-        }
-
-        uint256 costWei = tokensOut * price;
-        uint256 refund = ethIn - costWei;
-
-        uint256 amountBase = tokensOut * MILLION;
-        totalPresaleSold = uint96(uint256(totalPresaleSold) + amountBase);
-
-        address payable buyer = payable(msg.sender);
+    /// @notice Transfer presale inventory to a buyer (affiliate contract only).
+    function presaleDistribute(address buyer, uint256 amountBase) external onlyAffiliateContract {
+        if (buyer == address(0)) revert ZeroAddress();
         _transfer(address(this), buyer, amountBase);
-
-        address gameAddr = address(purgeGame);
-        uint256 gameCut;
-        if (gameAddr != address(0)) {
-            gameCut = (costWei * 80) / 100;
-            (bool gameOk, ) = gameAddr.call{value: gameCut}("");
-            if (!gameOk) revert Insufficient();
-        }
-
-        if (refund != 0) {
-            (bool refundOk, ) = buyer.call{value: refund}("");
-            if (!refundOk) revert Insufficient();
-        }
-
-        uint256 creatorCut = costWei - gameCut;
-        (bool ok, ) = payable(creator).call{value: creatorCut}("");
-        if (!ok) revert Insufficient();
-
-        bytes32 buyerCode = _referralCode(buyer);
-        if (buyerCode != bytes32(0)) {
-            AffiliateCodeInfo storage info = affiliateCode[buyerCode];
-            address affiliate = info.owner;
-            if (affiliate != address(0) && affiliate != buyer) {
-                uint256 affiliateBonus = (amountBase * 5) / 100;
-                uint256 buyerBonus = (amountBase * 2) / 100;
-                if (affiliateBonus != 0) {
-                    _mint(affiliate, affiliateBonus);
-                }
-                if (buyerBonus != 0) {
-                    _mint(buyer, buyerBonus);
-                }
-            }
-        }
     }
 
     /// @notice Wire the game, NFT, renderers, and supporting modules required by Purgecoin.
@@ -890,6 +649,25 @@ contract Purgecoin {
         IPurgeRenderer(trophyRenderer_).wireContracts(game_, nft_);
         purgeGameNFT.wireAll(game_, trophies_);
         purgeGameTrophies.wireAndPrime(game_, address(this), 1);
+        _wireAffiliate(game_, trophies_);
+    }
+
+    function wireAffiliate(address affiliate_) external {
+        if (msg.sender != creator || affiliateOverride) revert OnlyDeployer();
+        if (affiliate_ == address(0)) revert ZeroAddress();
+        affiliateOverride = true;
+        affiliateProgram = PurgeAffiliate(affiliate_);
+        _wireAffiliate(address(purgeGame), address(purgeGameTrophies));
+    }
+
+    function _wireAffiliate(address game_, address trophies_) internal {
+        address affiliateAddr = address(affiliateProgram);
+        if (affiliateAddr == address(0)) return;
+        affiliateProgram.wire(address(this), game_, trophies_);
+        address payer = address(purgeGameNFT);
+        if (payer != address(0)) {
+            affiliateProgram.setPayer(payer);
+        }
     }
 
     /// @notice Credit the creator's share of gameplay proceeds.
@@ -930,6 +708,43 @@ contract Purgecoin {
         if (amount != 0) {
             addFlip(player, amount, false, false, false);
         }
+    }
+
+    /// @notice Credit a coinflip stake from the affiliate program.
+    /// @dev Access: affiliate contract only; zero address is ignored.
+    function affiliateAddFlip(address player, uint256 amount) external {
+        if (msg.sender != address(affiliateProgram)) revert OnlyGame();
+        if (player == address(0) || amount == 0) return;
+        addFlip(player, amount, false, false, false);
+    }
+
+    /// @notice Batch credit up to three affiliate/upline flip stakes in a single call.
+    /// @dev Access: affiliate contract only; zero amounts or addresses are skipped.
+    function affiliateAddFlipBatch(address[3] calldata players, uint256[3] calldata amounts) external {
+        if (msg.sender != address(affiliateProgram)) revert OnlyGame();
+        for (uint256 i; i < 3; ) {
+            address player = players[i];
+            uint256 amount = amounts[i];
+            if (player != address(0) && amount != 0) {
+                addFlip(player, amount, false, false, false);
+            }
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    /// @notice Compute affiliate quest rewards while preserving quest module access control.
+    /// @dev Access: affiliate contract only.
+    function affiliateQuestReward(address player, uint256 amount) external returns (uint256 questReward) {
+        if (msg.sender != address(affiliateProgram)) revert OnlyGame();
+        IPurgeQuestModule module = questModule;
+        if (address(module) == address(0) || player == address(0) || amount == 0) return 0;
+        (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleAffiliate(
+            player,
+            amount
+        );
+        return _questApplyReward(player, reward, hardMode, questType, streak, completed);
     }
 
     // ---------------------------------------------------------------------
@@ -1228,20 +1043,6 @@ contract Purgecoin {
 
         addFlip(top, amount, false, false, true);
     }
-    function getTopAffiliate() external view returns (address) {
-        return topAffiliate.player;
-    }
-
-    /// @notice Return the recorded top affiliate for a given level.
-    /// @dev Uses live leaderboard when requesting the current level; otherwise returns the archived top.
-    function affiliateTop(uint24 lvl) external view returns (address player, uint96 score) {
-        if (lvl == purgeGame.level()) {
-            PlayerScore memory entry = topAffiliate;
-            return (entry.player, entry.score);
-        }
-        PlayerScore memory stored = affiliateTopByLevel[lvl];
-        return (stored.player, stored.score);
-    }
 
     /// @notice Return the top coinflip bettor recorded for a given level.
     /// @dev Uses live leaderboard when requesting the current level; otherwise returns the archived top.
@@ -1414,14 +1215,6 @@ contract Purgecoin {
             wholeTokens = type(uint96).max;
         }
         return uint96(wholeTokens);
-    }
-
-    function _updateTopAffiliate(address player, uint256 total) private {
-        uint96 score = _score96(total);
-        PlayerScore memory current = topAffiliate;
-        if (score > current.score) {
-            topAffiliate = PlayerScore({player: player, score: score});
-        }
     }
 
     function _updateTopBettor(address player, uint256 stakeScore) private {

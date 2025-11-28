@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import "@openzeppelin/contracts/utils/Base64.sol";
 import "@openzeppelin/contracts/utils/Strings.sol";
+import "./interfaces/IPurgeAffiliate.sol";
 
 interface IIcons32 {
     function vbW(uint256 i) external view returns (uint16);
@@ -44,9 +45,9 @@ interface IERC721Lite {
     function ownerOf(uint256 tokenId) external view returns (address);
 }
 
-/// @notice Read-only aux interface (e.g., for referral lookups in labels/traits).
+/// @notice Read-only aux interface to locate the affiliate program.
 interface IPurgedRead {
-    function getReferrer(address user) external view returns (address);
+    function affiliateProgram() external view returns (address);
 }
 
 /**
@@ -62,7 +63,7 @@ contract IconRendererRegular32 {
 
     // ---------------- Storage ----------------
 
-    IPurgedRead private immutable coin; // PURGE ERC20 implementing IPurgedRead (getReferrer)
+    IPurgedRead private immutable coin; // PURGE ERC20 implementing affiliateProgram()
     IIcons32 private immutable icons; // External icon data source
     IColorRegistry private immutable registry; // Color override store
 
@@ -193,17 +194,28 @@ contract IconRendererRegular32 {
         s = registry.addressColor(owner_, k);
         if (bytes(s).length != 0) return s;
 
-        address ref = coin.getReferrer(owner_);
+        address ref = _referrer(owner_);
         if (ref != address(0)) {
             s = registry.addressColor(ref, k);
             if (bytes(s).length != 0) return s;
-            address up = coin.getReferrer(ref);
+            address up = _referrer(ref);
             if (up != address(0)) {
                 s = registry.addressColor(up, k);
                 if (bytes(s).length != 0) return s;
             }
         }
         return defColor;
+    }
+
+    function _affiliateProgram() private view returns (IPurgeAffiliate) {
+        address affiliate = coin.affiliateProgram();
+        return affiliate == address(0) ? IPurgeAffiliate(address(0)) : IPurgeAffiliate(affiliate);
+    }
+
+    function _referrer(address user) private view returns (address) {
+        IPurgeAffiliate affiliate = _affiliateProgram();
+        if (address(affiliate) == address(0)) return address(0);
+        return affiliate.getReferrer(user);
     }
 
     // ---------------------------------------------------------------------
