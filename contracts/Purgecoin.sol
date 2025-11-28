@@ -1329,7 +1329,8 @@ contract Purgecoin {
         }
 
         uint48 settleDay = _syncFlipDay();
-        uint48 targetDay = settleDay + (purgeGame.rngLocked() ? 2 : 1);
+        bool rngLocked = purgeGame.rngLocked();
+        uint48 targetDay = settleDay + (rngLocked ? 2 : 1);
         uint48 nowDay = _currentDay();
         if (targetDay <= nowDay) {
             targetDay = nowDay + 1;
@@ -1353,18 +1354,21 @@ contract Purgecoin {
         if (!skipLuckboxCheck && playerLuckbox[player] == 0) {
             playerLuckbox[player] = 1;
         }
-        _updatePlayerScore(2, player, newStake);
+        // Freeze leaderboard-related state while RNG is locked to prevent post-RNG manipulation.
+        if (!rngLocked) {
+            _updatePlayerScore(2, player, newStake);
 
-        uint256 record = biggestFlipEver;
-        address leader = topBettors[0].player;
-        if (newStake > record && leader == player) {
-            biggestFlipEver = uint128(newStake);
+            uint256 record = biggestFlipEver;
+            address leader = topBettors[0].player;
+            if (newStake > record && leader == player) {
+                biggestFlipEver = uint128(newStake);
 
-            if (canArmBounty && bountyEligible) {
-                uint256 threshold = (bountyOwedTo != address(0)) ? (record + record / 100) : record;
-                if (eligibleStake >= threshold) {
-                    bountyOwedTo = player;
-                    emit BountyOwed(player, currentBounty, newStake);
+                if (canArmBounty && bountyEligible) {
+                    uint256 threshold = (bountyOwedTo != address(0)) ? (record + record / 100) : record;
+                    if (eligibleStake >= threshold) {
+                        bountyOwedTo = player;
+                        emit BountyOwed(player, currentBounty, newStake);
+                    }
                 }
             }
         }
