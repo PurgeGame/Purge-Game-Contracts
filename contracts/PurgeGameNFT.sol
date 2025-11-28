@@ -332,7 +332,7 @@ contract PurgeGameNFT {
             .purchaseInfo();
 
         if ((targetLevel % 20) == 16) revert NotTimeYet();
-        if (rngLocked_) revert RngNotReady();
+        if (rngLocked_ && phase >= 3 && state == 2) revert RngNotReady();
 
         uint256 coinCost = quantity * priceCoinUnit;
         _enforceCenturyLuckbox(buyer, targetLevel, priceCoinUnit);

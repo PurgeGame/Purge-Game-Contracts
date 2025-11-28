@@ -71,12 +71,6 @@ contract Purgecoin {
         uint8 rakeback;
     }
 
-    struct StakeTrophyCandidate {
-        address player;
-        uint72 principal;
-        uint24 level;
-    }
-
     struct CoinflipDayResult {
         uint16 rewardPercent;
         bool win;
@@ -120,9 +114,9 @@ contract Purgecoin {
 
     uint8 private constant STAKE_BUCKETS = 12;
 
-    mapping(uint24 => address[]) internal stakeAddr;
     mapping(uint24 => mapping(address => uint256[STAKE_BUCKETS])) internal stakeAmt;
-    StakeTrophyCandidate internal stakeTrophyCandidate;
+    mapping(address => uint24) internal lastStakeScanLevel;
+    mapping(address => uint48) internal lastStakeScanDay;
 
     mapping(address => uint8) internal affiliatePos;
     mapping(address => uint8) internal topPos;
@@ -361,21 +355,8 @@ contract Purgecoin {
         purgeGameTrophies.awardTrophy(player, level, PURGE_TROPHY_KIND_STAKE, dataWord, 0);
     }
 
-    function _stakeMask(uint256[STAKE_BUCKETS] storage buckets) private returns (uint256 mask) {
-        mask = buckets[0];
-        if (mask != 0) return mask;
-
-        for (uint8 i = 1; i <= MAX_RISK; ) {
-            if (buckets[i] != 0) {
-                mask |= (uint256(1) << i);
-            }
-            unchecked {
-                ++i;
-            }
-        }
-        if (mask != 0) {
-            buckets[0] = mask;
-        }
+    function _stakeMask(uint256[STAKE_BUCKETS] storage buckets) private view returns (uint256 mask) {
+        return buckets[0];
     }
 
     function _viewClaimableCoin(address player) internal view returns (uint256 total) {
@@ -406,19 +387,29 @@ contract Purgecoin {
         uint48 windowStart = currentDay > 30 ? currentDay - 30 : 0;
         uint24 lvl = stakeLevelComplete;
         uint24 scanned;
-        while (lvl != 0 && scanned < 400) {
+
+        // Only reuse the prior scan boundary when the window start hasn't shifted.
+        uint24 lowerBound;
+        if (lastStakeScanDay[player] == windowStart) {
+            lowerBound = lastStakeScanLevel[player];
+            if (lowerBound >= lvl) {
+                lowerBound = 0;
+            }
+        }
+        while (lvl != 0 && lvl > lowerBound && scanned < 400) {
             uint48 resDay = stakeResolutionDay[lvl];
-            if (resDay == 0 || resDay < windowStart) break;
+            if (resDay == 0 || resDay < windowStart) {
+                break;
+            }
 
             uint256[STAKE_BUCKETS] storage stakes = stakeAmt[lvl][player];
             uint256 mask = stakes[0];
             if (mask == 0) {
-                for (uint8 i = 1; i <= MAX_RISK; ) {
-                    if (stakes[i] != 0) mask |= (uint256(1) << i);
-                    unchecked {
-                        ++i;
-                    }
+                unchecked {
+                    --lvl;
+                    ++scanned;
                 }
+                continue;
             }
 
             uint256 tmpMask = mask;
@@ -457,10 +448,6 @@ contract Purgecoin {
                 ++scanned;
             }
         }
-    }
-
-    function _hasAnyStake(uint256[STAKE_BUCKETS] storage buckets) private returns (bool) {
-        return _stakeMask(buckets) != 0;
     }
 
     function _lowestSetBitIndex(uint256 mask) private pure returns (uint8 idx) {
@@ -529,10 +516,21 @@ contract Purgecoin {
         uint24 lvl = stakeLevelComplete;
         if (lvl == 0) return 0;
 
+        // Only reuse the prior scan boundary when the window start hasn't shifted.
+        uint24 lowerBound;
+        if (lastStakeScanDay[player] == windowStartDay) {
+            lowerBound = lastStakeScanLevel[player];
+            if (lowerBound >= lvl) {
+                lowerBound = 0;
+            }
+        }
+
         uint24 scanned;
-        while (lvl != 0 && scanned < 400) {
+        while (lvl != 0 && lvl > lowerBound && scanned < 400) {
             uint48 resDay = stakeResolutionDay[lvl];
-            if (resDay == 0 || resDay < windowStartDay) break;
+            if (resDay == 0 || resDay < windowStartDay) {
+                break;
+            }
 
             uint256[STAKE_BUCKETS] storage stakes = stakeAmt[lvl][player];
             uint256 mask = _stakeMask(stakes);
@@ -547,6 +545,10 @@ contract Purgecoin {
                 ++scanned;
             }
         }
+
+        // Cache the scan state for this window start.
+        lastStakeScanDay[player] = windowStartDay;
+        lastStakeScanLevel[player] = lvl;
     }
 
     /// @notice Burn PURGED to open a future stake targeting `targetLevel` with a risk radius.
@@ -655,15 +657,10 @@ contract Purgecoin {
 
         uint256[STAKE_BUCKETS] storage stakes = stakeAmt[targetLevel][sender];
         uint256 mask = _stakeMask(stakes);
-        bool hadStake = mask != 0;
 
         stakes[risk] += principalRounded;
         mask |= (uint256(1) << risk);
         stakes[0] = mask;
-
-        if (!hadStake) {
-            stakeAddr[targetLevel].push(sender);
-        }
 
         emit StakeCreated(sender, targetLevel, risk, principalRounded);
     }
