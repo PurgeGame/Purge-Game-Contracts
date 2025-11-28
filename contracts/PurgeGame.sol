@@ -410,6 +410,8 @@ contract PurgeGame is PurgeGameStorage {
                         payDailyJackpot(false, level, rngWord);
                     }
                     _stakeForTargetRatio(lvl);
+                    bool decOpen = ((lvl >= 25) && ((lvl % 10) == 5) && ((lvl % 100) != 95));
+                    decWindowOpen = decOpen;
                     _unlockRng(day);
                 }
                 break;
@@ -498,6 +500,7 @@ contract PurgeGame is PurgeGameStorage {
                     earlyPurgePercent = 0;
                     levelStartTime = ts;
                     gameState = 3;
+                    if (lvl % 100 == 99) decWindowOpen = true;
                     _unlockRng(day); // open RNG after map jackpot is finalized
                 }
                 break;
@@ -1281,11 +1284,8 @@ contract PurgeGame is PurgeGameStorage {
         rngWordCurrent = 0;
         rngLockedFlag = true;
 
-        bool decOpen = ((lvl >= 25) && ((lvl % 10) == 5) && ((lvl % 100) != 95) && gameState_ == 1) ||
-            (lvl % 100 == 99 && gameState_ == 3);
-        bool decClose = ((decWindowOpen && ((lvl % 100 != 0 && gameState_ == 1))) || (lvl % 100 == 0 && phase_ == 3));
-        if (decOpen) decWindowOpen = true;
-        else if (decClose) decWindowOpen = false;
+        bool decClose = (((lvl % 100 != 0 && gameState_ == 1) || (lvl % 100 == 0 && phase_ == 3)) && decWindowOpen);
+        if (decClose) decWindowOpen = false;
     }
 
     function _unlockRng(uint48 day) private {
