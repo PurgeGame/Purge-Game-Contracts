@@ -290,7 +290,6 @@ contract Purgecoin {
     /// @param amount Amount (6 decimals) to burn; must satisfy the global minimum.
     function decimatorBurn(uint256 amount) external {
         (bool decOn, uint24 lvl) = purgeGame.decWindow();
-        if (purgeGame.rngLocked()) revert BettingPaused();
         if (!decOn) revert NotDecimatorWindow();
         if (amount < MIN) revert AmountLTMin();
 
@@ -937,9 +936,7 @@ contract Purgecoin {
         return coinflipBalance[day][player];
     }
 
-    function coinflipDayInfo(
-        uint48 day
-    ) external view returns (uint16 rewardPercent, bool win) {
+    function coinflipDayInfo(uint48 day) external view returns (uint16 rewardPercent, bool win) {
         CoinflipDayResult storage result = coinflipDayResult[day];
         return (result.rewardPercent, result.win);
     }
@@ -999,6 +996,10 @@ contract Purgecoin {
 
         while (remaining != 0 && cursor <= latest) {
             CoinflipDayResult storage result = coinflipDayResult[cursor];
+
+            if (result.rewardPercent == 0 && !result.win) {
+                break; // day not settled yet; keep stake intact
+            }
 
             uint256 flipStake = coinflipBalance[cursor][player];
             if (flipStake != 0) {
@@ -1253,12 +1254,23 @@ contract Purgecoin {
         cfTailNext = 0;
     }
 
-    function _ensureNextFlipDay(uint48 targetDay) internal {
+    function _ensureNextFlipDay(uint48 targetDay) internal returns (uint48 lockedDay) {
         uint48 queuedDay = nextFlipDay;
-        if (queuedDay != targetDay) {
-            _resetNextQueue();
+        if (queuedDay == 0) {
             nextFlipDay = targetDay;
+            return targetDay;
         }
+
+        if (queuedDay == targetDay) return targetDay;
+
+        // If a roster is already queued, keep targeting that day to avoid orphaning it.
+        if (cfTailNext != cfHeadNext) {
+            return queuedDay;
+        }
+
+        _resetNextQueue();
+        nextFlipDay = targetDay;
+        return targetDay;
     }
 
     // Append to the "next day" queue, reusing storage slots while advancing the ring tail.
@@ -1310,12 +1322,12 @@ contract Purgecoin {
         _claimCoinflips(player, 30);
 
         uint48 settleDay = _syncFlipDay();
-        uint48 targetDay = settleDay + 1;
+        uint48 targetDay = settleDay + (purgeGame.rngLocked() ? 2 : 1);
         uint48 nowDay = _currentDay();
         if (targetDay <= nowDay) {
             targetDay = nowDay + 1;
         }
-        _ensureNextFlipDay(targetDay);
+        targetDay = _ensureNextFlipDay(targetDay);
 
         uint256 prevStake = coinflipBalance[targetDay][player];
         if (prevStake == 0) _pushPlayerNext(player);

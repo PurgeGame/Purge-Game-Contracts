@@ -81,4 +81,7 @@ abstract contract PurgeGameStorage {
     // -----------------------
     mapping(uint48 => uint256) internal rngWordByDay;
     mapping(uint48 => bool) internal rngWordRecorded;
+
+    // Latch to keep a decimator window open until RNG is requested for that level (also used for the level-100 special).
+    bool internal decWindowOpen = true;
 }

@@ -237,21 +237,8 @@ contract PurgeGame is PurgeGameStorage {
     }
 
     function decWindow() external view returns (bool on, uint24 lvl) {
-        uint24 curLvl = level;
-        lvl = curLvl;
-        uint8 gs = gameState;
-
-        bool special = (curLvl != 0) && (curLvl % DECIMATOR_SPECIAL_LEVEL == 0);
-        if (!special && gs == 3 && curLvl < type(uint24).max) {
-            uint24 next = curLvl + 1;
-            if (next % DECIMATOR_SPECIAL_LEVEL == 0) {
-                special = true;
-                lvl = next;
-            }
-        }
-
-        bool standard = (curLvl >= 25 && (curLvl % 10) == 5 && (curLvl % 100) != 95);
-        on = standard || special;
+        on = decWindowOpen;
+        lvl = level;
     }
 
     function isBafLevelActive(uint24 lvl) external view returns (bool) {
@@ -1157,13 +1144,13 @@ contract PurgeGame is PurgeGameStorage {
 
         if (currentWord == 0) {
             if (rngLockedFlag) revert RngNotReady();
-            _requestRng();
+            _requestRng(gameState, phase, lvl);
             return 1;
         }
 
         if (!rngLockedFlag) {
             // Stale entropy from previous cycle; request a fresh word.
-            _requestRng();
+            _requestRng(gameState, phase, lvl);
             return 1;
         }
 
@@ -1278,7 +1265,7 @@ contract PurgeGame is PurgeGameStorage {
         return airdropIndex >= total;
     }
 
-    function _requestRng() private {
+    function _requestRng(uint8 gameState_, uint8 phase_, uint24 lvl) private {
         uint256 id = vrfCoordinator.requestRandomWords(
             VRFRandomWordsRequest({
                 keyHash: vrfKeyHash,
@@ -1293,6 +1280,12 @@ contract PurgeGame is PurgeGameStorage {
         rngFulfilled = false;
         rngWordCurrent = 0;
         rngLockedFlag = true;
+
+        bool decOpen = ((lvl >= 25) && ((lvl % 10) == 5) && ((lvl % 100) != 95) && gameState_ == 1) ||
+            (lvl % 100 == 99 && gameState_ == 3);
+        bool decClose = ((decWindowOpen && ((lvl % 100 != 0 && gameState_ == 1))) || (lvl % 100 == 0 && phase_ == 3));
+        if (decOpen) decWindowOpen = true;
+        else if (decClose) decWindowOpen = false;
     }
 
     function _unlockRng(uint48 day) private {
