@@ -67,13 +67,23 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         uint8 percentBefore = earlyPurgePercent;
         bool purchasePhaseActive = (gameState == 2 && phase <= 2);
         uint8 percentAfter = purchasePhaseActive ? _currentEarlyPurgePercent() : percentBefore;
-        if (purchasePhaseActive) earlyPurgePercent = percentAfter;
+        if (purchasePhaseActive) {
+            earlyPurgePercent = percentAfter;
+            if (
+                !earlyPurgeBoostArmed &&
+                percentBefore < EARLY_PURGE_BOOST_THRESHOLD &&
+                percentAfter >= EARLY_PURGE_BOOST_THRESHOLD
+            ) {
+                earlyPurgeBoostArmed = true; // arm boost for the next jackpot instead of the current one
+            }
+        }
 
-        bool boostTrigger = purchasePhaseActive &&
-            percentBefore < EARLY_PURGE_BOOST_THRESHOLD &&
-            percentAfter >= EARLY_PURGE_BOOST_THRESHOLD;
+        bool boostTrigger = purchasePhaseActive && earlyPurgeBoostArmed;
+        if (boostTrigger) {
+            earlyPurgeBoostArmed = false; // consume the armed boost
+        }
 
-        bool coinOnly = percentBefore >= EARLY_PURGE_COIN_ONLY_THRESHOLD && !boostTrigger;
+        bool coinOnly = !boostTrigger && percentBefore >= EARLY_PURGE_COIN_ONLY_THRESHOLD;
 
         uint256 entropyWord = _scrambleJackpotEntropy(randWord, jackpotCounter);
         if (!isDaily) {
@@ -81,7 +91,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
 
             uint256 rewardPoolSlice;
             if (!coinOnly) {
-                uint256 poolBps = boostTrigger ? 200 : 50; // default 0.5%, 2% when EP boost triggers
+                uint256 poolBps = boostTrigger ? 200 : 50; // default 0.5%, boosted 2% when armed
                 rewardPoolSlice = (rewardPool * poolBps) / 10_000;
                 rewardPoolSlice = (rewardPoolSlice * _rewardJackpotScaleBps(lvl)) / 10_000;
             }
