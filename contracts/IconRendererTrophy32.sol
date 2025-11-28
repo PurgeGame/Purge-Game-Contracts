@@ -202,6 +202,21 @@ contract IconRendererTrophy32 {
         uint256 data,
         uint32[4] calldata extras
     ) external view returns (string memory) {
+        return _tokenURI(tokenId, data, extras);
+    }
+
+    /// @notice Render PurgeBond NFTs as exterminator trophy placeholders.
+    function bondTokenURI(uint256 tokenId) external view returns (string memory) {
+        uint32[4] memory extras;
+        uint256 placeholderData = uint256(0xFFFF) << 152;
+        return _tokenURI(tokenId, placeholderData, extras);
+    }
+
+    function _tokenURI(
+        uint256 tokenId,
+        uint256 data,
+        uint32[4] memory extras
+    ) private view returns (string memory) {
         if ((data >> 128) == 0) revert("renderer:notTrophy");
 
         uint24 lvl = uint24((data >> 128) & 0xFFFFFF);
@@ -403,7 +418,12 @@ contract IconRendererTrophy32 {
         string memory s = registry.tokenColor(tokenId, k);
         if (bytes(s).length != 0) return s;
 
-        address owner_ = nft.ownerOf(tokenId);
+        address owner_;
+        try nft.ownerOf(tokenId) returns (address o) {
+            owner_ = o;
+        } catch {
+            owner_ = address(0);
+        }
         s = registry.addressColor(owner_, k);
         if (bytes(s).length != 0) return s;
 
