@@ -11,6 +11,11 @@ interface IPurgeCoinJackpotView {
     function coinflipTop(uint24 lvl) external view returns (address player, uint96 score);
     function biggestLuckbox() external view returns (address player, uint96 score);
     function playerLuckbox(address player) external view returns (uint256);
+    function bonds() external view returns (address);
+}
+
+interface IPurgeBonds {
+    function sampleBondOwner(uint256 entropy) external view returns (uint256 tokenId, address owner);
 }
 
 /**
@@ -35,6 +40,14 @@ contract PurgeJackpots is IPurgeJackpots {
     struct PlayerScore {
         address player;
         uint96 score;
+    }
+
+    function _recentLevel(uint24 lvl, uint256 entropy) private pure returns (uint24) {
+        uint256 offset = (entropy % 20) + 1; // 1..20
+        if (lvl > offset) {
+            return lvl - uint24(offset);
+        }
+        return 0;
     }
 
     struct BAFState {
@@ -334,12 +347,13 @@ contract PurgeJackpots is IPurgeJackpots {
             extMode = 1;
 
             uint256 P = poolWei;
-            address[] memory tmpW = new address[](10);
-            uint256[] memory tmpA = new uint256[](10);
+            address[] memory tmpW = new address[](140);
+            uint256[] memory tmpA = new uint256[](140);
             uint256 n;
             uint256 toReturn;
             address trophyRecipient;
             bool trophyAwarded;
+            address bondsAddr = coin.bonds();
 
             uint256 entropy = rngWord;
             uint256 salt;
@@ -352,14 +366,20 @@ contract PurgeJackpots is IPurgeJackpots {
                     unchecked {
                         ++n;
                     }
+                } else {
+                    toReturn += prize;
+                }
+
+                uint256 trophyPrize = P / 10;
+                if (w != address(0) && _eligible(w)) {
                     trophyRecipient = w;
                     uint256 trophyData = (uint256(BAF_TRAIT_SENTINEL) << 152) |
                         (uint256(lvl) << TROPHY_BASE_LEVEL_SHIFT) |
                         TROPHY_FLAG_BAF;
-                    purgeGameTrophies.awardTrophy(trophyRecipient, lvl, PURGE_TROPHY_KIND_BAF, trophyData, prize);
+                    purgeGameTrophies.awardTrophy(trophyRecipient, lvl, PURGE_TROPHY_KIND_BAF, trophyData, trophyPrize);
                     trophyAwarded = true;
                 } else {
-                    toReturn += prize;
+                    toReturn += trophyPrize;
                 }
             }
 
@@ -369,11 +389,8 @@ contract PurgeJackpots is IPurgeJackpots {
                 }
                 entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
                 uint256 prize = P / 10;
-                uint8 pick = uint8(entropy & 3);
+                uint8 pick = 2 + uint8(entropy & 1);
                 (address w, ) = _bafTop(lvl, pick);
-                if (w == address(0) && pick != 0) {
-                    (w, ) = _bafTop(lvl, 0);
-                }
                 if (_creditOrRefund(w, prize, tmpW, tmpA, n)) {
                     unchecked {
                         ++n;
@@ -388,8 +405,6 @@ contract PurgeJackpots is IPurgeJackpots {
                     ++salt;
                 }
                 entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
-                // Legacy coinflip-queue prizes removed; return this slice to the pool.
-                toReturn += (P * 18) / 100;
             }
 
             {
@@ -403,9 +418,32 @@ contract PurgeJackpots is IPurgeJackpots {
                         ++salt;
                     }
                     entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
-                    (uint256 tokenId, address owner) = purgeGameTrophies.stakedTrophySampleWithId(entropy);
-                    trophyIds[s] = tokenId;
-                    trophyOwners[s] = owner;
+                    (uint256 idA, address ownerA) = purgeGameTrophies.stakedTrophySampleWithId(entropy);
+
+                    unchecked {
+                        ++salt;
+                    }
+                    entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
+                    (uint256 idB, address ownerB) = purgeGameTrophies.stakedTrophySampleWithId(entropy);
+
+                    bool validA = idA != 0 && ownerA != address(0);
+                    bool validB = idB != 0 && ownerB != address(0);
+
+                    if (validA && validB) {
+                        if (idA <= idB) {
+                            trophyIds[s] = idA;
+                            trophyOwners[s] = ownerA;
+                        } else {
+                            trophyIds[s] = idB;
+                            trophyOwners[s] = ownerB;
+                        }
+                    } else if (validA) {
+                        trophyIds[s] = idA;
+                        trophyOwners[s] = ownerA;
+                    } else if (validB) {
+                        trophyIds[s] = idB;
+                        trophyOwners[s] = ownerB;
+                    }
                     unchecked {
                         ++s;
                     }
@@ -458,32 +496,152 @@ contract PurgeJackpots is IPurgeJackpots {
             }
 
             {
-                uint256 prizeLuckbox = (P * 2) / 100;
-                (address luckboxLeader, uint96 luckboxScore) = coin.biggestLuckbox();
-                if (luckboxLeader != address(0) && luckboxScore != 0) {
-                    if (_creditOrRefund(luckboxLeader, prizeLuckbox, tmpW, tmpA, n)) {
+                uint256 bondSlice = P / 10;
+                uint256[4] memory bondPrizes = [(bondSlice * 5) / 10, (bondSlice * 3) / 10, (bondSlice * 2) / 10, uint256(0)];
+
+                if (bondsAddr != address(0)) {
+                    IPurgeBonds bonds = IPurgeBonds(bondsAddr);
+                    for (uint8 s; s < 4; ) {
                         unchecked {
-                            ++n;
+                            ++salt;
                         }
-                    } else {
-                        toReturn += prizeLuckbox;
+                        entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
+                        (uint256 idA, address ownerA) = bonds.sampleBondOwner(entropy);
+
+                        unchecked {
+                            ++salt;
+                        }
+                        entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
+                        (uint256 idB, address ownerB) = bonds.sampleBondOwner(entropy);
+
+                        bool validA = idA != 0 && ownerA != address(0);
+                        bool validB = idB != 0 && ownerB != address(0);
+                        address chosenOwner;
+
+                        if (validA && validB) {
+                            chosenOwner = (idA <= idB) ? ownerA : ownerB;
+                        } else if (validA) {
+                            chosenOwner = ownerA;
+                        } else if (validB) {
+                            chosenOwner = ownerB;
+                        }
+
+                        uint256 prize = bondPrizes[s];
+                        bool credited;
+                        if (prize != 0 && chosenOwner != address(0) && _eligible(chosenOwner)) {
+                            credited = _creditOrRefund(chosenOwner, prize, tmpW, tmpA, n);
+                        }
+                        if (credited) {
+                            unchecked {
+                                ++n;
+                            }
+                        } else if (prize != 0) {
+                            toReturn += prize;
+                        }
+                        unchecked {
+                            ++s;
+                        }
                     }
                 } else {
-                    toReturn += prizeLuckbox;
+                    toReturn += bondSlice;
                 }
             }
 
-            uint256 scatter = (P * 2) / 5;
-            if (limit >= 10 && bs.offset < limit) {
-                uint256 occurrences = 1 + (uint256(limit) - 1 - bs.offset) / 10;
-                uint256 perWei = scatter / occurrences;
-                bs.per = uint120(perWei);
+            {
+                uint256 slice = P / 10;
+                uint256[4] memory prizes = [(slice * 5) / 10, (slice * 3) / 10, (slice * 2) / 10, uint256(0)];
 
-                uint256 rem = scatter - perWei * occurrences;
-                bafState.returnAmountWei = uint120(toReturn + rem);
-            } else {
-                bs.per = 0;
-                bafState.returnAmountWei = uint120(toReturn + scatter);
+                for (uint8 s; s < 4; ) {
+                    unchecked {
+                        ++salt;
+                    }
+                    entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
+                    uint24 lvlA = _recentLevel(lvl, entropy);
+                    (address candA, ) = coin.coinflipTop(lvlA);
+
+                    unchecked {
+                        ++salt;
+                    }
+                    entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
+                    uint24 lvlB = _recentLevel(lvl, entropy);
+                    (address candB, ) = coin.coinflipTop(lvlB);
+
+                    address chosen;
+                    bool validA = candA != address(0);
+                    bool validB = candB != address(0);
+                    if (validA && validB) {
+                        chosen = (lvlA <= lvlB) ? candA : candB;
+                    } else if (validA) {
+                        chosen = candA;
+                    } else if (validB) {
+                        chosen = candB;
+                    }
+
+                    uint256 prize = prizes[s];
+                    bool credited;
+                    if (prize != 0 && chosen != address(0) && _eligible(chosen)) {
+                        credited = _creditOrRefund(chosen, prize, tmpW, tmpA, n);
+                    }
+                    if (credited) {
+                        unchecked {
+                            ++n;
+                        }
+                    } else if (prize != 0) {
+                        toReturn += prize;
+                    }
+                    unchecked {
+                        ++s;
+                    }
+                }
+            }
+
+            // Scatter now pays eligible random tickets from a random trait/level in last 20 levels.
+            {
+                unchecked {
+                    ++salt;
+                }
+                entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
+                uint256 scatter = (P * 2) / 5;
+                (uint24 lvlSel, uint8 traitSel, address[] memory tickets) = purgeGame.sampleTraitTickets(entropy);
+
+                uint256 eligibleCount;
+                uint256 tLen = tickets.length;
+                for (uint256 i; i < tLen; ) {
+                    if (_eligible(tickets[i])) {
+                        unchecked {
+                            ++eligibleCount;
+                        }
+                    }
+                    unchecked {
+                        ++i;
+                    }
+                }
+
+                if (eligibleCount == 0) {
+                    bafState.returnAmountWei = uint120(toReturn + scatter);
+                } else {
+                    uint256 perWei = scatter / eligibleCount;
+                    uint256 rem = scatter - perWei * eligibleCount;
+                    toReturn += rem;
+                    for (uint256 i; i < tLen; ) {
+                        address cand = tickets[i];
+                        if (perWei != 0 && _eligible(cand)) {
+                            if (_creditOrRefund(cand, perWei, tmpW, tmpA, n)) {
+                                unchecked {
+                                    ++n;
+                                }
+                            } else {
+                                toReturn += perWei;
+                            }
+                        } else if (perWei == 0 && _eligible(cand)) {
+                            toReturn += perWei;
+                        }
+                        unchecked {
+                            ++i;
+                        }
+                    }
+                    bafState.returnAmountWei = uint120(toReturn);
+                }
             }
 
             if (!trophyAwarded) {

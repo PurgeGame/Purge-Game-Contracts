@@ -898,6 +898,30 @@ contract PurgeBonds {
         win = roll < chanceBps;
     }
 
+    /// @notice Sample a random bond owner using entropy; returns zero address when no owner found within attempts.
+    function sampleBondOwner(uint256 entropy) external view returns (uint256 tokenId, address holder) {
+        uint256 maxId = nextId;
+        if (maxId <= 1) {
+            return (0, address(0));
+        }
+        unchecked {
+            maxId -= 1;
+        }
+
+        for (uint8 i; i < 8; ) {
+            entropy = uint256(keccak256(abi.encode(entropy, i)));
+            uint256 candidate = (entropy % maxId) + 1;
+            address bondOwner = _ownerOf[candidate];
+            if (bondOwner != address(0)) {
+                return (candidate, bondOwner);
+            }
+            unchecked {
+                ++i;
+            }
+        }
+        return (0, address(0));
+    }
+
     function _resolveBond(uint256 tokenId, uint256 rngWord) private returns (bool win) {
         uint256 basePrice = _basePrice(riskOf[tokenId]);
         uint16 chance;

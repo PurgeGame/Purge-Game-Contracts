@@ -903,6 +903,37 @@ contract PurgeGame is PurgeGameStorage {
         }
     }
 
+    /// @notice Sample up to 100 trait purge tickets from a random trait and recent level (last 20 levels).
+    /// @param entropy Random seed used to select level, trait, and starting offset.
+    function sampleTraitTickets(uint256 entropy) external view returns (uint24 lvlSel, uint8 traitSel, address[] memory tickets) {
+        uint24 currentLvl = level;
+        if (currentLvl <= 1) {
+            return (0, 0, new address[](0));
+        }
+
+        uint24 maxOffset = currentLvl > 20 ? 20 : currentLvl - 1;
+        uint256 levelEntropy = uint256(keccak256(abi.encode(entropy, currentLvl)));
+        uint24 offset = uint24((levelEntropy % maxOffset) + 1); // 1..maxOffset
+        lvlSel = currentLvl - offset;
+
+        traitSel = uint8(uint256(keccak256(abi.encode(entropy, lvlSel))) & 0xFF);
+        address[] storage arr = traitPurgeTicket[lvlSel][traitSel];
+        uint256 len = arr.length;
+        if (len == 0) {
+            return (lvlSel, traitSel, new address[](0));
+        }
+
+        uint256 take = len < 100 ? len : 100;
+        tickets = new address[](take);
+        uint256 start = uint256(keccak256(abi.encode(entropy, traitSel))) % len;
+        for (uint256 i; i < take; ) {
+            tickets[i] = arr[(start + i) % len];
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
     // --- Credits & jackpot helpers ------------------------------------------------------------------
 
     /// @notice Credit ETH winnings to a player’s claimable balance and emit an accounting event.

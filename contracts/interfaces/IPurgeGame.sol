@@ -68,4 +68,7 @@ interface IPurgeGame is IPurgeGameExternal {
     function rngLocked() external view returns (bool);
 
     function purchaseWithClaimable(bool mapPurchase) external;
+
+    /// @notice Sample up to 100 trait purge tickets from a random trait and recent level (last 20).
+    function sampleTraitTickets(uint256 entropy) external view returns (uint24 lvl, uint8 trait, address[] memory tickets);
 }

@@ -259,14 +259,13 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         address jackpots,
         bool consumeCarry
     ) private returns (bool finished, uint256 returnedWei) {
-        bool isFinished;
         address[] memory winnersArr;
         uint256[] memory amountsArr;
         uint256 trophyPoolDelta;
         uint256 returnWei;
 
         if (kind == 0) {
-            (isFinished, winnersArr, amountsArr, trophyPoolDelta, returnWei) = IPurgeJackpots(jackpots).runBafJackpot(
+            (finished, winnersArr, amountsArr, trophyPoolDelta, returnWei) = IPurgeJackpots(jackpots).runBafJackpot(
                 poolWei,
                 cap,
                 lvl,
@@ -274,7 +273,7 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
             );
         } else if (kind == 1) {
             (
-                isFinished,
+                finished,
                 winnersArr,
                 amountsArr,
                 trophyPoolDelta,
@@ -295,13 +294,11 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
             trophyPool += trophyPoolDelta;
         }
 
-        if (isFinished) {
-            returnedWei = returnWei;
-            if (consumeCarry && poolWei != 0) {
-                rewardPool -= (poolWei - returnWei);
-            }
+        returnedWei = returnWei;
+        if (consumeCarry && poolWei != 0) {
+            rewardPool -= (poolWei - returnWei);
         }
-        return (isFinished, returnedWei);
+        return (finished, returnedWei);
     }
 
     function _rewardBonusScaleBps(uint24 lvl) private pure returns (uint16) {

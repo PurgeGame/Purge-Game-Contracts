@@ -182,6 +182,10 @@ contract QuestGameMock is IPurgeGame {
         uint24
     ) external pure override {}
 
+    function sampleTraitTickets(uint256) external pure override returns (uint24, uint8, address[] memory) {
+        return (0, 0, new address[](0));
+    }
+
     function stEthToken() external pure returns (address) {
         return address(0);
     }
