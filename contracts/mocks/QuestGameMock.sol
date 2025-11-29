@@ -56,6 +56,33 @@ contract QuestGameMock is IPurgeGame {
         return 0;
     }
 
+    function gameInfo()
+        external
+        view
+        override
+        returns (
+            uint8 gameState_,
+            uint8 phase_,
+            uint8 jackpotCounter_,
+            uint256 price_,
+            uint256 rewardPool_,
+            uint256 prizePoolTarget,
+            uint256 prizePoolCurrent,
+            uint256 nextPrizePool_,
+            uint8 earlyPurgePercent_
+        )
+    {
+        gameState_ = state;
+        phase_ = phase;
+        jackpotCounter_ = 0;
+        price_ = 0;
+        rewardPool_ = 0;
+        prizePoolTarget = 0;
+        prizePoolCurrent = 0;
+        nextPrizePool_ = 0;
+        earlyPurgePercent_ = 0;
+    }
+
     function getEarlyPurgePercent() external pure override returns (uint8) {
         return 0;
     }

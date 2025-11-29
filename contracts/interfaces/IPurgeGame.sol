@@ -18,6 +18,21 @@ interface IPurgeGame is IPurgeGameExternal {
 
     function coinPriceUnit() external view returns (uint256);
 
+    function gameInfo()
+        external
+        view
+        returns (
+            uint8 gameState_,
+            uint8 phase_,
+            uint8 jackpotCounter_,
+            uint256 price_,
+            uint256 rewardPool_,
+            uint256 prizePoolTarget,
+            uint256 prizePoolCurrent,
+            uint256 nextPrizePool_,
+            uint8 earlyPurgePercent_
+        );
+
     function getEarlyPurgePercent() external view returns (uint8);
 
     function decWindow() external view returns (bool on, uint24 lvl);

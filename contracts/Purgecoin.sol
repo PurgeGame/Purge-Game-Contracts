@@ -74,6 +74,21 @@ contract Purgecoin {
         bool win;
     }
 
+    struct StakePosition {
+        uint256 principal;
+        uint256 modifiedAmount;
+        uint24 distance;
+        uint8 risk;
+        bool claimed;
+    }
+
+    struct StakeResolution {
+        uint8 winningRiskLevels;
+        uint256 winningModifiedTotal;
+        uint256 stakeFreeMoney;
+        bool resolved;
+    }
+
     // ---------------------------------------------------------------------
     // Game wiring & session state
     // ---------------------------------------------------------------------
@@ -105,9 +120,9 @@ contract Purgecoin {
         return _viewClaimableCoin(player);
     }
 
-    uint8 private constant STAKE_BUCKETS = 26;
-
-    mapping(uint24 => mapping(address => uint256[STAKE_BUCKETS])) internal stakeAmt;
+    mapping(address => mapping(uint24 => StakePosition[])) internal stakePositions;
+    mapping(uint24 => mapping(uint8 => uint256)) internal stakeModifiedTotals;
+    mapping(uint24 => StakeResolution) internal stakeResolutionInfo;
     mapping(address => uint24) internal lastStakeScanLevel;
     mapping(address => uint48) internal lastStakeScanDay;
 
@@ -172,7 +187,6 @@ contract Purgecoin {
     uint256 private constant MILLION = 1e6; // token has 6 decimals
     uint256 private constant MIN = 100 * MILLION; // min burn / min flip (100 PURGED)
     uint8 private constant MAX_RISK = 25; // staking risk 1..25
-    uint256 private constant BUCKET_SIZE = 1500;
     uint16 private constant COINFLIP_EXTRA_MIN_PERCENT = 78;
     uint16 private constant COINFLIP_EXTRA_RANGE = 38;
     uint16 private constant BPS_DENOMINATOR = 10_000;
@@ -307,8 +321,83 @@ contract Purgecoin {
         purgeGameTrophies.awardTrophy(player, level, PURGE_TROPHY_KIND_STAKE, dataWord, 0);
     }
 
-    function _stakeMask(uint256[STAKE_BUCKETS] storage buckets) private view returns (uint256 mask) {
-        return buckets[0];
+    function _stakeFreeMoneyView() private view returns (uint256) {
+        (
+            ,
+            ,
+            ,
+            uint256 priceWei,
+            ,
+            uint256 prizePoolTarget,
+            ,
+            ,
+            /*earlyPurgePercent_*/
+        ) = purgeGame.gameInfo();
+        uint256 priceCoinUnit = purgeGame.coinPriceUnit();
+        if (priceWei == 0 || priceCoinUnit == 0) return 0;
+        uint256 tenPercentEth = prizePoolTarget / 10;
+        if (tenPercentEth == 0) return 0;
+        return (tenPercentEth * priceCoinUnit) / priceWei;
+    }
+
+    function _winningRiskLevels(uint24 level) private view returns (uint8 winningRisk) {
+        if (level == 0) return 0;
+        uint8 maxRisk = level < MAX_RISK ? uint8(level) : MAX_RISK;
+        for (uint8 step; step < maxRisk; ) {
+            uint24 checkLevel = level - uint24(step);
+            uint48 day = stakeResolutionDay[checkLevel];
+            if (day == 0) break;
+            CoinflipDayResult storage result = coinflipDayResult[day];
+            if (result.rewardPercent == 0 && !result.win) break;
+            if (!result.win) break;
+            unchecked {
+                ++winningRisk;
+                ++step;
+            }
+        }
+    }
+
+    function _stakeResolutionView(uint24 level) private view returns (StakeResolution memory res) {
+        StakeResolution storage stored = stakeResolutionInfo[level];
+        if (stored.resolved) {
+            res = stored;
+            return res;
+        }
+
+        res.winningRiskLevels = _winningRiskLevels(level);
+        if (res.winningRiskLevels != 0) {
+            uint8 maxRisk = res.winningRiskLevels;
+            for (uint8 r = 1; r <= maxRisk; ) {
+                res.winningModifiedTotal += stakeModifiedTotals[level][r];
+                unchecked {
+                    ++r;
+                }
+            }
+        }
+        res.stakeFreeMoney = _stakeFreeMoneyView();
+    }
+
+    function _finalizeStakeResolution(uint24 level) internal returns (StakeResolution memory res) {
+        StakeResolution storage stored = stakeResolutionInfo[level];
+        if (stored.resolved) {
+            return stored;
+        }
+
+        uint48 resDay = stakeResolutionDay[level];
+        if (resDay == 0) {
+            return stored;
+        }
+        CoinflipDayResult storage dayResult = coinflipDayResult[resDay];
+        if (dayResult.rewardPercent == 0 && !dayResult.win) {
+            return stored;
+        }
+
+        res = _stakeResolutionView(level);
+        stored.winningRiskLevels = res.winningRiskLevels;
+        stored.winningModifiedTotal = res.winningModifiedTotal;
+        stored.stakeFreeMoney = res.stakeFreeMoney;
+        stored.resolved = true;
+        return stored;
     }
 
     function _viewClaimableCoin(address player) internal view returns (uint256 total) {
@@ -354,45 +443,29 @@ contract Purgecoin {
                 break;
             }
 
-            uint256[STAKE_BUCKETS] storage stakes = stakeAmt[lvl][player];
-            uint256 mask = stakes[0];
-            if (mask == 0) {
-                unchecked {
-                    --lvl;
-                    ++scanned;
-                }
-                continue;
+            CoinflipDayResult storage dayResult = coinflipDayResult[resDay];
+            if (dayResult.rewardPercent == 0 && !dayResult.win) {
+                break;
             }
 
-            uint256 tmpMask = mask;
-            while (tmpMask != 0) {
-                uint8 risk = _lowestSetBitIndex(tmpMask);
-                uint256 principal = stakes[risk];
-                if (principal != 0) {
-                    uint256 payout = principal;
-                    bool allWon = true;
-                    for (uint8 step; step < risk; ) {
-                        uint24 checkLevel = lvl - uint24(step);
-                        uint48 day = stakeResolutionDay[checkLevel];
-                        if (day == 0) {
-                            allWon = false;
-                            break;
+            StakeResolution memory res = _stakeResolutionView(lvl);
+            if (res.winningRiskLevels != 0) {
+                StakePosition[] storage positions = stakePositions[player][lvl];
+                uint256 len = positions.length;
+                for (uint256 i; i < len; ) {
+                    StakePosition storage position = positions[i];
+                    if (!position.claimed && position.risk <= res.winningRiskLevels) {
+                        uint256 base = position.principal * (uint256(1) << position.risk);
+                        uint256 bonus;
+                        if (res.stakeFreeMoney != 0 && res.winningModifiedTotal != 0) {
+                            bonus = (position.modifiedAmount * res.stakeFreeMoney) / res.winningModifiedTotal;
                         }
-                        CoinflipDayResult storage result2 = coinflipDayResult[day];
-                        if (!result2.win) {
-                            allWon = false;
-                            break;
-                        }
-                        payout += (payout * uint256(result2.rewardPercent) * 100) / BPS_DENOMINATOR;
-                        unchecked {
-                            ++step;
-                        }
+                        total += base + bonus;
                     }
-                    if (allWon) {
-                        total += payout;
+                    unchecked {
+                        ++i;
                     }
                 }
-                tmpMask &= (tmpMask - 1);
             }
 
             unchecked {
@@ -402,66 +475,38 @@ contract Purgecoin {
         }
     }
 
-    function _lowestSetBitIndex(uint256 mask) private pure returns (uint8 idx) {
-        while ((mask & 1) == 0) {
-            mask >>= 1;
-            unchecked {
-                ++idx;
-            }
-        }
-    }
-
-    function _claimStake(
+    function _claimStakePosition(
         address player,
         uint24 targetLevel,
-        uint8 risk,
+        StakePosition storage position,
+        StakeResolution memory res,
         bool mintPayout
-    ) internal returns (uint256 payout) {
+    ) private returns (uint256 payout) {
         if (player == address(0)) revert ZeroAddress();
-        if (risk == 0 || risk > MAX_RISK) revert StakeInvalid();
-        if (targetLevel == 0 || risk > targetLevel) revert StakeInvalid();
+        if (position.claimed) revert StakeInvalid();
+        if (position.risk == 0 || position.risk > MAX_RISK) revert StakeInvalid();
 
-        uint256[STAKE_BUCKETS] storage stakes = stakeAmt[targetLevel][player];
-        uint256 principal = stakes[risk];
-        if (principal == 0) revert StakeInvalid();
-        uint256 mask = _stakeMask(stakes);
-
-        payout = principal;
-        bool allWon = true;
-
-        for (uint8 step; step < risk; ) {
-            uint24 checkLevel = targetLevel - uint24(step);
-            uint48 day = stakeResolutionDay[checkLevel];
-            if (day == 0) revert StakeInvalid();
-
-            CoinflipDayResult storage result = coinflipDayResult[day];
-            if (!result.win) {
-                allWon = false;
-                break;
-            }
-
-            payout += (payout * uint256(result.rewardPercent) * 100) / BPS_DENOMINATOR;
-            unchecked {
-                ++step;
-            }
-        }
-
-        stakes[risk] = 0;
-        mask &= ~(uint256(1) << risk);
-        stakes[0] = mask;
-
-        if (!allWon) {
-            emit StakeClaimed(player, targetLevel, risk, 0, false);
+        bool won = res.winningRiskLevels != 0 && position.risk <= res.winningRiskLevels;
+        position.claimed = true;
+        if (!won) {
+            emit StakeClaimed(player, targetLevel, position.risk, 0, false);
             return 0;
         }
+
+        uint256 base = position.principal * (uint256(1) << position.risk);
+        uint256 bonus;
+        if (res.stakeFreeMoney != 0 && res.winningModifiedTotal != 0) {
+            bonus = (position.modifiedAmount * res.stakeFreeMoney) / res.winningModifiedTotal;
+        }
+        payout = base + bonus;
 
         if (mintPayout) {
             _mint(player, payout);
             playerLuckbox[player] += payout;
         }
-        _awardStakeTrophy(targetLevel, player, principal);
+        _awardStakeTrophy(targetLevel, player, position.principal);
 
-        emit StakeClaimed(player, targetLevel, risk, payout, true);
+        emit StakeClaimed(player, targetLevel, position.risk, payout, true);
     }
 
     function _claimRecentStakes(address player, uint48 windowStartDay) internal returns (uint256 total) {
@@ -484,12 +529,22 @@ contract Purgecoin {
                 break;
             }
 
-            uint256[STAKE_BUCKETS] storage stakes = stakeAmt[lvl][player];
-            uint256 mask = _stakeMask(stakes);
-            while (mask != 0) {
-                uint8 risk = _lowestSetBitIndex(mask);
-                total += _claimStake(player, lvl, risk, false);
-                mask &= (mask - 1);
+            CoinflipDayResult storage dayResult = coinflipDayResult[resDay];
+            if (dayResult.rewardPercent == 0 && !dayResult.win) {
+                break;
+            }
+
+            StakeResolution memory res = _finalizeStakeResolution(lvl);
+            StakePosition[] storage positions = stakePositions[player][lvl];
+            uint256 len = positions.length;
+            for (uint256 i; i < len; ) {
+                StakePosition storage position = positions[i];
+                if (!position.claimed) {
+                    total += _claimStakePosition(player, lvl, position, res, false);
+                }
+                unchecked {
+                    ++i;
+                }
             }
 
             unchecked {
@@ -508,8 +563,7 @@ contract Purgecoin {
     /// - `burnAmt` must be at least 250e6 base units (token has 6 decimals).
     /// - `targetLevel` must be ahead of the current effective game level.
     /// - `risk` must be between 1 and `MAX_RISK` and cannot exceed the distance to `targetLevel`.
-    /// - Stores stake principal per level/risk bucket (whole-token rounded).
-    /// - Stakes are recorded on their maturity level and later auto-claimed during flip deposits.
+    /// - Records the stake with its distance, risk, original principal, and modified weighting used for prize splits.
     function stake(uint256 burnAmt, uint24 targetLevel, uint8 risk) external {
         if (burnAmt < 250 * MILLION) revert AmountLTMin();
         address sender = msg.sender;
@@ -589,12 +643,12 @@ contract Purgecoin {
         }
 
         // Encode and place the stake lane
-        uint256 principalRounded = boostedPrincipal - (boostedPrincipal % STAKE_PRINCIPAL_FACTOR);
-        if (principalRounded == 0) principalRounded = STAKE_PRINCIPAL_FACTOR;
+        uint256 modifiedStake = boostedPrincipal - (boostedPrincipal % STAKE_PRINCIPAL_FACTOR);
+        if (modifiedStake == 0) modifiedStake = STAKE_PRINCIPAL_FACTOR;
         IPurgeQuestModule module = questModule;
         (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleStake(
             sender,
-            principalRounded,
+            modifiedStake,
             distance,
             risk
         );
@@ -602,19 +656,23 @@ contract Purgecoin {
         if (questReward != 0) {
             uint256 bonus = questReward - (questReward % STAKE_PRINCIPAL_FACTOR);
             if (bonus != 0) {
-                uint256 updated = principalRounded + bonus;
-                principalRounded = updated;
+                uint256 updated = modifiedStake + bonus;
+                modifiedStake = updated;
             }
         }
 
-        uint256[STAKE_BUCKETS] storage stakes = stakeAmt[targetLevel][sender];
-        uint256 mask = _stakeMask(stakes);
+        stakePositions[sender][targetLevel].push(
+            StakePosition({
+                principal: burnAmt,
+                modifiedAmount: modifiedStake,
+                distance: distance,
+                risk: risk,
+                claimed: false
+            })
+        );
+        stakeModifiedTotals[targetLevel][risk] += modifiedStake;
 
-        stakes[risk] += principalRounded;
-        mask |= (uint256(1) << risk);
-        stakes[0] = mask;
-
-        emit StakeCreated(sender, targetLevel, risk, principalRounded);
+        emit StakeCreated(sender, targetLevel, risk, burnAmt);
     }
 
     /// @notice Claim presale/early affiliate bonuses that were deferred to the affiliate contract.
@@ -877,6 +935,7 @@ contract Purgecoin {
         if (setDay == 0) return;
         stakeResolutionDay[level] = setDay;
         stakeLevelComplete = level;
+        _finalizeStakeResolution(level);
     }
 
     function _claimCoinflipsInternal(
