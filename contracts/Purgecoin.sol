@@ -86,7 +86,14 @@ contract Purgecoin {
         uint8 winningRiskLevels;
         uint256 winningModifiedTotal;
         uint256 stakeFreeMoney;
+        address topStakeWinner;
+        uint256 topStakeAmount;
         bool resolved;
+    }
+
+    struct StakeTop {
+        address player;
+        uint256 modifiedAmount;
     }
 
     // ---------------------------------------------------------------------
@@ -122,6 +129,7 @@ contract Purgecoin {
 
     mapping(address => mapping(uint24 => StakePosition[])) internal stakePositions;
     mapping(uint24 => mapping(uint8 => uint256)) internal stakeModifiedTotals;
+    mapping(uint24 => mapping(uint8 => StakeTop)) internal stakeTopByLevelAndRisk;
     mapping(uint24 => StakeResolution) internal stakeResolutionInfo;
     mapping(address => uint24) internal lastStakeScanLevel;
     mapping(address => uint48) internal lastStakeScanDay;
@@ -312,13 +320,14 @@ contract Purgecoin {
         emit DecimatorBurn(caller, amount, bucketUsed);
     }
 
-    function _awardStakeTrophy(uint24 level, address player, uint256 principal) private {
-        if (player == address(0) || principal == 0) return;
+    function _awardStakeTrophy(uint24 level, StakeResolution memory res) private {
         if (stakeTrophyAwarded[level]) return;
+        if (res.winningRiskLevels == 0) return;
+        if (res.topStakeWinner == address(0) || res.topStakeAmount == 0) return;
         stakeTrophyAwarded[level] = true;
 
         uint256 dataWord = (uint256(0xFFFF) << 152) | (uint256(level) << TROPHY_BASE_LEVEL_SHIFT) | TROPHY_FLAG_STAKE;
-        purgeGameTrophies.awardTrophy(player, level, PURGE_TROPHY_KIND_STAKE, dataWord, 0);
+        purgeGameTrophies.awardTrophy(res.topStakeWinner, level, PURGE_TROPHY_KIND_STAKE, dataWord, 0);
     }
 
     function _stakeFreeMoneyView() private view returns (uint256) {
@@ -367,12 +376,21 @@ contract Purgecoin {
         res.winningRiskLevels = _winningRiskLevels(level);
         if (res.winningRiskLevels != 0) {
             uint8 maxRisk = res.winningRiskLevels;
+            address bestPlayer;
+            uint256 bestModified;
             for (uint8 r = 1; r <= maxRisk; ) {
                 res.winningModifiedTotal += stakeModifiedTotals[level][r];
+                StakeTop storage top = stakeTopByLevelAndRisk[level][r];
+                if (top.player != address(0) && top.modifiedAmount > bestModified) {
+                    bestModified = top.modifiedAmount;
+                    bestPlayer = top.player;
+                }
                 unchecked {
                     ++r;
                 }
             }
+            res.topStakeWinner = bestPlayer;
+            res.topStakeAmount = bestModified;
         }
         res.stakeFreeMoney = _stakeFreeMoneyView();
     }
@@ -396,6 +414,8 @@ contract Purgecoin {
         stored.winningRiskLevels = res.winningRiskLevels;
         stored.winningModifiedTotal = res.winningModifiedTotal;
         stored.stakeFreeMoney = res.stakeFreeMoney;
+        stored.topStakeWinner = res.topStakeWinner;
+        stored.topStakeAmount = res.topStakeAmount;
         stored.resolved = true;
         return stored;
     }
@@ -504,7 +524,7 @@ contract Purgecoin {
             _mint(player, payout);
             playerLuckbox[player] += payout;
         }
-        _awardStakeTrophy(targetLevel, player, position.principal);
+        _awardStakeTrophy(targetLevel, res);
 
         emit StakeClaimed(player, targetLevel, position.risk, payout, true);
     }
@@ -662,6 +682,12 @@ contract Purgecoin {
                 uint256 updated = modifiedStake + bonus;
                 modifiedStake = updated;
             }
+        }
+
+        StakeTop storage top = stakeTopByLevelAndRisk[targetLevel][risk];
+        if (modifiedStake > top.modifiedAmount) {
+            top.modifiedAmount = modifiedStake;
+            top.player = sender;
         }
 
         stakePositions[sender][targetLevel].push(
