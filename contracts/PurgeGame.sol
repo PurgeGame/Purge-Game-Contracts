@@ -425,6 +425,7 @@ contract PurgeGame is PurgeGameStorage {
             if (rngWord == 1) {
                 break;
             }
+
             // --- State 1 - Pregame ---
             if (_gameState == 1) {
                 _runEndgameModule(lvl, cap, day, rngWord); // handles payouts, wipes, endgame dist, and jackpots
@@ -469,13 +470,19 @@ contract PurgeGame is PurgeGameStorage {
                 }
 
                 if (_phase == 3) {
+                    bool ranDecHundred;
                     if (lvl % 100 == 0) {
+                        ranDecHundred = true;
                         if (!_runDecimatorHundredJackpot(lvl, cap, rngWord)) {
                             break; // keep working this jackpot slice before moving on
                         }
                     }
+
                     phase = 4;
-                    break;
+                    _phase = 4; // fall through to phase 4 logic in the same call when nothing ran
+                    if (ranDecHundred) {
+                        break; // level-100 decimator work consumes this tick
+                    }
                 }
 
                 if (_phase == 4) {
@@ -523,6 +530,7 @@ contract PurgeGame is PurgeGameStorage {
                         coinContract.rewardTopFlipBonus(day, priceCoin);
                     }
                     coinContract.resetCoinflipLeaderboard(day);
+                    _maybeResolveBonds();
                     traitRebuildCursor = 0;
                     airdropMultiplier = 1;
                     earlyPurgePercent = 0;
@@ -1341,6 +1349,15 @@ contract PurgeGame is PurgeGameStorage {
             }
         }
         return airdropIndex >= total;
+    }
+
+    function _maybeResolveBonds() private returns (bool worked) {
+        address bondsAddr = bonds;
+        if (bondsAddr == address(0)) return false;
+        IPurgeBonds bondContract = IPurgeBonds(bondsAddr);
+        if (!bondContract.resolvePending()) return false;
+        bondContract.resolvePendingBonds(50);
+        return true;
     }
 
     function _requestRng(uint8 gameState_, uint8 phase_, uint24 lvl, uint48 day) private {

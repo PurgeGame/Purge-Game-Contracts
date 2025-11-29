@@ -47,6 +47,9 @@ contract PurgeBonds {
     error ResolveNotReady();
     error InsufficientEthForResolve();
     error InvalidRng();
+    error InvalidQuantity();
+    error InvalidBase();
+    error InsufficientHeadroom();
     error TransferBlocked();
     error InvalidRate();
 
@@ -289,28 +292,79 @@ contract PurgeBonds {
         tokenId = _buy(risk, true);
     }
 
+    /// @notice Purchase multiple bonds using a desired base pool amount (<= 1 ETH) and quantity.
+    /// @dev Base-per-bond is `min(baseWei / quantity, 0.5 ether)`; risk is derived from that base.
+    ///      Caller must send the exact aggregate price for the derived risk across all mints.
+    function buyWithBase(
+        uint256 baseWei,
+        uint256 quantity
+    ) external payable nonReentrant returns (uint256 firstTokenId) {
+        firstTokenId = _buyWithBase(baseWei, quantity, false);
+    }
+
+    /// @notice Same as buyWithBase but permanently stakes the minted bonds (non-transferable).
+    function buyStakedWithBase(
+        uint256 baseWei,
+        uint256 quantity
+    ) external payable nonReentrant returns (uint256 firstTokenId) {
+        firstTokenId = _buyWithBase(baseWei, quantity, true);
+    }
+
     function _buy(uint8 risk, bool stake) private returns (uint256 tokenId) {
         address recipient = fundRecipient;
         if (recipient == address(0)) revert ZeroAddress();
         if (!purchasesEnabled) revert PurchasesClosed();
+        _guardPurchases();
 
         _syncMultiplier();
         uint256 price = _priceForRisk(risk);
         if (msg.value != price) revert WrongPrice();
 
-        uint256 seed;
-        if (game == address(0)) {
-            seed = msg.value / 2;
-            rewardSeedEth += seed;
-        }
-        uint256 toSend = msg.value - seed;
-        (bool ok, ) = payable(recipient).call{value: toSend}("");
-        if (!ok) revert CallFailed();
+        _processPayment(msg.value, recipient);
 
         tokenId = _mint(msg.sender, risk, price, stake);
         emit Purchased(msg.sender, tokenId, risk, price);
 
         _bumpMultiplier(msg.value);
+    }
+
+    function _buyWithBase(uint256 baseWei, uint256 quantity, bool stake) private returns (uint256 firstTokenId) {
+        address recipient = fundRecipient;
+        if (recipient == address(0)) revert ZeroAddress();
+        if (!purchasesEnabled) revert PurchasesClosed();
+        _guardPurchases();
+        if (quantity == 0) revert InvalidQuantity();
+        if (baseWei == 0 || baseWei > 1 ether) revert InvalidBase();
+
+        _syncMultiplier();
+
+        uint256 basePerBond = baseWei / quantity;
+        if (basePerBond == 0) revert InvalidBase();
+        if (basePerBond > 0.5 ether) {
+            basePerBond = 0.5 ether;
+        }
+        uint8 risk = _riskForBase(basePerBond);
+
+        uint256 remaining = msg.value;
+        for (uint256 i; i < quantity; ) {
+            uint256 price = _priceForRisk(risk);
+            if (price == 0 || remaining < price) revert WrongPrice();
+            remaining -= price;
+
+            uint256 mintedId = _mint(msg.sender, risk, price, stake);
+            if (firstTokenId == 0) {
+                firstTokenId = mintedId;
+            }
+            emit Purchased(msg.sender, mintedId, risk, price);
+
+            _bumpMultiplier(price);
+            unchecked {
+                ++i;
+            }
+        }
+        if (remaining != 0) revert WrongPrice();
+
+        _processPayment(msg.value, recipient);
     }
 
     /// @notice Backdoor mint for the owner (creator contract) to manually mint without payment if needed.
@@ -393,6 +447,37 @@ contract PurgeBonds {
         if (amount > available) revert InsufficientCoinAvailable();
 
         if (!IERC20Minimal(coin).transfer(to, amount)) revert CallFailed();
+    }
+
+    /// @notice Withdraw ETH that exceeds total outstanding obligations.
+    /// @param to Recipient address.
+    /// @param amount Amount to withdraw (0 = sweep all headroom).
+    function sweepExcessEth(address to, uint256 amount) external onlyOwner {
+        if (to == address(0)) revert ZeroAddress();
+        uint256 headroom = _ethHeadroom();
+        if (amount == 0) {
+            amount = headroom;
+        }
+        if (amount == 0 || amount > headroom) revert InsufficientHeadroom();
+        ethPool -= amount;
+        (bool ok, ) = payable(to).call{value: amount}("");
+        if (!ok) revert CallFailed();
+    }
+
+    /// @notice Withdraw stETH that exceeds the accounted pool for bond obligations.
+    /// @param to Recipient address.
+    /// @param amount Amount to withdraw (0 = sweep all headroom).
+    function sweepExcessStEth(address to, uint256 amount) external onlyOwner {
+        if (to == address(0)) revert ZeroAddress();
+        uint256 headroom = _stEthHeadroom();
+        if (amount == 0) {
+            amount = headroom;
+        }
+        if (amount == 0 || amount > headroom) revert InsufficientHeadroom();
+        stEthAccounted -= amount;
+        address stToken = stEthToken;
+        if (stToken == address(0)) revert ZeroAddress();
+        if (!IERC20Minimal(stToken).transfer(to, amount)) revert CallFailed();
     }
 
     function setRenderer(address renderer_) external onlyOwner {
@@ -747,6 +832,33 @@ contract PurgeBonds {
         return mult;
     }
 
+    function _guardPurchases() private view {
+        if (resolvePending) revert ResolvePendingAlready();
+        if (transfersLocked) revert TransferBlocked();
+    }
+
+    function _processPayment(uint256 amount, address recipient) private {
+        uint256 seed;
+        if (game == address(0)) {
+            seed = amount / 2;
+            rewardSeedEth += seed;
+        }
+        uint256 toSend = amount - seed;
+        (bool ok, ) = payable(recipient).call{value: toSend}("");
+        if (!ok) revert CallFailed();
+    }
+
+    function _riskForBase(uint256 baseWei) private pure returns (uint8 risk) {
+        if (baseWei == 0 || baseWei > 1 ether) revert InvalidBase();
+        uint256 base = 1 ether;
+        while (base > baseWei && risk < MAX_RISK) {
+            unchecked {
+                ++risk;
+            }
+            base >>= 1;
+        }
+    }
+
     function _inPendingWindow(uint256 tokenId) private view returns (bool) {
         if (!resolvePending) return false;
         uint256 start = pendingResolveBase;
@@ -765,6 +877,12 @@ contract PurgeBonds {
         uint256 pool = ethPool;
         if (pool <= owed) return 0;
         return pool - owed;
+    }
+
+    function _stEthHeadroom() private view returns (uint256) {
+        uint256 accounted = stEthAccounted;
+        if (accounted <= stEthPool) return 0;
+        return accounted - stEthPool;
     }
 
     /// @notice Purely algorithmic bond outcome using RNG + token data; no state writes.
