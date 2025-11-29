@@ -18,6 +18,21 @@ interface IStETH {
     function approve(address spender, uint256 amount) external returns (bool);
 }
 
+interface IPurgeBonds {
+    function payBonds(
+        uint256 coinAmount,
+        address stEthAddress,
+        uint48 rngDay,
+        uint256 rngWord,
+        uint256 baseId,
+        uint256 maxBonds
+    ) external payable;
+    function resolvePendingBonds(uint256 maxBonds) external;
+    function resolvePending() external view returns (bool);
+    function setTransfersLocked(bool locked) external;
+    function stakeRateBps() external view returns (uint16);
+}
+
 /**
  * @title Purge Game — Core NFT game contract
  * @notice This file defines the on-chain game logic surface (interfaces + core state).
@@ -82,6 +97,7 @@ contract PurgeGame is PurgeGameStorage {
     IPurgeCoin private immutable coin; // Trusted coin/game-side coordinator (PURGE ERC20)
     IPurgeGameNFT private immutable nft; // ERC721 interface for mint/burn/metadata surface
     IPurgeGameTrophies private immutable trophies; // Dedicated trophy module
+    address public bonds; // Bond contract for resolution and metadata
     IStETH private immutable steth; // stETH token held by the game
     address private immutable endgameModule; // Delegate module for endgame settlement
     address private immutable jackpotModule; // Delegate module for jackpot routines
@@ -229,6 +245,11 @@ contract PurgeGame is PurgeGameStorage {
 
     function rngWordForDay(uint48 day) external view returns (uint256) {
         return rngWordByDay[day];
+    }
+
+    function setBonds(address bonds_) external {
+        if (msg.sender != address(coin) || bonds_ == address(0)) revert E();
+        bonds = bonds_;
     }
 
     function getEarlyPurgePercent() external view returns (uint8) {
@@ -1130,13 +1151,21 @@ contract PurgeGame is PurgeGameStorage {
     }
 
     function _stakeForTargetRatio(uint24 lvl) private {
-        // Skip staking during decimator (L%10==5), BAF (L%20==0), and 90-99 levels.
-        if ((lvl % 10 == 5) || (lvl % 20 == 0) || (lvl >= 90 && lvl < 100)) return;
+        // Skip only for levels ending in 99 or 00 to avoid endgame edge cases.
+        uint24 cycle = lvl % 100;
+        if (cycle == 99 || cycle == 0) return;
 
-        uint256 rp = rewardPool;
-        if (rp == 0) return;
+        uint256 pool = rewardPool + trophyPool;
+        if (pool == 0) return;
 
-        uint256 targetSt = ((rp * 8) / 10); // ceiling to hit 80%
+        uint256 rateBps = 10_000;
+        address bondsAddr = bonds;
+        if (bondsAddr != address(0)) {
+            rateBps = IPurgeBonds(bondsAddr).stakeRateBps();
+        }
+        if (rateBps == 0) return;
+
+        uint256 targetSt = (pool * rateBps) / 10_000; // stake against configured share of reward + trophy pool
         uint256 stBal = principalStEth;
         if (stBal >= targetSt) return;
 
@@ -1144,6 +1173,45 @@ contract PurgeGame is PurgeGameStorage {
         if (stakeAmount < REWARD_POOL_MIN_STAKE) return;
 
         _stakeEth(stakeAmount);
+    }
+
+    // --- Bonds integration -------------------------------------------------------------------------
+
+    function _prepareBondsForMapJackpot(uint48 day) private {
+        address bondsAddr = bonds;
+        if (bondsAddr == address(0)) revert E();
+
+        IPurgeBonds bondContract = IPurgeBonds(bondsAddr);
+        bondContract.setTransfersLocked(true);
+
+        uint256 stBal = steth.balanceOf(address(this));
+        uint256 principal = principalStEth;
+        uint256 stYield;
+        if (stBal > principal) {
+            unchecked {
+                stYield = stBal - principal;
+            }
+            if (stYield != 0) {
+                if (!steth.transfer(bondsAddr, stYield)) revert E();
+                bondContract.payBonds{value: 0}(0, stethTokenAddress, day, 0, 0, 0);
+            }
+        }
+
+        if (stYield != 0) {
+            uint256 priceWei = price;
+            if (priceWei != 0) {
+                uint256 totalValue = stYield; // stETH + ETH (ETH portion currently zero)
+                uint256 coinEquivalent = (totalValue * priceCoin) / priceWei;
+                uint256 bondMint = coinEquivalent / 50; // 2%
+                if (bondMint != 0) {
+                    coin.bondPayment(bondsAddr, bondMint);
+                }
+            }
+        }
+
+        if (!bondContract.resolvePending()) {
+            bondContract.setTransfersLocked(false);
+        }
     }
 
     // --- Flips, VRF, payments, rarity ----------------------------------------------------------------
@@ -1155,13 +1223,13 @@ contract PurgeGame is PurgeGameStorage {
 
         if (currentWord == 0) {
             if (rngLockedFlag) revert RngNotReady();
-            _requestRng(gameState, phase, lvl);
+            _requestRng(gameState, phase, lvl, day);
             return 1;
         }
 
         if (!rngLockedFlag) {
             // Stale entropy from previous cycle; request a fresh word.
-            _requestRng(gameState, phase, lvl);
+            _requestRng(gameState, phase, lvl, day);
             return 1;
         }
 
@@ -1276,7 +1344,12 @@ contract PurgeGame is PurgeGameStorage {
         return airdropIndex >= total;
     }
 
-    function _requestRng(uint8 gameState_, uint8 phase_, uint24 lvl) private {
+    function _requestRng(uint8 gameState_, uint8 phase_, uint24 lvl, uint48 day) private {
+        bool mapJackpotRequest = (gameState_ == 2 && phase_ == 3);
+        if (mapJackpotRequest) {
+            _prepareBondsForMapJackpot(day);
+        }
+
         uint256 id = vrfCoordinator.requestRandomWords(
             VRFRandomWordsRequest({
                 keyHash: vrfKeyHash,

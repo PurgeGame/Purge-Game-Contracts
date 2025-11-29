@@ -265,7 +265,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         uint256 mapWei;
         uint256 mainWei;
 
-        uint256 savePctTimes2 = _mapRewardPoolPercent(lvl, rngWord);
+        (uint256 savePctTimes2, uint256 level100RollTotal) = _mapRewardPoolPercent(lvl, rngWord);
         uint256 _rewardPool = (totalWei * savePctTimes2) / 200;
         rewardPool = _rewardPool;
 
@@ -289,7 +289,12 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
                 uint256 stBal = IStETH(stAddr).balanceOf(address(this));
                 if (stBal > principalStEth) {
                     uint256 yieldPool = stBal - principalStEth;
-                    rewardPool += yieldPool;
+                    if (level100RollTotal < 5) {
+                        uint256 bonus = yieldPool / 2;
+                        if (bonus != 0) {
+                            rewardPool += bonus;
+                        }
+                    }
                 }
             }
         }
@@ -316,21 +321,24 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         }
     }
 
-    function _mapRewardPoolPercent(uint24 lvl, uint256 rngWord) private pure returns (uint256) {
+    function _mapRewardPoolPercent(
+        uint24 lvl,
+        uint256 rngWord
+    ) private pure returns (uint256 pctTimes2, uint256 level100Roll) {
         if ((lvl % 100) == 0) {
-            uint256 pct = rngWord % 11; // 0-10%
-            return pct * 2; // returned as times two
+            level100Roll = _roll3d11(rngWord); // 0-30
+            return (level100Roll * 2, level100Roll); // returned as times two
         }
         if ((rngWord % 1_000_000_000) == DEGENERATE_ENTROPY_CHECK_VALUE) {
-            return 20; // 10% fallback when trait entropy is degenerate (returned as times two).
+            return (20, 0); // 10% fallback when trait entropy is degenerate (returned as times two).
         }
         if (lvl >= 80 && lvl <= 98) {
             uint256 base = 75 + (uint256(lvl) - 80) + ((lvl % 10 == 9) ? 5 : 0);
             uint256 pct = base + _rollSum(rngWord, CARRYOVER_3D4_SALT, 4, 3);
-            return _clampPctTimes2(pct);
+            return (_clampPctTimes2(pct), 0);
         }
         if (lvl == 99) {
-            return 196; // Hard cap at 98% for the pre-finale level (times two).
+            return (196, 0); // Hard cap at 98% for the pre-finale level (times two).
         }
 
         uint256 baseTimes2;
@@ -352,7 +360,13 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         if (jackpotPctTimes2 < 34 && jackpotPctTimes2 != 60) {
             baseTimes2 = 166;
         }
-        return baseTimes2;
+        return (baseTimes2, 0);
+    }
+
+    function _roll3d11(uint256 rngWord) private pure returns (uint256 total) {
+        total = (rngWord % 11);
+        total += ((rngWord >> 16) % 11);
+        total += ((rngWord >> 32) % 11);
     }
 
     function _rewardPoolBonus(uint256 rngWord) private pure returns (uint256) {

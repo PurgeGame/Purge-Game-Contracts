@@ -206,8 +206,20 @@ contract IconRendererTrophy32 {
     }
 
     /// @notice Render PurgeBond NFTs as exterminator trophy placeholders.
-    function bondTokenURI(uint256 tokenId) external view returns (string memory) {
+    function bondTokenURI(
+        uint256 tokenId,
+        uint32 createdDistance,
+        uint32 currentDistance,
+        uint16 chanceBps,
+        bool staked_
+    ) external view returns (string memory) {
         uint32[4] memory extras;
+        // High bit in extras[0] marks bond rendering for attribute injection.
+        extras[0] = uint32(1) << 31;
+        extras[1] = createdDistance;
+        extras[2] = currentDistance;
+        extras[3] = uint32(chanceBps) | (staked_ ? (uint32(1) << 31) : 0);
+
         uint256 placeholderData = uint256(0xFFFF) << 152;
         return _tokenURI(tokenId, placeholderData, extras);
     }
@@ -233,6 +245,12 @@ contract IconRendererTrophy32 {
             !isDec;
         bool invertFlag = (data & TROPHY_FLAG_INVERT) != 0;
         uint32 statusFlags = extras[0];
+        bool isBond = (statusFlags & (uint32(1) << 31)) != 0;
+        uint32 bondCreated = extras[1];
+        uint32 bondCurrent = extras[2];
+        uint32 bondPack = extras[3];
+        bool bondStaked = (bondPack & (uint32(1) << 31)) != 0;
+        uint16 bondChance = uint16(bondPack);
         uint256 ethAttachment = data & TROPHY_OWED_MASK;
         if ((statusFlags & 2) == 0 && ethAttachment != 0) {
             statusFlags |= 2;
@@ -250,6 +268,8 @@ contract IconRendererTrophy32 {
                 : 0;
             stakedDurationStr = duration.toString();
             stakeAttrValue = string.concat(stakedDurationStr, " Levels");
+        } else if (isBond) {
+            stakeAttrValue = bondStaked ? "Yes" : "No";
         }
 
         string memory lvlStr = (lvl == 0) ? "TBD" : uint256(lvl).toString();
@@ -381,6 +401,22 @@ contract IconRendererTrophy32 {
                 '"}'
             )
         );
+        if (isBond) {
+            attrs = string(
+                abi.encodePacked(
+                    attrs,
+                    ',{"trait_type":"Bond Distance (Initial)","value":"',
+                    uint256(bondCreated).toString(),
+                    '"},{"trait_type":"Bond Distance (Current)","value":"',
+                    uint256(bondCurrent).toString(),
+                    '"},{"trait_type":"Bond Chance Bps","value":"',
+                    uint256(bondChance).toString(),
+                    '"},{"trait_type":"Bond Staked","value":"',
+                    bondStaked ? "Yes" : "No",
+                    '"}'
+                )
+            );
+        }
         attrs = string(abi.encodePacked(attrs, "]"));
 
         string memory img = _trophySvg(

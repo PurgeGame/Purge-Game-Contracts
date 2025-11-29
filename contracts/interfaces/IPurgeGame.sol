@@ -26,6 +26,8 @@ interface IPurgeGame is IPurgeGameExternal {
 
     function principalStEthBalance() external view returns (uint256);
 
+    function setBonds(address bonds_) external;
+
     function purchaseInfo()
         external
         view

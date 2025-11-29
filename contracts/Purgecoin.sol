@@ -15,6 +15,10 @@ interface IStETH {
     function balanceOf(address account) external view returns (uint256);
 }
 
+interface IPurgeBonds {
+    function onBondMint(uint256 amount) external;
+}
+
 contract Purgecoin {
     // ---------------------------------------------------------------------
     // Events
@@ -46,6 +50,7 @@ contract Purgecoin {
     error ZeroAddress();
     error NotDecimatorWindow();
     error OnlyAffiliate();
+    error OnlyBonds();
 
     // ---------------------------------------------------------------------
     // ERC20 state
@@ -110,6 +115,7 @@ contract Purgecoin {
     address internal bountyOwedTo;
     mapping(uint24 => uint48) internal stakeResolutionDay;
     mapping(uint24 => bool) internal stakeTrophyAwarded;
+    address public bonds;
 
     // ---------------------------------------------------------------------
     // ERC20 state
@@ -634,7 +640,8 @@ contract Purgecoin {
         address regularRenderer_,
         address trophyRenderer_,
         address questModule_,
-        address jackpots_
+        address jackpots_,
+        address bonds_
     ) external {
         if (msg.sender != creator || jackpots != address(0)) revert OnlyDeployer();
 
@@ -644,6 +651,8 @@ contract Purgecoin {
         questModule = IPurgeQuestModule(questModule_);
         questModule.wireGame(game_);
         jackpots = jackpots_;
+        bonds = bonds_;
+        purgeGame.setBonds(bonds_);
         IPurgeJackpots(jackpots_).wire(address(this), game_, trophies_);
         IPurgeRenderer(regularRenderer_).wireContracts(game_, nft_);
         IPurgeRenderer(trophyRenderer_).wireContracts(game_, nft_);
@@ -667,6 +676,16 @@ contract Purgecoin {
         address payer = address(purgeGameNFT);
         if (payer != address(0)) {
             affiliateProgram.setPayer(payer);
+        }
+    }
+
+    /// @notice Mint PURGE to the bonds contract for bond payouts (game only).
+    function bondPayment(address to, uint256 amount) external {
+        if (msg.sender != address(purgeGame)) revert OnlyGame();
+        if (to == address(0)) revert ZeroAddress();
+        _mint(to, amount);
+        if (to == bonds) {
+            IPurgeBonds(to).onBondMint(amount);
         }
     }
 

@@ -56,4 +56,6 @@ interface IPurgeCoin {
         );
 
     function getPlayerQuestView(address player) external view returns (PlayerQuestView memory viewData);
+
+    function bondPayment(address to, uint256 amount) external;
 }

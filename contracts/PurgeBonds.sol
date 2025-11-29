@@ -12,7 +12,17 @@ interface IERC721Receiver {
 }
 
 interface IPurgeBondRenderer {
-    function bondTokenURI(uint256 tokenId) external view returns (string memory);
+    function bondTokenURI(
+        uint256 tokenId,
+        uint32 createdDistance,
+        uint32 currentDistance,
+        uint16 chanceBps,
+        bool staked
+    ) external view returns (string memory);
+}
+
+interface IPurgeGameLike {
+    function rngWordForDay(uint48 day) external view returns (uint256);
 }
 
 /// @notice PurgeBonds — a lightweight ERC721 used to beta test bond-like payouts for the creator flows.
@@ -33,7 +43,12 @@ contract PurgeBonds {
     error Reentrancy();
     error PurchasesClosed();
     error InsufficientCoinAvailable();
+    error ResolvePendingAlready();
+    error ResolveNotReady();
+    error InsufficientEthForResolve();
+    error InvalidRng();
     error TransferBlocked();
+    error InvalidRate();
 
     // ---------------------------------------------------------------------
     // Events
@@ -58,11 +73,19 @@ contract PurgeBonds {
     address public stEthToken;
     address public coinToken;
     address public renderer;
+    address public game;
     bool public decayPaused;
     uint256 public bondCoin; // PURGE reserved for bond payouts
     uint256 public totalEthOwed; // Sum of ETH owed across all bonds
+    uint256 public rewardSeedEth; // Held ETH from unwired purchases to seed game reward pool
+    bool public resolvePending;
+    uint256 public pendingRngWord;
+    uint48 public pendingRngDay;
+    uint256 public pendingResolveBase;
+    uint256 public pendingResolveMax;
+    uint256 public pendingResolveBudget; // Amount of ETH/stETH-equivalent allocated for the pending resolve
 
-    uint256 public priceMultiplier = 1e18; // dynamic price multiplier (1e18 = 1.0x)
+    uint256 public priceMultiplier = 49_9e16; // dynamic price multiplier (1e18 = 1.0x), default 49.9x
     uint64 public lastDecayDay;
     uint256 public ethPool;
     uint256 public stEthPool;
@@ -81,9 +104,12 @@ contract PurgeBonds {
     mapping(uint256 => bool) public claimed;
     mapping(uint256 => uint16) public winChanceBps; // basis points; capped at 10000
     mapping(uint256 => bool) public staked;
+    mapping(uint256 => uint32) public createdDistance;
 
     uint256 public lowestUnresolved;
     uint256 public resolveBaseId;
+    bool public transfersLocked;
+    uint16 public stakeRateBps = 10_000; // percent of reward+trophy pool to stake as stETH
 
     bool private entered;
     uint256 private stEthAccounted;
@@ -105,12 +131,14 @@ contract PurgeBonds {
     /// @notice Accept ETH/stETH/coin inflows and resolve/burn bonds for the day using RNG.
     /// @param coinAmount Amount of coin credited alongside this call; 25% is added to the bondPool.
     /// @param stEthAddress Address of the stETH token used for accounting (must match configured stEthToken).
-    /// @param rngWord Randomness for this resolution window (e.g., day's RNG).
+    /// @param rngDay Epoch day used to fetch RNG from the game contract during resolution (0 to skip scheduling).
+    /// @param rngWord Randomness for this resolution window; takes precedence over rngDay when non-zero.
     /// @param baseId Optional starting token id for this resolution pass (0 = continue from prior cursor).
     /// @param maxBonds Max bonds to resolve in this call (0 = default 25).
     function payBonds(
         uint256 coinAmount,
         address stEthAddress,
+        uint48 rngDay,
         uint256 rngWord,
         uint256 baseId,
         uint256 maxBonds
@@ -141,25 +169,70 @@ contract PurgeBonds {
             }
         }
 
-        // Resolution cursor
-        if (baseId != 0) {
-            resolveBaseId = baseId;
-        } else if (resolveBaseId == 0) {
-            resolveBaseId = nextClaimable;
+        if ((rngWord != 0 || rngDay != 0) && ethPool > 1 ether && !resolvePending) {
+            uint256 startId = _resolveStart(baseId);
+            if (startId != 0) {
+                uint256 budget = msg.value + stAdded;
+                _scheduleResolve(startId, rngDay, rngWord, maxBonds, budget);
+            }
         }
-        uint256 tid = resolveBaseId;
-        uint256 maxId = nextId - 1;
+
+        emit BondsPaid(msg.value, stAdded, bondAdded);
+    }
+
+    /// @notice Schedule bond resolution using a provided RNG word without executing it.
+    function scheduleResolve(
+        uint48 rngDay,
+        uint256 rngWord,
+        uint256 baseId,
+        uint256 maxBonds,
+        uint256 budgetWei
+    ) external {
+        if (msg.sender != owner && msg.sender != game) revert Unauthorized();
+        uint256 startId = _resolveStart(baseId);
+        _scheduleResolve(startId, rngDay, rngWord, maxBonds, budgetWei);
+    }
+
+    /// @notice Resolve pending bonds using the stored RNG; callable by anyone when pending.
+    function resolvePendingBonds(uint256 maxBonds) external nonReentrant {
+        if (!resolvePending) revert ResolveNotReady();
+        uint256 rngWord = pendingRngWord;
+        if (rngWord == 0) {
+            uint48 rngDay = pendingRngDay;
+            if (rngDay == 0) revert InvalidRng();
+            address game_ = game;
+            if (game_ == address(0)) revert ZeroAddress();
+            rngWord = IPurgeGameLike(game_).rngWordForDay(rngDay);
+            if (rngWord == 0) revert InvalidRng();
+            pendingRngWord = rngWord;
+        }
+
+        uint256 tid = pendingResolveBase;
+        uint256 maxId = pendingResolveMax == 0 ? nextId - 1 : pendingResolveMax;
         uint256 limit = maxBonds == 0 ? 25 : maxBonds;
+        uint256 budget = pendingResolveBudget;
+        if (budget == 0) revert InsufficientEthForResolve();
         uint256 processed;
         while (processed < limit && tid <= maxId) {
             if (!claimed[tid]) {
-                _resolveBond(tid, rngWord);
+                uint256 basePrice = _basePrice(riskOf[tid]);
+                uint256 delta = basePrice >= 1 ether ? 0 : (1 ether - basePrice);
+                if (budget < delta) {
+                    break;
+                }
+                bool win = _resolveBond(tid, rngWord);
+                if (win) {
+                    if (delta != 0) budget -= delta;
+                } else {
+                    budget += basePrice;
+                }
             }
             unchecked {
                 ++tid;
                 ++processed;
             }
         }
+
         resolveBaseId = tid;
         if (nextClaimable < tid) {
             nextClaimable = tid;
@@ -168,7 +241,13 @@ contract PurgeBonds {
             _burnInactiveUpTo(tid - 1);
         }
 
-        emit BondsPaid(msg.value, stAdded, bondAdded);
+        resolvePending = false;
+        pendingRngWord = 0;
+        pendingResolveBase = 0;
+        pendingResolveMax = 0;
+        pendingResolveBudget = 0;
+        pendingRngDay = 0;
+        transfersLocked = false;
     }
 
     modifier nonReentrant() {
@@ -219,7 +298,13 @@ contract PurgeBonds {
         uint256 price = _priceForRisk(risk);
         if (msg.value != price) revert WrongPrice();
 
-        (bool ok, ) = payable(recipient).call{value: msg.value}("");
+        uint256 seed;
+        if (game == address(0)) {
+            seed = msg.value / 2;
+            rewardSeedEth += seed;
+        }
+        uint256 toSend = msg.value - seed;
+        (bool ok, ) = payable(recipient).call{value: toSend}("");
         if (!ok) revert CallFailed();
 
         tokenId = _mint(msg.sender, risk, price, stake);
@@ -244,6 +329,7 @@ contract PurgeBonds {
         if (stake) {
             staked[tokenId] = true;
         }
+        createdDistance[tokenId] = uint32(_currentDistance(tokenId));
         totalEthOwed += _basePrice(risk);
 
         // Store win chance based on payment size (capped at 100%).
@@ -284,6 +370,17 @@ contract PurgeBonds {
         coinToken = token;
     }
 
+    function setGame(address game_) external onlyOwner {
+        if (game_ == address(0)) revert ZeroAddress();
+        game = game_;
+        uint256 seed = rewardSeedEth;
+        if (seed != 0) {
+            rewardSeedEth = 0;
+            (bool ok, ) = payable(game_).call{value: seed}("");
+            if (!ok) revert CallFailed();
+        }
+    }
+
     /// @notice Send PURGE held by this contract, excluding the reserved bondCoin balance.
     function sendCoin(address to, uint256 amount) external onlyOwner {
         if (to == address(0)) revert ZeroAddress();
@@ -309,6 +406,25 @@ contract PurgeBonds {
         if (enabled) {
             lastDecayDay = uint64(block.timestamp / 1 days);
         }
+    }
+
+    function setTransfersLocked(bool locked) external onlyOwner {
+        transfersLocked = locked;
+    }
+
+    function setStakeRateBps(uint16 rateBps) external onlyOwner {
+        if (rateBps < 2500 || rateBps > 15_000) revert InvalidRate(); // 25% - 150%
+        stakeRateBps = rateBps;
+    }
+
+    /// @notice Hook from the PURGE token to credit freshly minted bond payouts.
+    function onBondMint(uint256 amount) external {
+        if (msg.sender != coinToken) revert Unauthorized();
+        if (amount == 0) return;
+        uint256 newBondCoin = bondCoin + amount;
+        if (IERC20Minimal(coinToken).balanceOf(address(this)) < newBondCoin) revert InsufficientCoinAvailable();
+        bondCoin = newBondCoin;
+        bondPool += amount;
     }
 
     // ---------------------------------------------------------------------
@@ -444,7 +560,14 @@ contract PurgeBonds {
         if (_ownerOf[tokenId] == address(0)) revert InvalidToken();
         address renderer_ = renderer;
         if (renderer_ == address(0)) revert ZeroAddress();
-        return IPurgeBondRenderer(renderer_).bondTokenURI(tokenId);
+        uint32 created = createdDistance[tokenId];
+        uint32 current = uint32(_currentDistance(tokenId));
+        uint16 chance = winChanceBps[tokenId];
+        if (chance == 0) {
+            chance = 1;
+        }
+        bool isStaked = staked[tokenId];
+        return IPurgeBondRenderer(renderer_).bondTokenURI(tokenId, created, current, chance, isStaked);
     }
 
     function currentPrice(uint8 risk) external view returns (uint256) {
@@ -457,7 +580,7 @@ contract PurgeBonds {
 
     function approve(address spender, uint256 tokenId) external {
         address holder = ownerOf(tokenId);
-        if (staked[tokenId] || _isResolved(tokenId)) revert TransferBlocked();
+        if (_transfersBlocked(tokenId)) revert TransferBlocked();
         if (msg.sender != holder && !isApprovedForAll(holder, msg.sender)) revert Unauthorized();
         _tokenApproval[tokenId] = spender;
         emit Approval(holder, spender, tokenId);
@@ -475,7 +598,7 @@ contract PurgeBonds {
     function transferFrom(address from, address to, uint256 tokenId) public {
         address holder = ownerOf(tokenId);
         if (holder != from) revert Unauthorized();
-        if (staked[tokenId] || _isResolved(tokenId)) revert TransferBlocked();
+        if (_transfersBlocked(tokenId)) revert TransferBlocked();
         if (msg.sender != holder && msg.sender != _tokenApproval[tokenId] && !isApprovedForAll(holder, msg.sender))
             revert Unauthorized();
         if (to == address(0)) revert ZeroAddress();
@@ -523,6 +646,48 @@ contract PurgeBonds {
         address holder = _ownerOf[tokenId];
         if (holder == address(0)) revert InvalidToken();
         return (spender == holder || _tokenApproval[tokenId] == spender || _operatorApproval[holder][spender]);
+    }
+
+    function _resolveStart(uint256 baseId) private returns (uint256 startId) {
+        if (baseId != 0) {
+            resolveBaseId = baseId;
+            return baseId;
+        }
+        startId = resolveBaseId;
+        if (startId == 0) {
+            startId = nextClaimable;
+            if (startId == 0) {
+                startId = 1;
+            }
+            resolveBaseId = startId;
+        }
+    }
+
+    function _scheduleResolve(
+        uint256 startId,
+        uint48 rngDay,
+        uint256 rngWord,
+        uint256 maxBonds,
+        uint256 budgetWei
+    ) private {
+        if (resolvePending) revert ResolvePendingAlready();
+        if (rngWord == 0 && rngDay == 0) revert InvalidRng();
+        if (budgetWei == 0) revert InsufficientEthForResolve();
+        if (ethPool <= 1 ether) revert InsufficientEthForResolve();
+
+        uint256 maxId = nextId - 1;
+        if (maxId == 0 || startId == 0 || startId > maxId) revert InvalidToken();
+
+        uint256 plannedMax = maxBonds == 0 ? maxId : startId + maxBonds - 1;
+        if (plannedMax > maxId) plannedMax = maxId;
+
+        pendingResolveBase = startId;
+        pendingResolveMax = plannedMax;
+        pendingRngWord = rngWord;
+        pendingRngDay = rngDay;
+        resolveBaseId = startId;
+        pendingResolveBudget = budgetWei;
+        resolvePending = true;
     }
 
     function _syncMultiplier() private {
@@ -577,7 +742,29 @@ contract PurgeBonds {
                 ++i;
             }
         }
+        // Floor at 9.9x (9.9e18).
+        if (mult < 99e17) return 99e17;
         return mult;
+    }
+
+    function _inPendingWindow(uint256 tokenId) private view returns (bool) {
+        if (!resolvePending) return false;
+        uint256 start = pendingResolveBase;
+        uint256 end = pendingResolveMax;
+        if (start == 0) return false;
+        if (end == 0) end = nextId - 1;
+        return tokenId >= start && tokenId <= end;
+    }
+
+    function _transfersBlocked(uint256 tokenId) private view returns (bool) {
+        return transfersLocked || staked[tokenId] || _isResolved(tokenId) || _inPendingWindow(tokenId);
+    }
+
+    function _ethHeadroom() private view returns (uint256) {
+        uint256 owed = totalEthOwed;
+        uint256 pool = ethPool;
+        if (pool <= owed) return 0;
+        return pool - owed;
     }
 
     /// @notice Purely algorithmic bond outcome using RNG + token data; no state writes.
@@ -593,9 +780,11 @@ contract PurgeBonds {
         win = roll < chanceBps;
     }
 
-    function _resolveBond(uint256 tokenId, uint256 rngWord) private {
+    function _resolveBond(uint256 tokenId, uint256 rngWord) private returns (bool win) {
         uint256 basePrice = _basePrice(riskOf[tokenId]);
-        (bool win, uint16 chance, uint256 roll) = bondOutcome(tokenId, rngWord);
+        uint16 chance;
+        uint256 roll;
+        (win, chance, roll) = bondOutcome(tokenId, rngWord);
         if (win) {
             if (!claimReady[tokenId]) {
                 claimReady[tokenId] = true;
@@ -648,5 +837,12 @@ contract PurgeBonds {
 
     function _isResolved(uint256 tokenId) private view returns (bool) {
         return claimReady[tokenId] || claimed[tokenId];
+    }
+
+    function _currentDistance(uint256 tokenId) private view returns (uint256) {
+        if (_isResolved(tokenId)) return 0;
+        uint256 cursor = nextClaimable;
+        if (tokenId < cursor) return 0;
+        return (tokenId - cursor) + 1;
     }
 }
