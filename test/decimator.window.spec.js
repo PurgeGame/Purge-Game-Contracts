@@ -54,7 +54,8 @@ describe("Decimator window latch", function () {
       renderer.target,
       renderer.target,
       quest.target,
-      extJackpot.target
+      extJackpot.target,
+      steth.target
     );
 
     // Keep quest staking gates from blocking coinflip payouts in unrelated code paths.

@@ -16,6 +16,8 @@ const SELECTION_CAP = 1900; // winners processed per call during selection
 let DEC_PLAYERS_COUNT_SLOT;
 let DEC_BURN_SLOT;
 let DEC_BUCKET_ROSTER_SLOT;
+let DEC_BUCKET_BURN_TOTAL_SLOT;
+let DEC_BUCKET_TOP_SLOT;
 let DEC_BUCKET_INDEX_SLOT;
 let DEC_BUCKET_OFFSET_SLOT;
 let DEC_CLAIM_ROUND_SLOT;
@@ -27,13 +29,21 @@ const mappingSlot = (key, slot) => BigInt(ethers.keccak256(abi.encode(["uint256"
 const mappingSlotAddr = (addr, slot) =>
   BigInt(ethers.keccak256(abi.encode(["address", "uint256"], [addr, slot])));
 
-// Nested mapping (level => denom => address[]).
-const rosterSlots = (level, denom) => {
-  const levelSlot = mappingSlot(level, DEC_BUCKET_ROSTER_SLOT);
+const subbucketSlot = (level, denom, sub, baseSlot) => {
+  const levelSlot = mappingSlot(level, baseSlot);
   const bucketSlot = BigInt(ethers.keccak256(abi.encode(["uint256", "uint256"], [denom, levelSlot])));
+  return BigInt(ethers.keccak256(abi.encode(["uint256", "uint256"], [sub, bucketSlot])));
+};
+
+// Nested mapping (level => denom => sub => address[]).
+const rosterSlots = (level, denom, sub) => {
+  const bucketSlot = subbucketSlot(level, denom, sub, DEC_BUCKET_ROSTER_SLOT);
   const dataBase = BigInt(ethers.keccak256(abi.encode(["uint256"], [bucketSlot])));
   return { bucketSlot, dataBase };
 };
+
+const burnTotalSlot = (level, denom, sub) => subbucketSlot(level, denom, sub, DEC_BUCKET_BURN_TOTAL_SLOT);
+const topSlot = (level, denom, sub) => subbucketSlot(level, denom, sub, DEC_BUCKET_TOP_SLOT);
 
 const setStorage = async (target, slot, value) => {
   await network.provider.send("hardhat_setStorageAt", [target, pad32(slot), value]);
@@ -56,6 +66,8 @@ describe("Decimator jackpot heavy bucket sweep", function () {
       DEC_BURN_SLOT = slots.decBurnSlot;
       DEC_PLAYERS_COUNT_SLOT = slots.decPlayersCountSlot;
       DEC_BUCKET_ROSTER_SLOT = slots.decBucketRosterSlot;
+      DEC_BUCKET_BURN_TOTAL_SLOT = slots.decBucketBurnTotalSlot;
+      DEC_BUCKET_TOP_SLOT = slots.decBucketTopSlot;
       DEC_BUCKET_INDEX_SLOT = slots.decBucketIndexSlot;
       DEC_BUCKET_OFFSET_SLOT = slots.decBucketOffsetSlot;
       DEC_CLAIM_ROUND_SLOT = slots.decClaimRoundSlot;
@@ -103,21 +115,25 @@ describe("Decimator jackpot heavy bucket sweep", function () {
       await renderer.getAddress(),
       await renderer.getAddress(),
       await questModule.getAddress(),
-      await extJackpot.getAddress()
+      await extJackpot.getAddress(),
+      deployer.address
     );
 
     // --- Seed decBucketRoster + decBurn directly in storage for scale ---
-    const burnByAddr = {};
-    const bucketByAddr = {};
     const rosters = {};
     let totalEntries = 0;
     const decBucketIndexBase = mappingSlot(LEVEL, DEC_BUCKET_INDEX_SLOT);
 
     for (const bucket of BUCKETS) {
-      const { bucketSlot, dataBase } = rosterSlots(LEVEL, bucket);
-      const writes = [{ slot: bucketSlot, value: pad32(BigInt(ENTRIES_PER_BUCKET)) }];
+      const subRosters = Array.from({ length: bucket }, () => []);
+      const burnTotals = Array(bucket).fill(0n);
+      const topBurns = Array(bucket).fill(0n);
+      const topAddrs = Array(bucket).fill(ethers.ZeroAddress);
+      const rosterSlotsBySub = subRosters.map((_, sub) => rosterSlots(LEVEL, bucket, sub));
+      const burnSlotsBySub = subRosters.map((_, sub) => burnTotalSlot(LEVEL, bucket, sub));
+      const topSlotsBySub = subRosters.map((_, sub) => topSlot(LEVEL, bucket, sub));
+      const writes = [];
 
-      const roster = [];
       for (let i = 0; i < ENTRIES_PER_BUCKET; i += 1) {
         const raw = ethers.keccak256(abi.encode(["uint8", "uint32"], [bucket, i]));
         const addr = ethers.getAddress("0x" + raw.slice(26));
@@ -126,21 +142,35 @@ describe("Decimator jackpot heavy bucket sweep", function () {
             10n ** 15n) +
           10n ** 12n; // non-zero, varied
 
-        const packed = burn + (BigInt(LEVEL) << 192n) + (BigInt(bucket) << 216n);
+        const sub = i % bucket;
+        const idxInSub = Math.floor(i / bucket);
+        const packed =
+          burn + (BigInt(LEVEL) << 192n) + (BigInt(bucket) << 216n) + (BigInt(sub) << 224n);
         const decBurnSlot = mappingSlotAddr(addr, DEC_BURN_SLOT);
         const decIndexSlot = mappingSlotAddr(addr, decBucketIndexBase);
 
-        writes.push({ slot: dataBase + BigInt(i), value: padAddr(addr) });
+        const { dataBase } = rosterSlotsBySub[sub];
+        writes.push({ slot: dataBase + BigInt(idxInSub), value: padAddr(addr) });
         writes.push({ slot: decBurnSlot, value: pad32(packed) });
-        writes.push({ slot: decIndexSlot, value: pad32(BigInt(i)) });
+        writes.push({ slot: decIndexSlot, value: pad32(BigInt(idxInSub)) });
 
-        burnByAddr[addr] = burn;
-        bucketByAddr[addr] = bucket;
-        roster.push({ addr, burn, bucket });
+        subRosters[sub].push({ addr, burn, bucket, sub, idx: idxInSub });
+        burnTotals[sub] += burn;
+        if (burn > topBurns[sub]) {
+          topBurns[sub] = burn;
+          topAddrs[sub] = addr;
+        }
+      }
+
+      for (let sub = 0; sub < bucket; sub += 1) {
+        writes.push({ slot: rosterSlotsBySub[sub].bucketSlot, value: pad32(BigInt(subRosters[sub].length)) });
+        writes.push({ slot: burnSlotsBySub[sub], value: pad32(burnTotals[sub]) });
+        writes.push({ slot: topSlotsBySub[sub], value: padAddr(topAddrs[sub]) });
+        writes.push({ slot: topSlotsBySub[sub] + 1n, value: pad32(topBurns[sub]) });
       }
 
       await chunkedSet(await extJackpot.getAddress(), writes, 128);
-      rosters[bucket] = roster;
+      rosters[bucket] = subRosters;
       totalEntries += ENTRIES_PER_BUCKET;
     }
 
@@ -233,14 +263,12 @@ describe("Decimator jackpot heavy bucket sweep", function () {
 
     const expectedWinners = [];
     for (const bucket of BUCKETS) {
-      const roster = rosters[bucket];
-      const denom = bucket;
-      const offset = offsets[bucket] % denom;
-      const start = (denom - ((offset + 1) % denom)) % denom;
-      for (let idx = start; idx < roster.length; idx += denom) {
-        expectedWinners.push(roster[idx]);
-      }
+      const winningSub = offsets[bucket] % bucket;
+      expectedWinners.push(...rosters[bucket][winningSub]);
     }
+
+    const expectedTotalBurn = expectedWinners.reduce((acc, w) => acc + w.burn, 0n);
+    expect(totalBurn).to.equal(expectedTotalBurn);
 
     const expectedAmounts = expectedWinners.map((w) => (poolWei * w.burn) / totalBurn);
 
@@ -248,10 +276,13 @@ describe("Decimator jackpot heavy bucket sweep", function () {
     let nonWinner = null;
     for (const bucket of BUCKETS) {
       if (nonWinner) break;
-      for (const entry of rosters[bucket]) {
-        if (!winnerSet.has(entry.addr.toLowerCase())) {
-          nonWinner = entry.addr;
-          break;
+      for (const subRoster of rosters[bucket]) {
+        if (nonWinner) break;
+        for (const entry of subRoster) {
+          if (!winnerSet.has(entry.addr.toLowerCase())) {
+            nonWinner = entry.addr;
+            break;
+          }
         }
       }
     }

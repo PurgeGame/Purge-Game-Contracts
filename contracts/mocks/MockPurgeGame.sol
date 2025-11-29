@@ -9,6 +9,7 @@ contract MockPurgeGame {
     mapping(address => uint32) public levelCounts;
     mapping(address => uint24) public lastMintLevels;
     uint256 public principalStEth;
+    address public bonds;
 
     function setRngLocked(bool v) external { rngLocked = v; }
     function setLevel(uint24 v) external { level = v; }
@@ -17,6 +18,7 @@ contract MockPurgeGame {
     function setLevelCount(address u, uint32 c) external { levelCounts[u] = c; }
     function setLastMintLevel(address u, uint24 l) external { lastMintLevels[u] = l; }
     function setPrincipalStEth(uint256 v) external { principalStEth = v; }
+    function setBonds(address bonds_) external { bonds = bonds_; }
 
     function ethMintStreakCount(address player) external view returns (uint32) {
         return streaks[player];

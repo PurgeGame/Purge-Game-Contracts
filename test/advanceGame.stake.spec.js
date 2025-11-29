@@ -120,7 +120,8 @@ async function deploySystem() {
       await regularRenderer.getAddress(),
       await trophyRenderer.getAddress(),
       await questModule.getAddress(),
-      await externalJackpot.getAddress()
+      await externalJackpot.getAddress(),
+      deployer.address
     )
   ).wait();
 

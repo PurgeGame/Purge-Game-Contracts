@@ -11,6 +11,9 @@ const POOL_WEI = ethers.parseEther("1000");
 let DEC_PLAYERS_COUNT_SLOT;
 let DEC_BURN_SLOT;
 let DEC_BUCKET_ROSTER_SLOT;
+let DEC_BUCKET_BURN_TOTAL_SLOT;
+let DEC_BUCKET_TOP_SLOT;
+let DEC_BUCKET_INDEX_SLOT;
 
 const pad32 = (value) => ethers.toBeHex(value, 32);
 const padAddr = (addr) => ethers.zeroPadValue(addr, 32);
@@ -19,12 +22,20 @@ const mappingSlot = (key, slot) => BigInt(ethers.keccak256(abi.encode(["uint256"
 const mappingSlotAddr = (addr, slot) =>
   BigInt(ethers.keccak256(abi.encode(["address", "uint256"], [addr, slot])));
 
-const rosterSlots = (level, denom) => {
-  const levelSlot = mappingSlot(level, DEC_BUCKET_ROSTER_SLOT);
+const subbucketSlot = (level, denom, sub, baseSlot) => {
+  const levelSlot = mappingSlot(level, baseSlot);
   const bucketSlot = BigInt(ethers.keccak256(abi.encode(["uint256", "uint256"], [denom, levelSlot])));
+  return BigInt(ethers.keccak256(abi.encode(["uint256", "uint256"], [sub, bucketSlot])));
+};
+
+const rosterSlots = (level, denom, sub) => {
+  const bucketSlot = subbucketSlot(level, denom, sub, DEC_BUCKET_ROSTER_SLOT);
   const dataBase = BigInt(ethers.keccak256(abi.encode(["uint256"], [bucketSlot])));
   return { bucketSlot, dataBase };
 };
+
+const burnTotalSlot = (level, denom, sub) => subbucketSlot(level, denom, sub, DEC_BUCKET_BURN_TOTAL_SLOT);
+const topSlot = (level, denom, sub) => subbucketSlot(level, denom, sub, DEC_BUCKET_TOP_SLOT);
 
 const setStorage = async (target, slot, value) => {
   await network.provider.send("hardhat_setStorageAt", [target, pad32(slot), value]);
@@ -48,6 +59,9 @@ describe("Gas Benchmark", function () {
       DEC_BURN_SLOT = slots.decBurnSlot;
       DEC_PLAYERS_COUNT_SLOT = slots.decPlayersCountSlot;
       DEC_BUCKET_ROSTER_SLOT = slots.decBucketRosterSlot;
+      DEC_BUCKET_BURN_TOTAL_SLOT = slots.decBucketBurnTotalSlot;
+      DEC_BUCKET_TOP_SLOT = slots.decBucketTopSlot;
+      DEC_BUCKET_INDEX_SLOT = slots.decBucketIndexSlot;
     }
 
     const [deployer] = await ethers.getSigners();
@@ -93,7 +107,8 @@ describe("Gas Benchmark", function () {
       await renderer.getAddress(),
       await renderer.getAddress(),
       await questModule.getAddress(),
-      await extJackpot.getAddress()
+      await extJackpot.getAddress(),
+      deployer.address
     );
 
     await network.provider.request({
@@ -106,22 +121,49 @@ describe("Gas Benchmark", function () {
 
   it("Benchmark: Dense Winners (High Write)", async function () {
     const CAP = 1000; 
-    const OPS_LIMIT = Math.max(5000, CAP * 4);
-    // Fill bucket 4 with valid entries
     const bucket = 4;
-    const { bucketSlot, dataBase } = rosterSlots(LEVEL, bucket);
-    const writes = [{ slot: bucketSlot, value: pad32(BigInt(ENTRIES_PER_BUCKET)) }];
+    const decBucketIndexBase = mappingSlot(LEVEL, DEC_BUCKET_INDEX_SLOT);
+    const subRosters = Array.from({ length: bucket }, () => []);
+    const burnTotals = Array(bucket).fill(0n);
+    const topBurns = Array(bucket).fill(0n);
+    const topAddrs = Array(bucket).fill(ethers.ZeroAddress);
+    const rosterSlotsBySub = subRosters.map((_, sub) => rosterSlots(LEVEL, bucket, sub));
+    const burnSlotsBySub = subRosters.map((_, sub) => burnTotalSlot(LEVEL, bucket, sub));
+    const topSlotsBySub = subRosters.map((_, sub) => topSlot(LEVEL, bucket, sub));
+    const writes = [];
 
     for (let i = 0; i < ENTRIES_PER_BUCKET; i += 1) {
       // Predictable addresses to avoid collision checks in setup
       const addr = ethers.getAddress(ethers.zeroPadValue(ethers.toBeHex(i + 1), 20));
       const burn = 10n ** 18n; // valid burn
-      const packed = burn + (BigInt(LEVEL) << 192n) + (BigInt(bucket) << 216n);
-      const decBurnSlot = mappingSlotAddr(addr, DEC_BURN_SLOT);
 
-      writes.push({ slot: dataBase + BigInt(i), value: padAddr(addr) });
+      const sub = i % bucket;
+      const idxInSub = Math.floor(i / bucket);
+      const packed =
+        burn + (BigInt(LEVEL) << 192n) + (BigInt(bucket) << 216n) + (BigInt(sub) << 224n);
+      const decBurnSlot = mappingSlotAddr(addr, DEC_BURN_SLOT);
+      const decIndexSlot = mappingSlotAddr(addr, decBucketIndexBase);
+
+      const { dataBase } = rosterSlotsBySub[sub];
+      writes.push({ slot: dataBase + BigInt(idxInSub), value: padAddr(addr) });
       writes.push({ slot: decBurnSlot, value: pad32(packed) });
+      writes.push({ slot: decIndexSlot, value: pad32(BigInt(idxInSub)) });
+
+      subRosters[sub].push(addr);
+      burnTotals[sub] += burn;
+      if (burn > topBurns[sub]) {
+        topBurns[sub] = burn;
+        topAddrs[sub] = addr;
+      }
     }
+
+    for (let sub = 0; sub < bucket; sub += 1) {
+      writes.push({ slot: rosterSlotsBySub[sub].bucketSlot, value: pad32(BigInt(subRosters[sub].length)) });
+      writes.push({ slot: burnSlotsBySub[sub], value: pad32(burnTotals[sub]) });
+      writes.push({ slot: topSlotsBySub[sub], value: padAddr(topAddrs[sub]) });
+      writes.push({ slot: topSlotsBySub[sub] + 1n, value: pad32(topBurns[sub]) });
+    }
+
     await chunkedSet(await extJackpot.getAddress(), writes, 500);
     const decPlayersCountSlot = mappingSlot(LEVEL, DEC_PLAYERS_COUNT_SLOT);
     await setStorage(await extJackpot.getAddress(), decPlayersCountSlot, pad32(BigInt(ENTRIES_PER_BUCKET)));
@@ -130,6 +172,12 @@ describe("Gas Benchmark", function () {
     // Init call
     await extJackpot.connect(gameSigner).runExternalJackpot(1, POOL_WEI, CAP, LEVEL, RNG_WORD);
 
+    const [finishedPreview, , , , returnPreview] = await extJackpot
+      .connect(gameSigner)
+      .runExternalJackpot.staticCall(1, POOL_WEI, CAP, LEVEL, RNG_WORD);
+    expect(finishedPreview).to.equal(true);
+    expect(returnPreview).to.equal(0n);
+
     // Measure next step (Selection)
     const tx = await extJackpot.connect(gameSigner).runExternalJackpot(1, POOL_WEI, CAP, LEVEL, RNG_WORD);
     const receipt = await tx.wait();
@@ -137,30 +185,44 @@ describe("Gas Benchmark", function () {
   });
 
   it("Benchmark: Sparse Scanning (High Ops, Low Write)", async function () {
-    // We want to hit the OPS limit (5000) before finding many winners.
-    // Set CAP=1000, OPS_LIMIT=5000.
-    // We fill bucket 4 with "invalid" entries (zero burn or wrong level).
-    // This forces the loop to scan and increment OPS.
-    
     const CAP = 1000; 
-    const OPS_LIMIT = 5000; // default minimum
     const bucket = 4;
-    const { bucketSlot, dataBase } = rosterSlots(LEVEL, bucket);
-    const writes = [{ slot: bucketSlot, value: pad32(BigInt(ENTRIES_PER_BUCKET)) }];
+    const decBucketIndexBase = mappingSlot(LEVEL, DEC_BUCKET_INDEX_SLOT);
+    const subRosters = Array.from({ length: bucket }, () => []);
+    const burnTotals = Array(bucket).fill(0n);
+    const topBurns = Array(bucket).fill(0n);
+    const topAddrs = Array(bucket).fill(ethers.ZeroAddress);
+    const rosterSlotsBySub = subRosters.map((_, sub) => rosterSlots(LEVEL, bucket, sub));
+    const burnSlotsBySub = subRosters.map((_, sub) => burnTotalSlot(LEVEL, bucket, sub));
+    const topSlotsBySub = subRosters.map((_, sub) => topSlot(LEVEL, bucket, sub));
+    const writes = [];
 
     for (let i = 0; i < ENTRIES_PER_BUCKET; i += 1) {
       const addr = ethers.getAddress(ethers.zeroPadValue(ethers.toBeHex(i + 1), 20));
-      const burn = 0n; // INVALID: 0 burn
-      // Even if bucket matches, 0 burn makes it invalid for winner selection in current logic?
-      // Let's check code: if (e.level == lvl && e.bucket == denom && e.burn != 0)
-      // So 0 burn is skipped.
-      
-      const packed = burn + (BigInt(LEVEL) << 192n) + (BigInt(bucket) << 216n);
-      const decBurnSlot = mappingSlotAddr(addr, DEC_BURN_SLOT);
+      const burn = 0n;
 
-      writes.push({ slot: dataBase + BigInt(i), value: padAddr(addr) });
+      const sub = i % bucket;
+      const idxInSub = Math.floor(i / bucket);
+      const packed =
+        burn + (BigInt(LEVEL) << 192n) + (BigInt(bucket) << 216n) + (BigInt(sub) << 224n);
+      const decBurnSlot = mappingSlotAddr(addr, DEC_BURN_SLOT);
+      const decIndexSlot = mappingSlotAddr(addr, decBucketIndexBase);
+
+      const { dataBase } = rosterSlotsBySub[sub];
+      writes.push({ slot: dataBase + BigInt(idxInSub), value: padAddr(addr) });
       writes.push({ slot: decBurnSlot, value: pad32(packed) });
+      writes.push({ slot: decIndexSlot, value: pad32(BigInt(idxInSub)) });
+
+      subRosters[sub].push(addr);
     }
+
+    for (let sub = 0; sub < bucket; sub += 1) {
+      writes.push({ slot: rosterSlotsBySub[sub].bucketSlot, value: pad32(BigInt(subRosters[sub].length)) });
+      writes.push({ slot: burnSlotsBySub[sub], value: pad32(burnTotals[sub]) });
+      writes.push({ slot: topSlotsBySub[sub], value: padAddr(topAddrs[sub]) });
+      writes.push({ slot: topSlotsBySub[sub] + 1n, value: pad32(topBurns[sub]) });
+    }
+
     await chunkedSet(await extJackpot.getAddress(), writes, 500);
     const decPlayersCountSlot = mappingSlot(LEVEL, DEC_PLAYERS_COUNT_SLOT);
     await setStorage(await extJackpot.getAddress(), decPlayersCountSlot, pad32(BigInt(ENTRIES_PER_BUCKET)));
@@ -168,10 +230,15 @@ describe("Gas Benchmark", function () {
     // Start jackpot
     await extJackpot.connect(gameSigner).runExternalJackpot(1, POOL_WEI, CAP, LEVEL, RNG_WORD);
 
+    const [finishedPreview, , , , returnPreview] = await extJackpot
+      .connect(gameSigner)
+      .runExternalJackpot.staticCall(1, POOL_WEI, CAP, LEVEL, RNG_WORD);
+    expect(finishedPreview).to.equal(true);
+    expect(returnPreview).to.equal(POOL_WEI);
+
     // Measure next step (Selection)
-    // It should scan ~5000 entries, find 0 winners, and return because of OPS limit.
     const tx = await extJackpot.connect(gameSigner).runExternalJackpot(1, POOL_WEI, CAP, LEVEL, RNG_WORD);
     const receipt = await tx.wait();
-    console.log(`Gas used for Sparse Scanning (Ops ~5000): ${receipt.gasUsed.toString()}`);
+    console.log(`Gas used for Sparse Selection (Cap ${CAP}): ${receipt.gasUsed.toString()}`);
   });
 });

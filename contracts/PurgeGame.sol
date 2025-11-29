@@ -471,16 +471,18 @@ contract PurgeGame is PurgeGameStorage {
 
                 if (_phase == 3) {
                     bool ranDecHundred;
+                    bool decHundredFinished = true;
                     if (lvl % 100 == 0) {
                         ranDecHundred = true;
-                        if (!_runDecimatorHundredJackpot(lvl, cap, rngWord)) {
+                        decHundredFinished = _runDecimatorHundredJackpot(lvl, cap, rngWord);
+                        if (!decHundredFinished) {
                             break; // keep working this jackpot slice before moving on
                         }
                     }
 
                     phase = 4;
                     _phase = 4; // fall through to phase 4 logic in the same call when nothing ran
-                    if (ranDecHundred) {
+                    if (ranDecHundred && !decHundredFinished) {
                         break; // level-100 decimator work consumes this tick
                     }
                 }

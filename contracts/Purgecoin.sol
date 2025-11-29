@@ -587,6 +587,8 @@ contract Purgecoin {
 
         uint24 distance = targetLevel - effectiveLevel;
         if (distance > 500) revert Insufficient();
+        uint24 minDistance = currLevel > 10 ? 10 : currLevel;
+        if (distance < minDistance) revert StakeInvalid();
 
         if (risk == 0 || risk > MAX_RISK) revert Insufficient();
         if (risk > targetLevel) revert StakeInvalid();

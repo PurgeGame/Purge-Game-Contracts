@@ -61,6 +61,14 @@ async function deploySystem() {
   const jackpotModule = await PurgeGameJackpotModule.deploy();
   await jackpotModule.waitForDeployment();
 
+  const QuestModule = await ethers.getContractFactory("PurgeQuestModule");
+  const questModule = await QuestModule.deploy(await purgecoin.getAddress());
+  await questModule.waitForDeployment();
+
+  const ExternalJackpot = await ethers.getContractFactory("PurgeJackpots");
+  const externalJackpot = await ExternalJackpot.deploy();
+  await externalJackpot.waitForDeployment();
+
   const MockStETH = await ethers.getContractFactory("MockStETH");
   const steth = await MockStETH.deploy();
   await steth.waitForDeployment();
@@ -91,13 +99,16 @@ async function deploySystem() {
 
   await (
     await purgecoin.wire(
-      await purgeGame.getAddress(),
-      await purgeNFT.getAddress(),
-      await purgeTrophies.getAddress(),
-      await renderer.getAddress(),
-      await renderer.getAddress()
-    )
-  ).wait();
+    await purgeGame.getAddress(),
+    await purgeNFT.getAddress(),
+    await purgeTrophies.getAddress(),
+    await renderer.getAddress(),
+    await renderer.getAddress(),
+    await questModule.getAddress(),
+    await externalJackpot.getAddress(),
+    deployer.address
+  )
+).wait();
 
   return {
     link,

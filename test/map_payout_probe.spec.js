@@ -41,7 +41,18 @@ async function deploySystem() {
     await purgecoin.getAddress(), await renderer.getAddress(), await purgeNFT.getAddress(), await purgeTrophies.getAddress(),
     await endgameModule.getAddress(), await jackpotModule.getAddress(), await vrf.getAddress(), ethers.ZeroHash, 1n, await link.getAddress(), await steth.getAddress()
   );
-  await (await purgecoin.wire(await purgeGame.getAddress(), await purgeNFT.getAddress(), await purgeTrophies.getAddress(), await renderer.getAddress(), await trophyRenderer.getAddress(), await questModule.getAddress(), await externalJackpot.getAddress())).wait();
+  await (
+    await purgecoin.wire(
+      await purgeGame.getAddress(),
+      await purgeNFT.getAddress(),
+      await purgeTrophies.getAddress(),
+      await renderer.getAddress(),
+      await trophyRenderer.getAddress(),
+      await questModule.getAddress(),
+      await externalJackpot.getAddress(),
+      deployer.address
+    )
+  ).wait();
   
   return { purgeGame, purgecoin, purgeNFT, vrf, deployer };
 }

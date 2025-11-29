@@ -107,7 +107,8 @@ async function deploySystem() {
       await renderer.getAddress(),
       await renderer.getAddress(),
       await questModule.getAddress(),
-      await externalJackpotModule.getAddress()
+      await externalJackpotModule.getAddress(),
+      deployer.address
     )
   ).wait();
 

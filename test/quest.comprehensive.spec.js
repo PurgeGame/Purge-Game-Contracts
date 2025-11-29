@@ -94,7 +94,8 @@ describe("Quest System Comprehensive Test", function () {
         renderer.target,
         renderer.target,
         questModule.target,
-        extJackpot.target
+        extJackpot.target,
+        deployer.address
     );
     
     // Fund Player

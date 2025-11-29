@@ -15,6 +15,9 @@ const SELECTION_CAP = 500; // winners processed per call during selection
 let DEC_PLAYERS_COUNT_SLOT;
 let DEC_BURN_SLOT;
 let DEC_BUCKET_ROSTER_SLOT;
+let DEC_BUCKET_BURN_TOTAL_SLOT;
+let DEC_BUCKET_TOP_SLOT;
+let DEC_BUCKET_INDEX_SLOT;
 
 const pad32 = (value) => ethers.toBeHex(value, 32);
 const padAddr = (addr) => ethers.zeroPadValue(addr, 32);
@@ -23,13 +26,21 @@ const mappingSlot = (key, slot) => BigInt(ethers.keccak256(abi.encode(["uint256"
 const mappingSlotAddr = (addr, slot) =>
   BigInt(ethers.keccak256(abi.encode(["address", "uint256"], [addr, slot])));
 
-// Nested mapping (level => denom => address[]).
-const rosterSlots = (level, denom) => {
-  const levelSlot = mappingSlot(level, DEC_BUCKET_ROSTER_SLOT);
+const subbucketSlot = (level, denom, sub, baseSlot) => {
+  const levelSlot = mappingSlot(level, baseSlot);
   const bucketSlot = BigInt(ethers.keccak256(abi.encode(["uint256", "uint256"], [denom, levelSlot])));
+  return BigInt(ethers.keccak256(abi.encode(["uint256", "uint256"], [sub, bucketSlot])));
+};
+
+// Nested mapping (level => denom => sub => address[]).
+const rosterSlots = (level, denom, sub) => {
+  const bucketSlot = subbucketSlot(level, denom, sub, DEC_BUCKET_ROSTER_SLOT);
   const dataBase = BigInt(ethers.keccak256(abi.encode(["uint256"], [bucketSlot])));
   return { bucketSlot, dataBase };
 };
+
+const burnTotalSlot = (level, denom, sub) => subbucketSlot(level, denom, sub, DEC_BUCKET_BURN_TOTAL_SLOT);
+const topSlot = (level, denom, sub) => subbucketSlot(level, denom, sub, DEC_BUCKET_TOP_SLOT);
 
 const setStorage = async (target, slot, value) => {
   await network.provider.send("hardhat_setStorageAt", [target, pad32(slot), value]);
@@ -42,56 +53,26 @@ const chunkedSet = async (target, writes, chunkSize = 64) => {
   }
 };
 
-// Simulate the selection phase (extMode == 2) using the exact contract math.
-const simulateSelection = (rosters, rngWord, cap) => {
-  let entropy = BigInt(rngWord);
-  const accumulators = {};
-  for (let denom = 2; denom <= 20; denom += 1) {
-    entropy = BigInt(ethers.keccak256(abi.encode(["uint256", "uint8"], [entropy, denom])));
-    accumulators[denom] = Number(entropy % BigInt(denom));
-  }
-
+// Simulate the selection phase (extMode == 2) using the subbucket selection math.
+const simulateSelection = (rosters, rngWord) => {
   const winners = [];
-  let extVar = 0n;
-  let winnersBudget = cap;
-  let denom = 2;
-  let idx = 0;
+  let totalBurn = 0n;
 
-  while (denom <= 20 && winnersBudget !== 0) {
-    const roster = rosters[denom] || [];
-    const len = roster.length;
-    let acc = accumulators[denom];
+  for (let denom = 2; denom <= 20; denom += 1) {
+    const bucketRosters = rosters[denom];
+    if (!bucketRosters) continue;
 
-    if (idx >= len) {
-      const advanced = len - idx;
-      accumulators[denom] = Number((BigInt(acc) + BigInt(advanced)) % BigInt(denom));
-      denom += 1;
-      idx = 0;
-      continue;
-    }
-
-    const step = (denom - ((acc + 1) % denom)) % denom;
-    const winnerIdx = idx + step;
-    if (winnerIdx >= len) {
-      accumulators[denom] = Number((BigInt(acc) + BigInt(len - idx)) % BigInt(denom));
-      denom += 1;
-      idx = 0;
-      continue;
-    }
-
-    const entry = roster[winnerIdx];
-    winners.push(entry);
-    extVar += entry.burn;
-    winnersBudget -= 1;
-    accumulators[denom] = 0;
-    idx = winnerIdx + 1;
-    if (idx >= len) {
-      denom += 1;
-      idx = 0;
+    const winningSub = Number(
+      BigInt(ethers.keccak256(abi.encode(["uint256", "uint8"], [rngWord, denom]))) % BigInt(denom)
+    );
+    const subRoster = bucketRosters[winningSub] || [];
+    winners.push(...subRoster);
+    for (const entry of subRoster) {
+      totalBurn += entry.burn;
     }
   }
 
-  return { winners, extVar };
+  return { winners, totalBurn };
 };
 
 describe("AdvanceGame Decimator Integration", function () {
@@ -104,6 +85,9 @@ describe("AdvanceGame Decimator Integration", function () {
       DEC_BURN_SLOT = slots.decBurnSlot;
       DEC_PLAYERS_COUNT_SLOT = slots.decPlayersCountSlot;
       DEC_BUCKET_ROSTER_SLOT = slots.decBucketRosterSlot;
+      DEC_BUCKET_BURN_TOTAL_SLOT = slots.decBucketBurnTotalSlot;
+      DEC_BUCKET_TOP_SLOT = slots.decBucketTopSlot;
+      DEC_BUCKET_INDEX_SLOT = slots.decBucketIndexSlot;
     }
 
     // --- Deploy Dependencies ---
@@ -167,7 +151,8 @@ describe("AdvanceGame Decimator Integration", function () {
       await renderer.getAddress(),
       await renderer.getAddress(),
       await questModule.getAddress(),
-      await extJackpotModule.getAddress()
+      await extJackpotModule.getAddress(),
+      deployer.address
     );
     
     await trophies.wireAndPrime(await game.getAddress(), await purgecoin.getAddress(), 1);
@@ -185,16 +170,20 @@ describe("AdvanceGame Decimator Integration", function () {
 
     // --- Seed decBucketRoster + decBurn in Purgecoin for PREVIOUS level (25) ---
     const decLevel = LEVEL - 1;
-    const burnByAddr = {};
-    const bucketByAddr = {};
     const rosters = {};
     let totalEntries = 0;
+    const decBucketIndexBase = mappingSlot(decLevel, DEC_BUCKET_INDEX_SLOT);
 
     for (const bucket of BUCKETS) {
-      const { bucketSlot, dataBase } = rosterSlots(decLevel, bucket);
-      const writes = [{ slot: bucketSlot, value: pad32(BigInt(ENTRIES_PER_BUCKET)) }];
+      const subRosters = Array.from({ length: bucket }, () => []);
+      const burnTotals = Array(bucket).fill(0n);
+      const topBurns = Array(bucket).fill(0n);
+      const topAddrs = Array(bucket).fill(ethers.ZeroAddress);
+      const rosterSlotsBySub = subRosters.map((_, sub) => rosterSlots(decLevel, bucket, sub));
+      const burnSlotsBySub = subRosters.map((_, sub) => burnTotalSlot(decLevel, bucket, sub));
+      const topSlotsBySub = subRosters.map((_, sub) => topSlot(decLevel, bucket, sub));
+      const writes = [];
 
-      const roster = [];
       for (let i = 0; i < ENTRIES_PER_BUCKET; i += 1) {
         const raw = ethers.keccak256(abi.encode(["uint8", "uint32"], [bucket, i]));
         const addr = ethers.getAddress("0x" + raw.slice(26));
@@ -203,19 +192,35 @@ describe("AdvanceGame Decimator Integration", function () {
             10n ** 15n) +
           10n ** 12n; // non-zero, varied
 
-        const packed = burn + (BigInt(decLevel) << 192n) + (BigInt(bucket) << 216n);
+        const sub = i % bucket;
+        const idxInSub = Math.floor(i / bucket);
+        const packed =
+          burn + (BigInt(decLevel) << 192n) + (BigInt(bucket) << 216n) + (BigInt(sub) << 224n);
         const decBurnSlot = mappingSlotAddr(addr, DEC_BURN_SLOT);
+        const decIndexSlot = mappingSlotAddr(addr, decBucketIndexBase);
 
-        writes.push({ slot: dataBase + BigInt(i), value: padAddr(addr) });
+        const { dataBase } = rosterSlotsBySub[sub];
+        writes.push({ slot: dataBase + BigInt(idxInSub), value: padAddr(addr) });
         writes.push({ slot: decBurnSlot, value: pad32(packed) });
+        writes.push({ slot: decIndexSlot, value: pad32(BigInt(idxInSub)) });
 
-        burnByAddr[addr] = burn;
-        bucketByAddr[addr] = bucket;
-        roster.push({ addr, burn, bucket });
+        subRosters[sub].push({ addr, burn, bucket, sub, idx: idxInSub });
+        burnTotals[sub] += burn;
+        if (burn > topBurns[sub]) {
+          topBurns[sub] = burn;
+          topAddrs[sub] = addr;
+        }
+      }
+
+      for (let sub = 0; sub < bucket; sub += 1) {
+        writes.push({ slot: rosterSlotsBySub[sub].bucketSlot, value: pad32(BigInt(subRosters[sub].length)) });
+        writes.push({ slot: burnSlotsBySub[sub], value: pad32(burnTotals[sub]) });
+        writes.push({ slot: topSlotsBySub[sub], value: padAddr(topAddrs[sub]) });
+        writes.push({ slot: topSlotsBySub[sub] + 1n, value: pad32(topBurns[sub]) });
       }
 
       await chunkedSet(await extJackpotModule.getAddress(), writes, 128);
-      rosters[bucket] = roster;
+      rosters[bucket] = subRosters;
       totalEntries += ENTRIES_PER_BUCKET;
     }
 
@@ -224,10 +229,8 @@ describe("AdvanceGame Decimator Integration", function () {
 
     // --- Expected winners + payouts (mirror contract logic) ---
     const expectedPool = (rewardPool * 15n) / 100n;
-    const { winners: expectedWinners, extVar } = simulateSelection(rosters, RNG_WORD, 1_000_000_000);
-    expect(extVar).to.be.gt(0n);
-    const totalWinnerBurn = expectedWinners.reduce((acc, w) => acc + w.burn, 0n);
-    expect(totalWinnerBurn).to.equal(extVar);
+    const { winners: expectedWinners, totalBurn: expectedTotalBurn } = simulateSelection(rosters, RNG_WORD);
+    expect(expectedTotalBurn).to.be.gt(0n);
 
     // --- Execute via advanceGame ---
     const gasLimit = 30_000_000;
@@ -254,7 +257,7 @@ describe("AdvanceGame Decimator Integration", function () {
     for (let i = 0; i < 5; i++) {
         const idx = Math.floor(Math.random() * expectedWinners.length);
         const winner = expectedWinners[idx];
-        const expectedAmount = (expectedPool * winner.burn) / totalWinnerBurn;
+        const expectedAmount = (expectedPool * winner.burn) / expectedTotalBurn;
         
         const claimable = await game.harnessGetClaimable(winner.addr);
         expect(claimable).to.equal(expectedAmount);

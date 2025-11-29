@@ -55,7 +55,8 @@ describe("Real Gas Benchmark (Keeper Mode)", function () {
         renderer.target,
         renderer.target,
         quest.target,
-        extJackpot.target
+        extJackpot.target,
+        deployer.address
     );
     
     await network.provider.request({ method: "hardhat_impersonateAccount", params: [game.target] });

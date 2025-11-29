@@ -50,7 +50,8 @@ describe("trait rebuild gas checks", function () {
       renderer.target,
       renderer.target,
       quest.target,
-      extJackpot.target
+      extJackpot.target,
+      deployer.address
     );
 
     return { game };

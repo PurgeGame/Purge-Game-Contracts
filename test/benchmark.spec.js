@@ -82,7 +82,8 @@ describe("Massive System Benchmark (Gas & Calls)", function () {
         renderer.target,
         renderer.target,
         quest.target,
-        extJackpot.target
+        extJackpot.target,
+        deployer.address
     );
     
     // Mint tokens to deployer for distribution
@@ -221,7 +222,16 @@ describe("Massive System Benchmark (Gas & Calls)", function () {
         1n, 
         link.target
       );
-      await purgecoin.wire(game.target, nft.target, trophies.target, renderer.target, renderer.target, quest.target, extJackpot.target);
+      await purgecoin.wire(
+        game.target,
+        nft.target,
+        trophies.target,
+        renderer.target,
+        renderer.target,
+        quest.target,
+        extJackpot.target,
+        deployer.address
+      );
       
       await network.provider.request({ method: "hardhat_impersonateAccount", params: [game.target] });
       await network.provider.send("hardhat_setBalance", [game.target, "0xDE0B6B3A7640000"]);
@@ -279,7 +289,16 @@ describe("Massive System Benchmark (Gas & Calls)", function () {
         1n, 
         link.target
       );
-      await purgecoin.wire(game.target, nft.target, trophies.target, renderer.target, renderer.target, quest.target, extJackpot.target);
+      await purgecoin.wire(
+        game.target,
+        nft.target,
+        trophies.target,
+        renderer.target,
+        renderer.target,
+        quest.target,
+        extJackpot.target,
+        deployer.address
+      );
       
       await network.provider.request({ method: "hardhat_impersonateAccount", params: [game.target] });
       await network.provider.send("hardhat_setBalance", [game.target, "0xDE0B6B3A7640000"]);
@@ -333,7 +352,16 @@ describe("Massive System Benchmark (Gas & Calls)", function () {
         1n, 
         link.target
       );
-      await purgecoin.wire(game.target, nft.target, trophies.target, renderer.target, renderer.target, quest.target, extJackpot.target);
+      await purgecoin.wire(
+        game.target,
+        nft.target,
+        trophies.target,
+        renderer.target,
+        renderer.target,
+        quest.target,
+        extJackpot.target,
+        deployer.address
+      );
       
       await network.provider.request({ method: "hardhat_impersonateAccount", params: [game.target] });
       await network.provider.send("hardhat_setBalance", [game.target, "0xDE0B6B3A7640000"]);

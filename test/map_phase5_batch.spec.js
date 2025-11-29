@@ -51,7 +51,8 @@ describe("Phase 5 map jackpot with 3000 cap", function () {
       renderer.target,
       renderer.target,
       quest.target,
-      extJackpot.target
+      extJackpot.target,
+      deployer.address
     );
 
     // Avoid coinflip pending gating.
