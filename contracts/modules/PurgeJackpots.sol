@@ -230,287 +230,266 @@ contract PurgeJackpots is IPurgeJackpots {
             uint256 returnAmountWei
         )
     {
-        uint32 batch;
-        if (cap == 0) {
-            batch = (kind == 0) ? BAF_BATCH : DEC_WINNER_BATCH;
-        } else {
-            batch = cap;
+        if (kind == 0) {
+            return _runBafJackpot(poolWei, cap, lvl, rngWord);
         }
+        if (kind == 1) {
+            return _runDecimatorJackpot(poolWei, cap, lvl, rngWord);
+        }
+        if (!bafState.inProgress) revert InvalidKind();
+        if (extMode == 1) {
+            return _runBafJackpot(poolWei, cap, lvl, rngWord);
+        }
+        if (extMode == 2) {
+            return _runDecimatorJackpot(poolWei, cap, lvl, rngWord);
+        }
+        revert InvalidKind();
+    }
+
+    function runBafJackpot(
+        uint256 poolWei,
+        uint32 cap,
+        uint24 lvl,
+        uint256 rngWord
+    )
+        external
+        override
+        onlyGameOrCoin
+        returns (
+            bool finished,
+            address[] memory winners,
+            uint256[] memory amounts,
+            uint256 trophyPoolDelta,
+            uint256 returnAmountWei
+        )
+    {
+        return _runBafJackpot(poolWei, cap, lvl, rngWord);
+    }
+
+    function runDecimatorJackpot(
+        uint256 poolWei,
+        uint32 cap,
+        uint24 lvl,
+        uint256 rngWord
+    )
+        external
+        override
+        onlyGameOrCoin
+        returns (
+            bool finished,
+            address[] memory winners,
+            uint256[] memory amounts,
+            uint256 trophyPoolDelta,
+            uint256 returnAmountWei
+        )
+    {
+        return _runDecimatorJackpot(poolWei, cap, lvl, rngWord);
+    }
+
+    function _runBafJackpot(
+        uint256 poolWei,
+        uint32 cap,
+        uint24 lvl,
+        uint256 rngWord
+    )
+        private
+        returns (
+            bool finished,
+            address[] memory winners,
+            uint256[] memory amounts,
+            uint256 trophyPoolDelta,
+            uint256 returnAmountWei
+        )
+    {
+        if (bafState.inProgress && extMode != 1) revert InvalidKind();
+
+        uint32 batch = cap == 0 ? BAF_BATCH : cap;
 
         if (!bafState.inProgress) {
-            if (kind > 1) revert InvalidKind();
-
             bafState.inProgress = true;
 
-            uint32 limit = (kind == 0) ? uint32(bafScatterRoster[lvl].length) : uint32(decPlayersCount[lvl]);
-            if (kind == 0) {
-                bs.offset = uint8(uint256(keccak256(abi.encode(rngWord, 1))) % 10);
-                scanCursor = bs.offset;
-            } else {
-                bs.offset = 0;
-                scanCursor = 0;
-                decScanDenom = 2;
-                decScanIndex = 0;
-                decTotalBurn = 0;
-                decBucketSeed = rngWord;
-                decTopWinner = address(0);
-                decTopBurn = 0;
-            }
+            uint32 limit = uint32(bafScatterRoster[lvl].length);
+            bs.offset = uint8(uint256(keccak256(abi.encode(rngWord, 1))) % 10);
+            scanCursor = bs.offset;
             bs.limit = limit;
 
             bafState.totalPrizePoolWei = uint128(poolWei);
             bafState.returnAmountWei = 0;
 
             extVar = 0;
-            extMode = (kind == 0) ? uint8(1) : uint8(2);
+            extMode = 1;
 
-            if (kind == 1) {
-                _seedDecBucketState(rngWord);
+            uint256 P = poolWei;
+            address[] memory tmpW = new address[](10);
+            uint256[] memory tmpA = new uint256[](10);
+            uint256 n;
+            uint256 toReturn;
+            address trophyRecipient;
+            bool trophyAwarded;
+
+            uint256 entropy = rngWord;
+            uint256 salt;
+
+            {
+                uint256 prize = P / 10;
+
+                (address w, ) = _bafTop(lvl, 0);
+                if (_creditOrRefund(w, prize, tmpW, tmpA, n)) {
+                    unchecked {
+                        ++n;
+                    }
+                    trophyRecipient = w;
+                    uint256 trophyData = (uint256(BAF_TRAIT_SENTINEL) << 152) |
+                        (uint256(lvl) << TROPHY_BASE_LEVEL_SHIFT) |
+                        TROPHY_FLAG_BAF;
+                    purgeGameTrophies.awardTrophy(trophyRecipient, lvl, PURGE_TROPHY_KIND_BAF, trophyData, prize);
+                    trophyAwarded = true;
+                } else {
+                    toReturn += prize;
+                }
             }
 
-            if (kind == 0) {
-                uint256 P = poolWei;
-                address[] memory tmpW = new address[](10);
-                uint256[] memory tmpA = new uint256[](10);
-                uint256 n;
-                uint256 toReturn;
-                address trophyRecipient;
-                bool trophyAwarded;
-
-                uint256 entropy = rngWord;
-                uint256 salt;
-
-                {
-                    uint256 prize = P / 10;
-
-                    (address w, ) = _bafTop(lvl, 0);
-                    if (_creditOrRefund(w, prize, tmpW, tmpA, n)) {
-                        unchecked {
-                            ++n;
-                        }
-                        trophyRecipient = w;
-                        uint256 trophyData = (uint256(BAF_TRAIT_SENTINEL) << 152) |
-                            (uint256(lvl) << TROPHY_BASE_LEVEL_SHIFT) |
-                            TROPHY_FLAG_BAF;
-                        purgeGameTrophies.awardTrophy(trophyRecipient, lvl, PURGE_TROPHY_KIND_BAF, trophyData, prize);
-                        trophyAwarded = true;
-                    } else {
-                        toReturn += prize;
-                    }
+            {
+                unchecked {
+                    ++salt;
                 }
-
-                {
+                entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
+                uint256 prize = P / 10;
+                uint8 pick = uint8(entropy & 3);
+                (address w, ) = _bafTop(lvl, pick);
+                if (w == address(0) && pick != 0) {
+                    (w, ) = _bafTop(lvl, 0);
+                }
+                if (_creditOrRefund(w, prize, tmpW, tmpA, n)) {
                     unchecked {
-                        ++salt;
+                        ++n;
                     }
-                    entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
-                    uint256 prize = P / 10;
-                    uint8 pick = uint8(entropy & 3);
-                    (address w, ) = _bafTop(lvl, pick);
-                    if (w == address(0) && pick != 0) {
-                        (w, ) = _bafTop(lvl, 0);
-                    }
-                    if (_creditOrRefund(w, prize, tmpW, tmpA, n)) {
-                        unchecked {
-                            ++n;
-                        }
-                    } else {
-                        toReturn += prize;
-                    }
-                }
-
-                {
-                    unchecked {
-                        ++salt;
-                    }
-                    entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
-                    // Legacy coinflip-queue prizes removed; return this slice to the pool.
-                    toReturn += (P * 18) / 100;
-                }
-
-                {
-                    uint256 trophyDelta;
-                    uint256[4] memory trophyPrizes = [(P * 5) / 100, (P * 3) / 100, (P * 2) / 100, uint256(0)];
-                    address[4] memory trophyOwners;
-                    uint256[4] memory trophyIds;
-
-                    for (uint8 s; s < 4; ) {
-                        unchecked {
-                            ++salt;
-                        }
-                        entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
-                        (uint256 tokenId, address owner) = purgeGameTrophies.stakedTrophySampleWithId(entropy);
-                        trophyIds[s] = tokenId;
-                        trophyOwners[s] = owner;
-                        unchecked {
-                            ++s;
-                        }
-                    }
-
-                    // Sort trophies by owner coinflip size
-                    for (uint8 i; i < 4; ) {
-                        uint8 bestIdx = i;
-                        uint256 best = coin.coinflipAmount(trophyOwners[i]);
-                        for (uint8 j = i + 1; j < 4; ) {
-                            uint256 val = coin.coinflipAmount(trophyOwners[j]);
-                            if (val > best) {
-                                best = val;
-                                bestIdx = j;
-                            }
-                            unchecked {
-                                ++j;
-                            }
-                        }
-                        if (bestIdx != i) {
-                            address ownerTmp = trophyOwners[i];
-                            trophyOwners[i] = trophyOwners[bestIdx];
-                            trophyOwners[bestIdx] = ownerTmp;
-
-                            uint256 tokenTmp = trophyIds[i];
-                            trophyIds[i] = trophyIds[bestIdx];
-                            trophyIds[bestIdx] = tokenTmp;
-                        }
-                        unchecked {
-                            ++i;
-                        }
-                    }
-
-                    for (uint8 i; i < 4; ) {
-                        uint256 prize = trophyPrizes[i];
-                        uint256 tokenId = trophyIds[i];
-                        address owner = trophyOwners[i];
-                        bool eligibleOwner = tokenId != 0 && owner != address(0) && _eligible(owner);
-                        if (eligibleOwner && prize != 0) {
-                            purgeGameTrophies.rewardTrophyByToken(tokenId, prize, lvl);
-                            trophyDelta += prize;
-                        } else if (prize != 0) {
-                            toReturn += prize;
-                        }
-                        unchecked {
-                            ++i;
-                        }
-                    }
-                    extVar = trophyDelta;
-                }
-
-                {
-                    uint256 prizeLuckbox = (P * 2) / 100;
-                    (address luckboxLeader, uint96 luckboxScore) = coin.biggestLuckbox();
-                    if (luckboxLeader != address(0) && luckboxScore != 0) {
-                        if (_creditOrRefund(luckboxLeader, prizeLuckbox, tmpW, tmpA, n)) {
-                            unchecked {
-                                ++n;
-                            }
-                        } else {
-                            toReturn += prizeLuckbox;
-                        }
-                    } else {
-                        toReturn += prizeLuckbox;
-                    }
-                }
-
-                uint256 scatter = (P * 2) / 5;
-                if (limit >= 10 && bs.offset < limit) {
-                    uint256 occurrences = 1 + (uint256(limit) - 1 - bs.offset) / 10;
-                    uint256 perWei = scatter / occurrences;
-                    bs.per = uint120(perWei);
-
-                    uint256 rem = scatter - perWei * occurrences;
-                    bafState.returnAmountWei = uint120(toReturn + rem);
                 } else {
-                    bs.per = 0;
-                    bafState.returnAmountWei = uint120(toReturn + scatter);
+                    toReturn += prize;
+                }
+            }
+
+            {
+                unchecked {
+                    ++salt;
+                }
+                entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
+                // Legacy coinflip-queue prizes removed; return this slice to the pool.
+                toReturn += (P * 18) / 100;
+            }
+
+            {
+                uint256 trophyDelta;
+                uint256[4] memory trophyPrizes = [(P * 5) / 100, (P * 3) / 100, (P * 2) / 100, uint256(0)];
+                address[4] memory trophyOwners;
+                uint256[4] memory trophyIds;
+
+                for (uint8 s; s < 4; ) {
+                    unchecked {
+                        ++salt;
+                    }
+                    entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
+                    (uint256 tokenId, address owner) = purgeGameTrophies.stakedTrophySampleWithId(entropy);
+                    trophyIds[s] = tokenId;
+                    trophyOwners[s] = owner;
+                    unchecked {
+                        ++s;
+                    }
                 }
 
-                if (!trophyAwarded) {
-                    purgeGameTrophies.burnBafPlaceholder(lvl);
-                }
+                // Sort trophies by owner coinflip size
+                for (uint8 i; i < 4; ) {
+                    uint8 bestIdx = i;
+                    uint256 best = coin.coinflipAmount(trophyOwners[i]);
+                    for (uint8 j = i + 1; j < 4; ) {
+                        uint256 val = coin.coinflipAmount(trophyOwners[j]);
+                        if (val > best) {
+                            best = val;
+                            bestIdx = j;
+                        }
+                        unchecked {
+                            ++j;
+                        }
+                    }
+                    if (bestIdx != i) {
+                        address ownerTmp = trophyOwners[i];
+                        trophyOwners[i] = trophyOwners[bestIdx];
+                        trophyOwners[bestIdx] = ownerTmp;
 
-                winners = new address[](n);
-                amounts = new uint256[](n);
-                for (uint256 i; i < n; ) {
-                    winners[i] = tmpW[i];
-                    amounts[i] = tmpA[i];
+                        uint256 tokenTmp = trophyIds[i];
+                        trophyIds[i] = trophyIds[bestIdx];
+                        trophyIds[bestIdx] = tokenTmp;
+                    }
                     unchecked {
                         ++i;
                     }
                 }
 
-                if (bs.per == 0 || limit < 10 || bs.offset >= limit) {
-                    uint256 ret = uint256(bafState.returnAmountWei);
-                    trophyPoolDelta = extVar;
-                    _clearBafTop(lvl);
-                    delete bafState;
-                    delete bs;
-                    extMode = 0;
-                    extVar = 0;
-                    scanCursor = SS_IDLE;
-                    return (true, winners, amounts, trophyPoolDelta, ret);
-                }
-                return (false, winners, amounts, 0, 0);
-            }
-
-            return (false, new address[](0), new uint256[](0), 0, 0);
-        }
-
-        if (extMode == 1) {
-            uint32 end = scanCursor + batch;
-            if (end > bs.limit) end = bs.limit;
-
-            uint256 per = uint256(bs.per);
-            uint256 retWei = uint256(bafState.returnAmountWei);
-            address[] storage roster = bafScatterRoster[lvl];
-            BafClaimRound storage round = bafScatterRound[lvl];
-            if (round.level != lvl) {
-                delete bafScatterRound[lvl];
-                delete bafScatterRoster[lvl];
-                round = bafScatterRound[lvl];
-                round.level = lvl;
-                round.perWei = per;
-                round.active = false;
-            }
-
-            bool anyWinner;
-            for (uint32 i = scanCursor; i < end; ) {
-                if (i >= roster.length) {
-                    retWei += per;
+                for (uint8 i; i < 4; ) {
+                    uint256 prize = trophyPrizes[i];
+                    uint256 tokenId = trophyIds[i];
+                    address owner = trophyOwners[i];
+                    bool eligibleOwner = tokenId != 0 && owner != address(0) && _eligible(owner);
+                    if (eligibleOwner && prize != 0) {
+                        purgeGameTrophies.rewardTrophyByToken(tokenId, prize, lvl);
+                        trophyDelta += prize;
+                    } else if (prize != 0) {
+                        toReturn += prize;
+                    }
                     unchecked {
-                        i += 10;
+                        ++i;
                     }
-                    continue;
                 }
-                address p = roster[i];
-                if (_eligible(p)) {
-                    if (!bafScatterWinner[lvl][p]) {
-                        bafScatterWinner[lvl][p] = true;
-                        anyWinner = true;
+                extVar = trophyDelta;
+            }
+
+            {
+                uint256 prizeLuckbox = (P * 2) / 100;
+                (address luckboxLeader, uint96 luckboxScore) = coin.biggestLuckbox();
+                if (luckboxLeader != address(0) && luckboxScore != 0) {
+                    if (_creditOrRefund(luckboxLeader, prizeLuckbox, tmpW, tmpA, n)) {
+                        unchecked {
+                            ++n;
+                        }
                     } else {
-                        retWei += per;
+                        toReturn += prizeLuckbox;
                     }
                 } else {
-                    retWei += per;
-                }
-                unchecked {
-                    i += 10;
+                    toReturn += prizeLuckbox;
                 }
             }
-            scanCursor = end;
-            bafState.returnAmountWei = uint120(retWei);
 
-            winners = new address[](0);
-            amounts = new uint256[](0);
-            if (end == bs.limit) {
-                uint256 ret = uint256(bafState.returnAmountWei);
-                if (!anyWinner) {
-                    delete bafScatterRound[lvl];
-                    delete bafScatterRoster[lvl];
-                } else {
-                    round.perWei = per;
-                    round.active = true;
-                    delete bafScatterRoster[lvl];
+            uint256 scatter = (P * 2) / 5;
+            if (limit >= 10 && bs.offset < limit) {
+                uint256 occurrences = 1 + (uint256(limit) - 1 - bs.offset) / 10;
+                uint256 perWei = scatter / occurrences;
+                bs.per = uint120(perWei);
+
+                uint256 rem = scatter - perWei * occurrences;
+                bafState.returnAmountWei = uint120(toReturn + rem);
+            } else {
+                bs.per = 0;
+                bafState.returnAmountWei = uint120(toReturn + scatter);
+            }
+
+            if (!trophyAwarded) {
+                purgeGameTrophies.burnBafPlaceholder(lvl);
+            }
+
+            winners = new address[](n);
+            amounts = new uint256[](n);
+            for (uint256 i; i < n; ) {
+                winners[i] = tmpW[i];
+                amounts[i] = tmpA[i];
+                unchecked {
+                    ++i;
                 }
-                _clearBafTop(lvl);
+            }
+
+            if (bs.per == 0 || limit < 10 || bs.offset >= limit) {
+                uint256 ret = uint256(bafState.returnAmountWei);
                 trophyPoolDelta = extVar;
+                _clearBafTop(lvl);
                 delete bafState;
                 delete bs;
                 extMode = 0;
@@ -521,125 +500,195 @@ contract PurgeJackpots is IPurgeJackpots {
             return (false, winners, amounts, 0, 0);
         }
 
-        if (extMode == 2) {
-            if (decScanDenom < 2) {
-                decScanDenom = 2;
-                decScanIndex = 0;
-                _seedDecBucketState(decBucketSeed);
+        if (extMode != 1) revert InvalidKind();
+
+        uint32 end = scanCursor + batch;
+        if (end > bs.limit) end = bs.limit;
+
+        uint256 per = uint256(bs.per);
+        uint256 retWei = uint256(bafState.returnAmountWei);
+        address[] storage roster = bafScatterRoster[lvl];
+        BafClaimRound storage round = bafScatterRound[lvl];
+        if (round.level != lvl) {
+            delete bafScatterRound[lvl];
+            delete bafScatterRoster[lvl];
+            round = bafScatterRound[lvl];
+            round.level = lvl;
+            round.perWei = per;
+            round.active = false;
+        }
+
+        bool anyWinner;
+        for (uint32 i = scanCursor; i < end; ) {
+            if (i >= roster.length) {
+                retWei += per;
+                unchecked {
+                    i += 10;
+                }
+                continue;
             }
-            uint32 winnersBudget = batch;
-            uint32 ops;
-            uint32 opsLimit = batch * 4;
-            if (opsLimit < 5000) opsLimit = 5000;
-
-            for (; decScanDenom <= 20 && winnersBudget != 0 && ops < opsLimit; ) {
-                uint8 denom = decScanDenom;
-                uint32 acc = decBucketAccumulator[denom];
-                address[] storage roster = decBucketRoster[lvl][denom];
-                uint256 len = roster.length;
-                uint32 idx = decScanIndex;
-
-                if (idx >= len) {
-                    uint256 advanced = len >= idx ? (len - idx) : 0;
-                    decBucketAccumulator[denom] = uint32((uint256(acc) + advanced) % denom);
-                    decScanDenom = denom + 1;
-                    decScanIndex = 0;
-                    continue;
+            address p = roster[i];
+            if (_eligible(p)) {
+                if (!bafScatterWinner[lvl][p]) {
+                    bafScatterWinner[lvl][p] = true;
+                    anyWinner = true;
+                } else {
+                    retWei += per;
                 }
-
-                bool exhaustedBucket;
-                while (winnersBudget != 0 && ops < opsLimit) {
-                    unchecked {
-                        ++ops;
-                    }
-                    uint256 step = (denom - ((uint256(acc) + 1) % denom)) % denom;
-                    uint256 winnerIdx = uint256(idx) + step;
-                    if (winnerIdx >= len) {
-                        decBucketAccumulator[denom] = uint32((uint256(acc) + (len - idx)) % denom);
-                        exhaustedBucket = true;
-                        break;
-                    }
-
-                    address p = roster[winnerIdx];
-                    DecEntry storage e = decBurn[p];
-                    if (e.level == lvl && e.bucket == denom && e.burn != 0) {
-                        uint256 burn = e.burn;
-                        decTotalBurn += burn;
-                        if (burn > uint256(decTopBurn)) {
-                            decTopBurn = uint192(burn);
-                            decTopWinner = p;
-                        }
-                        unchecked {
-                            --winnersBudget;
-                        }
-                    }
-
-                    acc = 0;
-                    idx = uint32(winnerIdx + 1);
-                    if (idx >= len) {
-                        exhaustedBucket = true;
-                        break;
-                    }
-                }
-
-                decBucketAccumulator[denom] = acc;
-                decScanIndex = idx;
-
-                if (exhaustedBucket) {
-                    decScanDenom = denom + 1;
-                    decScanIndex = 0;
-                }
+            } else {
+                retWei += per;
             }
+            unchecked {
+                i += 10;
+            }
+        }
+        scanCursor = end;
+        bafState.returnAmountWei = uint120(retWei);
 
-            if (decScanDenom > 20) {
-                if (decTotalBurn == 0) {
-                    uint256 refund = uint256(bafState.totalPrizePoolWei);
-                    if (_hasDecPlaceholder(lvl)) {
-                        purgeGameTrophies.burnDecPlaceholder(lvl);
-                    }
-                    delete bafState;
-                    delete bs;
-                    extMode = 0;
-                    extVar = 0;
-                    decTotalBurn = 0;
-                    decBucketSeed = 0;
-                    decTopWinner = address(0);
-                    decTopBurn = 0;
-                    decScanDenom = 0;
-                    decScanIndex = 0;
-                    scanCursor = SS_IDLE;
-                    _resetDecBucketState();
-                    return (true, new address[](0), new uint256[](0), 0, refund);
-                }
-
-                uint256 totalPool = uint256(bafState.totalPrizePoolWei);
-
-                DecClaimRound storage round = decClaimRound[lvl];
-                round.poolWei = totalPool;
-                round.totalBurn = decTotalBurn;
-                round.level = lvl;
+        winners = new address[](0);
+        amounts = new uint256[](0);
+        if (end == bs.limit) {
+            uint256 ret = uint256(bafState.returnAmountWei);
+            if (!anyWinner) {
+                delete bafScatterRound[lvl];
+                delete bafScatterRoster[lvl];
+            } else {
+                round.perWei = per;
                 round.active = true;
+                delete bafScatterRoster[lvl];
+            }
+            _clearBafTop(lvl);
+            trophyPoolDelta = extVar;
+            delete bafState;
+            delete bs;
+            extMode = 0;
+            extVar = 0;
+            scanCursor = SS_IDLE;
+            return (true, winners, amounts, trophyPoolDelta, ret);
+        }
+        return (false, winners, amounts, 0, 0);
+    }
 
-                // Derive winning offsets for each bucket for claim-time verification.
-                for (uint8 denom = 2; denom <= 20; ) {
-                    uint256 seed = uint256(keccak256(abi.encode(decBucketSeed, denom)));
-                    decBucketOffset[lvl][denom] = uint32(seed % denom);
+    function _runDecimatorJackpot(
+        uint256 poolWei,
+        uint32 cap,
+        uint24 lvl,
+        uint256 rngWord
+    )
+        private
+        returns (
+            bool finished,
+            address[] memory winners,
+            uint256[] memory amounts,
+            uint256 trophyPoolDelta,
+            uint256 returnAmountWei
+        )
+    {
+        if (bafState.inProgress && extMode != 2) revert InvalidKind();
+
+        uint32 batch = cap == 0 ? DEC_WINNER_BATCH : cap;
+
+        if (!bafState.inProgress) {
+            bafState.inProgress = true;
+
+            bs.offset = 0;
+            scanCursor = 0;
+            decScanDenom = 2;
+            decScanIndex = 0;
+            decTotalBurn = 0;
+            decBucketSeed = rngWord;
+            decTopWinner = address(0);
+            decTopBurn = 0;
+            bs.limit = uint32(decPlayersCount[lvl]);
+
+            bafState.totalPrizePoolWei = uint128(poolWei);
+            bafState.returnAmountWei = 0;
+
+            extVar = 0;
+            extMode = 2;
+
+            _seedDecBucketState(rngWord);
+
+            return (false, new address[](0), new uint256[](0), 0, 0);
+        }
+
+        if (extMode != 2) revert InvalidKind();
+
+        if (decScanDenom < 2) {
+            decScanDenom = 2;
+            decScanIndex = 0;
+            _seedDecBucketState(decBucketSeed);
+        }
+        uint32 winnersBudget = batch;
+        uint32 ops;
+        uint32 opsLimit = batch * 4;
+        if (opsLimit < 5000) opsLimit = 5000;
+
+        for (; decScanDenom <= 20 && winnersBudget != 0 && ops < opsLimit; ) {
+            uint8 denom = decScanDenom;
+            uint32 acc = decBucketAccumulator[denom];
+            address[] storage roster = decBucketRoster[lvl][denom];
+            uint256 len = roster.length;
+            uint32 idx = decScanIndex;
+
+            if (idx >= len) {
+                uint256 advanced = len >= idx ? (len - idx) : 0;
+                decBucketAccumulator[denom] = uint32((uint256(acc) + advanced) % denom);
+                decScanDenom = denom + 1;
+                decScanIndex = 0;
+                continue;
+            }
+
+            bool exhaustedBucket;
+            while (winnersBudget != 0 && ops < opsLimit) {
+                unchecked {
+                    ++ops;
+                }
+                uint256 step = (denom - ((uint256(acc) + 1) % denom)) % denom;
+                uint256 winnerIdx = uint256(idx) + step;
+                if (winnerIdx >= len) {
+                    decBucketAccumulator[denom] = uint32((uint256(acc) + (len - idx)) % denom);
+                    exhaustedBucket = true;
+                    break;
+                }
+
+                address p = roster[winnerIdx];
+                DecEntry storage e = decBurn[p];
+                if (e.level == lvl && e.bucket == denom && e.burn != 0) {
+                    uint256 burn = e.burn;
+                    decTotalBurn += burn;
+                    if (burn > uint256(decTopBurn)) {
+                        decTopBurn = uint192(burn);
+                        decTopWinner = p;
+                    }
                     unchecked {
-                        ++denom;
+                        --winnersBudget;
                     }
                 }
 
+                acc = 0;
+                idx = uint32(winnerIdx + 1);
+                if (idx >= len) {
+                    exhaustedBucket = true;
+                    break;
+                }
+            }
+
+            decBucketAccumulator[denom] = acc;
+            decScanIndex = idx;
+
+            if (exhaustedBucket) {
+                decScanDenom = denom + 1;
+                decScanIndex = 0;
+            }
+        }
+
+        if (decScanDenom > 20) {
+            if (decTotalBurn == 0) {
+                uint256 refund = uint256(bafState.totalPrizePoolWei);
                 if (_hasDecPlaceholder(lvl)) {
-                    if (decTopWinner != address(0)) {
-                        uint256 trophyData = (uint256(DECIMATOR_TRAIT_SENTINEL) << 152) |
-                            (uint256(lvl) << TROPHY_BASE_LEVEL_SHIFT) |
-                            TROPHY_FLAG_DECIMATOR;
-                        purgeGameTrophies.awardTrophy(decTopWinner, lvl, PURGE_TROPHY_KIND_DECIMATOR, trophyData, 0);
-                    } else {
-                        purgeGameTrophies.burnDecPlaceholder(lvl);
-                    }
+                    purgeGameTrophies.burnDecPlaceholder(lvl);
                 }
-
                 delete bafState;
                 delete bs;
                 extMode = 0;
@@ -647,20 +696,57 @@ contract PurgeJackpots is IPurgeJackpots {
                 decTotalBurn = 0;
                 decBucketSeed = 0;
                 decTopWinner = address(0);
+                decTopBurn = 0;
                 decScanDenom = 0;
                 decScanIndex = 0;
                 scanCursor = SS_IDLE;
                 _resetDecBucketState();
-                return (true, new address[](0), new uint256[](0), 0, 0);
+                return (true, new address[](0), new uint256[](0), 0, refund);
             }
 
-            return (false, new address[](0), new uint256[](0), 0, 0);
+            uint256 totalPool = uint256(bafState.totalPrizePoolWei);
+
+            DecClaimRound storage round = decClaimRound[lvl];
+            round.poolWei = totalPool;
+            round.totalBurn = decTotalBurn;
+            round.level = lvl;
+            round.active = true;
+
+            // Derive winning offsets for each bucket for claim-time verification.
+            for (uint8 denom = 2; denom <= 20; ) {
+                uint256 seed = uint256(keccak256(abi.encode(decBucketSeed, denom)));
+                decBucketOffset[lvl][denom] = uint32(seed % denom);
+                unchecked {
+                    ++denom;
+                }
+            }
+
+            if (_hasDecPlaceholder(lvl)) {
+                if (decTopWinner != address(0)) {
+                    uint256 trophyData = (uint256(DECIMATOR_TRAIT_SENTINEL) << 152) |
+                        (uint256(lvl) << TROPHY_BASE_LEVEL_SHIFT) |
+                        TROPHY_FLAG_DECIMATOR;
+                    purgeGameTrophies.awardTrophy(decTopWinner, lvl, PURGE_TROPHY_KIND_DECIMATOR, trophyData, 0);
+                } else {
+                    purgeGameTrophies.burnDecPlaceholder(lvl);
+                }
+            }
+
+            delete bafState;
+            delete bs;
+            extMode = 0;
+            extVar = 0;
+            decTotalBurn = 0;
+            decBucketSeed = 0;
+            decTopWinner = address(0);
+            decScanDenom = 0;
+            decScanIndex = 0;
+            scanCursor = SS_IDLE;
+            _resetDecBucketState();
+            return (true, new address[](0), new uint256[](0), 0, 0);
         }
 
-        if (extMode == 3) {
-            // Legacy Decimator streaming payouts removed; Decimator jackpots are now claim-based.
-            revert InvalidKind();
-        }
+        return (false, new address[](0), new uint256[](0), 0, 0);
     }
 
     // ---------------------------------------------------------------------

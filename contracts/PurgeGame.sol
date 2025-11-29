@@ -485,7 +485,6 @@ contract PurgeGame is PurgeGameStorage {
                     uint256 mapEffectiveWei = _calcPrizePoolForJackpot(lvl, rngWord);
                     payMapJackpot(lvl, rngWord, mapEffectiveWei);
 
-                    coinContract.rollDailyQuest(day, rngWord);
                     airdropMapsProcessedCount = 0;
                     if (airdropIndex >= pendingMapMints.length) {
                         airdropIndex = 0;
@@ -521,9 +520,9 @@ contract PurgeGame is PurgeGameStorage {
                     uint32 mintedCount = _purchaseTargetCountFromRaw(purchaseCountRaw);
                     nft.finalizePurchasePhase(mintedCount, rngWordCurrent);
                     if ((rngWordCurrent & 1) == 1) {
-                        coinContract.rewardTopFlipBonus(priceCoin);
+                        coinContract.rewardTopFlipBonus(day, priceCoin);
                     }
-                    coinContract.resetCoinflipLeaderboard();
+                    coinContract.resetCoinflipLeaderboard(day);
                     traitRebuildCursor = 0;
                     airdropMultiplier = 1;
                     earlyPurgePercent = 0;

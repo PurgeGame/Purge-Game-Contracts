@@ -16,14 +16,12 @@ interface IStETH {
  */
 contract PurgeGameJackpotModule is PurgeGameStorage {
     event PlayerCredited(address indexed player, uint256 amount);
-    event Jackpot(uint256 traits);
 
     uint48 private constant JACKPOT_RESET_TIME = 82620;
     uint8 private constant JACKPOT_LEVEL_CAP = 10;
     uint8 private constant EARLY_PURGE_COIN_ONLY_THRESHOLD = 50;
     uint8 private constant EARLY_PURGE_BOOST_THRESHOLD = 60;
     uint8 private constant PURGE_TROPHY_KIND_MAP = 0;
-    uint16 private constant TRAIT_ID_TIMEOUT = 420;
     uint256 private constant DEGENERATE_ENTROPY_CHECK_VALUE = 420;
     uint64 private constant MAP_JACKPOT_SHARES_PACKED =
         (uint64(6000)) | (uint64(1333) << 16) | (uint64(1333) << 32) | (uint64(1334) << 48);
@@ -86,6 +84,8 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         bool coinOnly = !boostTrigger && percentBefore >= EARLY_PURGE_COIN_ONLY_THRESHOLD;
 
         uint256 entropyWord = _scrambleJackpotEntropy(randWord, jackpotCounter);
+        uint48 questDay = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
+
         if (!isDaily) {
             uint32 winningTraitsPacked = _packWinningTraits(_getRandomTraits(entropyWord));
 
@@ -173,10 +173,10 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         }
 
         if ((randWord & 1) == 1) {
-            coinContract.rewardTopFlipBonus(priceCoin);
+            coinContract.rewardTopFlipBonus(questDay, priceCoin);
         }
-        coinContract.resetCoinflipLeaderboard();
-        _rollQuestForJackpot(coinContract, entropyWord, false);
+        coinContract.resetCoinflipLeaderboard(questDay);
+        _rollQuestForJackpot(coinContract, entropyWord, false, questDay);
     }
 
     function payMapJackpot(
@@ -204,7 +204,8 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
 
         currentPrizePool += (effectiveWei - paidWeiMap);
 
-        _rollQuestForJackpot(coinContract, rngWord, true);
+        uint48 questDay = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
+        _rollQuestForJackpot(coinContract, rngWord, true, questDay);
     }
 
     function runDecimatorHundredJackpot(
@@ -223,8 +224,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         uint256 pool = decimatorHundredPool;
 
         address jackpots = coinContract.jackpots();
-        (bool done, , , uint256 trophyPoolDelta, uint256 returnWei) = IPurgeJackpots(jackpots).runExternalJackpot(
-            1,
+        (bool done, , , uint256 trophyPoolDelta, uint256 returnWei) = IPurgeJackpots(jackpots).runDecimatorJackpot(
             pool,
             cap,
             lvl,
@@ -717,9 +717,9 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
     function _rollQuestForJackpot(
         IPurgeCoinModule coinContract,
         uint256 entropySource,
-        bool forceMintEthAndPurge
+        bool forceMintEthAndPurge,
+        uint48 questDay
     ) private {
-        uint48 questDay = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
         uint256 questEntropy = entropySource;
         if (forceMintEthAndPurge) {
             coinContract.rollDailyQuestWithOverrides(questDay, questEntropy, true, true);
@@ -752,10 +752,6 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         traits[1] = uint8(packed >> 8);
         traits[2] = uint8(packed >> 16);
         traits[3] = uint8(packed >> 24);
-    }
-
-    function _traitFromPacked(uint32 packed, uint8 idx) private pure returns (uint8) {
-        return uint8(packed >> (uint32(idx) * 8));
     }
 
     function _shareBpsByBucket(uint64 packed, uint8 offset) private pure returns (uint16[4] memory shares) {

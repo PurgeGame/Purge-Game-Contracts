@@ -259,13 +259,30 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         address jackpots,
         bool consumeCarry
     ) private returns (bool finished, uint256 returnedWei) {
-        (
-            bool isFinished,
-            address[] memory winnersArr,
-            uint256[] memory amountsArr,
-            uint256 trophyPoolDelta,
-            uint256 returnWei
-        ) = IPurgeJackpots(jackpots).runExternalJackpot(kind, poolWei, cap, lvl, rngWord);
+        bool isFinished;
+        address[] memory winnersArr;
+        uint256[] memory amountsArr;
+        uint256 trophyPoolDelta;
+        uint256 returnWei;
+
+        if (kind == 0) {
+            (isFinished, winnersArr, amountsArr, trophyPoolDelta, returnWei) = IPurgeJackpots(jackpots).runBafJackpot(
+                poolWei,
+                cap,
+                lvl,
+                rngWord
+            );
+        } else if (kind == 1) {
+            (
+                isFinished,
+                winnersArr,
+                amountsArr,
+                trophyPoolDelta,
+                returnWei
+            ) = IPurgeJackpots(jackpots).runDecimatorJackpot(poolWei, cap, lvl, rngWord);
+        } else {
+            revert E();
+        }
 
         for (uint256 i; i < winnersArr.length; ) {
             _addClaimableEth(winnersArr[i], amountsArr[i]);

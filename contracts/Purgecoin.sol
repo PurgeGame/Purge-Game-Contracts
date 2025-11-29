@@ -93,6 +93,7 @@ contract Purgecoin {
     uint48 internal currentFlipDay;
 
     PlayerScore public topBettor;
+    mapping(uint48 => PlayerScore) internal coinflipTopByDay;
     mapping(uint24 => PlayerScore) internal coinflipTopByLevel;
 
     mapping(address => uint256) public playerLuckbox;
@@ -1056,11 +1057,17 @@ contract Purgecoin {
         _addToBounty(amount);
     }
 
-    function rewardTopFlipBonus(uint256 amount) external onlyPurgeGameContract {
-        address top = topBettor.player;
-        if (top == address(0)) return;
+    function rewardTopFlipBonus(uint48 day, uint256 amount) external onlyPurgeGameContract {
+        PlayerScore memory entry = coinflipTopByDay[day];
+        if (entry.player == address(0)) {
+            entry = topBettor;
+            if (entry.player != address(0)) {
+                coinflipTopByDay[day] = entry;
+            }
+        }
+        if (entry.player == address(0)) return;
 
-        addFlip(top, amount, false, false, true);
+        addFlip(entry.player, amount, false, false, true);
     }
 
     /// @notice Return the top coinflip bettor recorded for a given level.
@@ -1074,8 +1081,9 @@ contract Purgecoin {
         return (stored.player, stored.score);
     }
 
-    function resetCoinflipLeaderboard() external onlyPurgeGameContract {
+    function resetCoinflipLeaderboard(uint48 day) external onlyPurgeGameContract {
         _archiveCoinflipTop(purgeGame.level());
+        _archiveCoinflipTopByDay(day);
         _clearActiveCoinflipLeaderboard();
     }
 
@@ -1085,6 +1093,15 @@ contract Purgecoin {
             coinflipTopByLevel[lvl] = leader;
         } else {
             delete coinflipTopByLevel[lvl];
+        }
+    }
+
+    function _archiveCoinflipTopByDay(uint48 day) internal {
+        PlayerScore memory leader = topBettor;
+        if (leader.player != address(0) && leader.score != 0) {
+            coinflipTopByDay[day] = leader;
+        } else {
+            delete coinflipTopByDay[day];
         }
     }
 
@@ -1152,10 +1169,10 @@ contract Purgecoin {
         if (!skipLuckboxCheck && playerLuckbox[player] == 0) {
             playerLuckbox[player] = 1;
         }
-        // Freeze top tracking while RNG is locked to prevent post-RNG manipulation.
-        if (!rngLocked) {
-            _updateTopBettor(player, newStake);
+        // Allow leaderboard churn even while RNG is locked; only freeze global records to avoid post-RNG manipulation.
+        _updateTopBettor(player, newStake);
 
+        if (!rngLocked) {
             uint256 record = biggestFlipEver;
             address leader = topBettor.player;
             if (newStake > record && leader == player) {
