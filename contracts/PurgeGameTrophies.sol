@@ -295,7 +295,8 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     }
 
     function _bafDailyCap(uint256 priceUnit) private pure returns (uint256) {
-        return priceUnit * BAF_DAILY_CAP_MULTIPLIER;
+        // Cap BAF claims to 1 * priceUnit per day regardless of stack size.
+        return priceUnit;
     }
 
     function _purgeTrophyReward(uint256 priceUnit) private pure returns (uint256) {
@@ -345,8 +346,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
 
     function _shouldMintBaf(uint24 level) private pure returns (bool) {
         if (level == 0) return false;
-        if ((level % 100) == 0) return false;
-        return (level % 20) == 0;
+        return (level % 10) == 0;
     }
 
     function _shouldMintDec(uint24 level) private pure returns (bool) {

@@ -54,8 +54,15 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
                 _payoutParticipants(cap, prevLevel);
                 return;
             }
-            if (prevLevel != 0 && (prevLevel % 20) == 0 && (prevLevel % 100) != 0) {
-                uint256 bafPoolWei = (rewardPool * 24) / 100;
+            if (prevLevel != 0 && (prevLevel % 10) == 0) {
+                uint256 bafPoolWei;
+                bool useStored;
+                if ((prevLevel % 100) == 0 && bafHundredPool != 0) {
+                    bafPoolWei = bafHundredPool;
+                    useStored = true;
+                } else {
+                    bafPoolWei = (rewardPool * _bafPercent(prevLevel)) / 100;
+                }
                 (bool bafFinished, ) = _progressExternal(
                     0,
                     bafPoolWei,
@@ -66,6 +73,9 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
                     true
                 );
                 if (!bafFinished) return;
+                if (useStored) {
+                    bafHundredPool = 0;
+                }
             }
             bool decWindow = prevLevel % 10 == 5 && prevLevel >= 25 && prevLevel % 100 != 95;
             if (decWindow) {
@@ -309,5 +319,9 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         uint256 scale = 10_000 - discount;
         if (scale < 5000) scale = 5000;
         return uint16(scale);
+    }
+
+    function _bafPercent(uint24 lvl) private pure returns (uint256) {
+        return lvl == 50 ? 25 : 10;
     }
 }

@@ -271,8 +271,7 @@ contract PurgeGame is PurgeGameStorage {
 
     function isBafLevelActive(uint24 lvl) external view returns (bool) {
         if (lvl == 0) return false;
-        if ((lvl % 20) != 0) return false;
-        if ((lvl % 100) == 0) return false;
+        if ((lvl % 10) != 0) return false;
         return gameState == 3;
     }
 
@@ -442,6 +441,7 @@ contract PurgeGame is PurgeGameStorage {
                     if (!decWindowOpen && decOpen) {
                         decWindowOpen = true;
                     }
+                    if (lvl % 100 == 99) decWindowOpen = true;
                     _unlockRng(day);
                 }
                 break;
@@ -1414,7 +1414,12 @@ contract PurgeGame is PurgeGameStorage {
         rngWordCurrent = 0;
         rngLockedFlag = true;
 
-        bool decClose = (((lvl % 100 != 0 && gameState_ == 1) || (lvl % 100 == 0 && phase_ == 3)) && decWindowOpen);
+        bool decClose = (
+            (
+                (lvl % 100 != 0 && (lvl % 100 != 99) && gameState_ == 1) ||
+                    (lvl % 100 == 0 && phase_ == 3)
+            ) && decWindowOpen
+        );
         if (decClose) decWindowOpen = false;
     }
 

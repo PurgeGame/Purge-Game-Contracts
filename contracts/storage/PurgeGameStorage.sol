@@ -76,6 +76,7 @@ abstract contract PurgeGameStorage {
     uint256 internal totalFlipReversals;
     uint256 internal principalStEth;
     address internal stethTokenAddress;
+    uint256 internal bafHundredPool;
 
     // -----------------------
     // RNG history

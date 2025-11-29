@@ -215,8 +215,11 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         IPurgeCoinModule coinContract
     ) external returns (bool finished) {
         if (!decimatorHundredReady) {
-            uint256 decPool = rewardPool / 2;
+            uint256 basePool = rewardPool;
+            uint256 decPool = (basePool * 40) / 100;
+            uint256 bafPool = (basePool * 10) / 100;
             decimatorHundredPool = decPool;
+            bafHundredPool = bafPool;
             rewardPool -= decPool;
             decimatorHundredReady = true;
         }

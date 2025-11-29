@@ -611,6 +611,12 @@ contract Purgecoin {
         if (stepBps > 250) {
             stepBps = 250;
         }
+        if (distance >= 20) {
+            uint8 stakeTrophyBoost = purgeGameTrophies.stakeTrophyBonus(sender);
+            if (stakeTrophyBoost != 0) {
+                stepBps += (stepBps * stakeTrophyBoost) / 100;
+            }
+        }
 
         uint256 boostedPrincipal = burnAmt;
         if (distance != 0) {
@@ -637,11 +643,6 @@ contract Purgecoin {
 
         if (currLevel == 1 && stakeGameState == 1) {
             boostedPrincipal = distance >= 10 ? (boostedPrincipal * 3) / 2 : (boostedPrincipal * 6) / 5;
-        }
-
-        uint8 stakeTrophyBoost = purgeGameTrophies.stakeTrophyBonus(sender);
-        if (stakeTrophyBoost != 0 && distance >= 20) {
-            boostedPrincipal += (boostedPrincipal * stakeTrophyBoost) / 100;
         }
 
         // Encode and place the stake lane
@@ -1221,10 +1222,10 @@ contract Purgecoin {
 
         // When BAF is active, capture a persistent roster entry + index for scatter.
         if (purgeGame.isBafLevelActive(purgeGame.level())) {
-            uint24 lvl = purgeGame.level();
+            uint24 bafLvl = purgeGame.level();
             address module = jackpots;
             if (module == address(0)) revert ZeroAddress();
-            IPurgeJackpots(module).recordBafFlip(player, lvl);
+            IPurgeJackpots(module).recordBafFlip(player, bafLvl);
         }
 
         if (!skipLuckboxCheck && playerLuckbox[player] == 0) {

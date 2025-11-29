@@ -112,8 +112,7 @@ contract QuestGameMock is IPurgeGame {
 
     function isBafLevelActive(uint24 lvl) external view override returns (bool) {
         if (lvl == 0) return false;
-        if ((lvl % 20) != 0) return false;
-        if ((lvl % 100) == 0) return false;
+        if ((lvl % 10) != 0) return false;
         return state == 3;
     }
 
