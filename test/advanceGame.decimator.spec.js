@@ -12,12 +12,9 @@ const BUCKETS = [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
 const ENTRIES_PER_BUCKET = 5000;
 const RNG_WORD = 0x123456789abcdefn;
 const SELECTION_CAP = 500; // winners processed per call during selection
-let DEC_PLAYERS_COUNT_SLOT;
 let DEC_BURN_SLOT;
-let DEC_BUCKET_ROSTER_SLOT;
 let DEC_BUCKET_BURN_TOTAL_SLOT;
 let DEC_BUCKET_TOP_SLOT;
-let DEC_BUCKET_INDEX_SLOT;
 
 const pad32 = (value) => ethers.toBeHex(value, 32);
 const padAddr = (addr) => ethers.zeroPadValue(addr, 32);
@@ -30,13 +27,6 @@ const subbucketSlot = (level, denom, sub, baseSlot) => {
   const levelSlot = mappingSlot(level, baseSlot);
   const bucketSlot = BigInt(ethers.keccak256(abi.encode(["uint256", "uint256"], [denom, levelSlot])));
   return BigInt(ethers.keccak256(abi.encode(["uint256", "uint256"], [sub, bucketSlot])));
-};
-
-// Nested mapping (level => denom => sub => address[]).
-const rosterSlots = (level, denom, sub) => {
-  const bucketSlot = subbucketSlot(level, denom, sub, DEC_BUCKET_ROSTER_SLOT);
-  const dataBase = BigInt(ethers.keccak256(abi.encode(["uint256"], [bucketSlot])));
-  return { bucketSlot, dataBase };
 };
 
 const burnTotalSlot = (level, denom, sub) => subbucketSlot(level, denom, sub, DEC_BUCKET_BURN_TOTAL_SLOT);
@@ -83,11 +73,8 @@ describe("AdvanceGame Decimator Integration", function () {
     if (!DEC_BURN_SLOT) {
       const slots = await getJackpotSlots();
       DEC_BURN_SLOT = slots.decBurnSlot;
-      DEC_PLAYERS_COUNT_SLOT = slots.decPlayersCountSlot;
-      DEC_BUCKET_ROSTER_SLOT = slots.decBucketRosterSlot;
       DEC_BUCKET_BURN_TOTAL_SLOT = slots.decBucketBurnTotalSlot;
       DEC_BUCKET_TOP_SLOT = slots.decBucketTopSlot;
-      DEC_BUCKET_INDEX_SLOT = slots.decBucketIndexSlot;
     }
 
     // --- Deploy Dependencies ---
@@ -168,18 +155,15 @@ describe("AdvanceGame Decimator Integration", function () {
     // Ensure RNG is ready so advanceGame doesn't revert/request
     await game.harnessSetRng(RNG_WORD, true, true);
 
-    // --- Seed decBucketRoster + decBurn in Purgecoin for PREVIOUS level (25) ---
+    // --- Seed dec burn + aggregates in Purgejackpots for PREVIOUS level (25) ---
     const decLevel = LEVEL - 1;
     const rosters = {};
-    let totalEntries = 0;
-    const decBucketIndexBase = mappingSlot(decLevel, DEC_BUCKET_INDEX_SLOT);
 
     for (const bucket of BUCKETS) {
       const subRosters = Array.from({ length: bucket }, () => []);
       const burnTotals = Array(bucket).fill(0n);
       const topBurns = Array(bucket).fill(0n);
       const topAddrs = Array(bucket).fill(ethers.ZeroAddress);
-      const rosterSlotsBySub = subRosters.map((_, sub) => rosterSlots(decLevel, bucket, sub));
       const burnSlotsBySub = subRosters.map((_, sub) => burnTotalSlot(decLevel, bucket, sub));
       const topSlotsBySub = subRosters.map((_, sub) => topSlot(decLevel, bucket, sub));
       const writes = [];
@@ -193,18 +177,13 @@ describe("AdvanceGame Decimator Integration", function () {
           10n ** 12n; // non-zero, varied
 
         const sub = i % bucket;
-        const idxInSub = Math.floor(i / bucket);
         const packed =
           burn + (BigInt(decLevel) << 192n) + (BigInt(bucket) << 216n) + (BigInt(sub) << 224n);
         const decBurnSlot = mappingSlotAddr(addr, DEC_BURN_SLOT);
-        const decIndexSlot = mappingSlotAddr(addr, decBucketIndexBase);
 
-        const { dataBase } = rosterSlotsBySub[sub];
-        writes.push({ slot: dataBase + BigInt(idxInSub), value: padAddr(addr) });
         writes.push({ slot: decBurnSlot, value: pad32(packed) });
-        writes.push({ slot: decIndexSlot, value: pad32(BigInt(idxInSub)) });
 
-        subRosters[sub].push({ addr, burn, bucket, sub, idx: idxInSub });
+        subRosters[sub].push({ addr, burn, bucket, sub });
         burnTotals[sub] += burn;
         if (burn > topBurns[sub]) {
           topBurns[sub] = burn;
@@ -213,7 +192,6 @@ describe("AdvanceGame Decimator Integration", function () {
       }
 
       for (let sub = 0; sub < bucket; sub += 1) {
-        writes.push({ slot: rosterSlotsBySub[sub].bucketSlot, value: pad32(BigInt(subRosters[sub].length)) });
         writes.push({ slot: burnSlotsBySub[sub], value: pad32(burnTotals[sub]) });
         writes.push({ slot: topSlotsBySub[sub], value: padAddr(topAddrs[sub]) });
         writes.push({ slot: topSlotsBySub[sub] + 1n, value: pad32(topBurns[sub]) });
@@ -221,11 +199,7 @@ describe("AdvanceGame Decimator Integration", function () {
 
       await chunkedSet(await extJackpotModule.getAddress(), writes, 128);
       rosters[bucket] = subRosters;
-      totalEntries += ENTRIES_PER_BUCKET;
     }
-
-    const decPlayersCountSlot = mappingSlot(decLevel, DEC_PLAYERS_COUNT_SLOT);
-    await setStorage(await extJackpotModule.getAddress(), decPlayersCountSlot, pad32(BigInt(totalEntries)));
 
     // --- Expected winners + payouts (mirror contract logic) ---
     const expectedPool = (rewardPool * 15n) / 100n;

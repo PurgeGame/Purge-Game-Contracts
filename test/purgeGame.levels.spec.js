@@ -89,7 +89,6 @@ async function deploySystem() {
   );
   await purgeGame.waitForDeployment();
 
-  await (await purgecoin.addContractAddress(await purgeGame.getAddress())).wait();
   await (
     await purgeNFT.setGame(
       await purgeGame.getAddress(),
@@ -345,7 +344,7 @@ describe.skip("PurgeGame integration scaffold", function () {
   it.skip("simulates gameplay through level 200 with capped advanceGame gas", async () => {});
 });
 
-describe.skip("advanceGame stress scenarios", function () {
+describe("advanceGame stress scenarios", function () {
   this.timeout(0);
 
   it("keeps advanceGame below 16M gas during BAF jackpot scatter", async () => {
@@ -385,7 +384,7 @@ describe.skip("advanceGame stress scenarios", function () {
       const tx = await purgeGame.connect(runner).advanceGame(0);
       const receipt = await tx.wait();
       gasSamples.push(receipt.gasUsed);
-      expect(receipt.gasUsed).to.be.lessThan(16_000_000n);
+      expect(receipt.gasUsed).to.be.lessThan(1_500_000n);
       iterations += 1;
       expect(iterations).to.be.lessThan(50);
     }
@@ -395,7 +394,7 @@ describe.skip("advanceGame stress scenarios", function () {
       0n
     );
     console.log("BAF advanceGame max gas:", maxGas.toString());
-    expect(maxGas).to.be.lessThan(16_000_000n);
+    expect(maxGas).to.be.lessThan(1_500_000n);
   });
 
   it("keeps advanceGame below 16M gas during Decimator payouts", async () => {

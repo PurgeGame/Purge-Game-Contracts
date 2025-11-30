@@ -1008,6 +1008,67 @@ contract PurgeBonds {
         win = roll < chanceBps;
     }
 
+    /// @notice Sample 8 bond owners using entropy; weighted by per-bond win chance with fixed-work selection.
+    function sampleBondOwners(uint256 entropy) external view returns (address[8] memory owners) {
+        uint256 maxId = nextId;
+        if (maxId <= 1) {
+            return owners;
+        }
+        unchecked {
+            maxId -= 1;
+        }
+
+        uint256 state = entropy;
+        uint8 filled;
+        uint256 attempts;
+        uint256 attemptCap = 160; // bound gas: ~160 iterations keeps bond sampling well under 1.5M
+        uint256 boostAt = (attemptCap * 3) / 4; // boost weights after ~75% of the roll budget
+
+        while (filled < 8 && attempts < attemptCap) {
+            state = _lcgStep(state);
+            uint256 candidate = (state % maxId) + 1;
+            address bondOwner = _ownerOf[candidate];
+            if (bondOwner == address(0)) {
+                unchecked {
+                    ++attempts;
+                }
+                continue;
+            }
+
+            uint256 chance = claimReady[candidate] ? 10_000 : uint256(winChanceBps[candidate]);
+            if (chance == 0) {
+                unchecked {
+                    ++attempts;
+                }
+                continue;
+            }
+
+            bool isStaked = staked[candidate];
+            if (claimReady[candidate] && !isStaked) {
+                chance = (chance * 7) / 10; // matured, unstaked discount
+            } else if (!claimReady[candidate] && isStaked) {
+                chance = (chance * 3) / 2; // boost unstaked-in-progress
+                if (chance > 10_000) chance = 10_000;
+            }
+
+            if (attempts >= boostAt) {
+                chance *= 3;
+                if (chance > 10_000) chance = 10_000;
+            }
+
+            if ((state % 10_000) < chance) {
+                owners[filled] = bondOwner;
+                unchecked {
+                    ++filled;
+                }
+            }
+
+            unchecked {
+                ++attempts;
+            }
+        }
+    }
+
     /// @notice Sample a random bond owner using entropy; returns zero address when no owner found within attempts.
     function sampleBondOwner(uint256 entropy) external view returns (uint256 tokenId, address holder) {
         uint256 maxId = nextId;
@@ -1017,13 +1078,51 @@ contract PurgeBonds {
         unchecked {
             maxId -= 1;
         }
+        return _sampleBondOwnerWithId(entropy, maxId);
+    }
 
-        for (uint8 i; i < 8; ) {
-            entropy = uint256(keccak256(abi.encode(entropy, i)));
+    function _sampleWeightedOwner(uint256 entropy, uint256 maxId) private view returns (address holder) {
+        for (uint8 i; i < 24; ) {
+            entropy = _lcgStep(entropy);
             uint256 candidate = (entropy % maxId) + 1;
             address bondOwner = _ownerOf[candidate];
-            if (bondOwner != address(0)) {
-                return (candidate, bondOwner);
+            uint256 chance = claimReady[candidate] ? 10_000 : uint256(winChanceBps[candidate]);
+            if (bondOwner != address(0) && chance != 0) {
+                // Discount unstaked bonds by 30% when matured; staked keep full weight.
+                if (claimReady[candidate] && !staked[candidate]) {
+                    chance = (chance * 7) / 10; // 70% weight
+                } else if (!claimReady[candidate] && staked[candidate]) {
+                    chance = (chance * 3) / 2;
+                    if (chance > 10_000) chance = 10_000;
+                }
+                if ((entropy % 10_000) < chance) {
+                    return bondOwner;
+                }
+            }
+            unchecked {
+                ++i;
+            }
+        }
+        return address(0);
+    }
+
+    function _lcgStep(uint256 state) private pure returns (uint256) {
+        unchecked {
+            return (state * 0xDA942042E4DD58B5D5) + 0x9E3779B97F4A7C15;
+        }
+    }
+
+    function _sampleBondOwnerWithId(uint256 entropy, uint256 maxId) private view returns (uint256 tokenId, address holder) {
+        address found = _sampleWeightedOwner(entropy, maxId);
+        if (found == address(0)) {
+            return (0, address(0));
+        }
+        // Best-effort to recover a token id for the chosen owner.
+        for (uint8 i; i < 24; ) {
+            entropy = _lcgStep(entropy);
+            uint256 candidate = (entropy % maxId) + 1;
+            if (_ownerOf[candidate] == found) {
+                return (candidate, found);
             }
             unchecked {
                 ++i;

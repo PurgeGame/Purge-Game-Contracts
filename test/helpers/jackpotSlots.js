@@ -18,12 +18,8 @@ async function getJackpotSlots() {
 
   return {
     decBurnSlot: slotOf("decBurn"),
-    decPlayersCountSlot: slotOf("decPlayersCount"),
-    decBucketRosterSlot: slotOf("decBucketRoster"),
     decBucketBurnTotalSlot: slotOf("decBucketBurnTotal"),
     decBucketTopSlot: slotOf("decBucketTop"),
-    decBucketFillCountSlot: slotOf("decBucketFillCount"),
-    decBucketIndexSlot: slotOf("decBucketIndex"),
     decBucketOffsetSlot: slotOf("decBucketOffset"),
     decClaimRoundSlot: slotOf("decClaimRound"),
   };

@@ -15,7 +15,7 @@ interface IPurgeCoinJackpotView {
 }
 
 interface IPurgeBonds {
-    function sampleBondOwner(uint256 entropy) external view returns (uint256 tokenId, address owner);
+    function sampleBondOwners(uint256 entropy) external view returns (address[8] memory owners);
 }
 
 /**
@@ -106,21 +106,15 @@ contract PurgeJackpots is IPurgeJackpots {
     // Track Decimator burns per level so earlier levels remain claimable after a player participates in later ones.
     mapping(uint24 => mapping(address => DecEntry)) internal decBurn;
 
-    // Decimator bucketed rosters and aggregates
-    mapping(uint24 => mapping(uint8 => mapping(uint8 => address[]))) internal decBucketRoster;
+    // Decimator aggregates
     mapping(uint24 => mapping(uint8 => mapping(uint8 => uint256))) internal decBucketBurnTotal;
     mapping(uint24 => mapping(uint8 => mapping(uint8 => DecSubbucketTop))) internal decBucketTop;
-    address internal decTopWinner;
-    uint192 internal decTopBurn;
 
     // Active Decimator claim round by level.
     mapping(uint24 => DecClaimRound) internal decClaimRound;
 
     // Track whether a player has claimed their Decimator share for a level.
     mapping(uint24 => mapping(address => bool)) internal decClaimed;
-
-    // Position of a player within the Decimator bucket roster for a given level.
-    mapping(uint24 => mapping(address => uint32)) internal decBucketIndex;
 
     // Winning subbucket index per denominator for a level (derived during selection).
     mapping(uint24 => mapping(uint8 => uint32)) internal decBucketOffset;
@@ -139,12 +133,6 @@ contract PurgeJackpots is IPurgeJackpots {
 
     modifier onlyGame() {
         if (msg.sender != address(purgeGame)) revert OnlyGame();
-        _;
-    }
-
-    modifier onlyGameOrCoin() {
-        address sender = msg.sender;
-        if (sender != address(purgeGame) && sender != address(coin)) revert OnlyGame();
         _;
     }
 
@@ -190,12 +178,10 @@ contract PurgeJackpots is IPurgeJackpots {
             e.level = lvl;
             e.burn = 0;
             e.bucket = bucket;
-            e.subBucket = 0;
-            _decPush(lvl, bucket, player, e);
+            e.subBucket = _decSubbucketFor(player, lvl, bucket);
         } else if (e.bucket == 0) {
             e.bucket = bucket;
-            e.subBucket = 0;
-            _decPush(lvl, bucket, player, e);
+            e.subBucket = _decSubbucketFor(player, lvl, bucket);
         }
 
         bucketUsed = e.bucket;
@@ -222,18 +208,18 @@ contract PurgeJackpots is IPurgeJackpots {
     )
         external
         override
-        onlyGameOrCoin
+        onlyGame
         returns (
             address[] memory winners,
             uint256[] memory amounts,
             uint256 trophyPoolDelta,
             uint256 returnAmountWei
-        )
+    )
     {
         uint256 P = poolWei;
-        // Max distinct winners: 1 (top) + 1 (pick) + 3 (bonds) + 3 (retro) + 50 + 50 (scatter buckets) = 108.
-        address[] memory tmpW = new address[](108);
-        uint256[] memory tmpA = new uint256[](108);
+        // Max distinct winners: 1 (top) + 1 (pick) + 4 (bonds) + 3 (retro) + 50 + 50 (scatter buckets) = 109.
+        address[] memory tmpW = new address[](112);
+        uint256[] memory tmpA = new uint256[](112);
         uint256 n;
         uint256 toReturn;
         bool trophyAwarded;
@@ -386,58 +372,42 @@ contract PurgeJackpots is IPurgeJackpots {
         }
 
         {
-            uint256 bondSlice = P / 10;
-            uint256[4] memory bondPrizes = [(bondSlice * 5) / 10, (bondSlice * 3) / 10, (bondSlice * 2) / 10, uint256(0)];
+            uint256[4] memory bondPrizes = [(P * 35) / 1000, (P * 35) / 1000, (P * 15) / 1000, (P * 15) / 1000];
+            IPurgeBonds bonds = IPurgeBonds(bondsAddr);
 
-            if (bondsAddr != address(0)) {
-                // Bond holders: sample twice per slot, prefer the lower token id.
-                IPurgeBonds bonds = IPurgeBonds(bondsAddr);
-                for (uint8 s; s < 4; ) {
+            unchecked {
+                ++salt;
+            }
+            entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
+            address[8] memory owners = bonds.sampleBondOwners(entropy);
+
+            uint8 idx;
+            for (uint8 prizeIdx; prizeIdx < 4; ) {
+                uint256 prize = bondPrizes[prizeIdx];
+                bool credited;
+                while (idx < 8) {
+                    address candidate = owners[idx];
                     unchecked {
-                        ++salt;
+                        ++idx;
                     }
-                    entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
-                    (uint256 idA, address ownerA) = bonds.sampleBondOwner(entropy);
-
-                    unchecked {
-                        ++salt;
-                    }
-                    entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
-                    (uint256 idB, address ownerB) = bonds.sampleBondOwner(entropy);
-
-                    bool validA = idA != 0 && ownerA != address(0);
-                    bool validB = idB != 0 && ownerB != address(0);
-                    address chosenOwner;
-
-                    if (validA && validB) {
-                        chosenOwner = (idA <= idB) ? ownerA : ownerB;
-                    } else if (validA) {
-                        chosenOwner = ownerA;
-                    } else if (validB) {
-                        chosenOwner = ownerB;
-                    }
-
-                    uint256 prize = bondPrizes[s];
-                    bool credited;
-                    if (prize != 0 && chosenOwner != address(0)) {
-                        uint256 scoreHint = _bafScore(chosenOwner, lvl);
-                        if (_eligible(chosenOwner, scoreHint, true)) {
-                            credited = _creditOrRefund(chosenOwner, prize, tmpW, tmpA, n, scoreHint, true);
+                    if (candidate == address(0)) continue;
+                    uint256 scoreHint = _bafScore(candidate, lvl);
+                    if (_eligible(candidate, scoreHint, true)) {
+                        credited = _creditOrRefund(candidate, prize, tmpW, tmpA, n, scoreHint, true);
+                        if (credited) {
+                            unchecked {
+                                ++n;
+                            }
                         }
-                    }
-                    if (credited) {
-                        unchecked {
-                            ++n;
-                        }
-                    } else if (prize != 0) {
-                        toReturn += prize;
-                    }
-                    unchecked {
-                        ++s;
+                        break;
                     }
                 }
-            } else {
-                toReturn += bondSlice;
+                if (!credited && prize != 0) {
+                    toReturn += prize;
+                }
+                unchecked {
+                    ++prizeIdx;
+                }
             }
         }
 
@@ -633,7 +603,7 @@ contract PurgeJackpots is IPurgeJackpots {
     )
         external
         override
-        onlyGameOrCoin
+        onlyGame
         returns (
             address[] memory winners,
             uint256[] memory amounts,
@@ -643,8 +613,8 @@ contract PurgeJackpots is IPurgeJackpots {
     {
         uint256 totalBurn;
         // Track provisional trophy winner among winning subbuckets across all denominators.
-        decTopWinner = address(0);
-        decTopBurn = 0;
+        address decTopWinner;
+        uint192 decTopBurn;
 
         uint256 decSeed = rngWord;
         for (uint8 denom = 2; denom <= 20; ) {
@@ -673,8 +643,6 @@ contract PurgeJackpots is IPurgeJackpots {
             if (_hasDecPlaceholder(lvl)) {
                 purgeGameTrophies.burnDecPlaceholder(lvl);
             }
-            decTopWinner = address(0);
-            decTopBurn = 0;
             return (new address[](0), new uint256[](0), 0, refund);
         }
 
@@ -697,9 +665,6 @@ contract PurgeJackpots is IPurgeJackpots {
                 purgeGameTrophies.burnDecPlaceholder(lvl);
             }
         }
-
-        decTopWinner = address(0);
-        decTopBurn = 0;
         return (new address[](0), new uint256[](0), 0, 0);
     }
 
@@ -787,10 +752,6 @@ contract PurgeJackpots is IPurgeJackpots {
         uint8 sub = e.subBucket;
         if (e.level != lvl || denom == 0 || e.burn == 0) return (0, false);
 
-        address[] storage roster = decBucketRoster[lvl][denom][sub];
-        uint256 idx = uint256(decBucketIndex[lvl][player]);
-        if (idx >= roster.length || roster[idx] != player) return (0, false);
-
         uint8 winningSub = uint8(decBucketOffset[lvl][denom]);
         if (sub != winningSub) return (0, false);
 
@@ -798,20 +759,6 @@ contract PurgeJackpots is IPurgeJackpots {
 
         amountWei = (round.poolWei * uint256(e.burn)) / round.totalBurn;
         winner = true;
-    }
-
-    // Push a player into a deterministic subbucket roster for their chosen denominator.
-    function _decPush(uint24 lvl, uint8 bucket, address p, DecEntry storage e) internal {
-        if (bucket == 0) return;
-
-        // Deterministically spread players across subbuckets using address+level entropy.
-        uint8 sub = _decSubbucketFor(p, lvl, bucket);
-
-        address[] storage subRoster = decBucketRoster[lvl][bucket][sub];
-        decBucketIndex[lvl][p] = uint32(subRoster.length);
-        subRoster.push(p);
-        e.subBucket = sub;
-
     }
 
     // Update aggregated burn totals for a subbucket and track the leading burner.
