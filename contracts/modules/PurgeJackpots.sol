@@ -35,11 +35,20 @@ contract PurgeJackpots is IPurgeJackpots {
     error OnlyCoin();
     error OnlyGame();
 
+    // Leaderboard entry for BAF coinflip stakes.
     struct PlayerScore {
         address player;
         uint96 score;
     }
 
+    // Track per-player BAF totals within an active level (derived from manual flip deltas).
+    struct BafEntry {
+        uint256 total; // total manual flips this BAF level
+        uint256 lastStake; // last observed coinflipAmount to compute deltas
+        uint24 level;
+    }
+
+    // Sample a recent level (last 20) to bias retro prizes toward fresh play.
     function _recentLevel(uint24 lvl, uint256 entropy) private pure returns (uint24) {
         uint256 offset = (entropy % 20) + 1; // 1..20
         if (lvl > offset) {
@@ -48,6 +57,7 @@ contract PurgeJackpots is IPurgeJackpots {
         return 0;
     }
 
+    // Per-player Decimator burn tracking for the active level.
     struct DecEntry {
         uint192 burn;
         uint24 level;
@@ -55,6 +65,7 @@ contract PurgeJackpots is IPurgeJackpots {
         uint8 subBucket;
     }
 
+    // Snapshot of a Decimator claim round for a level.
     struct DecClaimRound {
         uint256 poolWei;
         uint256 totalBurn;
@@ -62,6 +73,7 @@ contract PurgeJackpots is IPurgeJackpots {
         bool active;
     }
 
+    // Leading contributor inside a subbucket (used to pick the trophy owner).
     struct DecSubbucketTop {
         address player;
         uint192 burn;
@@ -90,6 +102,7 @@ contract PurgeJackpots is IPurgeJackpots {
     // ---------------------------------------------------------------------
     // BAF / Decimator state (lives here; Purgecoin storage is unaffected)
     // ---------------------------------------------------------------------
+    mapping(address => BafEntry) internal bafTotals;
     mapping(address => DecEntry) internal decBurn;
 
     // Decimator bucketed rosters and aggregates
@@ -135,6 +148,7 @@ contract PurgeJackpots is IPurgeJackpots {
         _;
     }
 
+    /// @dev One-time wiring called by Purgecoin to connect the game, coin, and trophies contracts.
     function wire(address coin_, address purgeGame_, address trophies_) external override {
         if (address(coin) != address(0)) revert AlreadyWired();
         if (msg.sender != coin_) revert OnlyCoin();
@@ -146,13 +160,28 @@ contract PurgeJackpots is IPurgeJackpots {
     // ---------------------------------------------------------------------
     // Hooks from Purgecoin
     // ---------------------------------------------------------------------
+    /// @dev Track leaderboard state for BAF using total manual flips during the BAF period.
     function recordBafFlip(address player, uint24 lvl) external override onlyCoin {
         uint256 stake = coin.coinflipAmount(player);
-        if (stake != 0) {
-            _updateBafTop(lvl, player, stake);
+        BafEntry storage entry = bafTotals[player];
+        if (entry.level != lvl) {
+            entry.level = lvl;
+            entry.total = 0;
+            entry.lastStake = 0;
+        }
+        if (stake > entry.lastStake) {
+            unchecked {
+                entry.total += stake - entry.lastStake;
+            }
+        }
+        entry.lastStake = stake;
+
+        if (entry.total != 0) {
+            _updateBafTop(lvl, player, entry.total);
         }
     }
 
+    /// @dev Register Decimator burns and bucket placement for a player in a level.
     function recordDecBurn(
         address player,
         uint24 lvl,
@@ -293,7 +322,9 @@ contract PurgeJackpots is IPurgeJackpots {
             uint256 prize = P / 10;
 
             (address w, ) = _bafTop(lvl, 0);
-            if (_creditOrRefund(w, prize, tmpW, tmpA, n)) {
+            // 10% to the top coinflip bettor (if eligible).
+            uint256 s0 = _bafScore(w, lvl);
+            if (_creditOrRefund(w, prize, tmpW, tmpA, n, s0, true)) {
                 unchecked {
                     ++n;
                 }
@@ -302,7 +333,8 @@ contract PurgeJackpots is IPurgeJackpots {
             }
 
             uint256 trophyPrize = P / 10;
-            if (w != address(0) && _eligible(w)) {
+            if (w != address(0) && _eligible(w, s0, true)) {
+                // Award BAF trophy + prize to the top bettor if they remain eligible.
                 uint256 trophyData = (uint256(BAF_TRAIT_SENTINEL) << 152) |
                     (uint256(lvl) << TROPHY_BASE_LEVEL_SHIFT) |
                     TROPHY_FLAG_BAF;
@@ -321,7 +353,9 @@ contract PurgeJackpots is IPurgeJackpots {
             uint256 prize = P / 10;
             uint8 pick = 2 + uint8(entropy & 1);
             (address w, ) = _bafTop(lvl, pick);
-            if (_creditOrRefund(w, prize, tmpW, tmpA, n)) {
+            // 10% to either the 3rd or 4th leaderboard slot (pseudo-random tie-break).
+            uint256 sPick = _bafScore(w, lvl);
+            if (_creditOrRefund(w, prize, tmpW, tmpA, n, sPick, true)) {
                 unchecked {
                     ++n;
                 }
@@ -338,6 +372,8 @@ contract PurgeJackpots is IPurgeJackpots {
         }
 
         {
+            // Staked trophy rewards: sample tickets twice per slot, pick the lower id, then sort
+            // the candidates by coinflip size to prefer higher current bettors.
             uint256 trophyDelta;
             uint256[4] memory trophyPrizes = [(P * 5) / 100, (P * 3) / 100, (P * 2) / 100, uint256(0)];
             address[4] memory trophyOwners;
@@ -379,12 +415,12 @@ contract PurgeJackpots is IPurgeJackpots {
                 }
             }
 
-            // Sort trophies by owner coinflip size
+            // Sort trophies by owner BAF score
             for (uint8 i; i < 4; ) {
                 uint8 bestIdx = i;
-                uint256 best = coin.coinflipAmount(trophyOwners[i]);
+                uint256 best = _bafScore(trophyOwners[i], lvl);
                 for (uint8 j = i + 1; j < 4; ) {
-                    uint256 val = coin.coinflipAmount(trophyOwners[j]);
+                    uint256 val = _bafScore(trophyOwners[j], lvl);
                     if (val > best) {
                         best = val;
                         bestIdx = j;
@@ -411,7 +447,7 @@ contract PurgeJackpots is IPurgeJackpots {
                 uint256 prize = trophyPrizes[i];
                 uint256 tokenId = trophyIds[i];
                 address owner = trophyOwners[i];
-                bool eligibleOwner = tokenId != 0 && owner != address(0) && _eligible(owner);
+                bool eligibleOwner = tokenId != 0 && owner != address(0) && _eligible(owner, 0, false);
                 if (eligibleOwner && prize != 0) {
                     purgeGameTrophies.rewardTrophyByToken(tokenId, prize, lvl);
                     trophyDelta += prize;
@@ -430,6 +466,7 @@ contract PurgeJackpots is IPurgeJackpots {
             uint256[4] memory bondPrizes = [(bondSlice * 5) / 10, (bondSlice * 3) / 10, (bondSlice * 2) / 10, uint256(0)];
 
             if (bondsAddr != address(0)) {
+                // Bond holders: sample twice per slot, prefer the lower token id.
                 IPurgeBonds bonds = IPurgeBonds(bondsAddr);
                 for (uint8 s; s < 4; ) {
                     unchecked {
@@ -458,8 +495,11 @@ contract PurgeJackpots is IPurgeJackpots {
 
                     uint256 prize = bondPrizes[s];
                     bool credited;
-                    if (prize != 0 && chosenOwner != address(0) && _eligible(chosenOwner)) {
-                        credited = _creditOrRefund(chosenOwner, prize, tmpW, tmpA, n);
+                    if (prize != 0 && chosenOwner != address(0)) {
+                        uint256 scoreHint = _bafScore(chosenOwner, lvl);
+                        if (_eligible(chosenOwner, scoreHint, true)) {
+                            credited = _creditOrRefund(chosenOwner, prize, tmpW, tmpA, n, scoreHint, true);
+                        }
                     }
                     if (credited) {
                         unchecked {
@@ -482,35 +522,45 @@ contract PurgeJackpots is IPurgeJackpots {
             uint256[4] memory prizes = [(slice * 5) / 10, (slice * 3) / 10, (slice * 2) / 10, uint256(0)];
 
             for (uint8 s; s < 4; ) {
+                // Retro top rewards: sample two recent levels (1..20 back) and pick the lower level.
                 unchecked {
                     ++salt;
                 }
                 entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
                 uint24 lvlA = _recentLevel(lvl, entropy);
-                (address candA, ) = coin.coinflipTop(lvlA);
+                (address candA, uint96 scoreA) = coin.coinflipTop(lvlA);
 
                 unchecked {
                     ++salt;
                 }
                 entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
                 uint24 lvlB = _recentLevel(lvl, entropy);
-                (address candB, ) = coin.coinflipTop(lvlB);
+                (address candB, uint96 scoreB) = coin.coinflipTop(lvlB);
 
                 address chosen;
+                uint256 chosenScore;
                 bool validA = candA != address(0);
                 bool validB = candB != address(0);
                 if (validA && validB) {
-                    chosen = (lvlA <= lvlB) ? candA : candB;
+                    if (lvlA <= lvlB) {
+                        chosen = candA;
+                        chosenScore = uint256(scoreA) * MILLION;
+                    } else {
+                        chosen = candB;
+                        chosenScore = uint256(scoreB) * MILLION;
+                    }
                 } else if (validA) {
                     chosen = candA;
+                    chosenScore = uint256(scoreA) * MILLION;
                 } else if (validB) {
                     chosen = candB;
+                    chosenScore = uint256(scoreB) * MILLION;
                 }
 
                 uint256 prize = prizes[s];
                 bool credited;
-                if (prize != 0 && chosen != address(0) && _eligible(chosen)) {
-                    credited = _creditOrRefund(chosen, prize, tmpW, tmpA, n);
+                if (prize != 0 && chosen != address(0) && _eligible(chosen, chosenScore, true)) {
+                    credited = _creditOrRefund(chosen, prize, tmpW, tmpA, n, chosenScore, true);
                 }
                 if (credited) {
                     unchecked {
@@ -525,44 +575,106 @@ contract PurgeJackpots is IPurgeJackpots {
             }
         }
 
-        // Scatter slice: pay up to 100 sampled trait tickets immediately (no batching/claims).
+        // Scatter slice: 200 total draws (4 tickets * 50 rounds). Per round, take top-2 by BAF score.
+        // First bucket splits 7% evenly (max 50 winners); second bucket splits 3% evenly (max 50 winners).
         {
-            unchecked {
-                ++salt;
-            }
-            entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
-            uint256 scatter = (P * 2) / 5;
-            (, , address[] memory tickets) = purgeGame.sampleTraitTickets(entropy);
+            uint256 scatterTop = (P * 7) / 100;
+            uint256 scatterSecond = (P * 3) / 100;
+            address[50] memory firstWinners;
+            address[50] memory secondWinners;
+            uint256 firstCount;
+            uint256 secondCount;
 
-            uint256 eligibleCount;
-            uint256 tLen = tickets.length;
-            for (uint256 i; i < tLen; ) {
-                if (_eligible(tickets[i])) {
+            // 50 rounds of 4-ticket sampling (total 200 tickets).
+            for (uint8 round; round < 50; ) {
+                unchecked {
+                    ++salt;
+                }
+                entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
+                (, , address[] memory tickets) = purgeGame.sampleTraitTickets(entropy);
+
+                // Pick up to 4 tickets from the sampled set.
+                uint256 limit = tickets.length;
+                if (limit > 4) limit = 4;
+
+                address best;
+                uint256 bestScore;
+                address second;
+                uint256 secondScore;
+
+                for (uint256 i; i < limit; ) {
+                    address cand = tickets[i];
+                    if (cand != address(0)) {
+                        uint256 score = _bafScore(cand, lvl);
+                        if (score > bestScore) {
+                            second = best;
+                            secondScore = bestScore;
+                            best = cand;
+                            bestScore = score;
+                        } else if (score > secondScore && cand != best) {
+                            second = cand;
+                            secondScore = score;
+                        }
+                    }
                     unchecked {
-                        ++eligibleCount;
+                        ++i;
                     }
                 }
+
+                // Bucket winners if eligible and capacity not exceeded; otherwise refund their would-be share later.
+                if (best != address(0) && firstCount < 50 && _eligible(best, bestScore, true)) {
+                    firstWinners[firstCount] = best;
+                    unchecked {
+                        ++firstCount;
+                    }
+                }
+                if (second != address(0) && secondCount < 50 && _eligible(second, secondScore, true)) {
+                    secondWinners[secondCount] = second;
+                    unchecked {
+                        ++secondCount;
+                    }
+                }
+
                 unchecked {
-                    ++i;
+                    ++round;
                 }
             }
 
-            if (eligibleCount == 0) {
-                toReturn += scatter;
+            if (firstCount == 0) {
+                toReturn += scatterTop;
             } else {
-                uint256 perWei = scatter / eligibleCount;
-                uint256 rem = scatter - perWei * eligibleCount;
+                uint256 per = scatterTop / firstCount;
+                uint256 rem = scatterTop - per * firstCount;
                 toReturn += rem;
-                for (uint256 i; i < tLen; ) {
-                    address cand = tickets[i];
-                    if (perWei != 0 && _eligible(cand)) {
-                        if (_creditOrRefund(cand, perWei, tmpW, tmpA, n)) {
-                            unchecked {
-                                ++n;
-                            }
-                        } else {
-                            toReturn += perWei;
+                for (uint256 i; i < firstCount; ) {
+                    uint256 scoreHint = _bafScore(firstWinners[i], lvl);
+                    if (per != 0 && _creditOrRefund(firstWinners[i], per, tmpW, tmpA, n, scoreHint, true)) {
+                        unchecked {
+                            ++n;
                         }
+                    } else {
+                        toReturn += per;
+                    }
+                    unchecked {
+                        ++i;
+                    }
+                }
+            }
+
+            if (secondCount == 0) {
+                toReturn += scatterSecond;
+            } else {
+                uint256 per2 = scatterSecond / secondCount;
+                uint256 rem2 = scatterSecond - per2 * secondCount;
+                toReturn += rem2;
+                for (uint256 i; i < secondCount; ) {
+                    uint256 scoreHint = _bafScore(secondWinners[i], lvl);
+                    if (per2 != 0 && _creditOrRefund(secondWinners[i], per2, tmpW, tmpA, n, scoreHint, true)) {
+                        unchecked {
+                            ++n;
+                        }
+                    } else {
+                        toReturn += per2;
                     }
                     unchecked {
                         ++i;
@@ -572,6 +684,7 @@ contract PurgeJackpots is IPurgeJackpots {
         }
 
         if (!trophyAwarded) {
+            // Clear placeholder if no BAF trophy was minted.
             purgeGameTrophies.burnBafPlaceholder(lvl);
         }
 
@@ -605,6 +718,7 @@ contract PurgeJackpots is IPurgeJackpots {
         )
     {
         uint256 totalBurn;
+        // Track provisional trophy winner among winning subbuckets across all denominators.
         decTopWinner = address(0);
         decTopBurn = 0;
 
@@ -631,6 +745,7 @@ contract PurgeJackpots is IPurgeJackpots {
 
         if (totalBurn == 0) {
             uint256 refund = poolWei;
+            // No eligible burns: clear any placeholder and refund the whole pool.
             if (_hasDecPlaceholder(lvl)) {
                 purgeGameTrophies.burnDecPlaceholder(lvl);
             }
@@ -649,6 +764,7 @@ contract PurgeJackpots is IPurgeJackpots {
 
         if (_hasDecPlaceholder(lvl)) {
             if (decTopWinner != address(0)) {
+                // Trophy follows the largest burn within the winning subbuckets.
                 uint256 trophyData = (uint256(DECIMATOR_TRAIT_SENTINEL) << 152) |
                     (uint256(lvl) << TROPHY_BASE_LEVEL_SHIFT) |
                     TROPHY_FLAG_DECIMATOR;
@@ -666,6 +782,7 @@ contract PurgeJackpots is IPurgeJackpots {
     // ---------------------------------------------------------------------
     // Claims
     // ---------------------------------------------------------------------
+    /// @dev Validate and mark a Decimator claim; returns the pro-rata payout.
     function _consumeDecClaim(address player, uint24 lvl) internal returns (uint256 amountWei) {
         DecClaimRound storage round = decClaimRound[lvl];
         if (!round.active) revert DecClaimInactive();
@@ -694,8 +811,10 @@ contract PurgeJackpots is IPurgeJackpots {
     // ---------------------------------------------------------------------
     // Helpers
     // ---------------------------------------------------------------------
-    function _eligible(address player) internal view returns (bool) {
-        if (coin.coinflipAmount(player) < 5_000 * MILLION) return false;
+    // Eligibility gate reused across jackpot slices; accepts optional coinflip score hint to save a read.
+    function _eligible(address player, uint256 scoreHint, bool hasHint) internal view returns (bool) {
+        uint256 score = hasHint ? scoreHint : coin.coinflipAmount(player);
+        if (score < 5_000 * MILLION) return false;
         return purgeGame.ethMintStreakCount(player) >= 6;
     }
 
@@ -704,10 +823,13 @@ contract PurgeJackpots is IPurgeJackpots {
         uint256 prize,
         address[] memory winnersBuf,
         uint256[] memory amountsBuf,
-        uint256 idx
+        uint256 idx,
+        uint256 scoreHint,
+        bool hasHint
     ) private view returns (bool credited) {
         if (prize == 0) return false;
-        if (candidate != address(0) && _eligible(candidate)) {
+        // Writes into the preallocated buffers; caller controls idx and increments only on success.
+        if (candidate != address(0) && _eligible(candidate, scoreHint, hasHint)) {
             winnersBuf[idx] = candidate;
             amountsBuf[idx] = prize;
             return true;
@@ -754,6 +876,7 @@ contract PurgeJackpots is IPurgeJackpots {
         winner = true;
     }
 
+    // Push a player into the round-robin subbucket roster for their chosen denominator.
     function _decPush(uint24 lvl, uint8 bucket, address p, DecEntry storage e) internal {
         if (bucket == 0) return;
 
@@ -768,6 +891,7 @@ contract PurgeJackpots is IPurgeJackpots {
 
     }
 
+    // Update aggregated burn totals for a subbucket and track the leading burner.
     function _decUpdateSubbucket(
         uint24 lvl,
         uint8 denom,
@@ -785,6 +909,12 @@ contract PurgeJackpots is IPurgeJackpots {
         }
     }
 
+    function _bafScore(address player, uint24 lvl) private view returns (uint256) {
+        BafEntry storage e = bafTotals[player];
+        if (e.level != lvl) return 0;
+        return e.total;
+    }
+
     function _score96(uint256 s) private pure returns (uint96) {
         uint256 wholeTokens = s / MILLION;
         if (wholeTokens > type(uint96).max) {
@@ -793,6 +923,7 @@ contract PurgeJackpots is IPurgeJackpots {
         return uint96(wholeTokens);
     }
 
+    // Maintain the top-4 BAF leaderboard (largest coinflip stake first, stable length).
     function _updateBafTop(uint24 lvl, address player, uint256 stake) private {
         uint96 score = _score96(stake);
         PlayerScore[4] storage board = bafTop[lvl];
@@ -855,6 +986,7 @@ contract PurgeJackpots is IPurgeJackpots {
         return (entry.player, entry.score);
     }
 
+    // Clear leaderboard state for a level after jackpot resolution.
     function _clearBafTop(uint24 lvl) private {
         uint8 len = bafTopLen[lvl];
         if (len != 0) {

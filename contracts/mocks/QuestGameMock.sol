@@ -10,7 +10,11 @@ contract QuestGameMock is IPurgeGame {
     uint8 private phase;
     uint8 private state;
     uint24 private currentLevel;
+    uint24 private sampleTicketLevel;
+    uint8 private sampleTraitId;
     mapping(address => uint24) private lastEthMintLevel;
+    mapping(address => uint24) private ethStreaks;
+    address[] private sampleTickets;
 
     function setPhase(uint8 newPhase) external {
         phase = newPhase;
@@ -24,8 +28,18 @@ contract QuestGameMock is IPurgeGame {
         currentLevel = newLevel;
     }
 
+    function setEthMintStreak(address player, uint24 streak) external {
+        ethStreaks[player] = streak;
+    }
+
     function setEthMintLastLevel(address player, uint24 lvl) external {
         lastEthMintLevel[player] = lvl;
+    }
+
+    function setSampleTickets(address[] calldata tickets, uint24 lvl, uint8 trait) external {
+        sampleTickets = tickets;
+        sampleTicketLevel = lvl;
+        sampleTraitId = trait;
     }
 
     function getTraitRemainingQuad(
@@ -147,8 +161,8 @@ contract QuestGameMock is IPurgeGame {
         return 0;
     }
 
-    function ethMintStreakCount(address /*player*/) external pure override returns (uint24) {
-        return 0;
+    function ethMintStreakCount(address player) external view override returns (uint24) {
+        return ethStreaks[player];
     }
 
     function ethMintLastLevel(address player) external view override returns (uint24) {
@@ -181,8 +195,8 @@ contract QuestGameMock is IPurgeGame {
         uint24
     ) external pure override {}
 
-    function sampleTraitTickets(uint256) external pure override returns (uint24, uint8, address[] memory) {
-        return (0, 0, new address[](0));
+    function sampleTraitTickets(uint256) external view override returns (uint24, uint8, address[] memory) {
+        return (sampleTicketLevel, sampleTraitId, sampleTickets);
     }
 
     function stEthToken() external pure returns (address) {
