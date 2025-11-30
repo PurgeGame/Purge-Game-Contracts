@@ -2,7 +2,6 @@
 pragma solidity ^0.8.26;
 
 import {IPurgeGameTrophies} from "../PurgeGameTrophies.sol";
-import {IPurgeAffiliate} from "../interfaces/IPurgeAffiliate.sol";
 import {IPurgeCoinModule, IPurgeGameTrophiesModule} from "./PurgeGameModuleInterfaces.sol";
 import {IPurgeJackpots} from "../interfaces/IPurgeJackpots.sol";
 import {PurgeGameStorage} from "../storage/PurgeGameStorage.sol";
@@ -22,21 +21,13 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
 
     uint32 private constant DEFAULT_PAYOUTS_PER_TX = 420;
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
-    uint8 private constant PURGE_TROPHY_KIND_AFFILIATE = 2;
-    uint8 private constant PURGE_TROPHY_KIND_STAKE = 3;
-    uint16 private constant STAKED_RANDOM_BPS = 50; // 0.5% of the reward pool
-    uint16 private constant AFFILIATE_CARRY_BPS = 100; // 1% of the reward pool
-    uint16 private constant STAKE_CARRY_BPS = 50; // 0.5% of the reward pool
     uint256 private constant MINT_MASK_24 = (uint256(1) << 24) - 1;
     uint256 private constant ETH_LEVEL_STREAK_SHIFT = 48;
-
-    constructor() {}
 
     /// @notice Entry point invoked via delegatecall from the core game contract.
     function finalizeEndgame(
         uint24 lvl,
         uint32 cap,
-        uint48 /*day*/,
         uint256 rngWord,
         address jackpots,
         IPurgeCoinModule coinContract,
@@ -63,7 +54,7 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
                 } else {
                     bafPoolWei = (rewardPool * _bafPercent(prevLevel)) / 100;
                 }
-                (bool bafFinished, ) = _progressExternal(
+                _progressExternal(
                     0,
                     bafPoolWei,
                     cap,
@@ -72,7 +63,6 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
                     jackpots,
                     true
                 );
-                if (!bafFinished) return;
                 if (useStored) {
                     bafHundredPool = 0;
                 }
@@ -80,7 +70,7 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
             bool decWindow = prevLevel % 10 == 5 && prevLevel >= 25 && prevLevel % 100 != 95;
             if (decWindow) {
                 uint256 decPoolWei = (rewardPool * 15) / 100;
-                (bool decFinished, ) = _progressExternal(
+                _progressExternal(
                     1,
                     decPoolWei,
                     cap,
@@ -89,7 +79,6 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
                     jackpots,
                     true
                 );
-                if (!decFinished) return;
             }
 
             phase = 0;
@@ -122,10 +111,6 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
             }
         }
 
-        address affiliateAddr = coinContract.affiliateProgram();
-        if (affiliateAddr != address(0)) {
-            IPurgeAffiliate(affiliateAddr).resetAffiliateLeaderboard(lvl);
-        }
     }
 
     function _payoutParticipants(uint32 capHint, uint24 prevLevel) private {
@@ -134,18 +119,17 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
 
         uint256 participantPool = currentPrizePool;
         uint256 unitPayout = participantPool / len;
+        uint256 remainder = participantPool - (unitPayout * uint256(len));
 
         uint32 cap = (capHint == 0) ? DEFAULT_PAYOUTS_PER_TX : capHint;
         uint32 i = airdropIndex;
         uint32 end = i + cap;
         if (end > len) end = len;
 
-        if (end == len) {
-            currentPrizePool = 0;
-        }
-
+        address lastPaid;
         while (i < end) {
             address w = arr[i];
+            lastPaid = w;
             uint32 run = 1;
             unchecked {
                 while (i + run < end && arr[i + run] == w) ++run;
@@ -153,6 +137,16 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
             _addClaimableEth(w, unitPayout * run);
             unchecked {
                 i += run;
+            }
+        }
+
+        if (end == len) {
+            currentPrizePool = 0;
+            if (remainder != 0) {
+                if (lastPaid == address(0)) {
+                    lastPaid = arr[end - 1];
+                }
+                _addClaimableEth(lastPaid, remainder);
             }
         }
 
@@ -221,6 +215,9 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         }
 
         uint256 participantShare = ((poolValue * 90) / 100) - exterminatorShare;
+        // Preserve the entire prize pool by rolling any rounding dust into the participant slice.
+        uint256 poolDust = poolValue - (ticketBonus + exterminatorShare + participantShare);
+        participantShare += poolDust;
         if (arr.length == 0) {
             currentPrizePool = 0;
             // Defensive: if no trait tickets exist, roll the participant slice back into the reward pool.
@@ -268,14 +265,14 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         uint256 rngWord,
         address jackpots,
         bool consumeCarry
-    ) private returns (bool finished, uint256 returnedWei) {
+    ) private returns (uint256 returnedWei) {
         address[] memory winnersArr;
         uint256[] memory amountsArr;
         uint256 trophyPoolDelta;
         uint256 returnWei;
 
         if (kind == 0) {
-            (finished, winnersArr, amountsArr, trophyPoolDelta, returnWei) = IPurgeJackpots(jackpots).runBafJackpot(
+            (, winnersArr, amountsArr, trophyPoolDelta, returnWei) = IPurgeJackpots(jackpots).runBafJackpot(
                 poolWei,
                 cap,
                 lvl,
@@ -283,7 +280,6 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
             );
         } else if (kind == 1) {
             (
-                finished,
                 winnersArr,
                 amountsArr,
                 trophyPoolDelta,
@@ -308,7 +304,7 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         if (consumeCarry && poolWei != 0) {
             rewardPool -= (poolWei - returnWei);
         }
-        return (finished, returnedWei);
+        return returnedWei;
     }
 
     function _rewardBonusScaleBps(uint24 lvl) private pure returns (uint16) {

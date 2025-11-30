@@ -49,12 +49,9 @@ interface IPurgeJackpots {
         );
 
     function consumeDecClaim(address player, uint24 lvl) external returns (uint256 amountWei);
-    function consumeBafClaim(address player, uint24 lvl) external returns (uint256 amountWei);
     function claimDecimatorJackpot(uint24 lvl) external;
-    function claimBafJackpot(uint24 lvl) external;
 
     function decClaimable(address player, uint24 lvl) external view returns (uint256 amountWei, bool winner);
-    function bafClaimable(address player, uint24 lvl) external view returns (uint256 amountWei, bool winner);
 
     function recordBafFlip(address player, uint24 lvl) external;
     function recordDecBurn(address player, uint24 lvl, uint8 bucket, uint256 amount) external returns (uint8 bucketUsed);

@@ -75,8 +75,8 @@ contract PurgeGameHarness is PurgeGame {
         rngLockedFlag = locked;
     }
 
-    function harnessRunEndgame(uint32 cap, uint48 day, uint256 rngWord) external {
-        _runEndgameModule(level, cap, day, rngWord);
+    function harnessRunEndgame(uint32 cap, uint256 rngWord) external {
+        _runEndgameModule(level, cap, rngWord);
     }
 
     function harnessGetPendingEndLevel() external view returns (address) {

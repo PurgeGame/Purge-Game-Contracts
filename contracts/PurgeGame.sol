@@ -427,7 +427,7 @@ contract PurgeGame is PurgeGameStorage {
 
             // --- State 1 - Pregame ---
             if (_gameState == 1) {
-                _runEndgameModule(lvl, cap, day, rngWord); // handles payouts, wipes, endgame dist, and jackpots
+                _runEndgameModule(lvl, cap, rngWord); // handles payouts, wipes, endgame dist, and jackpots
                 if (gameState == 2) {
                     if (lvl != 0) {
                         coinContract.recordStakeResolution(lvl, day);
@@ -794,7 +794,7 @@ contract PurgeGame is PurgeGameStorage {
     }
 
     /// @notice Delegatecall into the endgame module to resolve slow settlement paths.
-    function _runEndgameModule(uint24 lvl, uint32 cap, uint48 day, uint256 rngWord) internal {
+    function _runEndgameModule(uint24 lvl, uint32 cap, uint256 rngWord) internal {
         address jackpots = coin.jackpots();
         if (jackpots == address(0)) revert E();
         (bool ok, ) = endgameModule.delegatecall(
@@ -802,7 +802,6 @@ contract PurgeGame is PurgeGameStorage {
                 IPurgeGameEndgameModule.finalizeEndgame.selector,
                 lvl,
                 cap,
-                day,
                 rngWord,
                 jackpots,
                 coin,
@@ -827,7 +826,7 @@ contract PurgeGame is PurgeGameStorage {
             if (msg.sender != address(trophies)) revert E();
             trophyPool -= amount;
             rewardPool += amount;
-        } else if (op == PurgeGameExternalOp.DecJackpotClaim || op == PurgeGameExternalOp.BafJackpotClaim) {
+        } else if (op == PurgeGameExternalOp.DecJackpotClaim) {
             address jackpots = coin.jackpots();
             if (jackpots == address(0) || msg.sender != jackpots) revert E();
             _addClaimableEth(account, amount);

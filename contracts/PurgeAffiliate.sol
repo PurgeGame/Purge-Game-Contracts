@@ -72,7 +72,6 @@ contract PurgeAffiliate {
     mapping(address => bytes32) private playerReferralCode;
     mapping(address => uint256) public presaleCoinEarned;
     uint96 public totalPresaleSold;
-    PlayerScore public topAffiliate;
     mapping(uint24 => PlayerScore) private affiliateTopByLevel;
 
     // ---------------------------------------------------------------------
@@ -285,7 +284,7 @@ contract PurgeAffiliate {
             presaleCoinEarned[affiliateAddr] += totalFlipAward;
         }
 
-        _updateTopAffiliate(affiliateAddr, newTotal);
+        _updateTopAffiliate(affiliateAddr, newTotal, lvl);
 
         playerRakeback = rakebackShare;
 
@@ -356,35 +355,16 @@ contract PurgeAffiliate {
         }
     }
 
-    /// @notice Clear affiliate tracking for the next cycle (invoked by the game or coin).
-    function resetAffiliateLeaderboard(uint24 lvl) external {
-        address sender = msg.sender;
-        if (sender != address(coin) && sender != address(purgeGame)) revert OnlyAuthorized();
-        uint24 archiveLevel = lvl == 0 ? 0 : lvl - 1;
-        PlayerScore memory leader = topAffiliate;
-        if (leader.player != address(0) && leader.score != 0) {
-            affiliateTopByLevel[archiveLevel] = leader;
-        } else {
-            delete affiliateTopByLevel[archiveLevel];
-        }
-        delete topAffiliate;
-    }
-
     // ---------------------------------------------------------------------
     // Views
     // ---------------------------------------------------------------------
-    function getTopAffiliate() external view returns (address) {
-        return topAffiliate.player;
+    function getTopAffiliate(uint24 lvl) external view returns (address) {
+        (address player, ) = affiliateTop(lvl);
+        return player;
     }
 
     /// @notice Return the recorded top affiliate for a given level.
-    /// @dev Uses live leaderboard when requesting the current level; otherwise returns the archived top.
-    function affiliateTop(uint24 lvl) external view returns (address player, uint96 score) {
-        IPurgeGame game_ = purgeGame;
-        if (address(game_) != address(0) && lvl == game_.level()) {
-            PlayerScore memory entry = topAffiliate;
-            return (entry.player, entry.score);
-        }
+    function affiliateTop(uint24 lvl) public view returns (address player, uint96 score) {
         PlayerScore memory stored = affiliateTopByLevel[lvl];
         return (stored.player, stored.score);
     }
@@ -413,11 +393,11 @@ contract PurgeAffiliate {
         return uint96(wholeTokens);
     }
 
-    function _updateTopAffiliate(address player, uint256 total) private {
+    function _updateTopAffiliate(address player, uint256 total, uint24 lvl) private {
         uint96 score = _score96(total);
-        PlayerScore memory current = topAffiliate;
+        PlayerScore memory current = affiliateTopByLevel[lvl];
         if (score > current.score) {
-            topAffiliate = PlayerScore({player: player, score: score});
+            affiliateTopByLevel[lvl] = PlayerScore({player: player, score: score});
         }
     }
 

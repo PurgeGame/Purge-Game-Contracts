@@ -5,8 +5,7 @@ pragma solidity ^0.8.26;
 enum PurgeGameExternalOp {
     TrophyPayout,
     TrophyRecycle,
-    DecJackpotClaim,
-    BafJackpotClaim
+    DecJackpotClaim
 }
 
 interface IPurgeGameExternal {

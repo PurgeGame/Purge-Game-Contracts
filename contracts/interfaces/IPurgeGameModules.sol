@@ -7,7 +7,6 @@ interface IPurgeGameEndgameModule {
     function finalizeEndgame(
         uint24 lvl,
         uint32 cap,
-        uint48 day,
         uint256 rngWord,
         address jackpots,
         IPurgeCoinModule coinContract,

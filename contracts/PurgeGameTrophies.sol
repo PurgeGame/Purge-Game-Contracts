@@ -488,7 +488,9 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
                                 total += 1;
                             }
                             uint24 stakeLevel = uint24((info >> TROPHY_STAKE_LEVEL_SHIFT) & 0xFFFFFF);
-                            uint24 base = stakeLevel == 0 ? uint24((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF) : stakeLevel;
+                            uint24 base = stakeLevel == 0
+                                ? uint24((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF)
+                                : stakeLevel;
                             if (base < earliest) earliest = base;
                         }
                     }
@@ -517,7 +519,9 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
                             total += 1;
                         }
                         uint24 stakeLevel = uint24((info >> TROPHY_STAKE_LEVEL_SHIFT) & 0xFFFFFF);
-                        uint24 base = stakeLevel == 0 ? uint24((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF) : stakeLevel;
+                        uint24 base = stakeLevel == 0
+                            ? uint24((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF)
+                            : stakeLevel;
                         if (base < earliest) earliest = base;
                     }
                 }
@@ -939,7 +943,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         address affiliateWinner;
         address affiliateAddr = coin.affiliateProgram();
         if (affiliateAddr != address(0)) {
-            affiliateWinner = IPurgeAffiliate(affiliateAddr).getTopAffiliate();
+            affiliateWinner = IPurgeAffiliate(affiliateAddr).getTopAffiliate(req.level);
         }
         if (affiliateWinner == address(0)) {
             affiliateWinner = req.exterminator;
@@ -1249,11 +1253,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         return uint8(bonus);
     }
 
-    function exterminatorStakeDiscount(address player) external view override returns (uint8) {
-        player; // silence unused warning
-        return 0;
-    }
-
     function hasExterminatorStake(address player) external view override returns (bool) {
         bool[256] storage traits = exterminatorStakeTraits_[player];
         for (uint256 i; i < 256; ) {
@@ -1331,7 +1330,11 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         _addTrophyRewardInternal(tokenId, amountWei, level);
     }
 
-    function rewardTrophy(uint24 level, uint8 kind, uint256 amountWei) public override onlyGameOrCoin returns (bool paid) {
+    function rewardTrophy(
+        uint24 level,
+        uint8 kind,
+        uint256 amountWei
+    ) public override onlyGameOrCoin returns (bool paid) {
         (uint256 previousBase, uint256 currentBase) = nft.getBasePointers();
         uint24 currentLevel = game.level();
         uint256 tokenId = _placeholderTokenId(level, kind, previousBase, currentBase, currentLevel);
@@ -1342,12 +1345,11 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         return true;
     }
 
-    function rewardRandomStaked(uint256 rngSeed, uint256 amountWei, uint24 level)
-        public
-        override
-        onlyGameOrCoin
-        returns (bool paid)
-    {
+    function rewardRandomStaked(
+        uint256 rngSeed,
+        uint256 amountWei,
+        uint24 level
+    ) public override onlyGameOrCoin returns (bool paid) {
         (uint256 tokenIdA, ) = stakedTrophySampleWithId(rngSeed);
         (uint256 tokenIdB, ) = stakedTrophySampleWithId(uint256(keccak256(abi.encodePacked(rngSeed, uint256(7777)))));
 
@@ -1392,12 +1394,10 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         }
     }
 
-    function processEndLevel(EndLevelRequest calldata req, uint256 scaledPool)
-        external
-        override
-        onlyGame
-        returns (uint256 paidTotal)
-    {
+    function processEndLevel(
+        EndLevelRequest calldata req,
+        uint256 scaledPool
+    ) external override onlyGame returns (uint256 paidTotal) {
         _processEndLevel(req);
         paidTotal = _rewardEndgame(req.level, req.rngWord, scaledPool);
     }
