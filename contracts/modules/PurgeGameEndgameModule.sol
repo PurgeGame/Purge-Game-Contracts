@@ -24,7 +24,16 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
     uint256 private constant MINT_MASK_24 = (uint256(1) << 24) - 1;
     uint256 private constant ETH_LEVEL_STREAK_SHIFT = 48;
 
-    /// @notice Entry point invoked via delegatecall from the core game contract.
+    /**
+     * @notice Settles a completed level by paying trait-related slices, jackpots, and participant airdrops.
+     * @dev Called by the core game contract via `delegatecall` so state mutations land on the parent.
+     *      Trait payouts are primed up front on a trait win; `phase` then gates the participant payout vs jackpot/cleanup pass.
+     * @param lvl Current level index (1-based) that just completed.
+     * @param cap Optional cap for batched payouts; zero falls back to DEFAULT_PAYOUTS_PER_TX.
+     * @param rngWord Randomness used for jackpot and ticket selection.
+     * @param jackpots Address of the jackpots contract to invoke.
+     * @param trophiesContract Delegate that handles trophy minting and reward distribution.
+     */
     function finalizeEndgame(
         uint24 lvl,
         uint32 cap,
@@ -40,23 +49,26 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         uint8 _phase = phase;
         if (_phase > 3) {
             if (traitWin && currentPrizePool != 0) {
+                // Finalize the participant slice from `_primeTraitPayouts` in a gas-bounded manner.
                 _payoutParticipants(cap, prevLevel);
                 return;
             }
             if (prevLevel != 0 && (prevLevel % 10) == 0) {
                 uint256 bafPoolWei;
                 if ((prevLevel % 100) == 0 && bafHundredPool != 0) {
+                    // Every 100 levels we may have a carry pool; otherwise take a fresh slice from rewardPool.
                     bafPoolWei = bafHundredPool;
                     bafHundredPool = 0;
                 } else {
-                    bafPoolWei = (rewardPool * _bafPercent(prevLevel)) / 100;
+                    bafPoolWei = (rewardPool * (prevLevel == 50 ? 25 : 10)) / 100;
                 }
-                _progressExternal(0, bafPoolWei, cap, prevLevel, rngWord, jackpots, true);
+                _rewardJackpot(0, bafPoolWei, cap, prevLevel, rngWord, jackpots, true);
             }
             bool decWindow = prevLevel % 10 == 5 && prevLevel >= 15 && prevLevel % 100 != 95;
             if (decWindow) {
+                // Fire decimator jackpots midway through each decile except the 95th to avoid overlap with final bands.
                 uint256 decPoolWei = (rewardPool * 15) / 100;
-                _progressExternal(1, decPoolWei, cap, prevLevel, rngWord, jackpots, true);
+                _rewardJackpot(1, decPoolWei, cap, prevLevel, rngWord, jackpots, true);
             }
 
             phase = 0;
@@ -90,24 +102,26 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         }
     }
 
+    /**
+     * @notice Pays the participant slice of the prize pool evenly across trait purge tickets for the level.
+     * @dev Uses `airdropIndex` to batch work across transactions and coalesces consecutive identical winners.
+     * @param capHint Optional per-call cap to keep gas bounded; zero uses DEFAULT_PAYOUTS_PER_TX.
+     * @param prevLevel Level that just ended (level indexes are 1-based).
+     */
     function _payoutParticipants(uint32 capHint, uint24 prevLevel) private {
         address[] storage arr = traitPurgeTicket[prevLevel][uint8(lastExterminatedTrait)];
-        uint32 len = uint32(arr.length);
-
+        uint256 len = arr.length;
         uint256 participantPool = currentPrizePool;
         uint256 unitPayout = participantPool / len;
-        uint256 remainder = participantPool - (unitPayout * uint256(len));
 
-        uint32 cap = (capHint == 0) ? DEFAULT_PAYOUTS_PER_TX : capHint;
-        uint32 i = airdropIndex;
-        uint32 end = i + cap;
+        uint256 cap = (capHint == 0) ? DEFAULT_PAYOUTS_PER_TX : capHint;
+        uint256 i = airdropIndex;
+        uint256 end = i + cap;
         if (end > len) end = len;
 
-        address lastPaid;
         while (i < end) {
             address w = arr[i];
-            lastPaid = w;
-            uint32 run = 1;
+            uint256 run = 1;
             unchecked {
                 while (i + run < end && arr[i + run] == w) ++run;
             }
@@ -119,20 +133,18 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
 
         if (end == len) {
             currentPrizePool = 0;
-            if (remainder != 0) {
-                if (lastPaid == address(0)) {
-                    lastPaid = arr[end - 1];
-                }
-                _addClaimableEth(lastPaid, remainder);
-            }
         }
 
-        airdropIndex = i;
+        airdropIndex = uint32(i);
         if (i == len) {
             airdropIndex = 0;
         }
     }
 
+    /**
+     * @notice Splits the current prize pool into exterminator, ticket, and participant slices for a trait win.
+     * @dev Also triggers trophy processing for the exterminator and updates rewardPool/trophyPool balances.
+     */
     function _primeTraitPayouts(uint24 prevLevel, uint256 rngWord, IPurgeGameTrophiesModule trophiesContract) private {
         address ex = exterminator;
         if (ex == address(0)) return;
@@ -142,6 +154,7 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
             ? (poolValue * 40) / 100
             : (poolValue * 30) / 100;
 
+        // Pay half immediately; defer the rest through trophy processing.
         uint256 immediate = exterminatorShare >> 1;
         uint256 deferredWei = exterminatorShare - immediate;
         _addClaimableEth(ex, immediate);
@@ -154,11 +167,9 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         uint256 arrLen = arr.length;
         address[3] memory winners;
         uint256[3] memory streaks;
-        uint256 seed = rngWord ^ (uint256(prevLevel) << 128);
         for (uint8 i; i < 3; ) {
-            seed = uint256(keccak256(abi.encodePacked(seed, i)));
-            uint256 idx = seed % arrLen;
-            address w = arr[idx];
+            // Pick three winners with replacement using disjoint slices of the VRF word; weighting is applied later via streaks.
+            address w = arr[(rngWord >> (uint256(i) * 64)) % arrLen];
             winners[i] = w;
             streaks[i] = (mintPacked_[w] >> ETH_LEVEL_STREAK_SHIFT) & MINT_MASK_24;
             unchecked {
@@ -213,9 +224,11 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
             trophyPool += rewardsTotal;
         }
 
+        // Clear exterminator so a second call cannot double-claim the share.
         exterminator = address(0);
     }
 
+    /// @notice Adds ETH winnings to a player, emitting the credit event.
     function _addClaimableEth(address beneficiary, uint256 weiAmount) private {
         unchecked {
             claimableWinnings[beneficiary] += weiAmount;
@@ -223,7 +236,17 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         emit PlayerCredited(beneficiary, weiAmount);
     }
 
-    function _progressExternal(
+    /**
+     * @notice Routes a jackpot slice to the jackpots contract and optionally burns from rewardPool.
+     * @param kind 0 = BAF jackpot, 1 = Decimator jackpot.
+     * @param poolWei Amount forwarded; if `consumeCarry` is true, rewardPool is debited by poolWei - returnWei.
+     * @param cap Max winners processed in this call to bound gas.
+     * @param lvl Level tied to the jackpot.
+     * @param rngWord Randomness used by the jackpot contract.
+     * @param jackpots Jackpots contract to call.
+     * @param consumeCarry Whether to deduct the net spend from rewardPool.
+     */
+    function _rewardJackpot(
         uint8 kind,
         uint256 poolWei,
         uint32 cap,
@@ -231,7 +254,7 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         uint256 rngWord,
         address jackpots,
         bool consumeCarry
-    ) private returns (uint256 returnedWei) {
+    ) private {
         address[] memory winnersArr;
         uint256[] memory amountsArr;
         uint256 trophyPoolDelta;
@@ -254,7 +277,6 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         } else {
             revert E();
         }
-
         for (uint256 i; i < winnersArr.length; ) {
             _addClaimableEth(winnersArr[i], amountsArr[i]);
             unchecked {
@@ -266,13 +288,12 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
             trophyPool += trophyPoolDelta;
         }
 
-        returnedWei = returnWei;
         if (consumeCarry && poolWei != 0) {
             rewardPool -= (poolWei - returnWei);
         }
-        return returnedWei;
     }
 
+    /// @notice Computes the rewardPool scaling factor (in bps) based on the level's position in its 100-level band.
     function _rewardBonusScaleBps(uint24 lvl) private pure returns (uint16) {
         // Linearly scale reward pool-funded slices from 100% at the start of a 100-level band
         // down to 50% on the last level of the band, then reset on the next band.
@@ -281,9 +302,5 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         uint256 scale = 10_000 - discount;
         if (scale < 5000) scale = 5000;
         return uint16(scale);
-    }
-
-    function _bafPercent(uint24 lvl) private pure returns (uint256) {
-        return lvl == 50 ? 25 : 10;
     }
 }
