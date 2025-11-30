@@ -5,86 +5,87 @@ pragma solidity ^0.8.26;
  * @title PurgeGameStorage
  * @notice Shared storage layout between the core game contract and its delegatecall modules.
  *         Keeping all slot definitions in a single contract prevents layout drift.
+ *
+ * Storage layout summary (slots 0-3):
+ * - Slot 0: level timers + airdrop cursors + FSM (level / gameState)
+ * - Slot 1: exterminator pointer + rebuild cursor + jackpot counters + decimator latch
+ * - Slot 2: stETH address + RNG / trait flags
+ * - Slot 3: price (wei) + priceCoin (unit), both uint128
+ * Everything else starts at slot 4+ (full-width balances, arrays, mappings).
  */
 abstract contract PurgeGameStorage {
-    // -----------------------
-    // Game Progress and State (packed for gas efficiency)
-    // -----------------------
+    // ---------------------------------------------------------------------
+    // Packed core state (slots 0-2)
+    // ---------------------------------------------------------------------
 
-    // Slot 1 (28 bytes)
-    uint48 internal levelStartTime = type(uint48).max;
-    uint48 internal dailyIdx;
-    uint32 internal airdropMapsProcessedCount;
-    uint32 internal airdropIndex;
-    uint32 internal traitRebuildCursor;
-    uint32 internal airdropMultiplier = 1;
+    // Slot 0: level timing, airdrop batching, and the main FSM flags.
+    uint48 internal levelStartTime = type(uint48).max; // timestamp when current level opened (sentinel max pre-start)
+    uint48 internal dailyIdx; // monotonically increasing "day" counter derived from level start
+    uint48 internal rngRequestTime; // when the last RNG request was fired (for timeout checks)
+    uint32 internal airdropMapsProcessedCount; // maps handled within current airdrop batch
+    uint32 internal airdropIndex; // index into pendingMapMints for batched airdrops
+    uint24 public level = 1; // current level (1-indexed)
+    uint16 internal lastExterminatedTrait = 420; // last trait purged this level; 420 == TRAIT_ID_TIMEOUT sentinel
+    uint8 public gameState = 1; // FSM: 0=idle,1=pregame,2=airdrop/mint,3=purge window
 
-    // Slot 2 (15 bytes)
-    uint24 public level = 1;
-    uint16 internal lastExterminatedTrait = 420;
-    uint8 public gameState = 1;
-    uint8 internal jackpotCounter;
-    uint8 internal earlyPurgePercent;
-    uint8 internal phase;
-    bool internal earlyPurgeBoostArmed;
-    bool internal rngLockedFlag;
-    bool internal rngFulfilled = true;
-    bool internal traitCountsSeedQueued;
-    bool internal traitCountsShouldOverwrite;
-    bool internal decimatorHundredReady;
-    bool internal exterminationInvertFlag;
+    // Slot 1: actor pointers and sub-state cursors.
+    address internal exterminator; // player selected for the trait win at the end of a level
+    uint32 internal traitRebuildCursor; // progress cursor when reseeding trait counts
+    uint32 internal airdropMultiplier = 1; // airdrop bonus multiplier (scaled integer)
+    uint8 internal jackpotCounter; // jackpots processed within the current level
+    uint8 internal earlyPurgePercent; // % of previous prize pool carried into early purge reward (0-255)
+    uint8 internal phase; // sub-phase within gameState (0..7)
+    bool internal decWindowOpen = true; // latch to hold decimator window open until RNG is requested
 
-    // -----------------------
-    // Price
-    // -----------------------
-    uint256 internal price = 0.025 ether;
-    uint256 internal priceCoin = 1_000_000_000;
+    // Slot 2: RNG/trait flags + stETH address.
+    address internal stethTokenAddress; // stETH token contract used for staking
+    bool internal earlyPurgeBoostArmed; // true if the next jackpot should apply the boost
+    bool internal rngLockedFlag; // true while waiting for VRF fulfillment
+    bool internal rngFulfilled = true; // tracks VRF lifecycle; default true pre-first request
+    bool internal traitCountsSeedQueued; // true if initial trait counts were staged and await overwrite flag
+    bool internal traitCountsShouldOverwrite; // true to overwrite existing trait counts during rebuild
+    bool internal decimatorHundredReady; // true when level % 100 decimator special is primed
+    bool internal exterminationInvertFlag; // toggles inversion of exterminator bonus on certain levels
 
-    // -----------------------
-    // Prize Pools and RNG
-    // -----------------------
-    uint256 internal lastPrizePool = 125 ether;
-    uint256 internal currentPrizePool;
-    uint256 internal nextPrizePool;
-    uint256 internal rewardPool;
-    uint256 internal dailyJackpotBase;
-    uint256 internal decimatorHundredPool;
-    uint256 internal rngWordCurrent;
-    uint256 internal vrfRequestId;
+    // ---------------------------------------------------------------------
+    // Pricing and pooled balances
+    // ---------------------------------------------------------------------
 
-    // -----------------------
-    // Minting / Airdrops
-    // -----------------------
-    address[] internal pendingMapMints;
-    mapping(address => uint32) internal playerMapMintsOwed;
+    // Slot 3: price (wei) + priceCoin (unit) packed into one word. Both capped well below uint128.
+    uint128 internal price = 0.025 ether;
+    uint128 internal priceCoin = 1_000_000_000;
 
-    // -----------------------
-    // Token / Trait State
-    // -----------------------
-    mapping(address => uint256) internal claimableWinnings;
-    mapping(uint24 => address[][256]) internal traitPurgeTicket;
-    address internal exterminator;
+    uint256 internal lastPrizePool = 125 ether; // prize pool snapshot from the previous level
+    uint256 internal currentPrizePool; // active prize pool for the current level
+    uint256 internal nextPrizePool; // pre-funded prize pool for the next level
+    uint256 internal rewardPool; // aggregate ETH available for rewards
+    uint256 internal dailyJackpotBase; // baseline ETH allocated per daily jackpot
+    uint256 internal decimatorHundredPool; // reserved pool for the level-100 decimator special
+    uint256 internal bafHundredPool; // reserved pool for the BAF 100-level special
+    uint256 internal rngWordCurrent; // latest VRF word (or 0 if pending)
+    uint256 internal vrfRequestId; // last VRF request id used to match fulfillments
+    uint256 internal trophyPool; // ETH earmarked for trophy payouts
+    uint256 internal totalFlipReversals; // number of reverse flips purchased against current RNG
+    uint256 internal principalStEth; // stETH principal the contract has staked
 
-    // -----------------------
-    // Daily / Trait Counters
-    // -----------------------
-    uint32[80] internal dailyPurgeCount;
-    uint32[256] internal traitRemaining;
-    mapping(address => uint256) internal mintPacked_;
+    // ---------------------------------------------------------------------
+    // Minting / airdrops
+    // ---------------------------------------------------------------------
+    address[] internal pendingMapMints; // queue of players awaiting map mints
+    mapping(address => uint32) internal playerMapMintsOwed; // map NFT count owed per player (consumed during batching)
 
-    uint256 internal trophyPool;
-    uint256 internal totalFlipReversals;
-    uint256 internal principalStEth;
-    address internal stethTokenAddress;
-    uint256 internal bafHundredPool;
-    uint48 internal rngRequestTime;
+    // ---------------------------------------------------------------------
+    // Token / trait state
+    // ---------------------------------------------------------------------
+    mapping(address => uint256) internal claimableWinnings; // ETH claimable by players
+    mapping(uint24 => address[][256]) internal traitPurgeTicket; // level -> trait id -> ticket owner list
+    uint32[80] internal dailyPurgeCount; // per-day trait hit counters used for jackpot selection
+    uint32[256] internal traitRemaining; // remaining supply per trait id
+    mapping(address => uint256) internal mintPacked_; // bit-packed mint history (see PurgeGame ETH_* constants for layout)
 
-    // -----------------------
+    // ---------------------------------------------------------------------
     // RNG history
-    // -----------------------
-    mapping(uint48 => uint256) internal rngWordByDay;
-    mapping(uint48 => bool) internal rngWordRecorded;
-
-    // Latch to keep a decimator window open until RNG is requested for that level (also used for the level-100 special).
-    bool internal decWindowOpen = true;
+    // ---------------------------------------------------------------------
+    mapping(uint48 => uint256) internal rngWordByDay; // VRF words keyed by dailyIdx
+    mapping(uint48 => bool) internal rngWordRecorded; // bookkeeping flag to avoid double-recording a day
 }

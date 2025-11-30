@@ -725,7 +725,8 @@ contract PurgeGame is PurgeGameStorage {
     function _endLevel(uint16 exterminated) private {
         address callerExterminator = msg.sender;
         uint24 levelSnapshot = level;
-        if (exterminated < 256) {
+        bool traitExterminated = exterminated < 256;
+        if (traitExterminated) {
             uint8 exTrait = uint8(exterminated);
             uint16 prevTrait = lastExterminatedTrait;
             bool repeatTrait = prevTrait == uint16(exTrait);
@@ -782,6 +783,9 @@ contract PurgeGame is PurgeGameStorage {
         }
 
         gameState = 1;
+        if (traitExterminated) {
+            coin.normalizeActivePurgeQuests();
+        }
     }
 
     /// @notice Delegatecall into the endgame module to resolve slow settlement paths.

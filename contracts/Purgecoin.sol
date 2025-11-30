@@ -860,6 +860,13 @@ contract Purgecoin {
         }
     }
 
+    /// @notice Normalize purge quests mid-day when extermination ends the purge window.
+    function normalizeActivePurgeQuests() external onlyPurgeGameContract {
+        IPurgeQuestModule module = questModule;
+        if (address(module) == address(0)) return;
+        module.normalizeActivePurgeQuests();
+    }
+
     function notifyQuestMint(address player, uint32 quantity, bool paidWithEth) external onlyGameplayContracts {
         IPurgeQuestModule module = questModule;
         (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleMint(

@@ -35,6 +35,8 @@ interface IPurgeQuestModule {
         external
         returns (bool rolled, uint8 questType, bool highDifficulty, uint8 stakeMask, uint8 stakeRisk);
 
+    function normalizeActivePurgeQuests() external;
+
     function handleMint(address player, uint32 quantity, bool paidWithEth)
         external
         returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed);

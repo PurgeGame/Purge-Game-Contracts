@@ -4,6 +4,9 @@ pragma solidity ^0.8.26;
 import "../interfaces/IPurgeQuestModule.sol";
 import "../interfaces/IPurgeGame.sol";
 
+/// @title PurgeQuestModule
+/// @notice Tracks two rotating daily quests and validates player progress against Purge game actions.
+/// @dev All entry points are coin-gated; randomness is supplied by the coin contract.
 contract PurgeQuestModule is IPurgeQuestModule {
     error OnlyCoin();
     error InvalidQuestDay();
@@ -11,6 +14,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
 
     uint256 private constant MILLION = 1e6;
     uint8 private constant QUEST_SLOT_COUNT = 2;
+    // Quest types (generated pseudo-randomly per slot)
     uint8 private constant QUEST_TYPE_MINT_ANY = 0;
     uint8 private constant QUEST_TYPE_MINT_ETH = 1;
     uint8 private constant QUEST_TYPE_FLIP = 2;
@@ -19,17 +23,25 @@ contract PurgeQuestModule is IPurgeQuestModule {
     uint8 private constant QUEST_TYPE_PURGE = 5;
     uint8 private constant QUEST_TYPE_DECIMATOR = 6;
     uint8 private constant QUEST_TYPE_COUNT = 7;
+
+    // Quest flags for difficulty and forced behavior
     uint8 private constant QUEST_FLAG_HIGH_DIFFICULTY = 1 << 0;
     uint8 private constant QUEST_FLAG_VERY_HIGH_DIFFICULTY = 1 << 1;
     uint8 private constant QUEST_FLAG_FORCE_PURGE = 1 << 2;
+
+    // Stake-specific requirements (bitmask)
     uint8 private constant QUEST_STAKE_REQUIRE_PRINCIPAL = 1 << 0;
     uint8 private constant QUEST_STAKE_REQUIRE_DISTANCE = 1 << 1;
     uint8 private constant QUEST_STAKE_REQUIRE_RISK = 1 << 2;
+
+    // Tiering and streak accounting
     uint8 private constant QUEST_TIER_MAX_INDEX = 10;
     uint32 private constant QUEST_TIER_STREAK_SPAN = 7;
     uint8 private constant QUEST_STATE_COMPLETED_SLOTS_MASK = (uint8(1) << QUEST_SLOT_COUNT) - 1;
     uint8 private constant QUEST_STATE_STREAK_CREDITED = 1 << 7;
     uint8 private constant QUEST_STATE_ETH_PRIMED = 1 << 5;
+
+    // Baseline minima for quest targets and rarer decimator level trigger
     uint16 private constant QUEST_MIN_TOKEN = 250;
     uint16 private constant QUEST_MIN_FLIP_STAKE_TOKEN = 1_000;
     uint16 private constant QUEST_MIN_MINT = 1;
@@ -38,30 +50,35 @@ contract PurgeQuestModule is IPurgeQuestModule {
     address public immutable coin;
     IPurgeGame private questGame;
 
+    /// @notice Definition of a quest that is active for the current day.
     struct DailyQuest {
-        uint48 day;
-        uint8 questType;
-        uint8 stakeMask;
-        uint8 stakeRisk;
-        uint8 flags;
-        uint256 entropy;
+        uint48 day; // Quest day identifier (derived by caller, not block timestamp)
+        uint8 questType; // One of the QUEST_TYPE_* constants
+        uint8 stakeMask; // Bitmask of stake constraints when questType == STAKE
+        uint8 stakeRisk; // Minimum risk when QUEST_STAKE_REQUIRE_RISK is set
+        uint8 flags; // Difficulty and forced purge flags
+        uint32 version; // Bumped when quest mutates mid-day to reset stale player progress
+        uint256 entropy; // VRF-derived entropy used for targets and stake config
     }
 
+    /// @notice Progress and streak bookkeeping per player.
     struct PlayerQuestState {
-        uint32 lastCompletedDay;
-        uint32 streak;
-        uint32 baseStreak;
-        uint32 lastSyncDay;
-        uint32[QUEST_SLOT_COUNT] lastProgressDay;
-        uint128[QUEST_SLOT_COUNT] progress;
-        uint32 forcedProgressDay;
-        uint128 forcedProgress;
-        uint8 completionMask;
+        uint32 lastCompletedDay; // Last day where both slots were completed
+        uint32 streak; // Current streak of days with full completion
+        uint32 baseStreak; // Snapshot of streak at start of day (used for rewards)
+        uint32 lastSyncDay; // Day we last reset progress/completionMask
+        uint32[QUEST_SLOT_COUNT] lastProgressDay; // Tracks per-slot progress day to auto-reset
+        uint32[QUEST_SLOT_COUNT] lastQuestVersion; // Quest version used when progress was recorded
+        uint128[QUEST_SLOT_COUNT] progress; // Accumulated progress toward targets per slot
+        uint32 forcedProgressDay; // Day used for ETH priming accumulation
+        uint128 forcedProgress; // Progress toward ETH priming target
+        uint8 completionMask; // Bit 0/1 for slot completion, plus ETH_PRIMED/STREAK_CREDITED bits
     }
 
     DailyQuest[QUEST_SLOT_COUNT] private activeQuests;
     mapping(address => PlayerQuestState) private questPlayerState;
 
+    // Packed per-tier maxima (16 bits per tier index) for quest target generation.
     uint256 private constant QUEST_MINT_ANY_PACKED = 0x0000000000000000000000080008000800080008000700060005000400030002;
     uint256 private constant QUEST_MINT_ETH_PACKED = 0x0000000000000000000000050005000400040004000300030002000200020001;
     uint256 private constant QUEST_FLIP_PACKED = 0x000000000000000000000dac0ce40c1c0b540a8c09c408fc0834076c06a405dc;
@@ -74,10 +91,14 @@ contract PurgeQuestModule is IPurgeQuestModule {
     uint256 private constant QUEST_STAKE_DISTANCE_MAX_PACKED =
         0x00000000000000000000004b004b004b004b00460041003c00370032002d0028;
 
+    uint32 private questVersionCounter = 1;
+    /// @param coin_ Coin contract that is authorized to drive quest logic.
     constructor(address coin_) {
         coin = coin_;
     }
 
+    /// @notice Wire the Purge game contract after deployment.
+    /// @dev Hard gated by `coin` to avoid griefing.
     function wireGame(address game_) external onlyCoin {
         questGame = IPurgeGame(game_);
     }
@@ -87,6 +108,9 @@ contract PurgeQuestModule is IPurgeQuestModule {
         _;
     }
 
+    /// @notice Roll the daily quest set using VRF entropy.
+    /// @param day Quest day identifier (monotonicity enforced by caller).
+    /// @param entropy VRF entropy word; second slot reuses swapped halves.
     function rollDailyQuest(
         uint48 day,
         uint256 entropy
@@ -94,6 +118,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         return _rollDailyQuest(day, entropy, false, false);
     }
 
+    /// @notice Roll quests with optional overrides for testing/admin controls.
     function rollDailyQuestWithOverrides(
         uint48 day,
         uint256 entropy,
@@ -101,6 +126,11 @@ contract PurgeQuestModule is IPurgeQuestModule {
         bool forcePurge
     ) external onlyCoin returns (bool rolled, uint8 questType, bool highDifficulty, uint8 stakeMask, uint8 stakeRisk) {
         return _rollDailyQuest(day, entropy, forceMintEth, forcePurge);
+    }
+
+    /// @notice Normalize active quests when purge becomes disallowed mid-day (extermination to game state 1).
+    function normalizeActivePurgeQuests() external onlyCoin {
+        _normalizeActivePurgeQuests();
     }
 
     function _rollDailyQuest(
@@ -153,12 +183,12 @@ contract PurgeQuestModule is IPurgeQuestModule {
         return (true, primary.questType, hardMode, primary.stakeMask, primary.stakeRisk);
     }
 
+    /// @notice Handle mint progress for a player; covers both coin and ETH paid mints.
     function handleMint(
         address player,
         uint32 quantity,
         bool paidWithEth
     ) external onlyCoin returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) {
-        _normalizeActivePurgeQuests();
         DailyQuest[QUEST_SLOT_COUNT] memory quests = activeQuests;
         uint48 currentDay = _currentQuestDay(quests);
         PlayerQuestState storage state = questPlayerState[player];
@@ -232,11 +262,11 @@ contract PurgeQuestModule is IPurgeQuestModule {
         return (0, false, matched ? fallbackType : QUEST_TYPE_MINT_ANY, state.streak, false);
     }
 
+    /// @notice Handle flip/unstake progress credited in PURGE base units (6 decimals).
     function handleFlip(
         address player,
         uint256 flipCredit
     ) external onlyCoin returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) {
-        _normalizeActivePurgeQuests();
         DailyQuest[QUEST_SLOT_COUNT] memory quests = activeQuests;
         uint48 currentDay = _currentQuestDay(quests);
         PlayerQuestState storage state = questPlayerState[player];
@@ -262,7 +292,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
             }
             matched = true;
             fallbackType = quest.questType;
-            _questSyncProgress(state, slot, currentDay);
+            _questSyncProgress(state, slot, currentDay, quest.version);
             state.progress[slot] = _clampedAdd128(state.progress[slot], flipCredit);
             uint256 target = uint256(_questFlipTargetTokens(tier, quest.entropy)) * MILLION;
             if (state.progress[slot] >= target) {
@@ -275,11 +305,11 @@ contract PurgeQuestModule is IPurgeQuestModule {
         return (0, false, matched ? fallbackType : QUEST_TYPE_FLIP, state.streak, false);
     }
 
+    /// @notice Handle decimator burns counted in PURGE base units (6 decimals).
     function handleDecimator(
         address player,
         uint256 burnAmount
     ) external onlyCoin returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) {
-        _normalizeActivePurgeQuests();
         DailyQuest[QUEST_SLOT_COUNT] memory quests = activeQuests;
         uint48 currentDay = _currentQuestDay(quests);
         PlayerQuestState storage state = questPlayerState[player];
@@ -305,7 +335,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
             }
             matched = true;
             fallbackType = quest.questType;
-            _questSyncProgress(state, slot, currentDay);
+            _questSyncProgress(state, slot, currentDay, quest.version);
             state.progress[slot] = _clampedAdd128(state.progress[slot], burnAmount);
             uint256 target = uint256(_questDecimatorTargetTokens(tier, quest.entropy)) * MILLION;
             if (state.progress[slot] >= target) {
@@ -318,13 +348,13 @@ contract PurgeQuestModule is IPurgeQuestModule {
         return (0, false, matched ? fallbackType : QUEST_TYPE_DECIMATOR, state.streak, false);
     }
 
+    /// @notice Handle a staking action (principal, distance, risk) against stake quests.
     function handleStake(
         address player,
         uint256 principal,
         uint24 distance,
         uint8 risk
     ) external onlyCoin returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) {
-        _normalizeActivePurgeQuests();
         DailyQuest[QUEST_SLOT_COUNT] memory quests = activeQuests;
         uint48 currentDay = _currentQuestDay(quests);
         if (player == address(0) || currentDay == 0) {
@@ -372,11 +402,11 @@ contract PurgeQuestModule is IPurgeQuestModule {
         return (0, false, matched ? fallbackType : QUEST_TYPE_STAKE, state.streak, false);
     }
 
+    /// @notice Handle affiliate earnings credited in PURGE base units (6 decimals).
     function handleAffiliate(
         address player,
         uint256 amount
     ) external onlyCoin returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) {
-        _normalizeActivePurgeQuests();
         DailyQuest[QUEST_SLOT_COUNT] memory quests = activeQuests;
         uint48 currentDay = _currentQuestDay(quests);
         PlayerQuestState storage state = questPlayerState[player];
@@ -402,7 +432,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
             }
             matched = true;
             fallbackType = quest.questType;
-            _questSyncProgress(state, slot, currentDay);
+            _questSyncProgress(state, slot, currentDay, quest.version);
             state.progress[slot] = _clampedAdd128(state.progress[slot], amount);
             uint256 target = uint256(_questAffiliateTargetTokens(tier, quest.entropy)) * MILLION;
             if (state.progress[slot] >= target) {
@@ -415,11 +445,11 @@ contract PurgeQuestModule is IPurgeQuestModule {
         return (0, false, matched ? fallbackType : QUEST_TYPE_AFFILIATE, state.streak, false);
     }
 
+    /// @notice Handle purge (burn) quest progress in whole NFTs.
     function handlePurge(
         address player,
         uint32 quantity
     ) external onlyCoin returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) {
-        _normalizeActivePurgeQuests();
         DailyQuest[QUEST_SLOT_COUNT] memory quests = activeQuests;
         uint48 currentDay = _currentQuestDay(quests);
         PlayerQuestState storage state = questPlayerState[player];
@@ -445,7 +475,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
             }
             matched = true;
             fallbackType = quest.questType;
-            _questSyncProgress(state, slot, currentDay);
+            _questSyncProgress(state, slot, currentDay, quest.version);
             state.progress[slot] = _clampedAdd128(state.progress[slot], quantity);
             uint32 target = _questPurgeTarget(tier, quest.entropy);
             if (state.progress[slot] >= target) {
@@ -458,6 +488,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         return (0, false, matched ? fallbackType : QUEST_TYPE_PURGE, state.streak, false);
     }
 
+    /// @notice View helper for frontends; returns quest baselines at tier zero.
     function getActiveQuests() external view override returns (QuestInfo[2] memory quests) {
         DailyQuest[QUEST_SLOT_COUNT] memory local = _materializeActiveQuestsForView();
         uint8 baseTier = 0; // Baseline requirements with zero streak (use getPlayerQuestView for player-specific tiers)
@@ -477,6 +508,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         }
     }
 
+    /// @dev Returns active quests, downgrading purge slots in-memory when purge is not allowed.
     function _materializeActiveQuestsForView()
         private
         view
@@ -513,19 +545,23 @@ contract PurgeQuestModule is IPurgeQuestModule {
         lastCompletedDay = state.lastCompletedDay;
         for (uint8 slot; slot < QUEST_SLOT_COUNT; ) {
             DailyQuest memory quest = activeQuests[slot];
-            if (quest.day != 0 && state.lastProgressDay[slot] == quest.day) {
+            if (
+                quest.day != 0 &&
+                state.lastProgressDay[slot] == quest.day &&
+                state.lastQuestVersion[slot] == quest.version
+            ) {
                 progress[slot] = state.progress[slot];
-                completed[slot] = state.lastSyncDay == quest.day && (state.completionMask & uint8(1 << slot)) != 0;
             } else {
                 progress[slot] = 0;
-                completed[slot] = false;
             }
+            completed[slot] = state.lastSyncDay == quest.day && (state.completionMask & uint8(1 << slot)) != 0;
             unchecked {
                 ++slot;
             }
         }
     }
 
+    /// @notice Player-specific view of quests with tier-adjusted requirements and progress.
     function getPlayerQuestView(address player) external view override returns (PlayerQuestView memory viewData) {
         DailyQuest[QUEST_SLOT_COUNT] memory local = _materializeActiveQuestsForView();
         uint48 currentDay = _currentQuestDay(local);
@@ -550,12 +586,15 @@ contract PurgeQuestModule is IPurgeQuestModule {
                 stakeRisk: quest.stakeRisk,
                 requirements: _questRequirementsForTier(quest, tier)
             });
-            if (quest.day != 0 && state.lastProgressDay[slot] == quest.day) {
+            if (
+                quest.day != 0 &&
+                state.lastProgressDay[slot] == quest.day &&
+                state.lastQuestVersion[slot] == quest.version
+            ) {
                 viewData.progress[slot] = state.progress[slot];
-                viewData.completed[slot] =
-                    state.lastSyncDay == quest.day &&
-                    (state.completionMask & uint8(1 << slot)) != 0;
             }
+            viewData.completed[slot] =
+                state.lastSyncDay == quest.day && (state.completionMask & uint8(1 << slot)) != 0;
             unchecked {
                 ++slot;
             }
@@ -566,6 +605,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
     // Internal helpers
     // ---------------------------------------------------------------------
 
+    /// @dev Decode quest requirements for a particular tier (streak bucket).
     function _questRequirementsForTier(
         DailyQuest memory quest,
         uint8 tier
@@ -597,6 +637,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         }
     }
 
+    /// @dev Ensures stored quests remain valid when purge quests are temporarily disallowed.
     function _normalizeActivePurgeQuests() private {
         DailyQuest[QUEST_SLOT_COUNT] storage quests = activeQuests;
         bool purgeAllowed = _canRollPurgeQuest(quests[0].day != 0 ? quests[0].day : quests[1].day);
@@ -619,6 +660,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         }
     }
 
+    /// @dev Downgrades purge quests to ETH mint (or affiliate) when purging is paused, bumping version to reset progress.
     function _convertPurgeQuest(DailyQuest[QUEST_SLOT_COUNT] storage quests, uint8 slot) private {
         DailyQuest storage quest = quests[slot];
         uint8 otherSlot = slot == 0 ? uint8(1) : uint8(0);
@@ -628,8 +670,10 @@ contract PurgeQuestModule is IPurgeQuestModule {
         quest.stakeMask = 0;
         quest.stakeRisk = 0;
         quest.flags &= ~QUEST_FLAG_FORCE_PURGE;
+        quest.version = _nextQuestVersion();
     }
 
+    /// @dev Purge quests are only enabled when the core game is in purge state (gameState == 3).
     function _canRollPurgeQuest(uint48 /*questDay*/) private view returns (bool) {
         IPurgeGame game_ = questGame;
         if (address(game_) == address(0)) {
@@ -638,6 +682,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         return game_.gameState() == 3;
     }
 
+    /// @dev Decimator quests are unlocked at specific level boundaries.
     function _canRollDecimatorQuest() private view returns (bool) {
         IPurgeGame game_ = questGame;
         if (address(game_) == address(0)) {
@@ -668,6 +713,11 @@ contract PurgeQuestModule is IPurgeQuestModule {
         return value > type(uint128).max ? type(uint128).max : uint128(value);
     }
 
+    function _nextQuestVersion() private returns (uint32 newVersion) {
+        newVersion = questVersionCounter++;
+    }
+
+    /// @dev Processes a mint against a given quest slot, updating progress and emitting rewards when complete.
     function _questHandleMintSlot(
         PlayerQuestState storage state,
         DailyQuest memory quest,
@@ -676,7 +726,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         uint8 tier,
         uint256 priceUnit
     ) private returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) {
-        _questSyncProgress(state, slot, quest.day);
+        _questSyncProgress(state, slot, quest.day, quest.version);
         state.progress[slot] = _clampedAdd128(state.progress[slot], quantity);
         uint32 target = quest.questType == QUEST_TYPE_MINT_ANY
             ? _questMintAnyTarget(tier, quest.entropy)
@@ -687,6 +737,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         return (0, false, quest.questType, state.streak, false);
     }
 
+    /// @dev Resets per-day bookkeeping and streak if a day was missed.
     function _questSyncState(PlayerQuestState storage state, uint48 currentDay) private {
         if (state.lastCompletedDay != 0 && currentDay > uint48(state.lastCompletedDay + 1)) {
             state.streak = 0;
@@ -698,13 +749,16 @@ contract PurgeQuestModule is IPurgeQuestModule {
         }
     }
 
-    function _questSyncProgress(PlayerQuestState storage state, uint8 slot, uint48 currentDay) private {
-        if (state.lastProgressDay[slot] != currentDay) {
+    /// @dev Clears progress for a slot when the tracked day or quest version differs.
+    function _questSyncProgress(PlayerQuestState storage state, uint8 slot, uint48 currentDay, uint32 questVersion) private {
+        if (state.lastProgressDay[slot] != currentDay || state.lastQuestVersion[slot] != questVersion) {
             state.lastProgressDay[slot] = uint32(currentDay);
+            state.lastQuestVersion[slot] = questVersion;
             state.progress[slot] = 0;
         }
     }
 
+    /// @dev Clears ETH priming progress when the day rolls over.
     function _syncForcedProgress(PlayerQuestState storage state, uint48 currentDay) private {
         if (state.forcedProgressDay != currentDay) {
             state.forcedProgressDay = uint32(currentDay);
@@ -712,6 +766,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         }
     }
 
+    /// @dev Group streak into tiers to avoid per-day bespoke tables.
     function _questTier(uint32 streak) private pure returns (uint8) {
         uint32 tier = streak / QUEST_TIER_STREAK_SPAN;
         if (tier > QUEST_TIER_MAX_INDEX) {
@@ -724,6 +779,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         return uint16((packed >> (tier * 16)) & 0xFFFF);
     }
 
+    /// @dev Derives a target between min and max using a 10-bit difficulty input.
     function _questLinearTarget(uint32 minVal, uint32 maxVal, uint16 difficulty) private pure returns (uint32) {
         if (maxVal <= minVal) {
             return minVal;
@@ -790,6 +846,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         return _questLinearTarget(QUEST_MIN_TOKEN, uint32(maxVal), difficulty);
     }
 
+    /// @dev Enforces game-state constraints on a freshly seeded quest type.
     function _applyQuestTypeConstraints(
         DailyQuest[QUEST_SLOT_COUNT] storage quests,
         uint8 slot,
@@ -804,6 +861,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         }
     }
 
+    /// @dev Ensures two slots never share the same quest type unless explicitly forced.
     function _ensureDistinctQuestTypes(
         DailyQuest[QUEST_SLOT_COUNT] storage quests,
         bool purgeAllowed,
@@ -831,6 +889,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         quests[1].questType = _fallbackQuestType(referenceType, purgeAllowed, decAllowed);
     }
 
+    /// @dev Deterministic fallback used when repeated attempts fail to diversify quest types.
     function _fallbackQuestType(
         uint8 exclude,
         bool purgeAllowed,
@@ -853,6 +912,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         return QUEST_TYPE_MINT_ETH;
     }
 
+    /// @dev Marks ETH mint priming complete without granting a reward.
     function _questCompleteForced(
         PlayerQuestState storage state,
         uint48 currentDay
@@ -862,6 +922,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         return (0, false, QUEST_TYPE_MINT_ETH, state.streak, false);
     }
 
+    /// @dev Completes a quest slot, credits streak when all slots finish, and returns the proportional reward.
     function _questComplete(
         PlayerQuestState storage state,
         uint8 slot,
@@ -895,6 +956,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         return (rewardShare, isHard, quest.questType, newStreak, true);
     }
 
+    /// @dev Base reward scales with streak tiers and difficulty modifiers, before per-slot split.
     function _questBaseReward(uint32 streak, uint8 questFlags, uint256 priceUnit) private pure returns (uint256 totalReward) {
         totalReward = priceUnit / 5; // 20% of mint coin cost
         uint8 tier = _questTier(streak);
@@ -906,6 +968,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         }
     }
 
+    /// @dev Bonus applied when a new streak milestone is reached (paid once per day on the final slot).
     function _questStreakBonus(uint32 streak, uint256 priceUnit) private pure returns (uint256 bonusReward) {
         if (streak < 5) return 0;
         if (streak != 5 && (streak % 10) != 0) return 0;
@@ -915,6 +978,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         return bonus;
     }
 
+    /// @dev Derive stake quest requirements from entropy to keep selection reproducible.
     function _stakeQuestMaskAndRisk(uint256 entropy) private pure returns (uint8 mask, uint8 risk) {
         mask = QUEST_STAKE_REQUIRE_DISTANCE;
         bool requirePrincipal = ((entropy >> 16) & 1) == 0;
@@ -926,6 +990,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         }
     }
 
+    /// @dev Seeds a quest slot with a type, difficulty flags, and stake configuration.
     function _seedQuest(DailyQuest storage quest, uint48 day, uint256 entropy, uint8 excludeType) private {
         uint8 qType = uint8(entropy % QUEST_TYPE_COUNT);
         if (excludeType != type(uint8).max && qType == excludeType) {
@@ -951,19 +1016,23 @@ contract PurgeQuestModule is IPurgeQuestModule {
         quest.stakeRisk = risk;
         quest.flags = flags;
         quest.entropy = entropy;
+        quest.version = _nextQuestVersion();
     }
 
+    /// @dev Returns true when both slots are already populated for the provided day.
     function _questsCurrent(DailyQuest[QUEST_SLOT_COUNT] storage quests, uint48 day) private view returns (bool) {
         if (day == 0) return false;
         return quests[0].day == day && quests[1].day == day;
     }
 
+    /// @dev Helper to read the active day from either slot (slot0 preferred).
     function _currentQuestDay(DailyQuest[QUEST_SLOT_COUNT] memory quests) private pure returns (uint48) {
         uint48 day0 = quests[0].day;
         if (day0 != 0) return day0;
         return quests[1].day;
     }
 
+    /// @dev ETH mint eligibility is based on the last ETH mint level being within three levels.
     function _hasRecentEthMint(address player) private view returns (bool) {
         if (player == address(0)) {
             return false;
@@ -983,6 +1052,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         return currentLevel - lastLevel <= 3;
     }
 
+    /// @dev ETH priming can be satisfied via forced progress (same day) or recent ETH mint history.
     function _ethMintReady(PlayerQuestState storage state, address player) private view returns (bool) {
         if ((state.completionMask & QUEST_STATE_ETH_PRIMED) != 0) {
             return true;
