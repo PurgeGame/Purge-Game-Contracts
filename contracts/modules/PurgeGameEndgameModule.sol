@@ -2,7 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {IPurgeGameTrophies} from "../PurgeGameTrophies.sol";
-import {IPurgeCoinModule, IPurgeGameTrophiesModule} from "./PurgeGameModuleInterfaces.sol";
+import {IPurgeGameTrophiesModule} from "./PurgeGameModuleInterfaces.sol";
 import {IPurgeJackpots} from "../interfaces/IPurgeJackpots.sol";
 import {PurgeGameStorage} from "../storage/PurgeGameStorage.sol";
 
@@ -30,10 +30,8 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         uint32 cap,
         uint256 rngWord,
         address jackpots,
-        IPurgeCoinModule coinContract,
         IPurgeGameTrophiesModule trophiesContract
     ) external {
-        if (jackpots == address(0)) revert E();
         uint24 prevLevel = lvl - 1;
         bool traitWin = lastExterminatedTrait != TRAIT_ID_TIMEOUT;
         if (traitWin) {
@@ -47,38 +45,18 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
             }
             if (prevLevel != 0 && (prevLevel % 10) == 0) {
                 uint256 bafPoolWei;
-                bool useStored;
                 if ((prevLevel % 100) == 0 && bafHundredPool != 0) {
                     bafPoolWei = bafHundredPool;
-                    useStored = true;
+                    bafHundredPool = 0;
                 } else {
                     bafPoolWei = (rewardPool * _bafPercent(prevLevel)) / 100;
                 }
-                _progressExternal(
-                    0,
-                    bafPoolWei,
-                    cap,
-                    prevLevel,
-                    rngWord,
-                    jackpots,
-                    true
-                );
-                if (useStored) {
-                    bafHundredPool = 0;
-                }
+                _progressExternal(0, bafPoolWei, cap, prevLevel, rngWord, jackpots, true);
             }
-            bool decWindow = prevLevel % 10 == 5 && prevLevel >= 25 && prevLevel % 100 != 95;
+            bool decWindow = prevLevel % 10 == 5 && prevLevel >= 15 && prevLevel % 100 != 95;
             if (decWindow) {
                 uint256 decPoolWei = (rewardPool * 15) / 100;
-                _progressExternal(
-                    1,
-                    decPoolWei,
-                    cap,
-                    prevLevel,
-                    rngWord,
-                    jackpots,
-                    true
-                );
+                _progressExternal(1, decPoolWei, cap, prevLevel, rngWord, jackpots, true);
             }
 
             phase = 0;
@@ -110,7 +88,6 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
                 trophyPool += rewardsTotal;
             }
         }
-
     }
 
     function _payoutParticipants(uint32 capHint, uint24 prevLevel) private {
@@ -174,59 +151,48 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         // using their ETH mint streaks as weights (even split if all streaks are zero).
         uint256 ticketBonus = (poolValue * 10) / 100;
         address[] storage arr = traitPurgeTicket[prevLevel][uint8(lastExterminatedTrait)];
-        if (arr.length != 0 && ticketBonus != 0) {
-            address[3] memory winners;
-            uint256[3] memory streaks;
-            uint256 seed = rngWord ^ (uint256(prevLevel) << 128);
-            for (uint8 i; i < 3; ) {
-                seed = uint256(keccak256(abi.encodePacked(seed, i)));
-                uint256 idx = seed % arr.length;
-                address w = arr[idx];
-                winners[i] = w;
-                streaks[i] = (mintPacked_[w] >> ETH_LEVEL_STREAK_SHIFT) & MINT_MASK_24;
-                unchecked {
-                    ++i;
-                }
+        uint256 arrLen = arr.length;
+        address[3] memory winners;
+        uint256[3] memory streaks;
+        uint256 seed = rngWord ^ (uint256(prevLevel) << 128);
+        for (uint8 i; i < 3; ) {
+            seed = uint256(keccak256(abi.encodePacked(seed, i)));
+            uint256 idx = seed % arrLen;
+            address w = arr[idx];
+            winners[i] = w;
+            streaks[i] = (mintPacked_[w] >> ETH_LEVEL_STREAK_SHIFT) & MINT_MASK_24;
+            unchecked {
+                ++i;
             }
+        }
 
-            uint256 totalWeight = streaks[0] + streaks[1] + streaks[2];
-            uint256 remaining = ticketBonus;
-            for (uint8 i; i < 3; ) {
-                uint256 share;
-                if (totalWeight == 0) {
-                    share = ticketBonus / 3;
-                } else {
-                    share = (ticketBonus * streaks[i]) / totalWeight;
-                }
-                if (share != 0) {
-                    _addClaimableEth(winners[i], share);
-                    remaining -= share;
-                }
-                unchecked {
-                    ++i;
-                }
+        uint256 totalWeight = streaks[0] + streaks[1] + streaks[2];
+        uint256 remaining = ticketBonus;
+        for (uint8 i; i < 3; ) {
+            uint256 share;
+            if (totalWeight == 0) {
+                share = ticketBonus / 3;
+            } else {
+                share = (ticketBonus * streaks[i]) / totalWeight;
             }
-            if (remaining != 0) {
-                _addClaimableEth(winners[0], remaining);
+            if (share != 0) {
+                _addClaimableEth(winners[i], share);
+                remaining -= share;
             }
-        } else if (ticketBonus != 0) {
-            // Defensive: if no tickets exist (unexpected), roll the bonus back into the reward pool.
-            rewardPool += ticketBonus;
+            unchecked {
+                ++i;
+            }
+        }
+        if (remaining != 0) {
+            _addClaimableEth(winners[0], remaining);
         }
 
         uint256 participantShare = ((poolValue * 90) / 100) - exterminatorShare;
         // Preserve the entire prize pool by rolling any rounding dust into the participant slice.
         uint256 poolDust = poolValue - (ticketBonus + exterminatorShare + participantShare);
         participantShare += poolDust;
-        if (arr.length == 0) {
-            currentPrizePool = 0;
-            // Defensive: if no trait tickets exist, roll the participant slice back into the reward pool.
-            rewardPool += participantShare;
-            airdropIndex = 0;
-        } else {
-            currentPrizePool = participantShare;
-            airdropIndex = 0;
-        }
+        currentPrizePool = participantShare;
+        airdropIndex = 0;
 
         IPurgeGameTrophies.EndLevelRequest memory req = IPurgeGameTrophies.EndLevelRequest({
             exterminator: ex,
@@ -279,12 +245,12 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
                 rngWord
             );
         } else if (kind == 1) {
-            (
-                winnersArr,
-                amountsArr,
-                trophyPoolDelta,
-                returnWei
-            ) = IPurgeJackpots(jackpots).runDecimatorJackpot(poolWei, cap, lvl, rngWord);
+            (, winnersArr, amountsArr, trophyPoolDelta, returnWei) = IPurgeJackpots(jackpots).runDecimatorJackpot(
+                poolWei,
+                cap,
+                lvl,
+                rngWord
+            );
         } else {
             revert E();
         }

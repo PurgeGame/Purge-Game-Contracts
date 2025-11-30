@@ -804,7 +804,6 @@ contract PurgeGame is PurgeGameStorage {
                 cap,
                 rngWord,
                 jackpots,
-                coin,
                 trophies
             )
         );

@@ -243,6 +243,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     mapping(uint256 => uint256) private trophyData_;
     mapping(address => uint8) private mapStakeBonusPct_;
     mapping(address => uint8) private affiliateStakeBonusPct_;
+    mapping(address => uint8) private exterminatorStakeDiscountPct_;
     mapping(address => bool[256]) private exterminatorStakeTraits_;
     mapping(address => uint8) private stakeStakeBonusPct_;
     // Decimator stake bonus is computed on-demand; no cached mapping to avoid stale values.
@@ -434,6 +435,13 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     }
 
     function _mapDiscountCap(uint8 count) private pure returns (uint8) {
+        if (count == 0) return 0;
+        if (count == 1) return 5;
+        if (count == 2) return 8;
+        return 10;
+    }
+
+    function _exterminatorDiscountCap(uint8 count) private pure returns (uint8) {
         if (count == 0) return 0;
         if (count == 1) return 5;
         if (count == 2) return 8;
@@ -635,6 +643,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         } else if (params.targetExterminator) {
             uint16 traitId = uint16((info >> 152) & 0xFFFF);
             _removeExterminatorStakeTrait(params.player, traitId);
+            exterminatorStakeDiscountPct_[params.player] = 0;
             data.kind = 3;
             data.count = 0;
         } else if (params.targetBaf) {
@@ -719,6 +728,9 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             }
         }
         if (earliest == type(uint24).max) revert StakeInvalid();
+        uint24 effective = _currentEffectiveStakeLevel();
+        uint8 cap = _exterminatorDiscountCap(uint8(len));
+        exterminatorStakeDiscountPct_[player] = _timeBasedDiscount(uint8(len), earliest, effective, cap);
     }
 
     function _refreshStakeBonus(address player, uint256[] calldata tokenIds) private {
@@ -1251,6 +1263,10 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         uint256 bonus = heldLevels / 2; // 0.5% per level (rounded down)
         if (bonus > cap) bonus = cap;
         return uint8(bonus);
+    }
+
+    function exterminatorStakeDiscount(address player) external view override returns (uint8) {
+        return exterminatorStakeDiscountPct_[player];
     }
 
     function hasExterminatorStake(address player) external view override returns (bool) {
