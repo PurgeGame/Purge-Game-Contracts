@@ -602,7 +602,7 @@ contract PurgeJackpots is IPurgeJackpots {
                 }
                 entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
                 uint256 scatter = (P * 2) / 5;
-                (uint24 lvlSel, uint8 traitSel, address[] memory tickets) = purgeGame.sampleTraitTickets(entropy);
+                (, , address[] memory tickets) = purgeGame.sampleTraitTickets(entropy);
 
                 uint256 eligibleCount;
                 uint256 tLen = tickets.length;

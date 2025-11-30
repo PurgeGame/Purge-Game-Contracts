@@ -293,6 +293,10 @@ contract MJTrophies is IPurgeGameTrophies, IPurgeGameTrophiesModule {
         return 0;
     }
 
+    function decStakeBonus(address) external pure override returns (uint8) {
+        return 0;
+    }
+
     function mapStakeDiscount(address) external pure override returns (uint8) {
         return 0;
     }

@@ -293,18 +293,24 @@ contract Purgecoin {
         address caller = msg.sender;
         _burn(caller, amount);
 
+        uint256 effectiveAmount = amount;
+        uint8 decBonusPct = purgeGameTrophies.decStakeBonus(caller);
+        if (decBonusPct != 0) {
+            effectiveAmount += (effectiveAmount * decBonusPct) / 100;
+        }
+
         bool specialDec = (lvl % DECIMATOR_SPECIAL_LEVEL) == 0;
         uint8 bucket = specialDec
             ? _decBucketDenominatorFromLevels(purgeGame.ethMintLevelCount(caller))
             : _decBucketDenominator(purgeGame.ethMintStreakCount(caller));
-        uint8 bucketUsed = IPurgeJackpots(moduleAddr).recordDecBurn(caller, lvl, bucket, amount);
+        uint8 bucketUsed = IPurgeJackpots(moduleAddr).recordDecBurn(caller, lvl, bucket, effectiveAmount);
 
         IPurgeQuestModule module = questModule;
         (uint32 streak, , , ) = module.playerQuestStates(caller);
         if (streak != 0) {
             uint256 bonusBps = uint256(streak) * 25; // (streak/4)%
             if (bonusBps > 2500) bonusBps = 2500; // cap at 25%
-            uint256 streakBonus = (amount * bonusBps) / BPS_DENOMINATOR;
+            uint256 streakBonus = (effectiveAmount * bonusBps) / BPS_DENOMINATOR;
             IPurgeJackpots(moduleAddr).recordDecBurn(caller, lvl, bucketUsed, streakBonus);
         }
 
@@ -607,7 +613,7 @@ contract Purgecoin {
 
         uint24 distance = targetLevel - effectiveLevel;
         if (distance > 500) revert Insufficient();
-        uint24 minDistance = currLevel > 10 ? 10 : currLevel;
+        uint24 minDistance = currLevel > 20 ? 20 : currLevel;
         if (distance < minDistance) revert StakeInvalid();
 
         if (risk == 0 || risk > MAX_RISK) revert Insufficient();

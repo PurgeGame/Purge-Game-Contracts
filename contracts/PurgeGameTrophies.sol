@@ -64,6 +64,7 @@ interface IPurgeGameTrophies {
     function affiliateStakeBonus(address player) external view returns (uint8);
 
     function stakeTrophyBonus(address player) external view returns (uint8);
+    function decStakeBonus(address player) external view returns (uint8);
 
     function mapStakeDiscount(address player) external view returns (uint8);
 
@@ -248,6 +249,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     mapping(address => uint8) private exterminatorStakeBonusPct_;
     mapping(address => bool[256]) private exterminatorStakeTraits_;
     mapping(address => uint8) private stakeStakeBonusPct_;
+    // Decimator stake bonus is computed on-demand; no cached mapping to avoid stale values.
     mapping(address => BafStakeInfo) private bafStakeInfo;
 
     // ---------------------------------------------------------------------
@@ -464,6 +466,13 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         return 20;
     }
 
+    function _decBonusCap(uint8 count) private pure returns (uint8) {
+        if (count == 0) return 0;
+        if (count == 1) return 5;
+        if (count == 2) return 8;
+        return 10;
+    }
+
     function _timeBasedDiscount(
         uint8 count,
         uint24 earliestLevel,
@@ -500,6 +509,34 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
                             uint24 base = stakeLevel == 0 ? uint24((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF) : stakeLevel;
                             if (base < earliest) earliest = base;
                         }
+                    }
+                }
+            }
+            unchecked {
+                ++i;
+            }
+        }
+        if (earliest == type(uint24).max) {
+            earliest = 0;
+        }
+    }
+
+    function _decStakeStats(address player) private view returns (uint8 total, uint24 earliest) {
+        earliest = type(uint24).max;
+        uint256 len = stakedTrophyIds.length;
+        for (uint256 i; i < len; ) {
+            uint256 tokenId = stakedTrophyIds[i];
+            if (trophyStaked[tokenId]) {
+                address owner = address(uint160(nft.packedOwnershipOf(tokenId)));
+                if (owner == player) {
+                    uint256 info = trophyData_[tokenId];
+                    if (info != 0 && (info & TROPHY_FLAG_DECIMATOR) != 0) {
+                        unchecked {
+                            total += 1;
+                        }
+                        uint24 stakeLevel = uint24((info >> TROPHY_STAKE_LEVEL_SHIFT) & 0xFFFFFF);
+                        uint24 base = stakeLevel == 0 ? uint24((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF) : stakeLevel;
+                        if (base < earliest) earliest = base;
                     }
                 }
             }
@@ -1152,9 +1189,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             }
         }
 
-        if (_isDecimatorTrophy(ctx.info)) {
-            _processDecimatorClaim(ctx, priceUnit);
-        } else if (_isBafTrophy(ctx.info)) {
+        if (_isBafTrophy(ctx.info)) {
             _processBafClaim(msg.sender, ctx, priceUnit);
         }
 
@@ -1269,6 +1304,18 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
 
     function stakeTrophyBonus(address player) external view override returns (uint8) {
         return stakeStakeBonusPct_[player];
+    }
+
+    function decStakeBonus(address player) external view override returns (uint8) {
+        (uint8 count, uint24 earliest) = _decStakeStats(player);
+        if (count == 0 || earliest == 0) return 0;
+        uint24 effective = _currentEffectiveStakeLevel();
+        if (effective <= earliest) return 0;
+        uint8 cap = _decBonusCap(count);
+        uint256 heldLevels = effective - earliest;
+        uint256 bonus = heldLevels / 2; // 0.5% per level (rounded down)
+        if (bonus > cap) bonus = cap;
+        return uint8(bonus);
     }
 
     function exterminatorStakeDiscount(address player) external view override returns (uint8) {
