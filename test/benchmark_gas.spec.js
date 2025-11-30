@@ -170,16 +170,15 @@ describe("Gas Benchmark", function () {
 
     // Start jackpot
     // Init call
-    await extJackpot.connect(gameSigner).runExternalJackpot(1, POOL_WEI, CAP, LEVEL, RNG_WORD);
+    await extJackpot.connect(gameSigner).runDecimatorJackpot(POOL_WEI, LEVEL, RNG_WORD);
 
-    const [finishedPreview, , , , returnPreview] = await extJackpot
+    const [, , , returnPreview] = await extJackpot
       .connect(gameSigner)
-      .runExternalJackpot.staticCall(1, POOL_WEI, CAP, LEVEL, RNG_WORD);
-    expect(finishedPreview).to.equal(true);
+      .runDecimatorJackpot.staticCall(POOL_WEI, LEVEL, RNG_WORD);
     expect(returnPreview).to.equal(0n);
 
     // Measure next step (Selection)
-    const tx = await extJackpot.connect(gameSigner).runExternalJackpot(1, POOL_WEI, CAP, LEVEL, RNG_WORD);
+    const tx = await extJackpot.connect(gameSigner).runDecimatorJackpot(POOL_WEI, LEVEL, RNG_WORD);
     const receipt = await tx.wait();
     console.log(`Gas used for Dense Selection (Cap ${CAP}): ${receipt.gasUsed.toString()}`);
   });
@@ -228,16 +227,15 @@ describe("Gas Benchmark", function () {
     await setStorage(await extJackpot.getAddress(), decPlayersCountSlot, pad32(BigInt(ENTRIES_PER_BUCKET)));
 
     // Start jackpot
-    await extJackpot.connect(gameSigner).runExternalJackpot(1, POOL_WEI, CAP, LEVEL, RNG_WORD);
+    await extJackpot.connect(gameSigner).runDecimatorJackpot(POOL_WEI, LEVEL, RNG_WORD);
 
-    const [finishedPreview, , , , returnPreview] = await extJackpot
+    const [, , , returnPreview] = await extJackpot
       .connect(gameSigner)
-      .runExternalJackpot.staticCall(1, POOL_WEI, CAP, LEVEL, RNG_WORD);
-    expect(finishedPreview).to.equal(true);
+      .runDecimatorJackpot.staticCall(POOL_WEI, LEVEL, RNG_WORD);
     expect(returnPreview).to.equal(POOL_WEI);
 
     // Measure next step (Selection)
-    const tx = await extJackpot.connect(gameSigner).runExternalJackpot(1, POOL_WEI, CAP, LEVEL, RNG_WORD);
+    const tx = await extJackpot.connect(gameSigner).runDecimatorJackpot(POOL_WEI, LEVEL, RNG_WORD);
     const receipt = await tx.wait();
     console.log(`Gas used for Sparse Selection (Cap ${CAP}): ${receipt.gasUsed.toString()}`);
   });

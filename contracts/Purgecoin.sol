@@ -1177,7 +1177,7 @@ contract Purgecoin {
             uint24 bafLvl = purgeGame.level();
             address module = jackpots;
             if (module == address(0)) revert ZeroAddress();
-            IPurgeJackpots(module).recordBafFlip(player, bafLvl);
+            IPurgeJackpots(module).recordBafFlip(player, bafLvl, coinflipDeposit);
         }
 
         if (!skipLuckboxCheck && playerLuckbox[player] == 0) {

@@ -62,13 +62,13 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
                 } else {
                     bafPoolWei = (rewardPool * (prevLevel == 50 ? 25 : 10)) / 100;
                 }
-                _rewardJackpot(0, bafPoolWei, cap, prevLevel, rngWord, jackpots, true);
+                _rewardJackpot(0, bafPoolWei, prevLevel, rngWord, jackpots, true);
             }
             bool decWindow = prevLevel % 10 == 5 && prevLevel >= 15 && prevLevel % 100 != 95;
             if (decWindow) {
                 // Fire decimator jackpots midway through each decile except the 95th to avoid overlap with final bands.
                 uint256 decPoolWei = (rewardPool * 15) / 100;
-                _rewardJackpot(1, decPoolWei, cap, prevLevel, rngWord, jackpots, true);
+                _rewardJackpot(1, decPoolWei, prevLevel, rngWord, jackpots, true);
             }
 
             phase = 0;
@@ -240,7 +240,6 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
      * @notice Routes a jackpot slice to the jackpots contract and optionally burns from rewardPool.
      * @param kind 0 = BAF jackpot, 1 = Decimator jackpot.
      * @param poolWei Amount forwarded; if `consumeCarry` is true, rewardPool is debited by poolWei - returnWei.
-     * @param cap Max winners processed in this call to bound gas.
      * @param lvl Level tied to the jackpot.
      * @param rngWord Randomness used by the jackpot contract.
      * @param jackpots Jackpots contract to call.
@@ -249,48 +248,45 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
     function _rewardJackpot(
         uint8 kind,
         uint256 poolWei,
-        uint32 cap,
         uint24 lvl,
         uint256 rngWord,
         address jackpots,
         bool consumeCarry
     ) private {
-        address[] memory winnersArr;
-        uint256[] memory amountsArr;
-        uint256 trophyPoolDelta;
-        uint256 returnWei;
-
         if (kind == 0) {
-            (, winnersArr, amountsArr, trophyPoolDelta, returnWei) = IPurgeJackpots(jackpots).runBafJackpot(
-                poolWei,
-                cap,
-                lvl,
-                rngWord
-            );
+            (address[] memory winnersArr, uint256[] memory amountsArr, uint256 trophyPoolDelta, uint256 returnWei) = IPurgeJackpots(
+                jackpots
+            ).runBafJackpot(poolWei, lvl, rngWord);
+            for (uint256 i; i < winnersArr.length; ) {
+                _addClaimableEth(winnersArr[i], amountsArr[i]);
+                unchecked {
+                    ++i;
+                }
+            }
+            if (trophyPoolDelta != 0) {
+                trophyPool += trophyPoolDelta;
+            }
+            if (consumeCarry) {
+                rewardPool -= (poolWei - returnWei);
+            }
         } else if (kind == 1) {
-            (, winnersArr, amountsArr, trophyPoolDelta, returnWei) = IPurgeJackpots(jackpots).runDecimatorJackpot(
-                poolWei,
-                cap,
-                lvl,
-                rngWord
-            );
+            (address[] memory winnersArr, uint256[] memory amountsArr, uint256 trophyPoolDelta, uint256 returnWei) = IPurgeJackpots(
+                jackpots
+            ).runDecimatorJackpot(poolWei, lvl, rngWord);
+            for (uint256 i; i < winnersArr.length; ) {
+                _addClaimableEth(winnersArr[i], amountsArr[i]);
+                unchecked {
+                    ++i;
+                }
+            }
+            if (trophyPoolDelta != 0) {
+                trophyPool += trophyPoolDelta;
+            }
+            if (consumeCarry) {
+                rewardPool -= (poolWei - returnWei);
+            }
         } else {
             revert E();
-        }
-
-        for (uint256 i; i < winnersArr.length; ) {
-            _addClaimableEth(winnersArr[i], amountsArr[i]);
-            unchecked {
-                ++i;
-            }
-        }
-
-        if (trophyPoolDelta != 0) {
-            trophyPool += trophyPoolDelta;
-        }
-
-        if (consumeCarry) {
-            rewardPool -= (poolWei - returnWei);
         }
     }
 

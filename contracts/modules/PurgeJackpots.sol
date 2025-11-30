@@ -103,13 +103,13 @@ contract PurgeJackpots is IPurgeJackpots {
     // BAF / Decimator state (lives here; Purgecoin storage is unaffected)
     // ---------------------------------------------------------------------
     mapping(address => BafEntry) internal bafTotals;
-    mapping(address => DecEntry) internal decBurn;
+    // Track Decimator burns per level so earlier levels remain claimable after a player participates in later ones.
+    mapping(uint24 => mapping(address => DecEntry)) internal decBurn;
 
     // Decimator bucketed rosters and aggregates
     mapping(uint24 => mapping(uint8 => mapping(uint8 => address[]))) internal decBucketRoster;
     mapping(uint24 => mapping(uint8 => mapping(uint8 => uint256))) internal decBucketBurnTotal;
     mapping(uint24 => mapping(uint8 => mapping(uint8 => DecSubbucketTop))) internal decBucketTop;
-    mapping(uint24 => mapping(uint8 => uint32)) internal decBucketFillCount;
     address internal decTopWinner;
     uint192 internal decTopBurn;
 
@@ -161,24 +161,19 @@ contract PurgeJackpots is IPurgeJackpots {
     // Hooks from Purgecoin
     // ---------------------------------------------------------------------
     /// @dev Track leaderboard state for BAF using total manual flips during the BAF period.
-    function recordBafFlip(address player, uint24 lvl) external override onlyCoin {
-        uint256 stake = coin.coinflipAmount(player);
+    /// @param amount The newly added flip amount to credit for this level.
+    function recordBafFlip(address player, uint24 lvl, uint256 amount) external override onlyCoin {
         BafEntry storage entry = bafTotals[player];
         if (entry.level != lvl) {
             entry.level = lvl;
             entry.total = 0;
             entry.lastStake = 0;
         }
-        if (stake > entry.lastStake) {
-            unchecked {
-                entry.total += stake - entry.lastStake;
-            }
+        if (amount == 0) return;
+        unchecked {
+            entry.total += amount;
         }
-        entry.lastStake = stake;
-
-        if (entry.total != 0) {
-            _updateBafTop(lvl, player, entry.total);
-        }
+        _updateBafTop(lvl, player, entry.total);
     }
 
     /// @dev Register Decimator burns and bucket placement for a player in a level.
@@ -188,7 +183,7 @@ contract PurgeJackpots is IPurgeJackpots {
         uint8 bucket,
         uint256 amount
     ) external override onlyCoin returns (uint8 bucketUsed) {
-        DecEntry storage e = decBurn[player];
+        DecEntry storage e = decBurn[lvl][player];
         uint192 prevBurn = e.burn;
 
         if (e.level != lvl) {
@@ -220,32 +215,8 @@ contract PurgeJackpots is IPurgeJackpots {
     // ---------------------------------------------------------------------
     // External jackpot logic
     // ---------------------------------------------------------------------
-    function runExternalJackpot(
-        uint8 kind,
-        uint256 poolWei,
-        uint32 cap,
-        uint24 lvl,
-        uint256 rngWord
-    )
-        external
-        override
-        onlyGameOrCoin
-        returns (
-            bool finished,
-            address[] memory winners,
-            uint256[] memory amounts,
-            uint256 trophyPoolDelta,
-            uint256 returnAmountWei
-        )
-    {
-        if (kind == 0) return _runBafJackpot(poolWei, cap, lvl, rngWord);
-        if (kind == 1) return _runDecimatorJackpot(poolWei, cap, lvl, rngWord);
-        revert InvalidKind();
-    }
-
     function runBafJackpot(
         uint256 poolWei,
-        uint32 cap,
         uint24 lvl,
         uint256 rngWord
     )
@@ -253,54 +224,6 @@ contract PurgeJackpots is IPurgeJackpots {
         override
         onlyGameOrCoin
         returns (
-            bool finished,
-            address[] memory winners,
-            uint256[] memory amounts,
-            uint256 trophyPoolDelta,
-            uint256 returnAmountWei
-        )
-    {
-        return _runBafJackpot(poolWei, cap, lvl, rngWord);
-    }
-
-    function runDecimatorJackpot(
-        uint256 poolWei,
-        uint32 cap,
-        uint24 lvl,
-        uint256 rngWord
-    )
-        external
-        override
-        onlyGameOrCoin
-        returns (
-            bool finished,
-            address[] memory winners,
-            uint256[] memory amounts,
-            uint256 trophyPoolDelta,
-            uint256 returnAmountWei
-        )
-    {
-        return _runDecimatorJackpot(poolWei, cap, lvl, rngWord);
-    }
-
-    function runDecimatorHundredJackpot(
-        uint256 poolWei,
-        uint32 cap,
-        uint24 lvl,
-        uint256 rngWord
-    ) external override onlyGame returns (bool finished, uint256 trophyPoolDelta, uint256 returnAmountWei) {
-        (finished, , , trophyPoolDelta, returnAmountWei) = _runDecimatorJackpot(poolWei, cap, lvl, rngWord);
-    }
-
-    function _runBafJackpot(
-        uint256 poolWei,
-        uint32 /*cap*/,
-        uint24 lvl,
-        uint256 rngWord
-    )
-        private
-        returns (
-            bool finished,
             address[] memory winners,
             uint256[] memory amounts,
             uint256 trophyPoolDelta,
@@ -308,8 +231,9 @@ contract PurgeJackpots is IPurgeJackpots {
         )
     {
         uint256 P = poolWei;
-        address[] memory tmpW = new address[](140);
-        uint256[] memory tmpA = new uint256[](140);
+        // Max distinct winners: 1 (top) + 1 (pick) + 3 (bonds) + 3 (retro) + 50 + 50 (scatter buckets) = 108.
+        address[] memory tmpW = new address[](108);
+        uint256[] memory tmpA = new uint256[](108);
         uint256 n;
         uint256 toReturn;
         bool trophyAwarded;
@@ -699,18 +623,18 @@ contract PurgeJackpots is IPurgeJackpots {
         }
 
         _clearBafTop(lvl);
-        return (true, winners, amounts, trophyPoolDelta, toReturn);
+        return (winners, amounts, trophyPoolDelta, toReturn);
     }
 
-    function _runDecimatorJackpot(
+    function runDecimatorJackpot(
         uint256 poolWei,
-        uint32 /*cap*/,
         uint24 lvl,
         uint256 rngWord
     )
-        private
+        external
+        override
+        onlyGameOrCoin
         returns (
-            bool finished,
             address[] memory winners,
             uint256[] memory amounts,
             uint256 trophyPoolDelta,
@@ -751,7 +675,7 @@ contract PurgeJackpots is IPurgeJackpots {
             }
             decTopWinner = address(0);
             decTopBurn = 0;
-            return (true, new address[](0), new uint256[](0), 0, refund);
+            return (new address[](0), new uint256[](0), 0, refund);
         }
 
         uint256 totalPool = poolWei;
@@ -776,7 +700,7 @@ contract PurgeJackpots is IPurgeJackpots {
 
         decTopWinner = address(0);
         decTopBurn = 0;
-        return (true, new address[](0), new uint256[](0), 0, 0);
+        return (new address[](0), new uint256[](0), 0, 0);
     }
 
     // ---------------------------------------------------------------------
@@ -858,7 +782,7 @@ contract PurgeJackpots is IPurgeJackpots {
         if (!round.active || round.totalBurn == 0 || round.level != lvl) return (0, false);
         if (decClaimed[lvl][player]) return (0, false);
 
-        DecEntry storage e = decBurn[player];
+        DecEntry storage e = decBurn[lvl][player];
         uint8 denom = e.bucket;
         uint8 sub = e.subBucket;
         if (e.level != lvl || denom == 0 || e.burn == 0) return (0, false);
@@ -876,13 +800,12 @@ contract PurgeJackpots is IPurgeJackpots {
         winner = true;
     }
 
-    // Push a player into the round-robin subbucket roster for their chosen denominator.
+    // Push a player into a deterministic subbucket roster for their chosen denominator.
     function _decPush(uint24 lvl, uint8 bucket, address p, DecEntry storage e) internal {
         if (bucket == 0) return;
 
-        uint32 cursor = decBucketFillCount[lvl][bucket];
-        uint8 sub = uint8(cursor % bucket);
-        decBucketFillCount[lvl][bucket] = cursor + 1;
+        // Deterministically spread players across subbuckets using address+level entropy.
+        uint8 sub = _decSubbucketFor(p, lvl, bucket);
 
         address[] storage subRoster = decBucketRoster[lvl][bucket][sub];
         decBucketIndex[lvl][p] = uint32(subRoster.length);
@@ -907,6 +830,11 @@ contract PurgeJackpots is IPurgeJackpots {
             top.burn = updatedBurn;
             top.player = player;
         }
+    }
+
+    function _decSubbucketFor(address player, uint24 lvl, uint8 bucket) private pure returns (uint8) {
+        if (bucket == 0) return 0;
+        return uint8(uint256(keccak256(abi.encodePacked(player, lvl, bucket))) % bucket);
     }
 
     function _bafScore(address player, uint24 lvl) private view returns (uint256) {

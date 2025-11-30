@@ -191,13 +191,11 @@ describe("Decimator jackpot heavy bucket sweep", function () {
     await network.provider.send("hardhat_setBalance", [await mockGame.getAddress(), "0x1000000000000000000"]);
     const gameSigner = await ethers.getSigner(await mockGame.getAddress());
 
-    await extJackpot.connect(gameSigner).runExternalJackpot.staticCall(1, POOL_WEI, SELECTION_CAP, LEVEL, RNG_WORD);
+    await extJackpot.connect(gameSigner).runDecimatorJackpot.staticCall(POOL_WEI, LEVEL, RNG_WORD);
 
     const gasLimit = 25_000_000;
     try {
-      await extJackpot
-        .connect(gameSigner)
-        .runExternalJackpot(1, POOL_WEI, SELECTION_CAP, LEVEL, RNG_WORD, { gasLimit }); // init
+      await extJackpot.connect(gameSigner).runDecimatorJackpot(POOL_WEI, LEVEL, RNG_WORD, { gasLimit }); // init
     } catch (e) {
       // eslint-disable-next-line no-console
       console.log("init tx revert data", e.data || e);
@@ -209,33 +207,10 @@ describe("Decimator jackpot heavy bucket sweep", function () {
     console.log("slot54", slot54);
     // eslint-disable-next-line no-console
     console.log("slot55", slot55);
-    let iterations = 0;
-    let finalReturn = 0n;
-
-    while (true) {
-      const [stepFinished, , , , returnWeiStep] = await extJackpot
-        .connect(gameSigner)
-        .runExternalJackpot.staticCall(1, POOL_WEI, SELECTION_CAP, LEVEL, RNG_WORD);
-
-      try {
-        await extJackpot
-          .connect(gameSigner)
-          .runExternalJackpot(1, POOL_WEI, SELECTION_CAP, LEVEL, RNG_WORD, { gasLimit });
-      } catch (e) {
-        // eslint-disable-next-line no-console
-        console.log("jackpot tx revert data", e.data || e);
-        throw e;
-      }
-
-      iterations += 1;
-      if (stepFinished) {
-        finalReturn = returnWeiStep;
-        break;
-      }
-      if (iterations > 250) throw new Error("jackpot batching did not finish");
-    }
-
-    expect(finalReturn).to.equal(0n);
+    const [, , , returnWeiStep] = await extJackpot
+      .connect(gameSigner)
+      .runDecimatorJackpot.staticCall(POOL_WEI, LEVEL, RNG_WORD);
+    expect(returnWeiStep).to.equal(0n);
 
     const roundSlot = mappingSlot(LEVEL, 61);
     const roundSeed = await network.provider.send("eth_getStorageAt", [await purgecoin.getAddress(), pad32(roundSlot)]);

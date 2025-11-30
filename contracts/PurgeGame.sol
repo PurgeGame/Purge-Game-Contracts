@@ -467,7 +467,7 @@ contract PurgeGame is PurgeGameStorage {
                     bool decHundredFinished = true;
                     if (lvl % 100 == 0) {
                         ranDecHundred = true;
-                        decHundredFinished = _runDecimatorHundredJackpot(lvl, cap, rngWord);
+                        decHundredFinished = _runDecimatorHundredJackpot(lvl, rngWord);
                         if (!decHundredFinished) {
                             break; // keep working this jackpot slice before moving on
                         }
@@ -1098,7 +1098,7 @@ contract PurgeGame is PurgeGameStorage {
 
     // --- Shared jackpot helpers ----------------------------------------------------------------------
 
-    function _runDecimatorHundredJackpot(uint24 lvl, uint32 cap, uint256 rngWord) internal returns (bool finished) {
+    function _runDecimatorHundredJackpot(uint24 lvl, uint256 rngWord) internal returns (bool finished) {
         if (!decimatorHundredReady) {
             uint256 basePool = rewardPool;
             uint256 decPool = (basePool * 40) / 100;
@@ -1112,26 +1112,18 @@ contract PurgeGame is PurgeGameStorage {
         uint256 pool = decimatorHundredPool;
 
         address jackpots = coin.jackpots();
-        (bool done, uint256 trophyPoolDelta, uint256 returnWei) = IPurgeJackpots(jackpots).runDecimatorHundredJackpot(
-            pool,
-            cap,
-            lvl,
-            rngWord
-        );
+        (, , uint256 trophyPoolDelta, uint256 returnWei) = IPurgeJackpots(jackpots).runDecimatorJackpot(pool, lvl, rngWord);
 
         if (trophyPoolDelta != 0) {
             trophyPool += trophyPoolDelta;
         }
 
-        if (done) {
-            if (returnWei != 0) {
-                rewardPool += returnWei;
-            }
-            decimatorHundredPool = 0;
-            decimatorHundredReady = false;
+        if (returnWei != 0) {
+            rewardPool += returnWei;
         }
-
-        return done;
+        decimatorHundredPool = 0;
+        decimatorHundredReady = false;
+        return true;
     }
 
     // --- Map jackpot payout (end of purchase phase) -------------------------------------------------
