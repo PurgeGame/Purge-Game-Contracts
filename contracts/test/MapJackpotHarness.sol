@@ -108,10 +108,6 @@ contract MJCoin is IPurgeCoin, IPurgeCoinModule {
         burned[address(this)] += amount;
     }
 
-    function burnie(uint256 amount, address) external payable override(IPurgeCoin, IPurgeCoinModule) {
-        burned[msg.sender] += amount;
-    }
-
     function burnCoin(address target, uint256 amount) external override {
         burned[target] += amount;
     }
@@ -437,7 +433,7 @@ contract MJBonds {
     uint256 public pendingCount;
     uint256 public paidYield;
 
-    function setTransfersLocked(bool locked_) external {
+    function setTransfersLocked(bool locked_, uint48) external {
         locked = locked_;
     }
 

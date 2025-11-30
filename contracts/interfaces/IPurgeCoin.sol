@@ -9,8 +9,6 @@ interface IPurgeCoin {
 
     function bonusCoinflip(address player, uint256 amount) external;
 
-    function burnie(uint256 amount, address stethToken) external payable;
-
     function burnCoin(address target, uint256 amount) external;
 
     function claimPresaleAffiliateBonus() external;

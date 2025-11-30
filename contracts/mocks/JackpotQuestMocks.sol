@@ -35,8 +35,6 @@ contract JackpotCoinModuleMock is IPurgeCoinModule {
 
     function rewardTopFlipBonus(uint48, uint256) external pure override {}
 
-    function burnie(uint256, address) external payable override {}
-
     function rollDailyQuest(uint48 day, uint256 entropy) external override {
         lastRollDay = day;
         lastRollEntropy = entropy;

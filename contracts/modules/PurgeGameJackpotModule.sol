@@ -219,11 +219,10 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         _rollQuestForJackpot(coinContract, rngWord, true, questDay);
     }
 
-    /// @notice Computes prize pool splits for the next jackpot and forwards the Burnie slice.
+    /// @notice Computes prize pool splits for the next jackpot.
     function calcPrizePoolForJackpot(
         uint24 lvl,
-        uint256 rngWord,
-        IPurgeCoinModule coinContract
+        uint256 rngWord
     ) external returns (uint256 effectiveWei) {
         if (nextPrizePool != 0) {
             currentPrizePool += nextPrizePool;
@@ -231,10 +230,6 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         }
 
         uint256 totalWei = rewardPool + currentPrizePool;
-        // Pay 10% PURGE using the current mint conversion (priceCoin / price) to Burnie.
-        uint256 burnieAmount = (totalWei * priceCoin) / (10 * price);
-        coinContract.burnie(burnieAmount, stethTokenAddress);
-
         uint256 mapPct;
         uint256 mapWei;
         uint256 mainWei;

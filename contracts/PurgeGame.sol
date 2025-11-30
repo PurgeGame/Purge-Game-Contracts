@@ -30,7 +30,7 @@ interface IPurgeBonds {
     ) external payable;
     function resolvePendingBonds(uint256 maxBonds) external;
     function resolvePending() external view returns (bool);
-    function setTransfersLocked(bool locked) external;
+    function setTransfersLocked(bool locked, uint48 rngDay) external;
     function stakeRateBps() external view returns (uint16);
 }
 
@@ -381,32 +381,24 @@ contract PurgeGame is PurgeGameStorage {
     function advanceGame(uint32 cap) external {
         address caller = msg.sender;
         uint48 ts = uint48(block.timestamp);
+        uint48 day = uint48((ts - JACKPOT_RESET_TIME) / 1 days);
         IPurgeCoin coinContract = coin;
         // Liveness drain
         if (ts - 365 days > levelStartTime) {
+            _drainToBonds(day);
             gameState = 0;
-            address stethAddress = address(steth);
-            uint256 stBal = steth.balanceOf(address(this));
-            if (stBal == 0) stethAddress = address(0);
-
-            uint256 bal = address(this).balance;
-            if (bal > 0) {
-                coinContract.burnie{value: bal}(0, stethAddress);
-            } else {
-                coinContract.burnie(0, stethAddress);
-            }
+            return;
         }
         uint24 lvl = level;
         uint8 _gameState = gameState;
         uint8 _phase = phase;
 
-        uint48 day = uint48((ts - JACKPOT_RESET_TIME) / 1 days);
         uint48 gateIdx = dailyIdx;
         uint32 currentDay = uint32(day);
         uint32 minAllowedDay = gateIdx == 0 ? currentDay : uint32(gateIdx);
 
         do {
-            if (cap == 0) {
+            if (cap == 0 && _gameState != 0) {
                 uint256 mintData = mintPacked_[caller];
                 uint32 lastEthDay = uint32((mintData >> ETH_DAY_SHIFT) & MINT_MASK_32);
                 if (lastEthDay < minAllowedDay) revert MustMintToday();
@@ -492,6 +484,8 @@ contract PurgeGame is PurgeGameStorage {
                     if (!_processMapBatch(cap)) {
                         break;
                     }
+                    uint256 totalWeiForBond = rewardPool + currentPrizePool;
+                    _bondMaintenanceForMap(day, totalWeiForBond, rngWord);
                     uint256 mapEffectiveWei = _calcPrizePoolForJackpot(lvl, rngWord);
                     payMapJackpot(lvl, rngWord, mapEffectiveWei);
 
@@ -891,7 +885,9 @@ contract PurgeGame is PurgeGameStorage {
 
     /// @notice Sample up to 100 trait purge tickets from a random trait and recent level (last 20 levels).
     /// @param entropy Random seed used to select level, trait, and starting offset.
-    function sampleTraitTickets(uint256 entropy) external view returns (uint24 lvlSel, uint8 traitSel, address[] memory tickets) {
+    function sampleTraitTickets(
+        uint256 entropy
+    ) external view returns (uint24 lvlSel, uint8 traitSel, address[] memory tickets) {
         uint24 currentLvl = level;
         if (currentLvl <= 1) {
             return (0, 0, new address[](0));
@@ -1159,8 +1155,7 @@ contract PurgeGame is PurgeGameStorage {
             abi.encodeWithSelector(
                 IPurgeGameJackpotModule.calcPrizePoolForJackpot.selector,
                 lvl,
-                rngWord,
-                IPurgeCoinModule(address(coin))
+                rngWord
             )
         );
         if (!ok) revert E();
@@ -1189,6 +1184,21 @@ contract PurgeGame is PurgeGameStorage {
             return false;
         }
         return true;
+    }
+
+    function _drainToBonds(uint48 day) private {
+        address bondsAddr = bonds;
+        if (bondsAddr == address(0)) return;
+
+        uint256 stBal = steth.balanceOf(address(this));
+        if (stBal != 0) {
+            if (!steth.transfer(bondsAddr, stBal)) revert E();
+            principalStEth = 0;
+        }
+
+        uint256 ethBal = address(this).balance;
+        IPurgeBonds bondContract = IPurgeBonds(bondsAddr);
+        bondContract.payBonds{value: ethBal}(0, stethTokenAddress, day, 0, 0, 0);
     }
 
     // --- Reward vault & liquidity -----------------------------------------------------
@@ -1227,51 +1237,20 @@ contract PurgeGame is PurgeGameStorage {
         _stakeEth(stakeAmount);
     }
 
-    // --- Bonds integration -------------------------------------------------------------------------
-
-    function _prepareBondsForMapJackpot(uint48 day) private {
-        address bondsAddr = bonds;
-        if (bondsAddr == address(0)) revert E();
-
-        IPurgeBonds bondContract = IPurgeBonds(bondsAddr);
-        bondContract.setTransfersLocked(true);
-
-        uint256 stBal = steth.balanceOf(address(this));
-        uint256 principal = principalStEth;
-        uint256 stYield;
-        if (stBal > principal) {
-            unchecked {
-                stYield = stBal - principal;
-            }
-            if (stYield != 0) {
-                if (!steth.transfer(bondsAddr, stYield)) revert E();
-                bondContract.payBonds{value: 0}(0, stethTokenAddress, day, 0, 0, 0);
-            }
-        }
-
-        if (stYield != 0) {
-            uint256 priceWei = price;
-            if (priceWei != 0) {
-                uint256 totalValue = stYield; // stETH + ETH (ETH portion currently zero)
-                uint256 coinEquivalent = (totalValue * priceCoin) / priceWei;
-                uint256 bondMint = coinEquivalent / 50; // 2%
-                if (bondMint != 0) {
-                    coin.bondPayment(bondsAddr, bondMint);
-                }
-            }
-        }
-
-        if (!bondContract.resolvePending()) {
-            bondContract.setTransfersLocked(false);
-        }
-    }
-
     // --- Flips, VRF, payments, rarity ----------------------------------------------------------------
 
     function rngAndTimeGate(uint48 day, uint24 lvl) internal returns (uint256 word) {
         if (day == dailyIdx) revert NotTimeYet();
 
         uint256 currentWord = rngFulfilled ? rngWordCurrent : 0;
+
+        if (currentWord == 0 && rngLockedFlag && rngRequestTime != 0) {
+            uint48 elapsed = uint48(block.timestamp) - rngRequestTime;
+            if (elapsed >= 18 hours) {
+                _requestRng(gameState, phase, lvl, day);
+                return 1;
+            }
+        }
 
         if (currentWord == 0) {
             if (rngLockedFlag) revert RngNotReady();
@@ -1401,14 +1380,43 @@ contract PurgeGame is PurgeGameStorage {
         if (bondsAddr == address(0)) return false;
         IPurgeBonds bondContract = IPurgeBonds(bondsAddr);
         if (!bondContract.resolvePending()) return false;
+
         bondContract.resolvePendingBonds(50);
         return true;
     }
 
+    function _bondMaintenanceForMap(uint48 day, uint256 totalWei, uint256 rngWord) private {
+        address bondsAddr = bonds;
+        if (bondsAddr == address(0)) return;
+        IPurgeBonds bondContract = IPurgeBonds(bondsAddr);
+
+        // Skim 25% of stETH yield to bonds and register it.
+        uint256 stBal = steth.balanceOf(address(this));
+        uint256 skim;
+        if (stBal > principalStEth) {
+            uint256 yieldPool = stBal - principalStEth;
+            skim = yieldPool / 4;
+            if (skim != 0) {
+                if (!steth.transfer(bondsAddr, skim)) revert E();
+            }
+        }
+
+        // Mint 5% of totalWei (priced in PURGE) to the bonds contract.
+        uint256 bondMint;
+        if (price != 0) {
+            bondMint = (totalWei * priceCoin) / (20 * price);
+        }
+
+        // Single hop into bonds: registers stETH, mints bond coin, and runs one resolve slice if pending.
+        if (skim != 0 || bondMint != 0 || bondContract.resolvePending()) {
+            bondContract.payBonds{value: 0}(bondMint, stethTokenAddress, day, rngWord, 0, 50);
+        }
+    }
+
     function _requestRng(uint8 gameState_, uint8 phase_, uint24 lvl, uint48 day) private {
-        bool mapJackpotRequest = (gameState_ == 2 && phase_ == 3);
-        if (mapJackpotRequest) {
-            _prepareBondsForMapJackpot(day);
+        bool shouldLockBonds = (gameState_ == 2 && phase_ == 3) || (gameState_ == 0);
+        if (shouldLockBonds) {
+            IPurgeBonds(bonds).setTransfersLocked(true, day);
         }
 
         uint256 id = vrfCoordinator.requestRandomWords(
@@ -1425,13 +1433,10 @@ contract PurgeGame is PurgeGameStorage {
         rngFulfilled = false;
         rngWordCurrent = 0;
         rngLockedFlag = true;
+        rngRequestTime = uint48(block.timestamp);
 
-        bool decClose = (
-            (
-                (lvl % 100 != 0 && (lvl % 100 != 99) && gameState_ == 1) ||
-                    (lvl % 100 == 0 && phase_ == 3)
-            ) && decWindowOpen
-        );
+        bool decClose = (((lvl % 100 != 0 && (lvl % 100 != 99) && gameState_ == 1) ||
+            (lvl % 100 == 0 && phase_ == 3)) && decWindowOpen);
         if (decClose) decWindowOpen = false;
     }
 
@@ -1439,6 +1444,7 @@ contract PurgeGame is PurgeGameStorage {
         dailyIdx = day;
         rngLockedFlag = false;
         vrfRequestId = 0;
+        rngRequestTime = 0;
     }
 
     function rawFulfillRandomWords(uint256 requestId, uint256[] calldata randomWords) external {

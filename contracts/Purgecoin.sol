@@ -9,12 +9,6 @@ import {IPurgeRenderer} from "./interfaces/IPurgeRenderer.sol";
 import {IPurgeQuestModule, QuestInfo, PlayerQuestView} from "./interfaces/IPurgeQuestModule.sol";
 import {IPurgeJackpots} from "./interfaces/IPurgeJackpots.sol";
 
-interface IStETH {
-    function transfer(address to, uint256 amount) external returns (bool);
-    function transferFrom(address from, address to, uint256 amount) external returns (bool);
-    function balanceOf(address account) external view returns (uint256);
-}
-
 interface IPurgeBonds {
     function onBondMint(uint256 amount) external;
 }
@@ -337,17 +331,8 @@ contract Purgecoin {
     }
 
     function _stakeFreeMoneyView() private view returns (uint256) {
-        (
-            ,
-            ,
-            ,
-            uint256 priceWei,
-            ,
-            uint256 prizePoolTarget,
-            ,
-            ,
-            /*earlyPurgePercent_*/
-        ) = purgeGame.gameInfo();
+        (, , , uint256 priceWei, , uint256 prizePoolTarget, , , ) = /*earlyPurgePercent_*/
+        purgeGame.gameInfo();
         uint256 priceCoinUnit = purgeGame.coinPriceUnit();
         if (priceWei == 0 || priceCoinUnit == 0) return 0;
         uint256 tenPercentEth = prizePoolTarget / 10;
@@ -775,43 +760,13 @@ contract Purgecoin {
 
     /// @notice Mint PURGE to the bonds contract for bond payouts (game only).
     function bondPayment(address to, uint256 amount) external {
-        if (msg.sender != address(purgeGame)) revert OnlyGame();
+        address sender = msg.sender;
+        if (sender != address(purgeGame) && sender != bonds) revert OnlyGame();
         if (to == address(0)) revert ZeroAddress();
         _mint(to, amount);
         if (to == bonds) {
             IPurgeBonds(to).onBondMint(amount);
         }
-    }
-
-    /// @notice Credit the creator's share of gameplay proceeds.
-    /// @dev Access: PurgeGame only. Zero amounts are ignored.
-    function burnie(uint256 amount, address stethToken) external payable onlyPurgeGameContract {
-        address creator_ = creator;
-        if (msg.value != 0) {
-            if (stethToken != address(0)) {
-                uint256 stBal = IStETH(stethToken).balanceOf(address(purgeGame));
-                if (stBal != 0) {
-                    if (!IStETH(stethToken).transferFrom(address(purgeGame), creator_, stBal)) revert E();
-                }
-            }
-            uint256 payout = address(this).balance;
-            (bool ok, ) = payable(creator_).call{value: payout}("");
-            if (!ok) revert E();
-            return;
-        }
-
-        if (stethToken != address(0)) {
-            uint256 stBal = IStETH(stethToken).balanceOf(address(purgeGame));
-            if (stBal != 0) {
-                uint256 principal = purgeGame.principalStEthBalance();
-                uint256 yieldBal = stBal > principal ? (stBal - principal) : 0;
-                uint256 skim = yieldBal / 4; // 25% of yield
-                if (skim != 0) {
-                    if (!IStETH(stethToken).transferFrom(address(purgeGame), creator_, skim)) revert E();
-                }
-            }
-        }
-        _mint(creator_, amount);
     }
 
     /// @notice Grant a pending coinflip stake during gameplay flows instead of minting PURGE.

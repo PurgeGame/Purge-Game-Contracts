@@ -22,9 +22,6 @@ interface IPurgeCoinModule {
 
     function rewardTopFlipBonus(uint48 day, uint256 amount) external;
 
-
-    function burnie(uint256 amount, address stethToken) external payable;
-
     function rollDailyQuest(uint48 day, uint256 entropy) external;
     function rollDailyQuestWithOverrides(uint48 day, uint256 entropy, bool forceMintEth, bool forcePurge) external;
 }
