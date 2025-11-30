@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-interface IERC721Lite {
-    function ownerOf(uint256 tokenId) external view returns (address);
-}
+import {IERC721Lite} from "./interfaces/IconRendererTypes.sol";
 
 contract IconColorRegistry {
     error NotOwner();
