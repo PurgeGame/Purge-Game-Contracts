@@ -1194,8 +1194,12 @@ contract PurgeGame is PurgeGameStorage {
     // --- Reward vault & liquidity -----------------------------------------------------
 
     function _stakeEth(uint256 amount) private {
-        uint256 minted = steth.submit{value: amount}(address(0));
-        principalStEth += minted;
+        // Best-effort staking; skip if stETH deposits are paused or unavailable.
+        try steth.submit{value: amount}(address(0)) returns (uint256 minted) {
+            principalStEth += minted;
+        } catch {
+            return;
+        }
     }
 
     function _stakeForTargetRatio(uint24 lvl) private {
