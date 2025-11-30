@@ -169,7 +169,7 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         uint256 poolValue = currentPrizePool;
         uint256 exterminatorShare = (prevLevel % 10 == 4 && prevLevel != 4)
             ? (poolValue * 40) / 100
-            : (poolValue * 20) / 100;
+            : (poolValue * 30) / 100;
 
         uint256 immediate = exterminatorShare >> 1;
         uint256 deferredWei = exterminatorShare - immediate;

@@ -215,7 +215,7 @@ contract IconRendererTrophy32 {
     ) external view returns (string memory) {
         uint32[4] memory extras;
         // High bit in extras[0] marks bond rendering for attribute injection.
-        extras[0] = uint32(1) << 31;
+        extras[0] = (uint32(1) << 31) | (staked_ ? 1 : 0) | (currentDistance == 0 ? 2 : 0);
         extras[1] = createdDistance;
         extras[2] = currentDistance;
         extras[3] = uint32(chanceBps) | (staked_ ? (uint32(1) << 31) : 0);
@@ -251,6 +251,9 @@ contract IconRendererTrophy32 {
         uint32 bondPack = extras[3];
         bool bondStaked = (bondPack & (uint32(1) << 31)) != 0;
         uint16 bondChance = uint16(bondPack);
+        bool bondMatured = (statusFlags & 2) != 0 || bondCurrent == 0;
+        if (bondStaked) statusFlags |= 1;
+        if (bondMatured) statusFlags |= 2;
         uint256 ethAttachment = data & TROPHY_OWED_MASK;
         if ((statusFlags & 2) == 0 && ethAttachment != 0) {
             statusFlags |= 2;
@@ -370,54 +373,41 @@ contract IconRendererTrophy32 {
             includeTraitAttr = true;
         }
 
-        string memory attrs = string(
-            abi.encodePacked(
-                '[{"trait_type":"Level","value":"',
-                lvlStr,
-                '"},{"trait_type":"Trophy","value":"',
-                trophyType,
-                '"},{"trait_type":"Eth","value":"',
-                hasEthAttachment ? "Yes" : "No",
-                '"}'
-            )
-        );
-        if (includeTraitAttr) {
+        string memory attrs;
+        if (!isBond) {
             attrs = string(
                 abi.encodePacked(
-                    attrs,
-                    ',{"trait_type":"',
-                    traitType,
-                    '","value":"',
-                    traitValue,
+                    '[{"trait_type":"Level","value":"',
+                    lvlStr,
+                    '"},{"trait_type":"Trophy","value":"',
+                    trophyType,
+                    '"},{"trait_type":"Eth","value":"',
+                    hasEthAttachment ? "Yes" : "No",
                     '"}'
                 )
             );
-        }
-        attrs = string(
-            abi.encodePacked(
-                attrs,
-                ',{"trait_type":"Staked","value":"',
-                stakeAttrValue,
-                '"}'
-            )
-        );
-        if (isBond) {
+            if (includeTraitAttr) {
+                attrs = string(
+                    abi.encodePacked(
+                        attrs,
+                        ',{"trait_type":"',
+                        traitType,
+                        '","value":"',
+                        traitValue,
+                        '"}'
+                    )
+                );
+            }
             attrs = string(
                 abi.encodePacked(
                     attrs,
-                    ',{"trait_type":"Bond Distance (Initial)","value":"',
-                    uint256(bondCreated).toString(),
-                    '"},{"trait_type":"Bond Distance (Current)","value":"',
-                    uint256(bondCurrent).toString(),
-                    '"},{"trait_type":"Bond Chance Bps","value":"',
-                    uint256(bondChance).toString(),
-                    '"},{"trait_type":"Bond Staked","value":"',
-                    bondStaked ? "Yes" : "No",
+                    ',{"trait_type":"Staked","value":"',
+                    stakeAttrValue,
                     '"}'
                 )
             );
+            attrs = string(abi.encodePacked(attrs, "]"));
         }
-        attrs = string(abi.encodePacked(attrs, "]"));
 
         string memory img = _trophySvg(
             tokenId,
@@ -429,8 +419,37 @@ contract IconRendererTrophy32 {
             isDec,
             statusFlags,
             lvl,
-            invertFlag
+            invertFlag,
+            isBond,
+            bondChance,
+            bondMatured,
+            isBond
+                ? _bondElapsedPct1e6(bondCreated, bondCurrent, bondMatured)
+                : 0
         );
+        if (isBond) {
+            string memory name_ = bondMatured
+                ? string.concat("Matured PurgeBond #", tokenId.toString())
+                : string.concat(
+                    _formatBpsPercent(bondChance),
+                    " PurgeBond #",
+                    tokenId.toString()
+                );
+            string memory bondAttrs = _bondAttributes(
+                bondMatured,
+                bondStaked,
+                bondCreated,
+                bondCurrent,
+                bondChance
+            );
+            return
+                _packBond(
+                    img,
+                    name_,
+                    "A sequential claim on the revenue derived from Purge Game.",
+                    bondAttrs
+                );
+        }
         return _pack(tokenId, true, img, lvl, desc, trophyType, attrs);
     }
 
@@ -497,7 +516,11 @@ contract IconRendererTrophy32 {
         bool isDec,
         uint32 statusFlags,
         uint24 lvl,
-        bool invertFlag
+        bool invertFlag,
+        bool isBond,
+        uint16 bondChanceBps,
+        bool bondMatured,
+        uint32 bondProgress1e6
     ) private view returns (string memory) {
         uint32 innerSide = _innerSquareSide();
         string memory diamondPath = icons.diamond();
@@ -533,13 +556,24 @@ contract IconRendererTrophy32 {
                 _borderColor(tokenId, 0, uint8(1) << ringIdx, lvl)
             );
 
-            uint32 pct = registry.trophyOuter(tokenId);
-            uint32 diameter = (pct <= 1)
-                ? 88
-                : uint32((uint256(innerSide) * pct) / 1_000_000);
-            uint32 rOut = diameter / 2;
-            uint32 rMid = uint32((uint256(rOut) * RATIO_MID_1e6) / 1_000_000);
-            uint32 rIn = uint32((uint256(rOut) * RATIO_IN_1e6) / 1_000_000);
+            uint32 rOut;
+            uint32 rMid;
+            uint32 rIn;
+            if (isBond) {
+                uint32 scale1e6 = _bondScaleFromChance(bondChanceBps, bondMatured);
+                rOut = uint32((50 * uint256(scale1e6)) / 1_000_000);
+                if (rOut == 0) rOut = 1;
+                rMid = uint32((uint256(rOut) * RATIO_MID_1e6) / 1_000_000);
+                rIn = uint32((uint256(rOut) * RATIO_IN_1e6) / 1_000_000);
+            } else {
+                uint32 pct = registry.trophyOuter(tokenId);
+                uint32 diameter = (pct <= 1)
+                    ? 88
+                    : uint32((uint256(innerSide) * pct) / 1_000_000);
+                rOut = diameter / 2;
+                rMid = uint32((uint256(rOut) * RATIO_MID_1e6) / 1_000_000);
+                rIn = uint32((uint256(rOut) * RATIO_IN_1e6) / 1_000_000);
+            }
 
             string memory head = _svgHeader(
                 borderColor,
@@ -547,9 +581,14 @@ contract IconRendererTrophy32 {
             );
             string memory ringColor = _paletteColor(ringIdx, lvl);
             string memory placeholderFlameColor = _resolve(tokenId, 1, "#111");
+            bool showProgress = isBond && !bondMatured;
+            string memory progressColor = placeholderFlameColor;
+            string memory bandColor = showProgress
+                ? _bandColorForProgress(progressColor)
+                : placeholderFlameColor;
             string memory rings = _rings(
                 ringColor,
-                placeholderFlameColor,
+                bandColor,
                 _resolve(tokenId, 2, "#fff"),
                 rOut,
                 rMid,
@@ -566,23 +605,29 @@ contract IconRendererTrophy32 {
                 )
             );
 
-            string memory centerGlyph = _centerGlyph(
-                isMap,
-                isAffiliate,
-                isStake,
-                placeholderFlameColor,
-                ringColor,
-                diamondPath
+            string memory centerGlyph = isBond
+                ? _bondCenterGlyph(placeholderFlameColor, diamondPath, rIn)
+                : _centerGlyph(
+                    isMap,
+                    isAffiliate,
+                    isStake,
+                    placeholderFlameColor,
+                    ringColor,
+                    diamondPath
             );
+            string memory progress = "";
+            if (showProgress) {
+                progress = _bondProgressArc(rIn, rMid, bondProgress1e6, progressColor);
+            }
             string memory body = string(
-                abi.encodePacked(rings, clip, centerGlyph)
+                abi.encodePacked(rings, clip, progress, centerGlyph)
             );
             return
                 _composeSvg(
                     head,
                     body,
                     isMap,
-                    isExtermination,
+                    isBond ? false : isExtermination,
                     placeholderFlameColor,
                     diamondPath,
                     statusFlags
@@ -606,7 +651,6 @@ contract IconRendererTrophy32 {
         uint8 symIdx = isTopAffiliate ? 0 : (six & 0x07);
 
         string memory ringOuterColor;
-        string memory symbolColor;
         bool hasCustomAffiliateColor;
         {
             string memory defaultColor = _paletteColor(colIdx, lvl);
@@ -616,10 +660,8 @@ contract IconRendererTrophy32 {
                 ringOuterColor = hasCustomAffiliateColor
                     ? custom
                     : defaultColor;
-                symbolColor = ringOuterColor;
             } else {
                 ringOuterColor = defaultColor;
-                symbolColor = defaultColor;
             }
         }
 
@@ -635,7 +677,6 @@ contract IconRendererTrophy32 {
         }
 
         string memory flameColor = _resolve(tokenId, 1, "#111");
-        string memory squareFill = _resolve(tokenId, 3, "#d9d9d9");
 
         uint32 pct2 = registry.trophyOuter(tokenId);
         uint32 rOut2 = (pct2 <= 1)
@@ -662,7 +703,7 @@ contract IconRendererTrophy32 {
 
             return
                 _composeSvg(
-                    _svgHeader(border, squareFill),
+                    _svgHeader(border, _resolve(tokenId, 3, "#d9d9d9")),
                     anim,
                     isMap,
                     isExtermination,
@@ -671,8 +712,6 @@ contract IconRendererTrophy32 {
                     statusFlags
                 );
         }
-
-        string memory innerFill = _resolve(tokenId, 2, "#fff");
 
         string memory iconPath;
         uint16 w;
@@ -716,7 +755,7 @@ contract IconRendererTrophy32 {
                 _rings(
                     ringOuterColor,
                     flameColor,
-                    innerFill,
+                    _resolve(tokenId, 2, "#fff"),
                     rOut2,
                     rMid2,
                     rIn2,
@@ -731,9 +770,9 @@ contract IconRendererTrophy32 {
                         "<g clip-path='url(#ct2)'><g transform='",
                         _mat6(sSym1e6, txm, tyn),
                         "'><g fill='",
-                        symbolColor,
+                        ringOuterColor,
                         "' stroke='",
-                        solidFill ? "none" : symbolColor,
+                        solidFill ? "none" : ringOuterColor,
                         "' style='vector-effect:non-scaling-stroke'>",
                         iconPath,
                         "</g></g></g>"
@@ -756,7 +795,7 @@ contract IconRendererTrophy32 {
 
         return
             _composeSvg(
-                _svgHeader(border, squareFill),
+                _svgHeader(border, _resolve(tokenId, 3, "#d9d9d9")),
                 ringsAndSymbol,
                 isMap,
                 isExtermination,
@@ -856,6 +895,154 @@ contract IconRendererTrophy32 {
                     "</g>"
                 )
             );
+    }
+
+    function _bondCenterGlyph(
+        string memory defaultFillColor,
+        string memory flamePath,
+        uint32 rIn
+    ) private pure returns (string memory) {
+        // Scale the central glyph relative to the bond ring size (baseline rIn ~27 -> scale 0.13).
+        uint256 scale1e6 = (uint256(rIn) * 130_000) / 27;
+        if (scale1e6 == 0) scale1e6 = 1;
+        int256 tx1e6 = (int256(-56_000_000) * int256(scale1e6)) / 130_000;
+        int256 ty1e6 = (int256(-41_000_000) * int256(scale1e6)) / 130_000;
+
+        return
+            string(
+                abi.encodePacked(
+                    '<g clip-path="url(#ct)">',
+                    '<path fill="',
+                    defaultFillColor,
+                    '" transform="',
+                    _mat6(uint32(scale1e6), tx1e6, ty1e6),
+                    '" d="',
+                    flamePath,
+                    '"/>',
+                    "</g>"
+                )
+            );
+    }
+
+    function _bondElapsedPct1e6(
+        uint32 created,
+        uint32 current,
+        bool matured
+    ) private pure returns (uint32) {
+        uint32 base = created == 0 ? 1 : created;
+        uint32 usedCurrent = current;
+        if (matured || current > created) {
+            usedCurrent = 0;
+        }
+        uint256 elapsed = uint256(base) - uint256(usedCurrent);
+        uint256 pct = (elapsed * 1_000_000) / uint256(base);
+        if (pct > 1_000_000) return 1_000_000;
+        return uint32(pct);
+    }
+
+    function _bondProgressArc(
+        uint32 innerRadius,
+        uint32 midRadius,
+        uint32 progress1e6,
+        string memory strokeColor
+    ) private pure returns (string memory) {
+        uint256 pct100 = (uint256(progress1e6) + 5_000) / 10_000;
+        if (pct100 > 100) pct100 = 100;
+        uint32 bandWidth = midRadius > innerRadius
+            ? midRadius - innerRadius
+            : uint32(1);
+        uint256 strokeW = bandWidth == 0 ? 1 : bandWidth;
+        string memory radius = _midRadiusToString(innerRadius, midRadius);
+        string memory dash = pct100.toString();
+        int256 rotateDeg = -90 + _bondRotationOffset(pct100);
+        string memory rotateStr = _intToString(rotateDeg);
+        return
+            string(
+                abi.encodePacked(
+                    "<circle cx='0' cy='0' r='",
+                    radius,
+                    "' fill='none' stroke='",
+                    strokeColor,
+                    "' stroke-width='",
+                    strokeW.toString(),
+                    "' pathLength='100' stroke-dasharray='",
+                    dash,
+                    " 100' transform='rotate(",
+                    rotateStr,
+                    ") scale(1 -1)'/>"
+                )
+            );
+    }
+
+    function _midRadiusToString(
+        uint32 innerRadius,
+        uint32 midRadius
+    ) private pure returns (string memory) {
+        uint256 doubled = uint256(innerRadius) + uint256(midRadius);
+        uint256 whole = doubled / 2;
+        if ((doubled & 1) == 0) {
+            return whole.toString();
+        }
+        return string.concat(whole.toString(), ".5");
+    }
+
+    function _bondRotationOffset(uint256 pct100) private pure returns (int256) {
+        if (pct100 >= 23 && pct100 <= 27) return 90; // quarter (~25%)
+        if (pct100 >= 73 && pct100 <= 77) return -90; // three quarter (~75%)
+        if (pct100 >= 45 && pct100 <= 55) return 180; // half (~50%)
+        if (pct100 >= 90) {
+            // small remaining slice; rotate left by its size
+            uint256 gap = 100 > pct100 ? 100 - pct100 : 0;
+            int256 gapDeg = (int256(gap) * 36) / 10; // 3.6 deg per pct
+            return -gapDeg;
+        }
+        return 0;
+    }
+
+    function _intToString(int256 v) private pure returns (string memory) {
+        if (v >= 0) return uint256(v).toString();
+        return string.concat("-", uint256(-v).toString());
+    }
+
+    function _bandColorForProgress(
+        string memory baseColor
+    ) private pure returns (string memory) {
+        uint24 rgb = _hexToRgb(baseColor);
+        uint8 r = uint8(rgb >> 16);
+        uint8 g = uint8(rgb >> 8);
+        uint8 b = uint8(rgb);
+        uint256 lum = uint256(r) * 299 + uint256(g) * 587 + uint256(b) * 114; // max 255000
+        if (lum < 80_000) {
+            // Dark stroke: lighten, but blend back toward the base (e.g., #111 -> ~40% between current grey and black).
+            string memory lighter = _lightenHex(baseColor, 12);
+            return _blendHex(baseColor, lighter, 60);
+        }
+        // Light stroke: darken slightly and keep close to the base.
+        string memory darker = _lightenHex(baseColor, -10);
+        return _blendHex(baseColor, darker, 70);
+    }
+
+    function _blendHex(
+        string memory a,
+        string memory b,
+        uint8 weightB
+    ) private pure returns (string memory) {
+        uint8 weightA = uint8(100 - weightB);
+        uint24 rgbA = _hexToRgb(a);
+        uint24 rgbB = _hexToRgb(b);
+        uint8 r = uint8(
+            (uint256(uint8(rgbA >> 16)) * weightA +
+                uint256(uint8(rgbB >> 16)) * weightB) / 100
+        );
+        uint8 g = uint8(
+            (uint256(uint8(rgbA >> 8)) * weightA +
+                uint256(uint8(rgbB >> 8)) * weightB) / 100
+        );
+        uint8 bl = uint8(
+            (uint256(uint8(rgbA)) * weightA +
+                uint256(uint8(rgbB)) * weightB) / 100
+        );
+        return _rgbToHex((uint24(r) << 16) | (uint24(g) << 8) | uint24(bl));
     }
 
     function _cornerGlyph(
@@ -1101,9 +1288,46 @@ contract IconRendererTrophy32 {
         return string(buf);
     }
 
+    function _hexToRgb(string memory hexColor) private pure returns (uint24) {
+        bytes memory b = bytes(hexColor);
+        if (b.length == 4 && b[0] == bytes1("#")) {
+            // Expand #rgb -> #rrggbb
+            bytes memory exp = new bytes(7);
+            exp[0] = "#";
+            exp[1] = b[1];
+            exp[2] = b[1];
+            exp[3] = b[2];
+            exp[4] = b[2];
+            exp[5] = b[3];
+            exp[6] = b[3];
+            b = exp;
+        }
+        if (b.length != 7 || b[0] != bytes1("#")) return 0;
+        uint8 r = (uint8(_fromHexChar(b[1])) << 4) | uint8(_fromHexChar(b[2]));
+        uint8 g = (uint8(_fromHexChar(b[3])) << 4) | uint8(_fromHexChar(b[4]));
+        uint8 bl = (uint8(_fromHexChar(b[5])) << 4) | uint8(_fromHexChar(b[6]));
+        return (uint24(r) << 16) | (uint24(g) << 8) | uint24(bl);
+    }
+
     function _hexChar(uint8 nibble) private pure returns (bytes1) {
         uint8 v = nibble & 0x0F;
         return bytes1(v + (v < 10 ? 48 : 87));
+    }
+
+    function _fromHexChar(bytes1 c) private pure returns (uint8) {
+        uint8 b = uint8(c);
+        if (b >= 48 && b <= 57) return b - 48;
+        if (b >= 97 && b <= 102) return b - 87;
+        if (b >= 65 && b <= 70) return b - 55;
+        return 0;
+    }
+
+    function _lightenHex(string memory hexColor, int16 delta) private pure returns (string memory) {
+        uint24 rgb = _hexToRgb(hexColor);
+        uint8 r = _toneChannel(uint8(rgb >> 16), delta);
+        uint8 g = _toneChannel(uint8(rgb >> 8), delta);
+        uint8 b = _toneChannel(uint8(rgb), delta);
+        return _rgbToHex((uint24(r) << 16) | (uint24(g) << 8) | uint24(b));
     }
 
     function _colorTitle(uint8 idx) private pure returns (string memory) {
@@ -1173,6 +1397,29 @@ contract IconRendererTrophy32 {
             );
     }
 
+    function _packBond(
+        string memory svg,
+        string memory name_,
+        string memory desc,
+        string memory attrs
+    ) private pure returns (string memory) {
+        string memory imgData = string.concat(
+            "data:image/svg+xml;base64,",
+            Base64.encode(bytes(svg))
+        );
+
+        string memory j = string.concat('{"name":"', name_);
+        j = string.concat(j, '","description":"', desc);
+        j = string.concat(j, '","image":"', imgData, '","attributes":');
+        j = string.concat(j, attrs, "}");
+
+        return
+            string.concat(
+                "data:application/json;base64,",
+                Base64.encode(bytes(j))
+            );
+    }
+
     function _pack(
         uint256 tokenId,
         bool isTrophy,
@@ -1215,8 +1462,55 @@ contract IconRendererTrophy32 {
         return
             string.concat(
                 "data:application/json;base64,",
-                Base64.encode(bytes(j))
+            Base64.encode(bytes(j))
             );
+    }
+
+    function _bondAttributes(
+        bool matured,
+        bool staked,
+        uint32 created,
+        uint32 current,
+        uint16 chanceBps
+    ) private pure returns (string memory) {
+        return
+            string(
+                abi.encodePacked(
+                    '[{"trait_type":"Matured","value":"',
+                    matured ? "Yes" : "No",
+                    '"},{"trait_type":"Staked","value":"',
+                    staked ? "Yes" : "No",
+                    '"},{"trait_type":"Initial Distance","value":"',
+                    uint256(created).toString(),
+                    '"},{"trait_type":"Current Distance","value":"',
+                    uint256(current).toString(),
+                    '"},{"trait_type":"Odds","value":"',
+                    _formatBpsPercent(chanceBps),
+                    '"}]'
+                )
+            );
+    }
+
+    function _formatBpsPercent(uint16 bps) private pure returns (string memory) {
+        uint256 pct = uint256(bps);
+        uint256 whole = pct / 100;
+        uint256 frac = pct % 100;
+        if (frac == 0) {
+            return string.concat(whole.toString(), "%");
+        }
+        if (frac % 10 == 0) {
+            return
+                string.concat(
+                    whole.toString(),
+                    ".",
+                    (frac / 10).toString(),
+                    "%"
+                );
+        }
+        bytes memory two = new bytes(2);
+        two[0] = bytes1(uint8(48 + (frac / 10)));
+        two[1] = bytes1(uint8(48 + (frac % 10)));
+        return string.concat(whole.toString(), ".", string(two), "%");
     }
 
     function _formatEthAmount(
@@ -1262,6 +1556,16 @@ contract IconRendererTrophy32 {
 
     function _innerSquareSide() private pure returns (uint32) {
         return 98;
+    }
+
+    function _bondScaleFromChance(uint16 chanceBps, bool matured) private pure returns (uint32) {
+        if (matured) return 950_000; // 95%
+        if (chanceBps <= 200) return 250_000; // 25%
+        if (chanceBps >= 5000) return 750_000; // 75%
+        uint256 delta = uint256(chanceBps) - 200;
+        uint256 scaled = 250_000 + (delta * 500_000) / 4_800;
+        if (scaled > 750_000) return 750_000;
+        return uint32(scaled);
     }
 
     function _mat6(

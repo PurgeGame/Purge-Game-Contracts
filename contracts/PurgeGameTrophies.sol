@@ -190,8 +190,8 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
 
     struct BafStakeInfo {
         uint24 lastLevel;
-        uint32 lastDay;
-        uint32 claimedToday;
+        uint24 lastClaimLevel;
+        uint32 claimedThisLevel;
         uint8 count;
         uint256 pending;
     }
@@ -202,7 +202,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     uint32 private constant COIN_DRIP_STEPS = 10;
     uint256 private constant COIN_BASE_UNIT = 1_000_000;
     uint8 private constant BAF_LEVEL_REWARD_DIVISOR = 10; // priceCoin / 10
-    uint8 private constant BAF_DAILY_CAP_MULTIPLIER = 2; // priceCoin * 2
     uint16 private constant PURGE_TROPHY_REWARD_MULTIPLIER = 100; // priceCoin * 100
     uint24 private constant DECIMATOR_SPECIAL_LEVEL = 100;
     uint256 private constant TROPHY_FLAG_MAP = uint256(1) << 200;
@@ -225,8 +224,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     uint8 private constant _STAKE_ERR_NOT_STAKED = 4;
     uint8 private constant _STAKE_ERR_LOCKED = 5;
 
-    uint8 private constant EXTERMINATOR_STAKE_COIN_CAP = 25;
-
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
     uint16 private constant DECIMATOR_TRAIT_SENTINEL = 0xFFFB;
 
@@ -246,7 +243,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     mapping(uint256 => uint256) private trophyData_;
     mapping(address => uint8) private mapStakeBonusPct_;
     mapping(address => uint8) private affiliateStakeBonusPct_;
-    mapping(address => uint8) private exterminatorStakeBonusPct_;
     mapping(address => bool[256]) private exterminatorStakeTraits_;
     mapping(address => uint8) private stakeStakeBonusPct_;
     // Decimator stake bonus is computed on-demand; no cached mapping to avoid stale values.
@@ -296,9 +292,9 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         return priceUnit / BAF_LEVEL_REWARD_DIVISOR;
     }
 
-    function _bafDailyCap(uint256 priceUnit) private pure returns (uint256) {
-        // Cap BAF claims to 1 * priceUnit per day regardless of stack size.
-        return priceUnit;
+    function _bafLevelCap() private pure returns (uint256) {
+        // Cap BAF claims to 2,500 coins per level regardless of stack size.
+        return 2_500 * COIN_BASE_UNIT;
     }
 
     function _purgeTrophyReward(uint256 priceUnit) private pure returns (uint256) {
@@ -442,20 +438,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         if (count == 1) return 5;
         if (count == 2) return 8;
         return 10;
-    }
-
-    function _exterminatorStakeDiscountCap(uint8 count) private pure returns (uint8) {
-        if (count == 0) return 0;
-        if (count == 1) return 5;
-        if (count == 2) return 8;
-        return 10;
-    }
-
-    function _exterminatorTraitPurgeCap(uint8 count) private pure returns (uint8) {
-        if (count == 0) return 0;
-        if (count == 1) return 8;
-        if (count == 2) return 12;
-        return 15;
     }
 
     function _stakeBonusCap(uint8 count) private pure returns (uint8) {
@@ -614,14 +596,11 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
                 current += 1;
             }
             state.count = current;
-            if (state.lastDay == 0) {
-                state.lastDay = uint32(block.timestamp / 1 days);
-            }
             discountPct = 0;
             data.kind = 5;
             data.count = current;
         } else if (params.targetDec) {
-            // Decimator trophies stake purely to enable drip claims; no discounts or counters.
+            // Decimator trophies stake purely to enable burn bonuses; no discounts or counters.
             discountPct = 0;
             data.kind = 6;
             data.count = 0;
@@ -650,7 +629,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             data.kind = 2;
             data.count = 0;
         } else if (params.targetExterminator) {
-            exterminatorStakeBonusPct_[params.player] = 0;
             uint16 traitId = uint16((info >> 152) & 0xFFFF);
             _removeExterminatorStakeTrait(params.player, traitId);
             data.kind = 3;
@@ -716,7 +694,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             return;
         }
         if (len > 10) revert StakeInvalid();
-        uint8 cap = _exterminatorStakeDiscountCap(uint8(len));
         uint24 earliest = type(uint24).max;
         for (uint256 i; i < len; ) {
             uint256 tokenId = tokenIds[i];
@@ -738,8 +715,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             }
         }
         if (earliest == type(uint24).max) revert StakeInvalid();
-        uint24 effective = _currentEffectiveStakeLevel();
-        exterminatorStakeBonusPct_[player] = _timeBasedDiscount(uint8(len), earliest, effective, cap);
     }
 
     function _refreshStakeBonus(address player, uint256[] calldata tokenIds) private {
@@ -985,74 +960,31 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         }
     }
 
-    function _processDecimatorClaim(ClaimContext memory ctx, uint256 priceUnit) private view {
-        if (!ctx.isStaked) revert ClaimNotReady();
-        uint32 start = uint32((ctx.info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF) + COIN_DRIP_STEPS + 1;
-        uint32 floor = start - 1;
-        uint32 last = ctx.lastClaim;
-        if (last < floor) last = floor;
-        if (ctx.currentLevel > last) {
-            if (game.rngLocked()) revert CoinPaused();
-            uint32 from = last + 1;
-            uint32 offsetStart = from - start;
-            uint32 offsetEnd = ctx.currentLevel - start;
-
-            uint256 span = uint256(offsetEnd - offsetStart + 1);
-
-            uint256 prefixEnd = _getDecimatorCumulativeExtra(offsetEnd);
-            uint256 prefixStart = offsetStart == 0 ? 0 : _getDecimatorCumulativeExtra(offsetStart - 1);
-
-            uint256 emissionUnit = priceUnit;
-            ctx.coinAmount = emissionUnit * (span + (prefixEnd - prefixStart));
-            ctx.coinClaimed = true;
-            ctx.updatedLast = ctx.currentLevel;
-        }
-    }
-
-    function _getDecimatorCumulativeExtra(uint32 index) private pure returns (uint256) {
-        uint256 periodSize = COIN_DRIP_STEPS;
-        uint256 capBlock = 4;
-        uint256 capIndex = 49;
-
-        if (index <= capIndex) {
-            uint256 blocks = uint256(index) / periodSize;
-            uint256 rem = uint256(index) % periodSize;
-            return ((blocks * (blocks - 1)) / 2) * periodSize + blocks * (rem + 1);
-        } else {
-            uint256 blocks = uint256(capIndex) / periodSize;
-            uint256 rem = uint256(capIndex) % periodSize;
-            uint256 base = ((blocks * (blocks - 1)) / 2) * periodSize + blocks * (rem + 1);
-
-            return base + (uint256(index) - capIndex) * capBlock;
-        }
-    }
-
     function _processBafClaim(address player, ClaimContext memory ctx, uint256 priceUnit) private {
         if (!ctx.isStaked) revert ClaimNotReady();
         BafStakeInfo storage state = bafStakeInfo[player];
         _syncBafStake(player, state, ctx.currentLevel, priceUnit);
 
-        uint32 currentDay = uint32(block.timestamp / 1 days);
-        if (state.lastDay != currentDay) {
-            state.lastDay = currentDay;
-            state.claimedToday = 0;
+        if (state.lastClaimLevel != ctx.currentLevel) {
+            state.lastClaimLevel = ctx.currentLevel;
+            state.claimedThisLevel = 0;
         }
 
         uint256 pending = state.pending;
         if (pending == 0) revert ClaimNotReady();
 
-        uint256 dailyCap = _bafDailyCap(priceUnit);
-        uint256 claimedToday = uint256(state.claimedToday);
-        if (claimedToday >= dailyCap) revert ClaimNotReady();
-        uint256 dailyRemaining = dailyCap - claimedToday;
+        uint256 levelCap = _bafLevelCap();
+        uint256 claimedLevel = uint256(state.claimedThisLevel);
+        if (claimedLevel >= levelCap) revert ClaimNotReady();
+        uint256 remaining = levelCap - claimedLevel;
 
         uint256 payout = pending;
-        if (payout > dailyRemaining) {
-            payout = dailyRemaining;
+        if (payout > remaining) {
+            payout = remaining;
         }
 
         state.pending = pending - payout;
-        state.claimedToday += uint32(payout);
+        state.claimedThisLevel += uint32(payout);
 
         ctx.coinAmount = payout;
         ctx.coinClaimed = true;
@@ -1092,11 +1024,11 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         }
         if (count != 0) {
             state.count = count;
-            if (state.lastDay == 0) {
-                state.lastDay = uint32(block.timestamp / 1 days);
-            }
             if (state.lastLevel == 0) {
                 state.lastLevel = currentLevel;
+            }
+            if (state.lastClaimLevel == 0) {
+                state.lastClaimLevel = currentLevel;
             }
         }
     }
@@ -1105,8 +1037,8 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         _bootstrapBafStake(player, state, currentLevel);
         if (state.lastLevel == 0) {
             state.lastLevel = currentLevel;
-            if (state.lastDay == 0) {
-                state.lastDay = uint32(block.timestamp / 1 days);
+            if (state.lastClaimLevel == 0) {
+                state.lastClaimLevel = currentLevel;
             }
             return;
         }
@@ -1286,14 +1218,13 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     ) external view override onlyGame returns (uint8 newPercent) {
         if (traitId >= 256) return 0;
         if (!exterminatorStakeTraits_[player][traitId]) return 0;
-        (uint8 total, uint24 earliest) = _exterminatorStakeStats(player);
-        if (total == 0 || earliest == 0) return 0;
+        (, uint24 earliest) = _exterminatorStakeStats(player);
+        if (earliest == 0) return 0;
         uint24 effective = _currentEffectiveStakeLevel();
         if (effective <= earliest) return 0;
         uint24 levelsHeld = effective - earliest;
-        uint8 cap = _exterminatorTraitPurgeCap(total);
-        if (levelsHeld > cap) {
-            return cap;
+        if (levelsHeld > 10) {
+            return 10;
         }
         return uint8(levelsHeld);
     }
@@ -1319,7 +1250,8 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     }
 
     function exterminatorStakeDiscount(address player) external view override returns (uint8) {
-        return exterminatorStakeBonusPct_[player];
+        player; // silence unused warning
+        return 0;
     }
 
     function hasExterminatorStake(address player) external view override returns (bool) {

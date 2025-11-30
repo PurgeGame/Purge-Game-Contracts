@@ -643,38 +643,29 @@ contract PurgeGame is PurgeGameStorage {
             }
 
             if (hasExterminatorStake) {
-                bool traitBonusApplied;
-                uint8 levelPercent = trophiesContract.handleExterminatorTraitPurge(caller, uint16(trait0));
-                if (levelPercent != 0) {
+                uint8[4] memory traitList = [trait0, trait1, trait2, trait3];
+                for (uint256 j; j < 4; ) {
+                    uint8 traitVal = traitList[j];
+                    bool seen;
+                    for (uint256 k; k < j; ) {
+                        if (traitList[k] == traitVal) {
+                            seen = true;
+                            break;
+                        }
+                        unchecked {
+                            ++k;
+                        }
+                    }
+                    if (!seen) {
+                        uint8 levelPercent = trophiesContract.handleExterminatorTraitPurge(caller, uint16(traitVal));
+                        if (levelPercent != 0) {
+                            unchecked {
+                                stakeBonusCoin += (priceCoinLocal * uint256(levelPercent)) / 100;
+                            }
+                        }
+                    }
                     unchecked {
-                        stakeBonusCoin += (priceCoinLocal * uint256(levelPercent)) / 100;
-                    }
-                    traitBonusApplied = true;
-                }
-                if (!traitBonusApplied) {
-                    levelPercent = trophiesContract.handleExterminatorTraitPurge(caller, uint16(trait1));
-                    if (levelPercent != 0) {
-                        unchecked {
-                            stakeBonusCoin += (priceCoinLocal * uint256(levelPercent)) / 100;
-                        }
-                        traitBonusApplied = true;
-                    }
-                }
-                if (!traitBonusApplied) {
-                    levelPercent = trophiesContract.handleExterminatorTraitPurge(caller, uint16(trait2));
-                    if (levelPercent != 0) {
-                        unchecked {
-                            stakeBonusCoin += (priceCoinLocal * uint256(levelPercent)) / 100;
-                        }
-                        traitBonusApplied = true;
-                    }
-                }
-                if (!traitBonusApplied) {
-                    levelPercent = trophiesContract.handleExterminatorTraitPurge(caller, uint16(trait3));
-                    if (levelPercent != 0) {
-                        unchecked {
-                            stakeBonusCoin += (priceCoinLocal * uint256(levelPercent)) / 100;
-                        }
+                        ++j;
                     }
                 }
             }
@@ -727,7 +718,7 @@ contract PurgeGame is PurgeGameStorage {
     /// - Split prize pool: 90% to participants (including the exterminator slice below) and 10% as a bonus
     ///   split across three winning tickets weighted by ETH mint streaks (even split if all streaks are zero);
     ///   affiliate/stake trophy rewards are now funded from the reward pool.
-    ///   From within the 90%, the “exterminator” gets 20% (or 40% on levels where `prevLevel % 10 == 4` and `prevLevel > 4`),
+    ///   From within the 90%, the “exterminator” gets 30% (or 40% on levels where `prevLevel % 10 == 4` and `prevLevel > 4`),
     ///   and the rest is divided evenly per ticket for the exterminated trait.
     /// - Mint the level trophy (transfers the placeholder token owned by the contract).
     ///

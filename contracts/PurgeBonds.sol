@@ -80,6 +80,7 @@ contract PurgeBonds {
     bool public decayPaused;
     uint256 public bondCoin; // PURGE reserved for bond payouts
     uint256 public totalEthOwed; // Sum of ETH owed across all bonds
+    uint256 public totalCoinOwed; // Weighted coin obligations (marketable bonds count at reduced weight)
     uint256 public rewardSeedEth; // Held ETH from unwired purchases to seed game reward pool
     bool public resolvePending;
     uint256 public pendingRngWord;
@@ -90,6 +91,7 @@ contract PurgeBonds {
 
     uint256 public priceMultiplier = 49_9e16; // dynamic price multiplier (1e18 = 1.0x), default 49.9x
     uint64 public lastDecayDay;
+    uint64 public decayDelayUntilDay;
     uint256 public ethPool;
     uint256 public stEthPool;
     uint256 public bondPool;
@@ -120,7 +122,10 @@ contract PurgeBonds {
     uint256 private constant MULT_SCALE = 1e18;
     uint256 private constant DECAY_BPS = 9950; // 0.5% down daily
     uint256 private constant BPS_DENOM = 10_000;
+    uint64 private constant DECAY_DELAY_DAYS = 7;
     uint8 private constant MAX_RISK = 59; // Keeps 1 ether >> risk non-zero
+    uint256 private constant COIN_WEIGHT_UNMARKETABLE = 5; // Unmarketable (staked) bonds get full weight
+    uint256 private constant COIN_WEIGHT_MARKETABLE = 1; // Marketable bonds get 20% of the coin payout
 
     modifier onlyOwner() {
         if (msg.sender != owner) revert Unauthorized();
@@ -275,7 +280,9 @@ contract PurgeBonds {
         owner = owner_;
         fundRecipient = fundRecipient_;
         stEthToken = stEthToken_;
-        lastDecayDay = uint64(block.timestamp / 1 days);
+        uint64 day = uint64(block.timestamp / 1 days);
+        lastDecayDay = day;
+        decayDelayUntilDay = day;
         lowestUnresolved = 1;
     }
 
@@ -384,7 +391,9 @@ contract PurgeBonds {
             staked[tokenId] = true;
         }
         createdDistance[tokenId] = uint32(_currentDistance(tokenId));
-        totalEthOwed += _basePrice(risk);
+        uint256 basePrice = _basePrice(risk);
+        totalEthOwed += basePrice;
+        totalCoinOwed += basePrice * _coinWeightMultiplier(tokenId);
 
         // Store win chance based on payment size (capped at 100%).
         if (paidWei != 0) {
@@ -532,7 +541,9 @@ contract PurgeBonds {
                 claimReady[tid] = true;
                 uint256 basePrice = _basePrice(riskOf[tid]);
                 if (basePrice < 1 ether) {
-                    totalEthOwed += (1 ether - basePrice);
+                    uint256 delta = 1 ether - basePrice;
+                    totalEthOwed += delta;
+                    totalCoinOwed += delta * _coinWeightMultiplier(tid);
                 }
                 emit ClaimEnabled(tid);
                 ++enabled;
@@ -558,9 +569,10 @@ contract PurgeBonds {
         uint256 ethShare = ethPool / supply;
         uint256 stShare = stEthPool / supply;
         uint256 bondShare;
-        uint256 owed = totalEthOwed;
-        if (owed != 0 && bondCoin != 0) {
-            bondShare = (bondCoin * 1 ether) / owed;
+        uint256 coinWeight = _coinClaimWeight(tokenId);
+        uint256 coinOwed = totalCoinOwed;
+        if (coinOwed != 0 && bondCoin != 0) {
+            bondShare = (bondCoin * coinWeight) / coinOwed;
         }
 
         if (ethShare != 0) {
@@ -593,6 +605,7 @@ contract PurgeBonds {
         }
 
         totalEthOwed -= 1 ether;
+        totalCoinOwed -= coinWeight;
         emit Claimed(to, tokenId, ethShare, stShare, bondShare);
     }
 
@@ -620,9 +633,9 @@ contract PurgeBonds {
         if (supply == 0) return (0, 0, 0);
         ethShare = ethPool / supply;
         stEthShare = stEthPool / supply;
-        uint256 owed = totalEthOwed;
-        if (owed != 0 && bondCoin != 0) {
-            bondShare = (bondCoin * 1 ether) / owed;
+        uint256 coinOwed = totalCoinOwed;
+        if (coinOwed != 0 && bondCoin != 0) {
+            bondShare = (bondCoin * (COIN_WEIGHT_MARKETABLE * 1 ether)) / coinOwed;
         }
     }
 
@@ -733,6 +746,14 @@ contract PurgeBonds {
         return (spender == holder || _tokenApproval[tokenId] == spender || _operatorApproval[holder][spender]);
     }
 
+    function _coinWeightMultiplier(uint256 tokenId) private view returns (uint256) {
+        return staked[tokenId] ? COIN_WEIGHT_UNMARKETABLE : COIN_WEIGHT_MARKETABLE;
+    }
+
+    function _coinClaimWeight(uint256 tokenId) private view returns (uint256) {
+        return _coinWeightMultiplier(tokenId) * 1 ether;
+    }
+
     function _resolveStart(uint256 baseId) private returns (uint256 startId) {
         if (baseId != 0) {
             resolveBaseId = baseId;
@@ -781,7 +802,17 @@ contract PurgeBonds {
         uint64 last = lastDecayDay;
         if (day <= last) return;
 
-        priceMultiplier = _applyDecay(priceMultiplier, uint256(day - last));
+        uint64 delayUntil = decayDelayUntilDay;
+        uint64 anchor = last;
+        if (delayUntil != 0) {
+            uint64 barrier = delayUntil - 1;
+            if (day <= barrier) return;
+            if (barrier > anchor) {
+                anchor = barrier;
+            }
+        }
+
+        priceMultiplier = _applyDecay(priceMultiplier, uint256(day - anchor));
         lastDecayDay = day;
     }
 
@@ -791,6 +822,13 @@ contract PurgeBonds {
         // delta = multiplier * paidWei / (100 * 1e18)
         uint256 delta = (priceMultiplier * paidWei) / (100 * 1 ether);
         priceMultiplier += delta;
+
+        uint64 day = uint64(block.timestamp / 1 days);
+        uint64 newDelay = day + DECAY_DELAY_DAYS;
+        // Enforce a one-week holding period before the new rate begins decaying again.
+        if (newDelay > decayDelayUntilDay) {
+            decayDelayUntilDay = newDelay;
+        }
     }
 
     function _priceForRisk(uint8 risk) private view returns (uint256) {
@@ -813,7 +851,18 @@ contract PurgeBonds {
         uint64 day = uint64(block.timestamp / 1 days);
         uint64 last = lastDecayDay;
         if (day <= last) return priceMultiplier;
-        return _applyDecay(priceMultiplier, uint256(day - last));
+
+        uint64 delayUntil = decayDelayUntilDay;
+        uint64 anchor = last;
+        if (delayUntil != 0) {
+            uint64 barrier = delayUntil - 1;
+            if (day <= barrier) return priceMultiplier;
+            if (barrier > anchor) {
+                anchor = barrier;
+            }
+        }
+
+        return _applyDecay(priceMultiplier, uint256(day - anchor));
     }
 
     function _applyDecay(uint256 mult, uint256 deltaDays) private pure returns (uint256) {
@@ -924,6 +973,7 @@ contract PurgeBonds {
 
     function _resolveBond(uint256 tokenId, uint256 rngWord) private returns (bool win) {
         uint256 basePrice = _basePrice(riskOf[tokenId]);
+        uint256 weight = _coinWeightMultiplier(tokenId);
         uint16 chance;
         uint256 roll;
         (win, chance, roll) = bondOutcome(tokenId, rngWord);
@@ -932,11 +982,14 @@ contract PurgeBonds {
                 claimReady[tokenId] = true;
                 emit ClaimEnabled(tokenId);
                 if (basePrice < 1 ether) {
-                    totalEthOwed += (1 ether - basePrice);
+                    uint256 delta = 1 ether - basePrice;
+                    totalEthOwed += delta;
+                    totalCoinOwed += delta * weight;
                 }
             }
         } else {
             totalEthOwed -= basePrice;
+            totalCoinOwed -= basePrice * weight;
             claimed[tokenId] = true;
             emit BondBurned(tokenId);
         }
@@ -950,7 +1003,9 @@ contract PurgeBonds {
                 address holder = _ownerOf[tid];
                 if (holder != address(0)) {
                     if (!claimed[tid]) {
-                        totalEthOwed -= _basePrice(riskOf[tid]);
+                        uint256 basePrice = _basePrice(riskOf[tid]);
+                        totalEthOwed -= basePrice;
+                        totalCoinOwed -= basePrice * _coinWeightMultiplier(tid);
                     }
                     claimed[tid] = true;
                     _burnLikeMain(holder, tid);

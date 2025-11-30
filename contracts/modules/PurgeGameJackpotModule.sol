@@ -416,7 +416,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
     }
 
     function _mapJackpotPercent(uint24 lvl) private pure returns (uint256) {
-        return (lvl % 20 == 16) ? 30 : 17;
+        return (lvl % 20 == 16) ? 40 : 30;
     }
 
     function _dailyJackpotBps(uint8 idx) private pure returns (uint16) {

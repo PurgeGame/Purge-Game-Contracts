@@ -475,20 +475,6 @@ contract PurgeGameNFT {
         uint256 expectedWei,
         uint256 priceUnit
     ) private returns (uint256 bonusMint) {
-        if (mapPurchase) {
-            uint8 mapDiscount = trophyModule.mapStakeDiscount(payer);
-            if (mapDiscount != 0) {
-                uint256 discountWei = (expectedWei * mapDiscount) / 100;
-                expectedWei -= discountWei;
-            }
-        } else {
-            uint8 levelDiscount = trophyModule.exterminatorStakeDiscount(payer);
-            if (levelDiscount != 0) {
-                uint256 discountWei = (expectedWei * levelDiscount) / 100;
-                expectedWei -= discountWei;
-            }
-        }
-
         if (useClaimable) {
             if (msg.value != 0) revert E();
         } else if (msg.value != expectedWei) {
@@ -498,6 +484,22 @@ contract PurgeGameNFT {
         // Quest progress tracks full-price equivalents (4 map mints = 1 unit).
         uint32 mintedQuantity = uint32(scaledQty / 100);
         uint32 mintUnits = mapPurchase ? mintedQuantity : 4;
+
+        if (mapPurchase) {
+            uint8 mapBonusPct = trophyModule.mapStakeDiscount(payer);
+            if (mapBonusPct != 0) {
+                uint256 coinCost = (scaledQty * priceUnit) / 100; // quantity * (priceUnit/4)
+                uint256 mapStakeMint = (coinCost * uint256(mapBonusPct)) / 100;
+                if (gameState != 3) {
+                    mapStakeMint <<= 1;
+                }
+                if (mapStakeMint != 0) {
+                    unchecked {
+                        bonusMint += mapStakeMint;
+                    }
+                }
+            }
+        }
 
         uint256 streakBonus;
         if (useClaimable) {
