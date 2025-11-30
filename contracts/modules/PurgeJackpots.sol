@@ -254,6 +254,15 @@ contract PurgeJackpots is IPurgeJackpots {
         return _runDecimatorJackpot(poolWei, cap, lvl, rngWord);
     }
 
+    function runDecimatorHundredJackpot(
+        uint256 poolWei,
+        uint32 cap,
+        uint24 lvl,
+        uint256 rngWord
+    ) external override onlyGame returns (bool finished, uint256 trophyPoolDelta, uint256 returnAmountWei) {
+        (finished, , , trophyPoolDelta, returnAmountWei) = _runDecimatorJackpot(poolWei, cap, lvl, rngWord);
+    }
+
     function _runBafJackpot(
         uint256 poolWei,
         uint32 /*cap*/,

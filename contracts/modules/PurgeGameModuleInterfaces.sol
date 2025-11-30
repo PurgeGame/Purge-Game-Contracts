@@ -22,7 +22,6 @@ interface IPurgeCoinModule {
 
     function rewardTopFlipBonus(uint48 day, uint256 amount) external;
 
-    function resetCoinflipLeaderboard(uint48 day) external;
 
     function burnie(uint256 amount, address stethToken) external payable;
 

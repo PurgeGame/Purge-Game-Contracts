@@ -30,7 +30,6 @@ interface IPurgeCoin {
 
     function rewardTopFlipBonus(uint48 day, uint256 amount) external;
 
-    function resetCoinflipLeaderboard(uint48 day) external;
 
     function coinflipTop(uint24 level) external view returns (address player, uint96 score);
 

@@ -7,6 +7,7 @@ import {IPurgeGameTrophies} from "./PurgeGameTrophies.sol";
 import {IPurgeCoinModule, IPurgeGameTrophiesModule} from "./modules/PurgeGameModuleInterfaces.sol";
 import {IPurgeCoin} from "./interfaces/IPurgeCoin.sol";
 import {IPurgeRendererLike} from "./interfaces/IPurgeRendererLike.sol";
+import {IPurgeJackpots} from "./interfaces/IPurgeJackpots.sol";
 import {IPurgeGameEndgameModule, IPurgeGameJackpotModule} from "./interfaces/IPurgeGameModules.sol";
 import {PurgeGameExternalOp} from "./interfaces/IPurgeGameExternal.sol";
 import {PurgeGameStorage} from "./storage/PurgeGameStorage.sol";
@@ -528,10 +529,6 @@ contract PurgeGame is PurgeGameStorage {
 
                     uint32 mintedCount = _purchaseTargetCountFromRaw(purchaseCountRaw);
                     nft.finalizePurchasePhase(mintedCount, rngWordCurrent);
-                    if ((rngWordCurrent & 1) == 1) {
-                        coinContract.rewardTopFlipBonus(day, priceCoin);
-                    }
-                    coinContract.resetCoinflipLeaderboard(day);
                     _maybeResolveBonds();
                     traitRebuildCursor = 0;
                     airdropMultiplier = 1;
@@ -1106,17 +1103,39 @@ contract PurgeGame is PurgeGameStorage {
     // --- Shared jackpot helpers ----------------------------------------------------------------------
 
     function _runDecimatorHundredJackpot(uint24 lvl, uint32 cap, uint256 rngWord) internal returns (bool finished) {
-        (bool ok, bytes memory data) = jackpotModule.delegatecall(
-            abi.encodeWithSelector(
-                IPurgeGameJackpotModule.runDecimatorHundredJackpot.selector,
-                lvl,
-                cap,
-                rngWord,
-                IPurgeCoinModule(address(coin))
-            )
+        if (!decimatorHundredReady) {
+            uint256 basePool = rewardPool;
+            uint256 decPool = (basePool * 40) / 100;
+            uint256 bafPool = (basePool * 10) / 100;
+            decimatorHundredPool = decPool;
+            bafHundredPool = bafPool;
+            rewardPool -= decPool;
+            decimatorHundredReady = true;
+        }
+
+        uint256 pool = decimatorHundredPool;
+
+        address jackpots = coin.jackpots();
+        (bool done, uint256 trophyPoolDelta, uint256 returnWei) = IPurgeJackpots(jackpots).runDecimatorHundredJackpot(
+            pool,
+            cap,
+            lvl,
+            rngWord
         );
-        if (!ok) revert E();
-        return abi.decode(data, (bool));
+
+        if (trophyPoolDelta != 0) {
+            trophyPool += trophyPoolDelta;
+        }
+
+        if (done) {
+            if (returnWei != 0) {
+                rewardPool += returnWei;
+            }
+            decimatorHundredPool = 0;
+            decimatorHundredReady = false;
+        }
+
+        return done;
     }
 
     // --- Map jackpot payout (end of purchase phase) -------------------------------------------------

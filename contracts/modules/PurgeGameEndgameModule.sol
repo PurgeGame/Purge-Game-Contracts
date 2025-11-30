@@ -277,6 +277,7 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         } else {
             revert E();
         }
+
         for (uint256 i; i < winnersArr.length; ) {
             _addClaimableEth(winnersArr[i], amountsArr[i]);
             unchecked {
@@ -288,7 +289,7 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
             trophyPool += trophyPoolDelta;
         }
 
-        if (consumeCarry && poolWei != 0) {
+        if (consumeCarry) {
             rewardPool -= (poolWei - returnWei);
         }
     }

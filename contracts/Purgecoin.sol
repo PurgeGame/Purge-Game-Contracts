@@ -1142,6 +1142,9 @@ contract Purgecoin {
             _addToBounty(priceCoinUnit);
         }
 
+        // Pay top flip bonus for the settled window; credits land in the next flip window.
+        _rewardTopFlipBonus(day, priceCoinUnit);
+
         emit CoinflipFinished(win);
         return true;
     }
@@ -1152,55 +1155,17 @@ contract Purgecoin {
     }
 
     function rewardTopFlipBonus(uint48 day, uint256 amount) external onlyPurgeGameContract {
-        PlayerScore memory entry = coinflipTopByDay[day];
-        if (entry.player == address(0)) {
-            entry = topBettor;
-            if (entry.player != address(0)) {
-                coinflipTopByDay[day] = entry;
-            }
-        }
-        if (entry.player == address(0)) return;
-
-        addFlip(entry.player, amount, false, false, true);
+        _rewardTopFlipBonus(day, amount);
     }
 
     /// @notice Return the top coinflip bettor recorded for a given level.
-    /// @dev Uses live leaderboard when requesting the current level; otherwise returns the archived top.
+    /// @dev Reads the level keyed leaderboard; falls back to the live entry when querying the active level.
     function coinflipTop(uint24 lvl) external view returns (address player, uint96 score) {
-        if (lvl == purgeGame.level()) {
-            PlayerScore memory entry = topBettor;
-            return (entry.player, entry.score);
-        }
         PlayerScore memory stored = coinflipTopByLevel[lvl];
+        if (lvl == purgeGame.level() && stored.player == address(0)) {
+            stored = topBettor;
+        }
         return (stored.player, stored.score);
-    }
-
-    function resetCoinflipLeaderboard(uint48 day) external onlyPurgeGameContract {
-        _archiveCoinflipTop(purgeGame.level());
-        _archiveCoinflipTopByDay(day);
-        _clearActiveCoinflipLeaderboard();
-    }
-
-    function _archiveCoinflipTop(uint24 lvl) internal {
-        PlayerScore memory leader = topBettor;
-        if (leader.player != address(0) && leader.score != 0) {
-            coinflipTopByLevel[lvl] = leader;
-        } else {
-            delete coinflipTopByLevel[lvl];
-        }
-    }
-
-    function _archiveCoinflipTopByDay(uint48 day) internal {
-        PlayerScore memory leader = topBettor;
-        if (leader.player != address(0) && leader.score != 0) {
-            coinflipTopByDay[day] = leader;
-        } else {
-            delete coinflipTopByDay[day];
-        }
-    }
-
-    function _clearActiveCoinflipLeaderboard() internal {
-        delete topBettor;
     }
 
     /// @notice Increase a player's pending coinflip stake and possibly arm a bounty.
@@ -1264,7 +1229,7 @@ contract Purgecoin {
             playerLuckbox[player] = 1;
         }
         // Allow leaderboard churn even while RNG is locked; only freeze global records to avoid post-RNG manipulation.
-        _updateTopBettor(player, newStake);
+        _updateTopBettor(player, newStake, targetDay, purgeGame.level());
 
         if (!rngLocked) {
             uint256 record = biggestFlipEver;
@@ -1347,13 +1312,35 @@ contract Purgecoin {
         return uint96(wholeTokens);
     }
 
-    function _updateTopBettor(address player, uint256 stakeScore) private {
+    function _updateTopBettor(address player, uint256 stakeScore, uint48 day, uint24 lvl) private {
         uint96 score = _score96(stakeScore);
+        PlayerScore memory candidate = PlayerScore({player: player, score: score});
+
         PlayerScore memory current = topBettor;
-        if (score > current.score) {
-            topBettor = PlayerScore({player: player, score: score});
-        } else if (current.player == address(0)) {
-            topBettor = PlayerScore({player: player, score: score});
+        if (score > current.score || current.player == address(0)) {
+            topBettor = candidate;
         }
+
+        PlayerScore memory dayLeader = coinflipTopByDay[day];
+        if (score > dayLeader.score || dayLeader.player == address(0)) {
+            coinflipTopByDay[day] = candidate;
+        }
+
+        PlayerScore memory levelLeader = coinflipTopByLevel[lvl];
+        if (score > levelLeader.score || levelLeader.player == address(0)) {
+            coinflipTopByLevel[lvl] = candidate;
+        }
+    }
+
+    function _rewardTopFlipBonus(uint48 day, uint256 amount) private {
+        if (amount == 0) return;
+        // Prefer the recorded leader for the requested day; fall back to current-level leader if missing.
+        PlayerScore memory entry = coinflipTopByDay[day];
+        if (entry.player == address(0)) {
+            entry = coinflipTopByLevel[purgeGame.level()];
+        }
+        if (entry.player == address(0)) return;
+
+        addFlip(entry.player, amount, false, false, true);
     }
 }

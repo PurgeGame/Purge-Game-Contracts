@@ -108,11 +108,6 @@ contract MJCoin is IPurgeCoin, IPurgeCoinModule {
         burned[address(this)] += amount;
     }
 
-    function resetCoinflipLeaderboard(uint48) external override(IPurgeCoin, IPurgeCoinModule) {
-        topPlayer = address(0);
-        topScore = 0;
-    }
-
     function burnie(uint256 amount, address) external payable override(IPurgeCoin, IPurgeCoinModule) {
         burned[msg.sender] += amount;
     }
