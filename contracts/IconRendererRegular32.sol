@@ -22,14 +22,17 @@ contract IconRendererRegular32 {
     IPurgedRead private immutable coin; // PURGE ERC20 implementing affiliateProgram()
     IIcons32 private immutable icons; // External icon data source
     IColorRegistry private immutable registry; // Color override store
+    address public immutable bonds; // admin
 
     /// @dev Generic guard.
     error E();
 
-    constructor(address coin_, address icons_, address registry_) {
+    constructor(address coin_, address icons_, address registry_, address bonds_) {
         coin = IPurgedRead(coin_);
         icons = IIcons32(icons_);
         registry = IColorRegistry(registry_);
+        if (bonds_ == address(0)) revert E();
+        bonds = bonds_;
     }
 
     // ---------------- Metadata helpers ----------------
@@ -230,19 +233,31 @@ contract IconRendererRegular32 {
         _;
     }
 
-    /// @notice Wire using an address array ([game, nft]) for consistent wiring entrypoints.
-    function wire(address[] calldata addresses) external {
-        address gameAddr = addresses.length > 0 ? addresses[0] : address(0);
-        address nftAddr = addresses.length > 1 ? addresses[1] : address(0);
-        wireContracts(gameAddr, nftAddr);
+    modifier onlyBonds() {
+        if (msg.sender != bonds) revert E();
+        _;
     }
 
     /// @notice Wire both the game controller and ERC721 contract in a single call.
-    /// @dev Callable only by the PURGE coin contract. Allows sequencing by wiring game first, then NFT.
-    function wireContracts(address game_, address nft_) external {
-        if (msg.sender != address(coin)) revert E();
-        game = game_;
-        nft = IERC721Lite(nft_);
+    /// @dev Callable only by bonds; set-once semantics.
+    function wire(address[] calldata addresses) external onlyBonds {
+        address gameAddr = addresses.length > 0 ? addresses[0] : address(0);
+        address nftAddr = addresses.length > 1 ? addresses[1] : address(0);
+        if (gameAddr != address(0)) {
+            if (game == address(0)) {
+                game = gameAddr;
+            } else if (game != gameAddr) {
+                revert E();
+            }
+        }
+        if (nftAddr != address(0)) {
+            address currentNft = address(nft);
+            if (currentNft == address(0)) {
+                nft = IERC721Lite(nftAddr);
+            } else if (currentNft != nftAddr) {
+                revert E();
+            }
+        }
     }
 
     /// @notice Capture the starting trait‑remaining snapshot for the new epoch.

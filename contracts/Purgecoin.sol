@@ -42,6 +42,7 @@ contract Purgecoin {
     error ZeroAddress();
     error NotDecimatorWindow();
     error OnlyBonds();
+    error OnlyAffiliate();
     error AlreadyWired();
 
     // ---------------------------------------------------------------------
@@ -95,7 +96,7 @@ contract Purgecoin {
     PurgeGameNFT internal purgeGameNFT;
     IPurgeGameTrophies internal purgeGameTrophies;
     IPurgeQuestModule internal questModule;
-    PurgeAffiliate public affiliateProgram;
+    PurgeAffiliate public immutable affiliateProgram;
     address public jackpots;
 
     uint24 internal stakeLevelComplete;
@@ -130,7 +131,7 @@ contract Purgecoin {
     uint128 public biggestFlipEver = 1_000_000_000;
     address internal bountyOwedTo;
     mapping(uint24 => uint48) internal stakeResolutionDay;
-    mapping<uint24 => bool) internal stakeTrophyAwarded;
+    mapping(uint24 => bool) internal stakeTrophyAwarded;
     address public immutable bonds;
     address public immutable regularRenderer;
     address public immutable trophyRenderer;
@@ -220,18 +221,11 @@ contract Purgecoin {
     // Constructor
     // ---------------------------------------------------------------------
     constructor(address bonds_, address affiliate_, address regularRenderer_, address trophyRenderer_) {
-        if (bonds_ == address(0)) revert ZeroAddress();
+        if (bonds_ == address(0) || affiliate_ == address(0)) revert ZeroAddress();
         bonds = bonds_;
+        affiliateProgram = PurgeAffiliate(affiliate_);
         regularRenderer = regularRenderer_;
         trophyRenderer = trophyRenderer_;
-        if (affiliate_ != address(0)) {
-            affiliateProgram = PurgeAffiliate(affiliate_);
-            uint256 presaleTotal = affiliateProgram.presaleClaimableTotal();
-            if (presaleTotal != 0) {
-                presaleClaimableRemaining = presaleTotal;
-                _mint(address(this), presaleTotal);
-            }
-        }
         currentFlipDay = _currentDay();
         uint256 bondSeed = 2_000_000 * MILLION;
         _mint(bonds_, bondSeed);
@@ -274,7 +268,6 @@ contract Purgecoin {
 
     /// @notice Claim presale/early affiliate bonuses that were deferred to the affiliate contract.
     function claimPresaleAffiliateBonus() external {
-        if (address(affiliateProgram) == address(0)) revert ZeroAddress();
         uint256 amount = affiliateProgram.consumePresaleCoin(msg.sender);
         if (amount == 0) return;
         if (amount > presaleClaimableRemaining) revert Insufficient();
@@ -759,13 +752,16 @@ contract Purgecoin {
             }
         }
 
-        if (address(affiliateProgram) != address(0) && presaleClaimableRemaining == 0) {
-            uint256 presaleTotal = affiliateProgram.presaleClaimableTotal();
-            if (presaleTotal != 0) {
-                presaleClaimableRemaining = presaleTotal;
-                _mint(address(this), presaleTotal);
-            }
-        }
+    }
+
+    /// @notice One-time presale mint from the affiliate contract; callable only by affiliate.
+    function affiliatePrimePresale() external {
+        if (msg.sender != address(affiliateProgram)) revert OnlyAffiliate();
+        if (presaleClaimableRemaining != 0) revert AlreadyWired();
+        uint256 presaleTotal = affiliateProgram.presaleClaimableTotal();
+        if (presaleTotal == 0) return;
+        presaleClaimableRemaining = presaleTotal;
+        _mint(address(this), presaleTotal);
     }
 
     /// @notice Mint PURGE to the bonds contract for bond payouts (game only).

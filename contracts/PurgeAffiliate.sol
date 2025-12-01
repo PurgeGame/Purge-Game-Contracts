@@ -10,6 +10,7 @@ interface IPurgeCoinAffiliate {
     function affiliateAddFlip(address player, uint256 amount) external;
     function affiliateAddFlipBatch(address[3] calldata players, uint256[3] calldata amounts) external;
     function affiliateQuestReward(address player, uint256 amount) external returns (uint256);
+    function affiliatePrimePresale() external;
 }
 
 contract PurgeAffiliate {
@@ -156,6 +157,7 @@ contract PurgeAffiliate {
             coin = IPurgeCoinAffiliate(coinAddr);
             presaleShutdown = true; // stop presale once coin is wired
             preCoinActive = false;
+            coin.affiliatePrimePresale();
         } else if (coinAddr != address(0) && coinAddr != currentCoin) {
             revert AlreadyConfigured();
         }
