@@ -449,35 +449,13 @@ contract PurgeBonds {
         fundRecipient = newRecipient;
     }
 
-    function setAffiliateProgram(address affiliate_) external onlyOwner {
-        if (affiliate_ == address(0)) revert ZeroAddress();
-        affiliateProgram = affiliate_;
-    }
-
-    function setStEthToken(address token) external onlyOwner {
-        if (token == address(0)) revert ZeroAddress();
-        stEthToken = token;
-    }
-
-    function setCoinToken(address token) external onlyOwner {
-        _setCoinToken(token);
-    }
-
-    function setGame(address game_) external onlyOwner {
-        _setGame(game_);
-    }
-
-    /// @notice Wire the coin and game contracts using a generic address array.
-    /// @dev Order: [coin token, game]. Same access control as `wireContracts`.
+    /// @notice Wire coin/game/affiliate using a single entrypoint.
+    /// @dev Order: [coin token, game, affiliate]; each slot may be set once (subsequent different values revert).
     function wire(address[] calldata addresses) external onlyOwner {
         address coinAddr = addresses.length > 0 ? addresses[0] : address(0);
         address gameAddr = addresses.length > 1 ? addresses[1] : address(0);
-        _wire(coinAddr, gameAddr);
-    }
-
-    /// @notice Wire the coin and game contracts once post-deploy.
-    function wireContracts(address coinToken_, address game_) external onlyOwner {
-        _wire(coinToken_, game_);
+        address affiliateAddr = addresses.length > 2 ? addresses[2] : address(0);
+        _wire(coinAddr, gameAddr, affiliateAddr);
     }
 
     /// @notice Permanently enter shutdown mode after the game triggers its liveness drain.
@@ -1206,7 +1184,7 @@ contract PurgeBonds {
     }
 
     function _setCoinToken(address token) private {
-        if (token == address(0)) revert ZeroAddress();
+        if (token == address(0)) return;
         address current = coinToken;
         if (current != address(0)) {
             if (current != token) revert AlreadyConfigured();
@@ -1215,13 +1193,14 @@ contract PurgeBonds {
         coinToken = token;
     }
 
-    function _wire(address coinAddr, address gameAddr) private {
+    function _wire(address coinAddr, address gameAddr, address affiliateAddr) private {
         _setCoinToken(coinAddr);
         _setGame(gameAddr);
+        _setAffiliate(affiliateAddr);
     }
 
     function _setGame(address game_) private {
-        if (game_ == address(0)) revert ZeroAddress();
+        if (game_ == address(0)) return;
         address current = game;
         if (current != address(0)) {
             if (current != game_) revert AlreadyConfigured();
@@ -1234,6 +1213,16 @@ contract PurgeBonds {
             (bool ok, ) = payable(game_).call{value: seed}("");
             if (!ok) revert CallFailed();
         }
+    }
+
+    function _setAffiliate(address affiliate_) private {
+        if (affiliate_ == address(0)) return;
+        address current = affiliateProgram;
+        if (current != address(0)) {
+            if (current != affiliate_) revert AlreadyConfigured();
+            return;
+        }
+        affiliateProgram = affiliate_;
     }
 
     function _riskForBase(uint256 baseWei) private pure returns (uint8 risk) {

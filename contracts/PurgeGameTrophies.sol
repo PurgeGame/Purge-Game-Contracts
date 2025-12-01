@@ -37,8 +37,8 @@ interface IPurgeGameTrophies {
         bool invertTrophy;
     }
 
-    function wire(address game_, address coin_) external;
-    function wireAndPrime(address game_, address coin_, uint24 firstLevel) external;
+    function wire(address[] calldata addresses) external;
+    function wireAndPrime(address[] calldata addresses, uint24 firstLevel) external;
 
     function clearStakePreview(uint24 level) external;
 
@@ -260,19 +260,17 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     // ---------------------------------------------------------------------
     // Wiring
     // ---------------------------------------------------------------------
-    /// @notice Wire game and coin contracts using an address array ([game, coin]).
-    function wire(address[] calldata addresses) external {
+    /// @notice Wire game and coin contracts using an address array ([game, coin]); set-once per slot.
+    function wire(address[] calldata addresses) external override {
         address gameAddr = addresses.length > 0 ? addresses[0] : address(0);
         address coinAddr = addresses.length > 1 ? addresses[1] : address(0);
-        wire(gameAddr, coinAddr);
+        _wire(gameAddr, coinAddr);
     }
 
-    function wire(address game_, address coin_) external override {
-        _wire(game_, coin_);
-    }
-
-    function wireAndPrime(address game_, address coin_, uint24 firstLevel) external override {
-        _wire(game_, coin_);
+    function wireAndPrime(address[] calldata addresses, uint24 firstLevel) external override {
+        address gameAddr = addresses.length > 0 ? addresses[0] : address(0);
+        address coinAddr = addresses.length > 1 ? addresses[1] : address(0);
+        _wire(gameAddr, coinAddr);
         prepareNextLevel(firstLevel);
     }
 

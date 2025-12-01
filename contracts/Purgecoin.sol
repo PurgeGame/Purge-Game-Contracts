@@ -43,6 +43,7 @@ contract Purgecoin {
     error ZeroAddress();
     error NotDecimatorWindow();
     error OnlyBonds();
+    error AlreadyWired();
 
     // ---------------------------------------------------------------------
     // ERC20 state
@@ -693,8 +694,10 @@ contract Purgecoin {
     }
 
     /// @notice Wire the game, NFT, renderers, and supporting modules using an address array.
-    /// @dev Order: [game, nft, trophies, regular renderer, trophy renderer, quest module, jackpots].
+    /// @dev Order: [game, nft, trophies, regular renderer, trophy renderer, quest module, jackpots]; set-once per slot.
     function wire(address[] calldata addresses) external {
+        if (msg.sender != bonds) revert OnlyBonds();
+
         address game_ = addresses.length > 0 ? addresses[0] : address(0);
         address nft_ = addresses.length > 1 ? addresses[1] : address(0);
         address trophies_ = addresses.length > 2 ? addresses[2] : address(0);
@@ -702,11 +705,93 @@ contract Purgecoin {
         address trophyRenderer_ = addresses.length > 4 ? addresses[4] : address(0);
         address questModule_ = addresses.length > 5 ? addresses[5] : address(0);
         address jackpots_ = addresses.length > 6 ? addresses[6] : address(0);
-        wire(game_, nft_, trophies_, regularRenderer_, trophyRenderer_, questModule_, jackpots_);
+
+        if (game_ != address(0)) {
+            address currentGame = address(purgeGame);
+            if (currentGame == address(0)) {
+                purgeGame = IPurgeGame(game_);
+            } else if (game_ != currentGame) {
+                revert AlreadyWired();
+            }
+        }
+
+        if (nft_ != address(0)) {
+            address currentNft = address(purgeGameNFT);
+            if (currentNft == address(0)) {
+                purgeGameNFT = PurgeGameNFT(nft_);
+            } else if (nft_ != currentNft) {
+                revert AlreadyWired();
+            }
+        }
+
+        if (trophies_ != address(0)) {
+            address currentTrophies = address(purgeGameTrophies);
+            if (currentTrophies == address(0)) {
+                purgeGameTrophies = IPurgeGameTrophies(trophies_);
+            } else if (trophies_ != currentTrophies) {
+                revert AlreadyWired();
+            }
+        }
+
+        if (questModule_ != address(0)) {
+            address currentQuest = address(questModule);
+            if (currentQuest == address(0)) {
+                questModule = IPurgeQuestModule(questModule_);
+            } else if (questModule_ != currentQuest) {
+                revert AlreadyWired();
+            }
+        }
+
+        if (jackpots_ != address(0)) {
+            address currentJackpots = jackpots;
+            if (currentJackpots == address(0)) {
+                jackpots = jackpots_;
+            } else if (jackpots_ != currentJackpots) {
+                revert AlreadyWired();
+            }
+        }
+
+        if (regularRenderer_ != address(0)) {
+            IPurgeRenderer(regularRenderer_).wireContracts(address(purgeGame), address(purgeGameNFT));
+        }
+        if (trophyRenderer_ != address(0)) {
+            IPurgeRenderer(trophyRenderer_).wireContracts(address(purgeGame), address(purgeGameNFT));
+        }
+        if (address(purgeGameNFT) != address(0) && address(purgeGameTrophies) != address(0)) {
+            address[] memory nftWire = new address[](2);
+            nftWire[0] = address(purgeGame);
+            nftWire[1] = address(purgeGameTrophies);
+            purgeGameNFT.wire(nftWire);
+
+            address[] memory trophyWire = new address[](2);
+            trophyWire[0] = address(purgeGame);
+            trophyWire[1] = address(this);
+            purgeGameTrophies.wireAndPrime(trophyWire, 1);
+        }
+        if (address(questModule) != address(0) && address(purgeGame) != address(0)) {
+            questModule.wireGame(address(purgeGame));
+        }
+        if (address(jackpots) != address(0)) {
+            address[] memory jackpotWire = new address[](3);
+            jackpotWire[0] = address(this);
+            jackpotWire[1] = address(purgeGame);
+            jackpotWire[2] = address(purgeGameTrophies);
+            IPurgeJackpots(jackpots).wire(jackpotWire);
+        }
+        _wireAffiliate(address(purgeGame), address(purgeGameTrophies));
+
+        if (address(affiliateProgram) != address(0) && presaleClaimableRemaining == 0) {
+            uint256 presaleTotal = affiliateProgram.presaleClaimableTotal();
+            if (presaleTotal != 0) {
+                presaleClaimableRemaining = presaleTotal;
+                _mint(address(this), presaleTotal);
+            }
+        }
     }
 
     /// @notice Wire the game, NFT, renderers, and supporting modules required by Purgecoin.
     /// @dev Creator only; callable once.
+    /// @notice Deprecated overload kept for compatibility; forwards to array-based wiring.
     function wire(
         address game_,
         address nft_,
@@ -716,27 +801,15 @@ contract Purgecoin {
         address questModule_,
         address jackpots_
     ) external {
-        if (msg.sender != bonds || jackpots != address(0)) revert OnlyBonds();
-
-        purgeGame = IPurgeGame(game_);
-        purgeGameNFT = PurgeGameNFT(nft_);
-        purgeGameTrophies = IPurgeGameTrophies(trophies_);
-        questModule = IPurgeQuestModule(questModule_);
-        questModule.wireGame(game_);
-        jackpots = jackpots_;
-        IPurgeJackpots(jackpots_).wire(address(this), game_, trophies_);
-        IPurgeRenderer(regularRenderer_).wireContracts(game_, nft_);
-        IPurgeRenderer(trophyRenderer_).wireContracts(game_, nft_);
-        purgeGameNFT.wireAll(game_, trophies_);
-        purgeGameTrophies.wireAndPrime(game_, address(this), 1);
-        _wireAffiliate(game_, trophies_);
-
-        // Initialize presale claimable supply from the affiliate program (if any) and reserve it on this contract.
-        uint256 presaleTotal = affiliateProgram.presaleClaimableTotal();
-        if (presaleTotal != 0) {
-            presaleClaimableRemaining = presaleTotal;
-            _mint(address(this), presaleTotal);
-        }
+        address[] memory arr = new address[](7);
+        arr[0] = game_;
+        arr[1] = nft_;
+        arr[2] = trophies_;
+        arr[3] = regularRenderer_;
+        arr[4] = trophyRenderer_;
+        arr[5] = questModule_;
+        arr[6] = jackpots_;
+        wire(arr);
     }
 
     function wireAffiliate(address affiliate_) external {

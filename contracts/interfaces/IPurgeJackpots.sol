@@ -22,5 +22,5 @@ interface IPurgeJackpots {
     function recordBafFlip(address player, uint24 lvl, uint256 amount) external;
     function recordDecBurn(address player, uint24 lvl, uint8 bucket, uint256 amount) external returns (uint8 bucketUsed);
 
-    function wire(address coin_, address purgeGame_, address trophies_) external;
+    function wire(address[] calldata addresses) external;
 }

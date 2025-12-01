@@ -957,26 +957,28 @@ contract PurgeGameNFT {
         _;
     }
 
-    /// @notice Wire game and trophy module using an address array ([game, trophies]).
+    /// @notice Wire game and trophy module using an address array ([game, trophies]); set-once per slot.
     function wire(address[] calldata addresses) external onlyCoinContract {
         address gameAddr = addresses.length > 0 ? addresses[0] : address(0);
         address trophiesAddr = addresses.length > 1 ? addresses[1] : address(0);
-        wireAll(gameAddr, trophiesAddr);
-    }
 
-    function wireAll(address game_, address trophies_) external onlyCoinContract {
-        _wireGame(game_);
-        _wireTrophies(trophies_);
-    }
+        if (gameAddr != address(0)) {
+            address currentGame = address(game);
+            if (currentGame == address(0)) {
+                game = IPurgeGame(gameAddr);
+            } else if (gameAddr != currentGame) {
+                revert E();
+            }
+        }
 
-    function _wireGame(address game_) private {
-        game = IPurgeGame(game_);
-    }
-
-    function _wireTrophies(address trophies_) private {
-        if (trophies_ == address(0)) revert E();
-        if (address(trophyModule) != address(0)) revert E();
-        trophyModule = IPurgeGameTrophies(trophies_);
+        if (trophiesAddr != address(0)) {
+            address currentTrophies = address(trophyModule);
+            if (currentTrophies == address(0)) {
+                trophyModule = IPurgeGameTrophies(trophiesAddr);
+            } else if (trophiesAddr != currentTrophies) {
+                revert E();
+            }
+        }
     }
 
     // ---------------------------------------------------------------------

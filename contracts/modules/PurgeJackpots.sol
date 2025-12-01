@@ -29,6 +29,7 @@ contract PurgeJackpots is IPurgeJackpots {
     error DecAlreadyClaimed();
     error DecNotWinner();
     error AlreadyWired();
+    error OnlyBonds();
     error OnlyCoin();
     error OnlyGame();
 
@@ -132,21 +133,48 @@ contract PurgeJackpots is IPurgeJackpots {
         _;
     }
 
-    /// @notice Wire using address array ([coin, game, trophies]) for uniform wiring calls.
-    function wire(address[] calldata addresses) external {
+    address public immutable bonds;
+
+    constructor(address bonds_) {
+        if (bonds_ == address(0)) revert OnlyBonds();
+        bonds = bonds_;
+    }
+
+    /// @notice One-time wiring using address array ([coin, game, trophies]); callable only by bonds.
+    function wire(address[] calldata addresses) external override {
+        if (msg.sender != bonds) revert OnlyBonds();
+
         address coinAddr = addresses.length > 0 ? addresses[0] : address(0);
         address gameAddr = addresses.length > 1 ? addresses[1] : address(0);
         address trophiesAddr = addresses.length > 2 ? addresses[2] : address(0);
-        wire(coinAddr, gameAddr, trophiesAddr);
-    }
 
-    /// @dev One-time wiring called by Purgecoin to connect the game, coin, and trophies contracts.
-    function wire(address coin_, address purgeGame_, address trophies_) external override {
-        if (address(coin) != address(0)) revert AlreadyWired();
-        if (msg.sender != coin_) revert OnlyCoin();
-        coin = IPurgeCoinJackpotView(coin_);
-        purgeGame = IPurgeGame(purgeGame_);
-        purgeGameTrophies = IPurgeGameTrophies(trophies_);
+        address currentCoin = address(coin);
+        if (coinAddr != address(0)) {
+            if (currentCoin == address(0)) {
+                coin = IPurgeCoinJackpotView(coinAddr);
+                currentCoin = coinAddr;
+            } else if (coinAddr != currentCoin) {
+                revert AlreadyWired();
+            }
+        }
+
+        address currentGame = address(purgeGame);
+        if (gameAddr != address(0)) {
+            if (currentGame == address(0)) {
+                purgeGame = IPurgeGame(gameAddr);
+            } else if (gameAddr != currentGame) {
+                revert AlreadyWired();
+            }
+        }
+
+        address currentTrophies = address(purgeGameTrophies);
+        if (trophiesAddr != address(0)) {
+            if (currentTrophies == address(0)) {
+                purgeGameTrophies = IPurgeGameTrophies(trophiesAddr);
+            } else if (trophiesAddr != currentTrophies) {
+                revert AlreadyWired();
+            }
+        }
     }
 
     // ---------------------------------------------------------------------
