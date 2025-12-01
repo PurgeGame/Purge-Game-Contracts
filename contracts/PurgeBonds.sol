@@ -32,6 +32,7 @@ interface IPurgeBondRenderer {
 
 interface IPurgeGameLike {
     function rngWordForDay(uint48 day) external view returns (uint256);
+    function emergencyUpdateVrfCoordinator(address newCoordinator) external;
 }
 
 interface IPurgeCoinBondMinter {
@@ -639,6 +640,16 @@ contract PurgeBonds {
     function setStakeRateBps(uint16 rateBps) external onlyOwner {
         if (rateBps < 2500 || rateBps > 15_000) revert InvalidRate(); 
         stakeRateBps = rateBps;
+    }
+
+    /**
+     * @notice Triggers a VRF coordinator swap on the game if RNG has been stuck for >3 days.
+     */
+    function updateGameVrfCoordinator(address newCoordinator) external onlyOwner {
+        if (newCoordinator == address(0)) revert ZeroAddress();
+        address game_ = game;
+        if (game_ == address(0)) revert ZeroAddress();
+        IPurgeGameLike(game_).emergencyUpdateVrfCoordinator(newCoordinator);
     }
 
     /**

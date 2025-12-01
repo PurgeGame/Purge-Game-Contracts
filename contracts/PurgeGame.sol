@@ -82,6 +82,7 @@ contract PurgeGame is PurgeGameStorage {
     error RngLocked(); // RNG is already locked; nudge not allowed
     error InvalidQuantity(); // Invalid quantity or token count for the action
     error CoinPaused(); // LINK top-ups unavailable while RNG is locked
+    error VrfUpdateNotReady(); // VRF swap not allowed yet (not stuck long enough or randomness already received)
 
     // -----------------------
     // Events
@@ -91,6 +92,7 @@ contract PurgeGame is PurgeGameStorage {
     event Purge(address indexed player, uint256[] tokenIds);
     event Advance(uint8 gameState, uint8 phase);
     event ReverseFlip(address indexed caller, uint256 totalQueued, uint256 cost);
+    event VrfCoordinatorUpdated(address indexed previous, address indexed current);
 
     // -----------------------
     // Immutable Addresses
@@ -104,7 +106,7 @@ contract PurgeGame is PurgeGameStorage {
     address private immutable jackpots; // PurgeJackpots contract
     address private immutable endgameModule; // Delegate module for endgame settlement
     address private immutable jackpotModule; // Delegate module for jackpot routines
-    IVRFCoordinator private immutable vrfCoordinator; // Chainlink VRF coordinator
+    IVRFCoordinator private vrfCoordinator; // Chainlink VRF coordinator (mutable for emergencies)
     bytes32 private immutable vrfKeyHash; // VRF key hash
     uint256 private immutable vrfSubscriptionId; // VRF subscription identifier
     address private immutable linkToken; // LINK token contract for top-ups
@@ -116,7 +118,7 @@ contract PurgeGame is PurgeGameStorage {
     // -----------------------
     // Game Constants
     // -----------------------
-    uint48 private constant JACKPOT_RESET_TIME = 82620; // Offset anchor for "daily" windows
+    uint48 private constant JACKPOT_RESET_TIME = 82620; // "Day" windows are offset from unix midnight by this anchor
     uint32 private constant TRAIT_REBUILD_TOKENS_PER_TX = 2500; // Max tokens processed per trait rebuild slice (post-level-1)
     uint32 private constant TRAIT_REBUILD_TOKENS_LEVEL1 = 1800; // Level 1 first-slice cap
     uint8 private constant JACKPOT_LEVEL_CAP = 10;
@@ -128,6 +130,11 @@ contract PurgeGame is PurgeGameStorage {
     uint256 private constant RNG_NUDGE_BASE_COST = 100 * 1e6; // PURGE has 6 decimals
     uint256 private constant REWARD_POOL_MIN_STAKE = 0.5 ether;
 
+    // mintPacked_ layout (LSB ->):
+    // [0-23]=last ETH level, [24-47]=total ETH level count, [48-71]=ETH level streak,
+    // [72-103]=last ETH day, [104-123]=ETH day streak, [124-155]=last COIN day,
+    // [156-175]=COIN day streak, [176-207]=aggregate last day, [208-227]=aggregate day streak,
+    // [228-243]=units minted at current level, [244]=level bonus paid flag.
     uint256 private constant MINT_MASK_24 = (uint256(1) << 24) - 1;
     uint256 private constant MINT_MASK_16 = (uint256(1) << 16) - 1;
     uint256 private constant MINT_MASK_20 = (uint256(1) << 20) - 1;
@@ -253,6 +260,17 @@ contract PurgeGame is PurgeGameStorage {
         return rngFulfilled;
     }
 
+    function _currentDayIndex() private view returns (uint48) {
+        return uint48((uint48(block.timestamp) - JACKPOT_RESET_TIME) / 1 days);
+    }
+
+    function _threeDayRngGap(uint48 day) private view returns (bool) {
+        if (rngWordByDay[day] != 0) return false;
+        if (day == 0 || rngWordByDay[day - 1] != 0) return false;
+        if (day < 2 || rngWordByDay[day - 2] != 0) return false;
+        return true;
+    }
+
     function decWindow() external view returns (bool on, uint24 lvl) {
         on = decWindowOpen;
         lvl = level;
@@ -369,7 +387,8 @@ contract PurgeGame is PurgeGameStorage {
     function advanceGame(uint32 cap) external {
         address caller = msg.sender;
         uint48 ts = uint48(block.timestamp);
-        uint48 day = uint48((ts - JACKPOT_RESET_TIME) / 1 days);
+        // Day index uses JACKPOT_RESET_TIME offset instead of unix midnight to align jackpots/quests.
+        uint48 day = _currentDayIndex();
         IPurgeCoin coinContract = coin;
         uint48 lst = levelStartTime;
         if (lst == LEVEL_START_SENTINEL) {
@@ -790,6 +809,7 @@ contract PurgeGame is PurgeGameStorage {
     /// @notice Delegatecall into the endgame module to resolve slow settlement paths.
     function _runEndgameModule(uint24 lvl, uint32 cap, uint256 rngWord) internal {
         if (jackpots == address(0)) revert E();
+        // Endgame settlement logic lives in PurgeGameEndgameModule (delegatecall keeps state on this contract).
         (bool ok, ) = endgameModule.delegatecall(
             abi.encodeWithSelector(
                 IPurgeGameEndgameModule.finalizeEndgame.selector,
@@ -1063,7 +1083,8 @@ contract PurgeGame is PurgeGameStorage {
     function _currentMintDay() private view returns (uint32) {
         uint48 day = dailyIdx;
         if (day == 0) {
-            day = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
+            // Matches the JACKPOT_RESET_TIME-offset day index used in advanceGame.
+            day = _currentDayIndex();
         }
         return uint32(day);
     }
@@ -1105,6 +1126,7 @@ contract PurgeGame is PurgeGameStorage {
     // --- Shared jackpot helpers ----------------------------------------------------------------------
 
     function _runDecimatorHundredJackpot(uint24 lvl, uint256 rngWord) internal returns (bool finished) {
+        // Decimator/BAF jackpots are promotional side-games; odds/payouts live in the jackpots module.
         if (!decimatorHundredReady) {
             uint256 basePool = rewardPool;
             uint256 decPool = (basePool * 40) / 100;
@@ -1392,6 +1414,24 @@ contract PurgeGame is PurgeGameStorage {
         bool decClose = (((lvl % 100 != 0 && (lvl % 100 != 99) && gameState_ == 1) ||
             (lvl % 100 == 0 && phase_ == 3)) && decWindowOpen);
         if (decClose) decWindowOpen = false;
+    }
+
+    /// @notice Emergency hook for the bonds contract to repoint VRF after prolonged downtime.
+    /// @dev Requires three consecutive day slots to have zeroed RNG entries.
+    function emergencyUpdateVrfCoordinator(address newCoordinator) external {
+        if (msg.sender != bonds) revert E();
+        address current = address(vrfCoordinator);
+        if (!_threeDayRngGap(_currentDayIndex())) revert VrfUpdateNotReady();
+
+        vrfCoordinator = IVRFCoordinator(newCoordinator);
+
+        rngLockedFlag = false;
+        rngFulfilled = true;
+        vrfRequestId = 0;
+        rngRequestTime = 0;
+        rngWordCurrent = 0;
+
+        emit VrfCoordinatorUpdated(current, newCoordinator);
     }
 
     function _unlockRng(uint48 day) private {

@@ -115,7 +115,7 @@ contract Purgecoin {
     // Highest level whose stakes have been marked as resolved by the game.
     uint24 internal stakeLevelComplete;
 
-    // Coinflip accounting keyed by day window.
+    // Coinflip accounting keyed by day window (auto daily flips; distinct from long-horizon stakes below).
     mapping(uint48 => mapping(address => uint256)) internal coinflipBalance;
     mapping(uint48 => CoinflipDayResult) internal coinflipDayResult;
     mapping(address => uint48) internal lastCoinflipClaim;
@@ -133,7 +133,7 @@ contract Purgecoin {
         return _viewClaimableCoin(player);
     }
 
-    // Player stakes keyed by player -> target level.
+    // Player stakes keyed by player -> target level (explicit "stake" != auto coinflip).
     mapping(address => mapping(uint24 => StakePosition[])) internal stakePositions;
     // Sum of modified stake amounts per level+risk (used to split free-money bonus).
     mapping(uint24 => mapping(uint8 => uint256)) internal stakeModifiedTotals;
@@ -290,7 +290,6 @@ contract Purgecoin {
     function claimPresaleAffiliateBonus() external {
         uint256 amount = affiliateProgram.consumePresaleCoin(msg.sender);
         if (amount == 0) return;
-        if (amount > presaleClaimableRemaining) revert Insufficient();
         // Pull from presale escrow minted to this contract.
         presaleClaimableRemaining -= amount;
         _transfer(address(this), msg.sender, amount);
@@ -359,7 +358,8 @@ contract Purgecoin {
     }
 
     function _stakeFreeMoneyView() private view returns (uint256) {
-        (, , , uint256 priceWei, , uint256 prizePoolTarget, , ,  /*earlyPurgePercent_*/) = purgeGame.gameInfo();
+        uint256 priceWei = purgeGame.mintPrice();
+        uint256 prizePoolTarget = purgeGame.prizePoolTargetView();
         uint256 priceCoinUnit = purgeGame.coinPriceUnit();
         if (priceWei == 0 || priceCoinUnit == 0) return 0;
         // "Free money" is 10% of the ETH prize pool converted into PURGE at the current unit price.
@@ -1182,12 +1182,7 @@ contract Purgecoin {
     /// @param coinflipDeposit      Amount to add to their current pending flip stake.
     /// @param canArmBounty         If true, a sufficiently large deposit may arm a bounty.
     /// @param bountyEligible       If true, this deposit can arm the bounty (entire amount is considered).
-    function addFlip(
-        address player,
-        uint256 coinflipDeposit,
-        bool canArmBounty,
-        bool bountyEligible
-    ) internal {
+    function addFlip(address player, uint256 coinflipDeposit, bool canArmBounty, bool bountyEligible) internal {
         // Auto-claim older flip/stake winnings (without mint) so deposits net against pending payouts.
         uint256 claimedFlips = _claimCoinflipsInternal(player, 30, false);
         uint48 currentDay = _currentDay();
