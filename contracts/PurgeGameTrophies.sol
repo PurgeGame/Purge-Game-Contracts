@@ -186,9 +186,28 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         uint256 pending;
     }
 
+    struct PlayerStakeCache {
+        uint256[] tokenIds;
+        uint24 earliest;
+    }
+
     // ---------------------------------------------------------------------
     // Trophy constants
     // ---------------------------------------------------------------------
+    // `trophyData_` packed layout (lsb → msb):
+    // [0..127]   accrued ETH/coin rewards
+    // [128..151] base level (24 bits, offset by 1 to keep 0 as sentinel)
+    // [152..167] trait id (0xFFFE = affiliate, 0xFFFF = placeholder sentinel)
+    // [168..191] last claim level (24 bits)
+    // [192..199] remaining vesting claims (8 bits)
+    // [200]      map flag
+    // [201]      affiliate flag
+    // [202]      stake flag
+    // [203]      BAF flag
+    // [204]      decimator flag (or special trait sentinel)
+    // [205..228] explicit stake level override (24 bits)
+    // [229]      invert trophy flag (trait-based)
+    // Remaining bits currently unused.
     uint32 private constant COIN_DRIP_STEPS = 10;
     uint256 private constant COIN_BASE_UNIT = 1_000_000;
     uint8 private constant BAF_LEVEL_REWARD_DIVISOR = 10; // priceCoin / 10
@@ -227,6 +246,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     address public gameAddress;
     address public immutable coinAddress;
 
+    // Staked list keeps 1-based indexes so zero is a clean sentinel for "not staked".
     uint256[] private stakedTrophyIds;
     mapping(uint256 => uint256) private stakedTrophyIndex; // 1-based index
     mapping(uint256 => uint256) private trophyData_;
@@ -238,6 +258,8 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     mapping(address => uint8) private stakeStakeBonusPct_;
     // Decimator stake bonus is computed on-demand; no cached mapping to avoid stale values.
     mapping(address => BafStakeInfo) private bafStakeInfo;
+    mapping(address => PlayerStakeCache) private exterminatorStakeCache;
+    mapping(address => PlayerStakeCache) private decStakeCache;
 
     // ---------------------------------------------------------------------
     // Constructor
@@ -299,6 +321,8 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         uint256 currentBase,
         uint24 currentLevel
     ) private pure returns (uint256) {
+        // Placeholders are minted in reverse order (dec -> baf -> stake -> affiliate -> map -> level)
+        // with separate base pointers for the active and prior level; return 0 if the placeholder is already gone.
         uint256 base;
         if (level == currentLevel) {
             base = currentBase;
@@ -351,7 +375,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     }
 
     function _ownerOf(uint256 tokenId) private view returns (address) {
-        return _ownerOf(tokenId);
+        return address(uint160(nft.packedOwnershipOf(tokenId)));
     }
 
     function _eraseTrophy(uint256 tokenId, uint8 kind, bool adjustSupply) private {
@@ -370,6 +394,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         uint256 data,
         uint256 deferredWei
     ) private returns (bool incrementSupply) {
+        // Replace owed/claim metadata but preserve other flags; initial deferredWei sets a 10-claim vest.
         uint256 prevData = trophyData_[tokenId];
         uint256 newData = (data & ~(TROPHY_OWED_MASK | TROPHY_LAST_CLAIM_MASK | TROPHY_CLAIMS_MASK)) |
             (deferredWei & TROPHY_OWED_MASK);
@@ -386,6 +411,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         uint256 info = trophyData_[tokenId];
         uint256 owed = (info & TROPHY_OWED_MASK) + amountWei;
         uint256 claims = (info >> TROPHY_CLAIMS_SHIFT) & 0xFF;
+        // Any new reward enforces at least a 3-claim schedule and bumps an existing one by 1 up to 255.
         if (amountWei != 0) {
             if (claims < 3) claims = 3;
             else if (claims < 0xFF) claims += 1;
@@ -459,6 +485,54 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         return 10;
     }
 
+    function _stakeLevelFromInfo(uint256 info) private pure returns (uint24) {
+        uint24 stakeLevel = uint24((info >> TROPHY_STAKE_LEVEL_SHIFT) & 0xFFFFFF);
+        if (stakeLevel != 0) return stakeLevel;
+        return uint24((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF);
+    }
+
+    function _addStakeCache(PlayerStakeCache storage cache, uint256 tokenId, uint24 stakeLevel) private {
+        cache.tokenIds.push(tokenId);
+        uint24 earliest = cache.earliest;
+        if (earliest == 0 || stakeLevel < earliest) {
+            cache.earliest = stakeLevel;
+        }
+    }
+
+    function _removeStakeCache(PlayerStakeCache storage cache, uint256 tokenId) private {
+        uint256 len = cache.tokenIds.length;
+        bool found;
+        for (uint256 i; i < len; ) {
+            if (cache.tokenIds[i] == tokenId) {
+                found = true;
+                uint256 lastIdx = len - 1;
+                if (i != lastIdx) {
+                    cache.tokenIds[i] = cache.tokenIds[lastIdx];
+                }
+                cache.tokenIds.pop();
+                break;
+            }
+            unchecked {
+                ++i;
+            }
+        }
+        if (!found) revert StakeInvalid();
+
+        uint24 newEarliest;
+        uint256 remaining = cache.tokenIds.length;
+        for (uint256 i; i < remaining; ) {
+            uint256 tid = cache.tokenIds[i];
+            uint24 lvl = _stakeLevelFromInfo(trophyData_[tid]);
+            if (lvl != 0 && (newEarliest == 0 || lvl < newEarliest)) {
+                newEarliest = lvl;
+            }
+            unchecked {
+                ++i;
+            }
+        }
+        cache.earliest = newEarliest;
+    }
+
     function _exterminatorDiscountCap(uint8 count) private pure returns (uint8) {
         if (count == 0) return 0;
         if (count == 1) return 5;
@@ -495,66 +569,19 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     }
 
     function _exterminatorStakeStats(address player) private view returns (uint8 total, uint24 earliest) {
-        earliest = type(uint24).max;
-        uint256 len = stakedTrophyIds.length;
-        for (uint256 i; i < len; ) {
-            uint256 tokenId = stakedTrophyIds[i];
-            address owner = _ownerOf(tokenId);
-            if (owner == player) {
-                uint256 info = trophyData_[tokenId];
-                if (info != 0) {
-                    bool invalid = (info & TROPHY_FLAG_MAP) != 0 ||
-                        (info & TROPHY_FLAG_AFFILIATE) != 0 ||
-                        (info & TROPHY_FLAG_STAKE) != 0 ||
-                        (info & TROPHY_FLAG_BAF) != 0 ||
-                        (info & TROPHY_FLAG_DECIMATOR) != 0;
-                    if (!invalid) {
-                        unchecked {
-                            total += 1;
-                        }
-                        uint24 stakeLevel = uint24((info >> TROPHY_STAKE_LEVEL_SHIFT) & 0xFFFFFF);
-                        uint24 base = stakeLevel == 0
-                            ? uint24((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF)
-                            : stakeLevel;
-                        if (base < earliest) earliest = base;
-                    }
-                }
-            }
-            unchecked {
-                ++i;
-            }
-        }
-        if (earliest == type(uint24).max) {
-            earliest = 0;
-        }
+        PlayerStakeCache storage cache = exterminatorStakeCache[player];
+        uint256 len = cache.tokenIds.length;
+        if (len == 0) return (0, 0);
+        total = len > type(uint8).max ? type(uint8).max : uint8(len);
+        earliest = cache.earliest;
     }
 
     function _decStakeStats(address player) private view returns (uint8 total, uint24 earliest) {
-        earliest = type(uint24).max;
-        uint256 len = stakedTrophyIds.length;
-        for (uint256 i; i < len; ) {
-            uint256 tokenId = stakedTrophyIds[i];
-            address owner = _ownerOf(tokenId);
-            if (owner == player) {
-                uint256 info = trophyData_[tokenId];
-                if (info != 0 && (info & TROPHY_FLAG_DECIMATOR) != 0) {
-                    unchecked {
-                        total += 1;
-                    }
-                    uint24 stakeLevel = uint24((info >> TROPHY_STAKE_LEVEL_SHIFT) & 0xFFFFFF);
-                    uint24 base = stakeLevel == 0
-                        ? uint24((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF)
-                        : stakeLevel;
-                    if (base < earliest) earliest = base;
-                }
-            }
-            unchecked {
-                ++i;
-            }
-        }
-        if (earliest == type(uint24).max) {
-            earliest = 0;
-        }
+        PlayerStakeCache storage cache = decStakeCache[player];
+        uint256 len = cache.tokenIds.length;
+        if (len == 0) return (0, 0);
+        total = len > type(uint8).max ? type(uint8).max : uint8(len);
+        earliest = cache.earliest;
     }
 
     function _ensurePlayerOwnsStaked(address player, uint256 tokenId) private view {
@@ -577,6 +604,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         if (trophyData_[params.tokenId] == 0) revert StakeInvalid();
         if (stakedTrophyIndex[params.tokenId] != 0) revert TrophyStakeViolation(_STAKE_ERR_ALREADY_STAKED);
         uint256 info = trophyData_[params.tokenId];
+        // Reset claim accrual to the stake level to avoid backdating, then set explicit stakeLevel bits.
         uint256 levelValue = uint256(params.effectiveLevel & 0xFFFFFF);
         uint256 owed = info & TROPHY_OWED_MASK;
         if (owed != 0) {
@@ -605,6 +633,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         } else if (params.targetExterminator) {
             uint16 traitId = uint16((trophyData_[params.tokenId] >> 152) & 0xFFFF);
             _addExterminatorStakeTrait(params.player, traitId);
+            _addStakeCache(exterminatorStakeCache[params.player], params.tokenId, params.effectiveLevel);
             data.kind = 3;
             data.count = 0;
         } else if (params.targetBaf) {
@@ -620,6 +649,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             data.count = current;
         } else if (params.targetDec) {
             // Decimator trophies stake purely to enable burn bonuses; no discounts or counters.
+            _addStakeCache(decStakeCache[params.player], params.tokenId, params.effectiveLevel);
             data.kind = 6;
             data.count = 0;
         } else {
@@ -636,6 +666,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         if (info == 0) revert StakeInvalid();
         if (stakedTrophyIndex[params.tokenId] == 0) revert TrophyStakeViolation(_STAKE_ERR_NOT_STAKED);
         _removeStakedTrophy(params.tokenId);
+        // Clear cached bonuses and trait tracking; stake level override removed below.
         if (params.targetMap) {
             mapStakeBonusPct_[params.player] = 0;
             data.kind = 1;
@@ -648,6 +679,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             uint16 traitId = uint16((info >> 152) & 0xFFFF);
             _removeExterminatorStakeTrait(params.player, traitId);
             exterminatorStakeDiscountPct_[params.player] = 0;
+            _removeStakeCache(exterminatorStakeCache[params.player], params.tokenId);
             data.kind = 3;
             data.count = 0;
         } else if (params.targetBaf) {
@@ -663,6 +695,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             data.count = current;
         } else if (params.targetDec) {
             // Decimator trophies have no counters or discounts; just remove stake state.
+            _removeStakeCache(decStakeCache[params.player], params.tokenId);
             data.kind = 6;
             data.count = 0;
         } else {
@@ -681,6 +714,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     }
 
     function _refreshMapBonus(address player, uint256[] calldata tokenIds) private {
+        // Caller supplies their staked map trophies; enforce max 10 to bound loop gas.
         uint256 len = tokenIds.length;
         if (len == 0) {
             return;
@@ -706,6 +740,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     }
 
     function _refreshExterminatorStakeBonus(address player, uint256[] calldata tokenIds) private {
+        // Exterminator stake cannot mix with other trophy flags; traits are tracked per-player for purge logic.
         uint256 len = tokenIds.length;
         if (len == 0) {
             return;
@@ -737,6 +772,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     }
 
     function _refreshStakeBonus(address player, uint256[] calldata tokenIds) private {
+        // Stake bonuses accrue over time per staked stake trophies.
         uint256 len = tokenIds.length;
         if (len == 0) {
             return;
@@ -762,6 +798,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     }
 
     function _refreshAffiliateBonus(address player, uint256[] calldata tokenIds) private {
+        // Affiliate bonus scales with both count and levels held; bounded to 10 ids for predictable gas.
         uint256 len = tokenIds.length;
         if (len == 0) {
             return;
@@ -848,6 +885,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     // Trophy awarding & end-level flows
     // ---------------------------------------------------------------------
     function _awardTrophyInternal(address to, uint8 kind, uint256 data, uint256 deferredWei, uint256 tokenId) private {
+        // Placeholder may still be owned by the game; move before stamping updated packed data.
         address currentOwner = _ownerOf(tokenId);
         if (currentOwner != to) {
             nft.transferTrophy(currentOwner, to, tokenId);
@@ -906,6 +944,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     }
 
     function _processEndLevel(EndLevelRequest calldata req) private {
+        // Resolve placeholder ids for the just-finished level using current/previous base pointers; if missing, exit.
         (uint256 previousBase, uint256 currentBase) = nft.getBasePointers();
         uint24 currentLevel = game.level();
 
@@ -981,6 +1020,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     }
 
     function _processBafClaim(address player, ClaimContext memory ctx, uint256 priceUnit) private {
+        // BAF trophies pay in coin, capped per-level and only when staked.
         if (!ctx.isStaked) revert ClaimNotReady();
         BafStakeInfo storage state = bafStakeInfo[player];
         _syncBafStake(player, state, ctx.currentLevel, priceUnit);
@@ -1025,6 +1065,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     }
 
     function _bootstrapBafStake(address player, BafStakeInfo storage state, uint24 currentLevel) private {
+        // Lazily reconstruct BAF stake counters from staked set to survive upgrades or partial state.
         if (state.count != 0) return;
         uint8 count;
         uint256 len = stakedTrophyIds.length;
@@ -1054,6 +1095,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     }
 
     function _syncBafStake(address player, BafStakeInfo storage state, uint24 currentLevel, uint256 priceUnit) private {
+        // Accrue pending BAF rewards per level since last sync; count comes from stake hooks.
         _bootstrapBafStake(player, state, currentLevel);
         if (state.lastLevel == 0) {
             state.lastLevel = currentLevel;
@@ -1100,6 +1142,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     // ---------------------------------------------------------------------
 
     function claimTrophy(uint256 tokenId) external override {
+        // Owner-only claim; staking is enforced by the vesting logic paths below.
         address owner = _ownerOf(tokenId);
         if (owner != msg.sender) revert Unauthorized();
         if (game.rngLocked()) revert CoinPaused();
@@ -1118,6 +1161,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         ctx.owed = ctx.info & TROPHY_OWED_MASK;
         ctx.newOwed = ctx.owed;
 
+        // Payout path is either an explicit multi-claim vest or a linear drip over COIN_DRIP_STEPS after base level.
         if (ctx.claimsRemaining != 0) {
             if (ctx.currentLevel <= ctx.lastClaim) revert ClaimNotReady();
             if (!ctx.isStaked) revert ClaimNotReady();
@@ -1167,6 +1211,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     // ---------------------------------------------------------------------
 
     function setTrophyStake(uint256 tokenId, bool stake) external override {
+        // Entry gate: RNG must be unlocked and caller must be EOAs (anti-bot), coin burns enforce cost to toggle.
         if (game.rngLocked()) revert CoinPaused();
 
         address sender = msg.sender;
@@ -1281,6 +1326,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     }
 
     function purgeTrophy(uint256 tokenId) external override {
+        // Irreversible burn path; blocked for staked trophies to keep accounting consistent.
         if (_isTrophyStaked(tokenId)) revert TrophyStakeViolation(_STAKE_ERR_TRANSFER_BLOCKED);
         uint256 info = trophyData_[tokenId];
         if (info == 0) revert InvalidToken();
@@ -1310,6 +1356,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     function stakedTrophySampleWithId(uint256 rngSeed) public view override returns (uint256 tokenId, address owner) {
         uint256 count = stakedTrophyIds.length;
         if (count == 0) return (0, address(0));
+        // Double-sample and pick lowest id to smooth modulo bias from count.
         uint256 rand = uint256(keccak256(abi.encodePacked(rngSeed, count)));
         uint256 idxA = count == 1 ? 0 : rand % count;
         uint256 idxB = count == 1 ? idxA : (rand >> 64) % count;
@@ -1377,6 +1424,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         uint256 amountWei,
         uint24 level
     ) public override onlyGameOrCoin returns (bool paid) {
+        // Sample twice and split reward across the lowest id to reduce duplicate-bias; pseudo-randomness seeded by caller.
         (uint256 tokenIdA, ) = stakedTrophySampleWithId(rngSeed);
         (uint256 tokenIdB, ) = stakedTrophySampleWithId(uint256(keccak256(abi.encodePacked(rngSeed, uint256(7777)))));
 
@@ -1446,6 +1494,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
 
     function prepareNextLevel(uint24 nextLevel) public override {
         (, uint256 currentBase) = nft.getBasePointers();
+        // Coin can prime the initial level when no base pointer is set; only the game advances thereafter.
         if (msg.sender != gameAddress) {
             if (msg.sender != coinAddress || currentBase != 0) revert Unauthorized();
         }
@@ -1458,6 +1507,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         if (game_ == address(0)) revert ZeroAddress();
         if (msg.sender != coinAddress) revert OnlyCoin();
         if (coin_ != address(0) && coin_ != coinAddress) revert Unauthorized();
+        // One-time wiring invoked by coin; locks in trusted game address.
         gameAddress = game_;
         game = IPurgeGameMinimal(game_);
     }
