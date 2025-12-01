@@ -373,7 +373,7 @@ contract PurgeBonds {
         address recipient = fundRecipient;
         if (recipient == address(0)) revert ZeroAddress();
         if (!purchasesEnabled) revert PurchasesClosed();
-        if (resolvePending) revert ResolvePendingAlready();
+        if (transfersLocked) revert TransferBlocked();
         if (quantity == 0) revert InvalidQuantity();
         if (baseWei == 0 || baseWei > 1 ether) revert InvalidBase();
 

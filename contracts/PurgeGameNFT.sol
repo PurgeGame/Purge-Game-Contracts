@@ -34,7 +34,6 @@ interface ITokenRenderer {
 }
 
 interface IPurgeGameNFT {
-    function wireAll(address game_, address trophies_) external;
     function tokenTraitsPacked(uint256 tokenId) external view returns (uint32);
     function purchaseCount() external view returns (uint32);
     function finalizePurchasePhase(uint32 minted, uint256 rngWord) external;
@@ -48,6 +47,11 @@ interface IPurgeGameNFT {
     function mintAndPurgeWithClaimable(address buyer, uint256 quantity) external;
 }
 
+/// @title PurgeGameNFT
+/// @notice ERC721 surface for Purge player tokens and trophy placeholders. The contract is intentionally
+///         minimalistic and delegates gameplay rules to the game and trophy modules.
+/// @dev Uses a packed ownership layout inspired by ERC721A; relies on external wiring from the coin contract
+///      to set the trusted game and trophy module addresses.
 contract PurgeGameNFT {
     // ---------------------------------------------------------------------
     // Errors
@@ -58,12 +62,10 @@ contract PurgeGameNFT {
     error TransferToNonERC721ReceiverImplementer();
     error Zero();
     error E();
-    error ClaimNotReady();
 
     error OnlyCoin();
     error InvalidToken();
     error TrophyStakeViolation(uint8 reason);
-    error StakeInvalid();
     error NotTimeYet();
     error RngNotReady();
     error InvalidQuantity();
@@ -94,6 +96,9 @@ contract PurgeGameNFT {
     // ---------------------------------------------------------------------
     // ERC721 storage
     // ---------------------------------------------------------------------
+    // Packed address/ownership layout mirrors ERC721A style: balance/numberMinted/numberBurned are 64-bit fields,
+    // followed by startTimestamp and trophy metadata bits. The extra trophy flags keep trophy state in the same slot
+    // as ownership to avoid additional mappings.
     uint256 private constant _BITMASK_ADDRESS_DATA_ENTRY = (1 << 64) - 1;
     uint256 private constant _BITPOS_NUMBER_MINTED = 64;
     uint256 private constant _BITPOS_NUMBER_BURNED = 128;
@@ -135,6 +140,9 @@ contract PurgeGameNFT {
     IPurgeCoin private immutable coin;
     IPurgeGameTrophies private trophyModule;
 
+    // Token id progression is segmented by "base" pointers: currentBaseTokenId marks the first active player token
+    // for the current season, and previousBaseTokenId (stored in the high 128 bits) allows the trophy module to
+    // reason about historical placeholders.
     uint256 private basePointers; // high 128 bits = previous base token id, low 128 bits = current base token id
 
     uint256 private totalTrophySupply;
@@ -143,6 +151,7 @@ contract PurgeGameNFT {
     uint256 private seasonPurgedCount;
     uint32 private _purchaseCount;
     uint256 private _nextBaseTokenIdHint;
+    // Pending mint queue holds players that bought tokens before the RNG roll; tokens are minted in batches later.
     address[] private _pendingMintQueue;
     mapping(address => uint32) private _tokensOwed;
     uint256 private _mintQueueIndex; // Tracks # of queue entries fully processed during airdrop rotation
@@ -176,6 +185,7 @@ contract PurgeGameNFT {
         return uint256(uint128(basePointers));
     }
 
+    /// @dev Store historical/current base token ids in a single slot to minimize writes.
     function _setBasePointers(uint256 previousBase, uint256 currentBase) private {
         basePointers = (uint256(uint128(previousBase)) << 128) | uint128(currentBase);
     }
@@ -188,6 +198,7 @@ contract PurgeGameNFT {
         return uint24((packed & _BITMASK_BALANCE_LEVEL) >> _BITPOS_BALANCE_LEVEL);
     }
 
+    /// @dev Updates address data for trophy balance + balance-level watermark. Trophy deltas are bounded to 32 bits.
     function _updateTrophyBalance(address owner, int32 delta, uint24 lvl, bool setLevel) private {
         if (owner == address(0)) return;
         if (delta == 0 && !setLevel) return;
@@ -229,6 +240,9 @@ contract PurgeGameNFT {
         _currentIndex = 97;
     }
 
+    /// @notice Total supply counts active trophies plus active player tokens during a purchase phase.
+    /// @dev During purchase phase (gameState == 3) supply is derived from the snapshot and purge count;
+    ///      otherwise we only surface trophy supply so indexers avoid stale player token ids.
     function totalSupply() external view returns (uint256) {
         uint256 trophyCount = totalTrophySupply;
 
@@ -242,6 +256,8 @@ contract PurgeGameNFT {
         return trophyCount;
     }
 
+    /// @notice Returns balance, resetting to trophy count when the game advances a level.
+    /// @dev Address data stores a balance-level watermark so historic balances do not leak into new levels.
     function balanceOf(address owner) external view returns (uint256) {
         if (owner == address(0)) revert Zero();
         uint256 packed = _packedAddressData[owner];
@@ -275,6 +291,8 @@ contract PurgeGameNFT {
         return _symbol;
     }
 
+    /// @notice Renders metadata via the trophy or regular renderer; reverts for nonexistent/burned tokens.
+    /// @dev Trophy renderer receives staking/claim flags; regular tokens are validated against the base token window.
     function tokenURI(uint256 tokenId) external view returns (string memory) {
         // Revert for nonexistent or burned tokens (keeps ERC721-consistent surface for indexers).
         _packedOwnershipOf(tokenId);
@@ -328,6 +346,7 @@ contract PurgeGameNFT {
         bytes32 affiliateCode,
         bool useClaimable
     ) private {
+        // Primary entry for player token purchases; pricing and bonuses are sourced from the game contract.
         if (quantity == 0 || quantity > type(uint32).max) revert InvalidQuantity();
 
         (uint24 targetLevel, uint8 state, uint8 phase, bool rngLocked_, uint256 priceWei, uint256 priceCoinUnit) = game
@@ -409,6 +428,7 @@ contract PurgeGameNFT {
         bytes32 affiliateCode,
         bool useClaimable
     ) private {
+        // Map purchase flow: mints 4:1 scaled quantity and immediately queues them for purge draws.
         (uint24 lvl, uint8 state, uint8 phase, bool rngLocked_, uint256 priceWei, uint256 priceUnit) = game
             .purchaseInfo();
         if (state == 3 && payInCoin) revert NotTimeYet();
@@ -486,6 +506,7 @@ contract PurgeGameNFT {
         uint256 expectedWei,
         uint256 priceUnit
     ) private returns (uint256 bonusMint) {
+        // ETH purchases optionally bypass payment when claimable credit is used; all flows are forwarded to game logic.
         if (useClaimable) {
             if (msg.value != 0) revert E();
         } else if (msg.value != expectedWei) {
@@ -516,13 +537,7 @@ contract PurgeGameNFT {
         if (useClaimable) {
             streakBonus = game.recordMint(payer, lvl, false, expectedWei, mintUnits);
         } else {
-            streakBonus = game.recordMint{value: expectedWei}(
-                payer,
-                lvl,
-                false,
-                expectedWei,
-                mintUnits
-            );
+            streakBonus = game.recordMint{value: expectedWei}(payer, lvl, false, expectedWei, mintUnits);
         }
 
         if (mintedQuantity != 0) {
@@ -580,6 +595,7 @@ contract PurgeGameNFT {
         uint256 unitPriceWei,
         uint32 quantity
     ) private view returns (uint256 cost, uint32 newCount) {
+        // Progressive ETH pricing for level-100 purchases: ramps up to full price after a history of prior mints.
         uint32 prev = _levelHundredMintCount[buyer];
         uint256 levelCount = game.ethMintLevelCount(buyer);
         uint256 streakCount = game.ethMintStreakCount(buyer);
@@ -608,6 +624,7 @@ contract PurgeGameNFT {
     }
 
     function _coinReceive(address payer, uint32 quantity, uint256 amount, uint24 lvl, uint256 discount) private {
+        // Coin payments burn PURGE (with level-based modifiers) and notify quest tracking without moving ETH.
         uint8 stepMod = uint8(lvl % 20);
         if (stepMod == 13) amount = (amount * 3) / 2;
         else if (stepMod == 18) amount = (amount * 9) / 10;
@@ -621,6 +638,7 @@ contract PurgeGameNFT {
     }
 
     function _recordPurchase(address buyer, uint32 quantity) private {
+        // Append buyer to the pending mint queue; mints are finalized in processPendingMints after RNG.
         uint32 owed = _tokensOwed[buyer];
         if (owed == 0) {
             _pendingMintQueue.push(buyer);
@@ -631,6 +649,8 @@ contract PurgeGameNFT {
         }
     }
 
+    /// @notice Batch-mint queued purchases, respecting an airdrop cap and optional multiplier for reward mints.
+    /// @dev Called by the game contract; will rotate through the queue deterministically based on `_mintQueueStartOffset`.
     function processPendingMints(uint32 playersToProcess, uint32 multiplier) external onlyGame returns (bool finished) {
         uint256 total = _pendingMintQueue.length;
 
@@ -706,6 +726,7 @@ contract PurgeGameNFT {
         return address(uint160(_packedOwnershipOf(tokenId)));
     }
 
+    /// @dev Resolve packed ownership; reverts for invalid or burned tokens. Backtracks to find the last initialized slot.
     function _packedOwnershipOf(uint256 tokenId) private view returns (uint256 packed) {
         if (tokenId >= _currentIndex) revert InvalidToken();
 
@@ -721,6 +742,7 @@ contract PurgeGameNFT {
             }
         }
 
+        // Tokens below the current base token id are considered retired unless flagged as trophies.
         if (tokenId < _currentBaseTokenId() && !trophyModule.isTrophy(tokenId)) {
             revert InvalidToken();
         }
@@ -775,6 +797,7 @@ contract PurgeGameNFT {
         return _operatorApprovals[owner][operator];
     }
 
+    /// @dev Lightweight existence check used by approval getters; trophies and game-owned placeholders are handled.
     function _exists(uint256 tokenId) internal view returns (bool) {
         if (tokenId < _currentBaseTokenId()) {
             if (trophyModule.isTrophy(tokenId)) return true;
@@ -809,6 +832,7 @@ contract PurgeGameNFT {
         return false;
     }
 
+    /// @dev Gas-optimized owner/approval check used by transferFrom.
     function _isSenderApprovedOrOwner(
         address approvedAddress,
         address owner,
@@ -821,6 +845,7 @@ contract PurgeGameNFT {
         }
     }
 
+    /// @notice Transfer respecting trophy staking locks; clears per-token approvals.
     function transferFrom(address from, address to, uint256 tokenId) public payable {
         uint256 prevOwnershipPacked = _packedOwnershipOf(tokenId);
         bool isTrophy = (prevOwnershipPacked & _BITMASK_TROPHY_ACTIVE) != 0;
@@ -891,6 +916,7 @@ contract PurgeGameNFT {
             }
     }
 
+    /// @dev Minimal ERC721Receiver check with reason bubbling.
     function _checkContractOnERC721Received(
         address from,
         address to,
@@ -910,6 +936,7 @@ contract PurgeGameNFT {
         }
     }
 
+    /// @dev Internal batch mint; emits one Transfer event per token for ERC721 indexers.
     function _mint(address to, uint256 quantity) internal {
         uint256 startTokenId = _currentIndex;
 
@@ -993,7 +1020,7 @@ contract PurgeGameNFT {
         _;
     }
 
-    /// @notice Wire game and trophy module using an address array ([game, trophies]); set-once per slot.
+    /// @notice Wire game and trophy modules using an address array ([game, trophies]); set-once per slot.
     function wire(address[] calldata addresses) external onlyCoinContract {
         _setGame(addresses.length > 0 ? addresses[0] : address(0));
         _setTrophyModule(addresses.length > 1 ? addresses[1] : address(0));
@@ -1023,11 +1050,16 @@ contract PurgeGameNFT {
     // Trophy module hooks
     // ---------------------------------------------------------------------
 
+    /// @notice Returns the next token id to be minted; callable by the trophy module only.
     function nextTokenId() external view onlyTrophyModule returns (uint256) {
         return _currentIndex;
     }
 
-    function mintPlaceholders(uint256 quantity) external onlyTrophyModule returns (uint256 startTokenId) {
+    /// @notice Mint placeholder trophies to the game contract; level provided by trophy module to avoid extra calls.
+    function mintPlaceholders(
+        uint256 quantity,
+        uint24 level
+    ) external onlyTrophyModule returns (uint256 startTokenId) {
         if (quantity == 0) revert E();
         startTokenId = _currentIndex;
         address gameAddr = address(game);
@@ -1035,18 +1067,20 @@ contract PurgeGameNFT {
         unchecked {
             totalTrophySupply += quantity;
         }
-        if (gameAddr != address(0)) {
-            _updateTrophyBalance(gameAddr, 0, game.level(), true);
-        }
+
+        _updateTrophyBalance(gameAddr, 0, level, true);
+
         return startTokenId;
     }
 
+    /// @notice Declare a dormant burn range; used later to emit Transfer events for historical burns.
     function scheduleDormantRange(uint256 startTokenId, uint256 endTokenId) external onlyTrophyModule {
         if (startTokenId >= endTokenId) return;
         _dormantCursor.push(startTokenId);
         _dormantEnd.push(endTokenId);
     }
 
+    /// @notice Burn placeholder padding after level processing; must not target active trophy ids.
     function clearPlaceholderPadding(uint256 startTokenId, uint256 endTokenId) external onlyTrophyModule {
         if (startTokenId >= endTokenId) return;
 
@@ -1085,6 +1119,7 @@ contract PurgeGameNFT {
         }
     }
 
+    /// @notice Expose previous/current base token ids to the trophy module.
     function getBasePointers() external view onlyTrophyModule returns (uint256 previousBase, uint256 currentBase) {
         previousBase = basePointers >> 128;
         currentBase = _currentBaseTokenId();
@@ -1094,18 +1129,22 @@ contract PurgeGameNFT {
         _setBasePointers(previousBase, currentBase);
     }
 
+    /// @notice Trophy module helper to read packed ownership (reverts for invalid tokens).
     function packedOwnershipOf(uint256 tokenId) external view onlyTrophyModule returns (uint256 packed) {
         return _packedOwnershipOf(tokenId);
     }
 
+    /// @notice Trophy module transfer that bypasses user approvals but still emits Transfer.
     function transferTrophy(address from, address to, uint256 tokenId) external onlyTrophyModule {
         _moduleTransfer(from, to, tokenId);
     }
 
+    /// @notice Trophy module hook to set packed info bits for staking/activation and trophy kind.
     function setTrophyPackedInfo(uint256 tokenId, uint8 kind, bool staked) external onlyTrophyModule {
         _setTrophyPackedInfo(tokenId, kind, staked);
     }
 
+    /// @notice Trophy module helper to clear per-token approvals (used before burns/transfers).
     function clearApproval(uint256 tokenId) external onlyTrophyModule {
         if (_tokenApprovals[tokenId] != address(0)) {
             delete _tokenApprovals[tokenId];
@@ -1138,6 +1177,7 @@ contract PurgeGameNFT {
         seasonPurgedCount = 0;
     }
 
+    /// @notice Called by game when a purchase phase ends; snapshots minted count and shuffles pending mint order.
     function finalizePurchasePhase(uint32 minted, uint256 rngWord) external onlyGame {
         _setSeasonMintedSnapshot(minted);
         uint256 baseTokenId = _currentBaseTokenId();
@@ -1154,6 +1194,7 @@ contract PurgeGameNFT {
         }
     }
 
+    /// @notice Burn a batch of player tokens (never trophies) owned by `owner`; trophies burned are tallied separately.
     function purge(address owner, uint256[] calldata tokenIds) external onlyGame {
         uint256 purged;
         uint256 burnDelta;
@@ -1187,10 +1228,14 @@ contract PurgeGameNFT {
         return _burnPacked(tokenId, packed);
     }
 
+    /// @dev Marks a token as burned and backfills ownership to keep scans efficient; approvals are cleared.
     function _burnPacked(uint256 tokenId, uint256 prevOwnershipPacked) private returns (bool isTrophy) {
         address from = address(uint160(prevOwnershipPacked));
         isTrophy = (prevOwnershipPacked & _BITMASK_TROPHY_ACTIVE) != 0;
 
+        if (_tokenApprovals[tokenId] != address(0)) {
+            delete _tokenApprovals[tokenId];
+        }
         _packedOwnerships[tokenId] = _packOwnershipData(from, _BITMASK_BURNED | _BITMASK_NEXT_INITIALIZED);
 
         if (prevOwnershipPacked & _BITMASK_NEXT_INITIALIZED == 0) {
@@ -1203,6 +1248,7 @@ contract PurgeGameNFT {
         emit Transfer(from, address(0), tokenId);
     }
 
+    /// @dev Applies burn deltas to address data and trophy balance; also refreshes level watermark.
     function _applyPurgeAccounting(address owner, uint256 burnDelta, uint32 trophiesBurned) private {
         uint256 currentPackedData = _packedAddressData[owner];
         uint256 currentNumberBurned = (currentPackedData >> _BITPOS_NUMBER_BURNED) & _BITMASK_ADDRESS_DATA_ENTRY;
@@ -1237,6 +1283,8 @@ contract PurgeGameNFT {
         _packedAddressData[owner] = currentPackedData;
     }
 
+    /// @notice Emits Transfer events for already-burned dormant ranges to help indexers catch up.
+    /// @dev This is intentionally out-of-spec (events without state changes) and should only be called by automation.
     function processDormant(uint32 limit) external returns (bool finished, bool worked) {
         uint256 head = _dormantHead;
         uint256 len = _dormantCursor.length;
@@ -1330,9 +1378,14 @@ contract PurgeGameNFT {
         return (false, worked);
     }
 
+    /// @dev Trophy-module transfer hook; clears stale approvals and preserves trophy metadata bits.
     function _moduleTransfer(address from, address to, uint256 tokenId) private {
         uint256 prevOwnershipPacked = _packedOwnershipOf(tokenId);
         if (to == address(0)) revert Zero();
+        address approved = _tokenApprovals[tokenId];
+        if (approved != address(0)) {
+            delete _tokenApprovals[tokenId];
+        }
         unchecked {
             --_packedAddressData[from];
             ++_packedAddressData[to];
@@ -1359,6 +1412,7 @@ contract PurgeGameNFT {
         }
     }
 
+    /// @dev Trophy module hook to set flag bits; updates owner trophy balance when active flag changes.
     function _setTrophyPackedInfo(uint256 tokenId, uint8 kind, bool staked) private {
         uint256 packed = _packedOwnerships[tokenId];
         if (packed == 0) {
@@ -1391,6 +1445,7 @@ contract PurgeGameNFT {
         }
     }
 
+    /// @dev Helper to check the staked flag without exposing full ownership; used to gate transfers/approvals.
     function _isTrophyStaked(uint256 tokenId) private view returns (bool) {
         uint256 packed = _packedOwnerships[tokenId];
         if (packed == 0) {
@@ -1415,10 +1470,12 @@ contract PurgeGameNFT {
         return _purchaseCount;
     }
 
+    /// @notice Pending owed mints for a player (used by processPendingMints).
     function tokensOwed(address player) external view returns (uint32) {
         return _tokensOwed[player];
     }
 
+    /// @notice Expose decoded trophy bookkeeping fields (owed rewards, base/last claim level, trait/kind flags).
     function getTrophyData(
         uint256 tokenId
     )

@@ -6,7 +6,7 @@ import {IPurgeAffiliate} from "./interfaces/IPurgeAffiliate.sol";
 
 interface IPurgeGameNftModule {
     function nextTokenId() external view returns (uint256);
-    function mintPlaceholders(uint256 quantity) external returns (uint256 startTokenId);
+    function mintPlaceholders(uint256 quantity, uint24 level) external returns (uint256 startTokenId);
     function getBasePointers() external view returns (uint256 previousBase, uint256 currentBase);
     function setBasePointers(uint256 previousBase, uint256 currentBase) external;
     function scheduleDormantRange(uint256 startTokenId, uint256 endTokenId) external;
@@ -146,7 +146,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         bool targetStake;
         bool targetBaf;
         bool targetDec;
-        bool pureExterminatorTrophy;
         uint24 effectiveLevel;
         uint24 currentLevel;
         uint256 priceUnit;
@@ -162,14 +161,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         uint256 levelBits;
         uint256 traitData;
         uint256 deferredAward;
-    }
-
-    struct MapTimeoutContext {
-        uint256 mapUnit;
-        uint256 stakedCount;
-        uint256 distributed;
-        uint256 draws;
-        uint256 rand;
     }
 
     struct ClaimContext {
@@ -231,19 +222,19 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     // ---------------------------------------------------------------------
     IPurgeGameNftModule public immutable nft;
     IPurgeGameMinimal private game;
-    IPurgecoinMinimal private coin;
+    IPurgecoinMinimal private immutable coin;
 
     address public gameAddress;
-    address public coinAddress;
+    address public immutable coinAddress;
 
     uint256[] private stakedTrophyIds;
     mapping(uint256 => uint256) private stakedTrophyIndex; // 1-based index
-    mapping(uint256 => bool) private trophyStaked;
     mapping(uint256 => uint256) private trophyData_;
     mapping(address => uint8) private mapStakeBonusPct_;
     mapping(address => uint8) private affiliateStakeBonusPct_;
     mapping(address => uint8) private exterminatorStakeDiscountPct_;
     mapping(address => bool[256]) private exterminatorStakeTraits_;
+    mapping(address => uint16) private exterminatorStakeTraitCount;
     mapping(address => uint8) private stakeStakeBonusPct_;
     // Decimator stake bonus is computed on-demand; no cached mapping to avoid stale values.
     mapping(address => BafStakeInfo) private bafStakeInfo;
@@ -359,8 +350,12 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         trophyData_[tokenId] = data;
     }
 
+    function _ownerOf(uint256 tokenId) private view returns (address) {
+        return _ownerOf(tokenId);
+    }
+
     function _eraseTrophy(uint256 tokenId, uint8 kind, bool adjustSupply) private {
-        if (trophyStaked[tokenId]) revert StakeInvalid();
+        if (stakedTrophyIndex[tokenId] != 0) revert StakeInvalid();
         bool hadData = trophyData_[tokenId] != 0;
         delete trophyData_[tokenId];
         nft.setTrophyPackedInfo(tokenId, kind, false);
@@ -394,7 +389,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         if (amountWei != 0) {
             if (claims < 3) claims = 3;
             else if (claims < 0xFF) claims += 1;
-            if (claims > 0xFF) claims = 0xFF;
         }
         uint256 base = uint256((startLevel - 1) & 0xFFFFFF);
         uint256 updated = (info &
@@ -439,12 +433,23 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
 
     function _addExterminatorStakeTrait(address player, uint16 traitId) private {
         if (traitId >= 256) revert StakeInvalid();
-        exterminatorStakeTraits_[player][traitId] = true;
+        bool[256] storage traits = exterminatorStakeTraits_[player];
+        if (!traits[traitId]) {
+            traits[traitId] = true;
+            exterminatorStakeTraitCount[player] += 1;
+        }
     }
 
     function _removeExterminatorStakeTrait(address player, uint16 traitId) private {
         if (traitId >= 256) revert StakeInvalid();
-        exterminatorStakeTraits_[player][traitId] = false;
+        bool[256] storage traits = exterminatorStakeTraits_[player];
+        if (traits[traitId]) {
+            traits[traitId] = false;
+            uint16 current = exterminatorStakeTraitCount[player];
+            if (current != 0) {
+                exterminatorStakeTraitCount[player] = current - 1;
+            }
+        }
     }
 
     function _mapDiscountCap(uint8 count) private pure returns (uint8) {
@@ -494,48 +499,16 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         uint256 len = stakedTrophyIds.length;
         for (uint256 i; i < len; ) {
             uint256 tokenId = stakedTrophyIds[i];
-            if (trophyStaked[tokenId]) {
-                address owner = address(uint160(nft.packedOwnershipOf(tokenId)));
-                if (owner == player) {
-                    uint256 info = trophyData_[tokenId];
-                    if (info != 0) {
-                        bool invalid = (info & TROPHY_FLAG_MAP) != 0 ||
-                            (info & TROPHY_FLAG_AFFILIATE) != 0 ||
-                            (info & TROPHY_FLAG_STAKE) != 0 ||
-                            (info & TROPHY_FLAG_BAF) != 0 ||
-                            (info & TROPHY_FLAG_DECIMATOR) != 0;
-                        if (!invalid) {
-                            unchecked {
-                                total += 1;
-                            }
-                            uint24 stakeLevel = uint24((info >> TROPHY_STAKE_LEVEL_SHIFT) & 0xFFFFFF);
-                            uint24 base = stakeLevel == 0
-                                ? uint24((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF)
-                                : stakeLevel;
-                            if (base < earliest) earliest = base;
-                        }
-                    }
-                }
-            }
-            unchecked {
-                ++i;
-            }
-        }
-        if (earliest == type(uint24).max) {
-            earliest = 0;
-        }
-    }
-
-    function _decStakeStats(address player) private view returns (uint8 total, uint24 earliest) {
-        earliest = type(uint24).max;
-        uint256 len = stakedTrophyIds.length;
-        for (uint256 i; i < len; ) {
-            uint256 tokenId = stakedTrophyIds[i];
-            if (trophyStaked[tokenId]) {
-                address owner = address(uint160(nft.packedOwnershipOf(tokenId)));
-                if (owner == player) {
-                    uint256 info = trophyData_[tokenId];
-                    if (info != 0 && (info & TROPHY_FLAG_DECIMATOR) != 0) {
+            address owner = _ownerOf(tokenId);
+            if (owner == player) {
+                uint256 info = trophyData_[tokenId];
+                if (info != 0) {
+                    bool invalid = (info & TROPHY_FLAG_MAP) != 0 ||
+                        (info & TROPHY_FLAG_AFFILIATE) != 0 ||
+                        (info & TROPHY_FLAG_STAKE) != 0 ||
+                        (info & TROPHY_FLAG_BAF) != 0 ||
+                        (info & TROPHY_FLAG_DECIMATOR) != 0;
+                    if (!invalid) {
                         unchecked {
                             total += 1;
                         }
@@ -556,9 +529,37 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         }
     }
 
+    function _decStakeStats(address player) private view returns (uint8 total, uint24 earliest) {
+        earliest = type(uint24).max;
+        uint256 len = stakedTrophyIds.length;
+        for (uint256 i; i < len; ) {
+            uint256 tokenId = stakedTrophyIds[i];
+            address owner = _ownerOf(tokenId);
+            if (owner == player) {
+                uint256 info = trophyData_[tokenId];
+                if (info != 0 && (info & TROPHY_FLAG_DECIMATOR) != 0) {
+                    unchecked {
+                        total += 1;
+                    }
+                    uint24 stakeLevel = uint24((info >> TROPHY_STAKE_LEVEL_SHIFT) & 0xFFFFFF);
+                    uint24 base = stakeLevel == 0
+                        ? uint24((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF)
+                        : stakeLevel;
+                    if (base < earliest) earliest = base;
+                }
+            }
+            unchecked {
+                ++i;
+            }
+        }
+        if (earliest == type(uint24).max) {
+            earliest = 0;
+        }
+    }
+
     function _ensurePlayerOwnsStaked(address player, uint256 tokenId) private view {
-        if (!trophyStaked[tokenId]) revert StakeInvalid();
-        address owner = address(uint160(nft.packedOwnershipOf(tokenId)));
+        if (stakedTrophyIndex[tokenId] == 0) revert StakeInvalid();
+        address owner = _ownerOf(tokenId);
         if (owner != player) revert StakeInvalid();
     }
 
@@ -574,7 +575,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
 
     function _stakeInternal(StakeParams memory params) private returns (StakeEventData memory data) {
         if (trophyData_[params.tokenId] == 0) revert StakeInvalid();
-        if (trophyStaked[params.tokenId]) revert TrophyStakeViolation(_STAKE_ERR_ALREADY_STAKED);
+        if (stakedTrophyIndex[params.tokenId] != 0) revert TrophyStakeViolation(_STAKE_ERR_ALREADY_STAKED);
         uint256 info = trophyData_[params.tokenId];
         uint256 levelValue = uint256(params.effectiveLevel & 0xFFFFFF);
         uint256 owed = info & TROPHY_OWED_MASK;
@@ -593,23 +594,17 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             trophyData_[params.tokenId] = infoWithStakeLevel;
             info = infoWithStakeLevel;
         }
-        trophyStaked[params.tokenId] = true;
         _addStakedTrophy(params.tokenId);
 
-        uint8 discountPct;
-
         if (params.targetMap) {
-            discountPct = 0;
             data.kind = 1;
             data.count = 0;
         } else if (params.targetAffiliate) {
-            discountPct = 0;
             data.kind = 2;
             data.count = 0;
         } else if (params.targetExterminator) {
             uint16 traitId = uint16((trophyData_[params.tokenId] >> 152) & 0xFFFF);
             _addExterminatorStakeTrait(params.player, traitId);
-            discountPct = 0;
             data.kind = 3;
             data.count = 0;
         } else if (params.targetBaf) {
@@ -621,29 +616,25 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
                 current += 1;
             }
             state.count = current;
-            discountPct = 0;
             data.kind = 5;
             data.count = current;
         } else if (params.targetDec) {
             // Decimator trophies stake purely to enable burn bonuses; no discounts or counters.
-            discountPct = 0;
             data.kind = 6;
             data.count = 0;
         } else {
-            discountPct = 0;
             data.kind = 4;
             data.count = 0;
         }
 
-        data.discountBps = uint16(discountPct) * 100;
+        data.discountBps = 0;
         return data;
     }
 
     function _unstakeInternal(StakeParams memory params) private returns (StakeEventData memory data) {
         uint256 info = trophyData_[params.tokenId];
         if (info == 0) revert StakeInvalid();
-        if (!trophyStaked[params.tokenId]) revert TrophyStakeViolation(_STAKE_ERR_NOT_STAKED);
-        trophyStaked[params.tokenId] = false;
+        if (stakedTrophyIndex[params.tokenId] == 0) revert TrophyStakeViolation(_STAKE_ERR_NOT_STAKED);
         _removeStakedTrophy(params.tokenId);
         if (params.targetMap) {
             mapStakeBonusPct_[params.player] = 0;
@@ -734,8 +725,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             uint24 base = stakeLevel == 0 ? uint24((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF) : stakeLevel;
             if (base < earliest) earliest = base;
             uint16 traitId = uint16((info >> 152) & 0xFFFF);
-            if (traitId >= 256) revert StakeInvalid();
-            exterminatorStakeTraits_[player][traitId] = true;
+            _addExterminatorStakeTrait(player, traitId);
             unchecked {
                 ++i;
             }
@@ -809,7 +799,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         }
         uint256 mintedCount = mintedEnd - startId;
 
-        uint256 mintedStart = nft.mintPlaceholders(mintedCount);
+        uint256 mintedStart = nft.mintPlaceholders(mintedCount, level);
         if (mintedStart != startId) {
             // Defensive: NFT must mint sequentially.
             revert InvalidToken();
@@ -858,7 +848,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     // Trophy awarding & end-level flows
     // ---------------------------------------------------------------------
     function _awardTrophyInternal(address to, uint8 kind, uint256 data, uint256 deferredWei, uint256 tokenId) private {
-        address currentOwner = address(uint160(nft.packedOwnershipOf(tokenId)));
+        address currentOwner = _ownerOf(tokenId);
         if (currentOwner != to) {
             nft.transferTrophy(currentOwner, to, tokenId);
         }
@@ -889,6 +879,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         (uint256 previousBase, uint256 currentBase) = nft.getBasePointers();
         uint24 currentLevel = game.level();
         uint256 tokenId = _placeholderTokenId(level, PURGE_TROPHY_KIND_STAKE, previousBase, currentBase, currentLevel);
+        if (tokenId == 0) return;
         _eraseTrophy(tokenId, PURGE_TROPHY_KIND_STAKE, true);
     }
 
@@ -959,7 +950,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
                 levelPlaceholder
             );
         } else {
-            if (levelTokenId != 0 && address(uint160(nft.packedOwnershipOf(levelTokenId))) == gameAddr) {
+            if (levelTokenId != 0 && _ownerOf(levelTokenId) == gameAddr) {
                 _eraseTrophy(levelTokenId, PURGE_TROPHY_KIND_LEVEL, true);
             }
         }
@@ -979,12 +970,12 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             TROPHY_FLAG_AFFILIATE;
         if (affiliateWinner != address(0)) {
             _awardTrophyInternal(affiliateWinner, PURGE_TROPHY_KIND_AFFILIATE, affiliateData, 0, affiliateTokenId);
-        } else if (affiliateTokenId != 0 && address(uint160(nft.packedOwnershipOf(affiliateTokenId))) == gameAddr) {
+        } else if (affiliateTokenId != 0 && _ownerOf(affiliateTokenId) == gameAddr) {
             _eraseTrophy(affiliateTokenId, PURGE_TROPHY_KIND_AFFILIATE, true);
         }
 
         // Stake placeholder: burn if still unassigned.
-        if (stakeTokenId != 0 && address(uint160(nft.packedOwnershipOf(stakeTokenId))) == gameAddr) {
+        if (stakeTokenId != 0 && _ownerOf(stakeTokenId) == gameAddr) {
             _eraseTrophy(stakeTokenId, PURGE_TROPHY_KIND_STAKE, true);
         }
     }
@@ -1020,7 +1011,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     }
 
     function _isTrophyStaked(uint256 tokenId) private view returns (bool) {
-        return trophyStaked[tokenId];
+        return stakedTrophyIndex[tokenId] != 0;
     }
 
     function _isDecimatorTrophy(uint256 info) private pure returns (bool) {
@@ -1039,8 +1030,8 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         uint256 len = stakedTrophyIds.length;
         for (uint256 i; i < len; ) {
             uint256 tokenId = stakedTrophyIds[i];
-            if (trophyStaked[tokenId] && _isBafTrophy(trophyData_[tokenId])) {
-                address owner = address(uint160(nft.packedOwnershipOf(tokenId)));
+            if (_isBafTrophy(trophyData_[tokenId])) {
+                address owner = _ownerOf(tokenId);
                 if (owner == player) {
                     unchecked {
                         count += 1;
@@ -1109,7 +1100,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     // ---------------------------------------------------------------------
 
     function claimTrophy(uint256 tokenId) external override {
-        address owner = address(uint160(nft.packedOwnershipOf(tokenId)));
+        address owner = _ownerOf(tokenId);
         if (owner != msg.sender) revert Unauthorized();
         if (game.rngLocked()) revert CoinPaused();
 
@@ -1179,7 +1170,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         if (game.rngLocked()) revert CoinPaused();
 
         address sender = msg.sender;
-        if (address(uint160(nft.packedOwnershipOf(tokenId))) != sender) revert Unauthorized();
+        if (_ownerOf(tokenId) != sender) revert Unauthorized();
 
         bool currentlyStaked = _isTrophyStaked(tokenId);
         uint24 currentLevel = game.level();
@@ -1205,7 +1196,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
 
         if (stake && sender.code.length != 0) revert StakeInvalid();
 
-        params.pureExterminatorTrophy = params.targetExterminator;
         params.effectiveLevel = effectiveLevel;
         params.currentLevel = currentLevel;
         params.priceUnit = priceUnit;
@@ -1225,7 +1215,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
 
         nft.setTrophyPackedInfo(tokenId, storedKind, stake);
 
-        emit TrophyStakeChanged(sender, tokenId, eventData.kind, stake, 0, eventData.discountBps);
+        emit TrophyStakeChanged(sender, tokenId, eventData.kind, stake, eventData.count, eventData.discountBps);
     }
 
     function refreshStakeBonuses(
@@ -1283,14 +1273,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     }
 
     function hasExterminatorStake(address player) external view override returns (bool) {
-        bool[256] storage traits = exterminatorStakeTraits_[player];
-        for (uint256 i; i < 256; ) {
-            if (traits[i]) return true;
-            unchecked {
-                ++i;
-            }
-        }
-        return false;
+        return exterminatorStakeTraitCount[player] != 0;
     }
 
     function mapStakeDiscount(address player) external view override returns (uint8) {
@@ -1304,7 +1287,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         uint24 baseLevel = uint24((info >> TROPHY_BASE_LEVEL_SHIFT) & 0xFFFFFF);
 
         address sender = msg.sender;
-        if (address(uint160(nft.packedOwnershipOf(tokenId))) != sender) revert Unauthorized();
+        if (_ownerOf(tokenId) != sender) revert Unauthorized();
 
         nft.clearApproval(tokenId);
 
@@ -1337,7 +1320,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
                 tokenId = otherToken;
             }
         }
-        owner = address(uint160(nft.packedOwnershipOf(tokenId)));
+        owner = _ownerOf(tokenId);
     }
 
     function trophyToken(uint24 level, uint8 kind) external view override returns (uint256 tokenId) {
@@ -1345,14 +1328,14 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         uint24 currentLevel = game.level();
         tokenId = _placeholderTokenId(level, kind, previousBase, currentBase, currentLevel);
         if (tokenId == 0) return 0;
-        address owner = address(uint160(nft.packedOwnershipOf(tokenId)));
+        address owner = _ownerOf(tokenId);
         if (owner == address(0)) {
             return 0; // burned placeholder
         }
     }
 
     function trophyOwner(uint256 tokenId) external view override returns (address owner) {
-        owner = address(uint160(nft.packedOwnershipOf(tokenId)));
+        owner = _ownerOf(tokenId);
     }
 
     function rewardTrophyByToken(uint256 tokenId, uint256 amountWei, uint24 level) external override onlyGameOrCoin {
@@ -1368,7 +1351,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         uint24 currentLevel = game.level();
         uint256 tokenId = _placeholderTokenId(level, kind, previousBase, currentBase, currentLevel);
         if (tokenId == 0) return false;
-        address owner = address(uint160(nft.packedOwnershipOf(tokenId)));
+        address owner = _ownerOf(tokenId);
         if (owner == address(0)) return false; // burned placeholder
         _addTrophyRewardInternal(tokenId, amountWei, level);
         return true;
@@ -1383,7 +1366,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         uint24 currentLevel = game.level();
         uint256 tokenId = _placeholderTokenId(level, kind, previousBase, currentBase, currentLevel);
         if (tokenId == 0) return false;
-        address owner = address(uint160(nft.packedOwnershipOf(tokenId)));
+        address owner = _ownerOf(tokenId);
         if (owner == address(0)) return false; // burned placeholder
         _addTrophyRewardInternalClaimsTen(tokenId, amountWei, level);
         return true;
@@ -1450,7 +1433,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     }
 
     function isTrophyStaked(uint256 tokenId) external view override returns (bool) {
-        return trophyStaked[tokenId];
+        return stakedTrophyIndex[tokenId] != 0;
     }
 
     function trophyData(uint256 tokenId) external view override returns (uint256 rawData) {
