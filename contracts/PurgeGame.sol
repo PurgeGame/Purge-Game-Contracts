@@ -261,6 +261,7 @@ contract PurgeGame is PurgeGameStorage {
     function isBafLevelActive(uint24 lvl) external view returns (bool) {
         if (lvl == 0) return false;
         if ((lvl % 10) != 0) return false;
+        if (rngLockedFlag && jackpotCounter >= 9) return false; // freeze BAF once the 10th jackpot RNG is in-flight
         return gameState == 3;
     }
 
