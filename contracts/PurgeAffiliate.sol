@@ -13,6 +13,10 @@ interface IPurgeCoinAffiliate {
     function affiliatePrimePresale() external;
 }
 
+interface IPurgeBondsPresale {
+    function ingestPresaleEth() external payable;
+}
+
 contract PurgeAffiliate {
     // ---------------------------------------------------------------------
     // Events
@@ -82,7 +86,7 @@ contract PurgeAffiliate {
     mapping(uint24 => PlayerScore) private affiliateTopByLevel;
     uint256 private presaleInventoryBase = PRESALE_SUPPLY_TOKENS * MILLION; // used before coin is wired
     bool private preCoinActive = true;
-    uint256 private rewardSeedEth; // holds 80% of presale proceeds before game is wired
+    uint256 private rewardSeedEth; // legacy accumulator (unused while presale forwards directly to bonds)
     bool private presaleShutdown; // permanently stops new presale purchases once coin is wired
     uint256 private presalePricePer1000 = PRESALE_PRICE_START_1000;
     uint48 private presaleLastDay;
@@ -194,6 +198,7 @@ contract PurgeAffiliate {
             revert AlreadyConfigured();
         }
     }
+
     // ---------------------------------------------------------------------
     // External player entrypoints
     // ---------------------------------------------------------------------
@@ -223,6 +228,25 @@ contract PurgeAffiliate {
     /// @notice Return the recorded referrer for `player` (zero address if none).
     function getReferrer(address player) external view returns (address) {
         return _referrerAddress(player);
+    }
+
+    /// @notice Allow the bonds contract to permanently close presale sales.
+    function shutdownPresale() external {
+        if (msg.sender != bonds) revert OnlyBonds();
+        presaleShutdown = true;
+    }
+
+    /// @notice Withdraw admin funds (excludes prize-pool-reserved ETH).
+    function withdrawAdmin(address payable to, uint256 amount) external {
+        if (msg.sender != bonds) revert OnlyBonds();
+        if (to == address(0)) revert Zero();
+        uint256 reserved = rewardSeedEth;
+        uint256 bal = address(this).balance;
+        uint256 available = bal > reserved ? bal - reserved : 0;
+        if (amount == 0) amount = available;
+        if (amount == 0 || amount > available) revert Insufficient();
+        (bool ok, ) = to.call{value: amount}("");
+        if (!ok) revert Insufficient();
     }
 
     /// @notice Presale purchase flow (ETH -> PURGE) with linear price ramp and deferred bonuses.
@@ -256,24 +280,11 @@ contract PurgeAffiliate {
         presalePrincipal[buyer] += amountBase;
         presaleCoinEarned[buyer] += amountBase;
 
-        uint256 gameCut = costWei;
-        rewardSeedEth += gameCut;
+        IPurgeBondsPresale(bonds).ingestPresaleEth{value: costWei}(); // bonds routes 90% to prize pool
 
         if (refund != 0) {
             (bool refundOk, ) = buyer.call{value: refund}("");
             if (!refundOk) revert Insufficient();
-        }
-
-        // All proceeds go to the game (or seed pool if unwired); no admin cut.
-        if (gameCut != costWei) {
-            address gameAddr = address(purgeGame);
-            if (gameAddr != address(0)) {
-                uint256 delta = costWei - gameCut;
-                (bool ok, ) = payable(gameAddr).call{value: delta}("");
-                if (!ok) revert Insufficient();
-            } else {
-                rewardSeedEth += costWei - gameCut;
-            }
         }
 
         _bumpPresalePrice(costWei);

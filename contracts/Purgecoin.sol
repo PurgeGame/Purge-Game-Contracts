@@ -12,10 +12,6 @@ import {IPurgeGame} from "./interfaces/IPurgeGame.sol";
 import {IPurgeQuestModule, QuestInfo, PlayerQuestView} from "./interfaces/IPurgeQuestModule.sol";
 import {IPurgeJackpots} from "./interfaces/IPurgeJackpots.sol";
 
-interface IPurgeBonds {
-    function onBondMint(uint256 amount) external;
-}
-
 contract Purgecoin {
     // ---------------------------------------------------------------------
     // Events
@@ -452,6 +448,8 @@ contract Purgecoin {
         stored.topStakeWinner = res.topStakeWinner;
         stored.topStakeAmount = res.topStakeAmount;
         stored.resolved = true;
+        // Award the stake trophy as soon as the resolution snapshot is finalized.
+        _awardStakeTrophy(level, stored);
         return stored;
     }
 
@@ -557,9 +555,6 @@ contract Purgecoin {
             bonus = (position.modifiedAmount * res.stakeFreeMoney) / res.winningModifiedTotal;
         }
         payout = base + bonus;
-
-        // Award stake trophy to the top modified stake when applicable.
-        _awardStakeTrophy(targetLevel, res);
 
         emit StakeClaimed(player, targetLevel, position.risk, payout, true);
     }
@@ -829,7 +824,6 @@ contract Purgecoin {
         address sender = msg.sender;
         if (sender != bonds) revert OnlyGame();
         _mint(bonds, amount);
-        IPurgeBonds(bonds).onBondMint(amount);
     }
 
     /// @notice Grant a pending coinflip stake during gameplay flows instead of minting PURGE.
@@ -1158,6 +1152,7 @@ contract Purgecoin {
         bool rngLocked = purgeGame.rngLocked();
         uint24 currLevel = purgeGame.level();
         uint48 targetDay = settleDay + (rngLocked ? 2 : 1);
+        uint48 currentDay = settleDay;
         if (targetDay <= currentDay) {
             targetDay = currentDay + 1;
         }
