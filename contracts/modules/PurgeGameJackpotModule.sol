@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import {IPurgeCoinModule, IPurgeGameTrophiesModule} from "./PurgeGameModuleInterfaces.sol";
 import {PurgeGameStorage} from "../storage/PurgeGameStorage.sol";
+import {PurgeTraitUtils} from "../PurgeTraitUtils.sol";
 
 interface IStETH {
     function balanceOf(address account) external view returns (uint256);
@@ -42,6 +43,8 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
     uint16 private constant DAILY_JACKPOT_BPS_8 = 1153;
     uint16 private constant DAILY_JACKPOT_BPS_9 = 1225;
     uint256 private constant TROPHY_FLAG_MAP = uint256(1) << 200;
+    uint32 private constant WRITES_BUDGET_SAFE = 800;
+    uint64 private constant MAP_LCG_MULT = 0x5851F42D4C957F2D;
 
     // Packed parameters for a single jackpot run to keep the call surface lean.
     struct JackpotParams {
@@ -761,6 +764,163 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         uint256 scale = 10_000 - discount;
         if (scale < 5000) scale = 5000;
         return uint16(scale);
+    }
+
+    /// @notice Process a batch of map mints using a caller-provided writes budget (0 = auto).
+    /// @param writesBudget Count of SSTORE writes allowed this tx; hard-clamped to stay ≤15M-safe.
+    /// @return finished True if all pending map mints have been fully processed.
+    function processMapBatch(uint32 writesBudget) external returns (bool finished) {
+        uint256 total = pendingMapMints.length;
+        if (airdropIndex >= total) return true;
+
+        if (writesBudget == 0) writesBudget = WRITES_BUDGET_SAFE;
+        uint24 lvl = level;
+        if (gameState == 3) {
+            unchecked {
+                ++lvl;
+            }
+        }
+        bool throttleWrites;
+        if (phase <= 1) {
+            throttleWrites = true;
+            phase = 2;
+        } else if (phase == 3) {
+            bool firstAirdropBatch = (airdropIndex == 0 && airdropMapsProcessedCount == 0);
+            if (firstAirdropBatch) {
+                throttleWrites = true;
+            }
+        }
+        if (throttleWrites) {
+            writesBudget -= (writesBudget * 35) / 100; // 65% scaling
+        }
+        uint32 used = 0;
+        uint256 entropy = rngWordCurrent;
+
+        while (airdropIndex < total && used < writesBudget) {
+            address player = pendingMapMints[airdropIndex];
+            uint32 owed = playerMapMintsOwed[player];
+            if (owed == 0) {
+                unchecked {
+                    ++airdropIndex;
+                }
+                airdropMapsProcessedCount = 0;
+                continue;
+            }
+
+            uint32 room = writesBudget - used;
+
+            uint32 baseOv = 2;
+            if (airdropMapsProcessedCount == 0 && owed <= 2) {
+                baseOv += 2;
+            }
+            if (room <= baseOv) break;
+            room -= baseOv;
+
+            uint32 maxT = (room <= 256) ? (room / 2) : (room - 256);
+            uint32 take = owed > maxT ? maxT : owed;
+            if (take == 0) break;
+
+            uint256 baseKey = (uint256(lvl) << 224) | (uint256(airdropIndex) << 192) | (uint256(uint160(player)) << 32);
+            _raritySymbolBatch(player, baseKey, airdropMapsProcessedCount, take, entropy);
+
+            uint32 writesThis = (take <= 256) ? (take * 2) : (take + 256);
+            writesThis += baseOv;
+            if (take == owed) {
+                writesThis += 1;
+            }
+
+            uint32 remainingOwed;
+            unchecked {
+                remainingOwed = owed - take;
+                playerMapMintsOwed[player] = remainingOwed;
+                airdropMapsProcessedCount += take;
+                used += writesThis;
+            }
+            if (remainingOwed == 0) {
+                unchecked {
+                    ++airdropIndex;
+                }
+                airdropMapsProcessedCount = 0;
+            }
+        }
+        return airdropIndex >= total;
+    }
+
+    function _raritySymbolBatch(
+        address player,
+        uint256 baseKey,
+        uint32 startIndex,
+        uint32 count,
+        uint256 entropyWord
+    ) private {
+        uint32[256] memory counts;
+        uint8[256] memory touchedTraits;
+        uint16 touchedLen;
+
+        uint32 endIndex = startIndex + count;
+        uint32 i = startIndex;
+
+        while (i < endIndex) {
+            uint32 groupIdx = i >> 4; // per 16 symbols
+
+            uint256 seed;
+            unchecked {
+                seed = (baseKey + groupIdx) ^ entropyWord;
+            }
+            uint64 s = uint64(seed) | 1;
+            uint8 offset = uint8(i & 15);
+            unchecked {
+                s = s * (MAP_LCG_MULT + uint64(offset)) + uint64(offset);
+            }
+
+            for (uint8 j = offset; j < 16 && i < endIndex; ) {
+                unchecked {
+                    s = s * MAP_LCG_MULT + 1;
+
+                    uint8 quadrant = uint8(i & 3);
+                    uint8 traitId = PurgeTraitUtils.traitFromWord(s) + (quadrant << 6);
+
+                    if (counts[traitId]++ == 0) {
+                        touchedTraits[touchedLen++] = traitId;
+                    }
+                    ++i;
+                    ++j;
+                }
+            }
+        }
+
+        uint24 lvl = uint24(baseKey >> 224); // level is encoded into the base key
+
+        uint256 levelSlot;
+        assembly ("memory-safe") {
+            mstore(0x00, lvl)
+            mstore(0x20, traitPurgeTicket.slot)
+            levelSlot := keccak256(0x00, 0x40)
+        }
+
+        for (uint16 u; u < touchedLen; ) {
+            uint8 traitId = touchedTraits[u];
+            uint32 occurrences = counts[traitId];
+
+            assembly ("memory-safe") {
+                let elem := add(levelSlot, traitId)
+                let len := sload(elem)
+                sstore(elem, add(len, occurrences))
+
+                mstore(0x00, elem)
+                let data := keccak256(0x00, 0x20)
+                for {
+                    let k := 0
+                } lt(k, occurrences) {
+                    k := add(k, 1)
+                } {
+                    sstore(add(data, add(len, k)), player)
+                }
+            }
+            unchecked {
+                ++u;
+            }
+        }
     }
 
     function _clearDailyPurgeCount() private {

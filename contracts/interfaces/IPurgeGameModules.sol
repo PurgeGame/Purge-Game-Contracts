@@ -35,4 +35,6 @@ interface IPurgeGameJackpotModule {
         uint256 rngWord,
         address stethAddr
     ) external returns (uint256 effectiveWei);
+
+    function processMapBatch(uint32 writesBudget) external returns (bool finished);
 }

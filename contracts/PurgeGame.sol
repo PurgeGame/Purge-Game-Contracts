@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {PurgeTraitUtils} from "./PurgeTraitUtils.sol";
 import {IPurgeGameNFT} from "./PurgeGameNFT.sol";
 import {IPurgeGameTrophies} from "./PurgeGameTrophies.sol";
 import {IPurgeCoinModule, IPurgeGameTrophiesModule} from "./modules/PurgeGameModuleInterfaces.sol";
@@ -117,10 +116,8 @@ contract PurgeGame is PurgeGameStorage {
     // Game Constants
     // -----------------------
     uint48 private constant JACKPOT_RESET_TIME = 82620; // Offset anchor for "daily" windows
-    uint32 private constant WRITES_BUDGET_SAFE = 800; // Keeps map batching within the ~15M gas budget
     uint32 private constant TRAIT_REBUILD_TOKENS_PER_TX = 2500; // Max tokens processed per trait rebuild slice (post-level-1)
     uint32 private constant TRAIT_REBUILD_TOKENS_LEVEL1 = 1800; // Level 1 first-slice cap
-    uint64 private constant MAP_LCG_MULT = 0x5851F42D4C957F2D; // LCG multiplier for map RNG slices
     uint8 private constant JACKPOT_LEVEL_CAP = 10;
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
     uint24 private constant DECIMATOR_SPECIAL_LEVEL = 100;
@@ -196,47 +193,29 @@ contract PurgeGame is PurgeGameStorage {
         if (stEthToken_ == address(0) || jackpots_ == address(0) || bonds_ == address(0)) revert E();
         jackpots = jackpots_;
         bonds = bonds_;
-        // Allow Purgecoin to pull stETH for yield skims during Burnie.
-        IStETH(stEthToken_).approve(purgeCoinContract, type(uint256).max);
         deployTimestamp = uint48(block.timestamp);
     }
 
     // --- View: lightweight game status -------------------------------------------------
 
-    /// @notice Snapshot key game state for UI/indexers.
-    /// @return gameState_       FSM state (0=idle,1=pregame,2=purchase/airdrop,3=purge)
-    /// @return phase_           Airdrop sub-phase (0..7)
-    /// @return jackpotCounter_  Daily jackpots processed this level
-    /// @return price_           Current mint price (wei)
-    /// @return rewardPool_      Reward pool earmarked for next level (wei)
-    /// @return prizePoolTarget  Last level's prize pool snapshot (wei)
-    /// @return prizePoolCurrent Active prize pool (currentPrizePool)
-    /// @return nextPrizePool_   Pool accumulated during purchases before the MAP jackpot flush
-    /// @return earlyPurgePercent_ Ratio of current prize pool vs. prior level prize pool (percent, capped at 255)
-    function gameInfo()
-        external
-        view
-        returns (
-            uint8 gameState_,
-            uint8 phase_,
-            uint8 jackpotCounter_,
-            uint256 price_,
-            uint256 rewardPool_,
-            uint256 prizePoolTarget,
-            uint256 prizePoolCurrent,
-            uint256 nextPrizePool_,
-            uint8 earlyPurgePercent_
-        )
-    {
-        gameState_ = gameState;
-        phase_ = phase;
-        jackpotCounter_ = jackpotCounter;
-        price_ = price;
-        rewardPool_ = rewardPool;
-        prizePoolTarget = lastPrizePool;
-        prizePoolCurrent = currentPrizePool;
-        nextPrizePool_ = nextPrizePool;
-        earlyPurgePercent_ = earlyPurgePercent;
+    function jackpotCounterView() external view returns (uint8) {
+        return jackpotCounter;
+    }
+
+    function rewardPoolView() external view returns (uint256) {
+        return rewardPool;
+    }
+
+    function prizePoolTargetView() external view returns (uint256) {
+        return lastPrizePool;
+    }
+
+    function prizePoolCurrentView() external view returns (uint256) {
+        return currentPrizePool;
+    }
+
+    function nextPrizePoolView() external view returns (uint256) {
+        return nextPrizePool;
     }
 
     // --- State machine: advance one tick ------------------------------------------------
@@ -1307,18 +1286,6 @@ contract PurgeGame is PurgeGameStorage {
         return currentWord;
     }
 
-    /// @notice Pay PURGE to nudge the next RNG word by +1; cost scales +10% per queued nudge and resets after fulfillment.
-    /// @dev Only available while RNG is unlocked (before a VRF request is in-flight).
-    function reverseFlip() external {
-        if (rngLockedFlag) revert RngLocked();
-        uint256 reversals = totalFlipReversals;
-        uint256 cost = _currentNudgeCost(reversals);
-        coin.burnCoin(msg.sender, cost);
-        uint256 newCount = reversals + 1;
-        totalFlipReversals = newCount;
-        emit ReverseFlip(msg.sender, newCount, cost);
-    }
-
     /// @notice Handle ETH payments for purchases; forwards affiliate rewards as coinflip credits.
     /// @param scaledQty Quantity scaled by 100 (to keep integer math with `price`).
     /// @param affiliateCode Affiliate/referral code provided by the buyer.
@@ -1328,84 +1295,11 @@ contract PurgeGame is PurgeGameStorage {
     /// @param writesBudget Count of SSTORE writes allowed this tx; hard-clamped to stay ≤15M-safe.
     /// @return finished True if all pending map mints have been fully processed.
     function _processMapBatch(uint32 writesBudget) internal returns (bool finished) {
-        uint256 total = pendingMapMints.length;
-        if (airdropIndex >= total) return true;
-
-        if (writesBudget == 0) writesBudget = WRITES_BUDGET_SAFE;
-        uint24 lvl = level;
-        if (gameState == 3) {
-            unchecked {
-                ++lvl;
-            }
-        }
-        bool throttleWrites;
-        if (phase <= 1) {
-            throttleWrites = true;
-            phase = 2;
-        } else if (phase == 3) {
-            bool firstAirdropBatch = (airdropIndex == 0 && airdropMapsProcessedCount == 0);
-            if (firstAirdropBatch) {
-                throttleWrites = true;
-            }
-        }
-        if (throttleWrites) {
-            writesBudget -= (writesBudget * 35) / 100; // 65% scaling
-        }
-        uint32 used = 0;
-        uint256 entropy = rngWordCurrent;
-
-        while (airdropIndex < total && used < writesBudget) {
-            address player = pendingMapMints[airdropIndex];
-            uint32 owed = playerMapMintsOwed[player];
-            if (owed == 0) {
-                unchecked {
-                    ++airdropIndex;
-                }
-                airdropMapsProcessedCount = 0;
-                continue;
-            }
-
-            uint32 room = writesBudget - used;
-
-            // per-address overhead (reserve before sizing 'take')
-            uint32 baseOv = 2;
-            if (airdropMapsProcessedCount == 0 && owed <= 2) {
-                baseOv += 2;
-            }
-            if (room <= baseOv) break;
-            room -= baseOv;
-
-            // existing writes-based clamp
-            uint32 maxT = (room <= 256) ? (room / 2) : (room - 256);
-            uint32 take = owed > maxT ? maxT : owed;
-            if (take == 0) break;
-
-            // do the work
-            uint256 baseKey = (uint256(lvl) << 224) | (uint256(airdropIndex) << 192) | (uint256(uint160(player)) << 32);
-            _raritySymbolBatch(player, baseKey, airdropMapsProcessedCount, take, entropy);
-
-            // writes accounting: ticket writes + per-address overhead + finish overhead
-            uint32 writesThis = (take <= 256) ? (take * 2) : (take + 256);
-            writesThis += baseOv;
-            if (take == owed) {
-                writesThis += 1;
-            }
-
-            uint32 remainingOwed;
-            unchecked {
-                remainingOwed = owed - take;
-                playerMapMintsOwed[player] = remainingOwed;
-                airdropMapsProcessedCount += take;
-                used += writesThis;
-            }
-            if (remainingOwed == 0) {
-                unchecked {
-                    ++airdropIndex;
-                }
-                airdropMapsProcessedCount = 0;
-            }
-        }
-        return airdropIndex >= total;
+        (bool ok, bytes memory data) = jackpotModule.delegatecall(
+            abi.encodeWithSelector(IPurgeGameJackpotModule.processMapBatch.selector, writesBudget)
+        );
+        if (!ok || data.length == 0) return false;
+        return abi.decode(data, (bool));
     }
 
     function _maybeResolveBonds() private returns (bool worked) {
@@ -1491,6 +1385,18 @@ contract PurgeGame is PurgeGameStorage {
         rngLockedFlag = false;
         vrfRequestId = 0;
         rngRequestTime = 0;
+    }
+
+    /// @notice Pay PURGE to nudge the next RNG word by +1; cost scales +10% per queued nudge and resets after fulfillment.
+    /// @dev Only available while RNG is unlocked (before a VRF request is in-flight).
+    function reverseFlip() external {
+        if (rngLockedFlag) revert RngLocked();
+        uint256 reversals = totalFlipReversals;
+        uint256 cost = _currentNudgeCost(reversals);
+        coin.burnCoin(msg.sender, cost);
+        uint256 newCount = reversals + 1;
+        totalFlipReversals = newCount;
+        emit ReverseFlip(msg.sender, newCount, cost);
     }
 
     function rawFulfillRandomWords(uint256 requestId, uint256[] calldata randomWords) external {
@@ -1698,95 +1604,6 @@ contract PurgeGame is PurgeGameStorage {
         }
         traitRemaining[traitId] = stored;
         return stored == endLevel;
-    }
-
-    /// @notice Generate `count` random “map symbols” for `player`, record tickets & contributions.
-    /// @dev
-    /// - Uses a xorshift* PRNG seeded per 16‑symbol group from `(baseKey + group, entropyWord)`.
-    /// - Each symbol maps to one of 256 trait buckets (0..63 | 64..127 | 128..191 | 192..255) via `PurgeTraitUtils.traitFromWord`.
-    /// - After counting occurrences per trait in memory, appends `player` into the purge ticket list
-    ///   for each touched trait exactly `occurrences` times and increases contribution counters.
-    /// @param player      Recipient whose tickets/contributions are updated.
-    /// @param baseKey     Per‑player base key (e.g., derived from `baseTokenId` and player index).
-    /// @param startIndex  Starting symbol index for this player (resume support).
-    /// @param count       Number of symbols to generate in this call.
-    /// @param entropyWord Global RNG word for this level-step; combined with `baseKey` for per-group seeds.
-    function _raritySymbolBatch(
-        address player,
-        uint256 baseKey,
-        uint32 startIndex,
-        uint32 count,
-        uint256 entropyWord
-    ) private {
-        uint32[256] memory counts;
-        uint8[256] memory touchedTraits;
-        uint16 touchedLen;
-
-        uint32 endIndex = startIndex + count;
-        uint32 i = startIndex;
-
-        while (i < endIndex) {
-            uint32 groupIdx = i >> 4; // per 16 symbols
-
-            uint256 seed;
-            unchecked {
-                seed = (baseKey + groupIdx) ^ entropyWord;
-            }
-            uint64 s = uint64(seed) | 1;
-            uint8 offset = uint8(i & 15);
-            unchecked {
-                s = s * (MAP_LCG_MULT + uint64(offset)) + uint64(offset);
-            }
-
-            for (uint8 j = offset; j < 16 && i < endIndex; ) {
-                unchecked {
-                    s = s * MAP_LCG_MULT + 1;
-
-                    uint8 quadrant = uint8(i & 3);
-                    uint8 traitId = PurgeTraitUtils.traitFromWord(s) + (quadrant << 6);
-
-                    if (counts[traitId]++ == 0) {
-                        touchedTraits[touchedLen++] = traitId;
-                    }
-                    ++i;
-                    ++j;
-                }
-            }
-        }
-
-        uint24 lvl = uint24(baseKey >> 224); // level is encoded into the base key
-
-        uint256 levelSlot;
-        assembly ("memory-safe") {
-            mstore(0x00, lvl)
-            mstore(0x20, traitPurgeTicket.slot)
-            levelSlot := keccak256(0x00, 0x40)
-        }
-
-        // One length SSTORE per touched trait, then contiguous ticket writes
-        for (uint16 u; u < touchedLen; ) {
-            uint8 traitId = touchedTraits[u];
-            uint32 occurrences = counts[traitId];
-
-            assembly ("memory-safe") {
-                let elem := add(levelSlot, traitId)
-                let len := sload(elem)
-                sstore(elem, add(len, occurrences))
-
-                mstore(0x00, elem)
-                let data := keccak256(0x00, 0x20)
-                for {
-                    let k := 0
-                } lt(k, occurrences) {
-                    k := add(k, 1)
-                } {
-                    sstore(add(data, add(len, k)), player)
-                }
-            }
-            unchecked {
-                ++u;
-            }
-        }
     }
 
     function getLastExterminatedTrait() external view returns (uint16) {
