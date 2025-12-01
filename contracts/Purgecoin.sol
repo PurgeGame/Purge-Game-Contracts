@@ -701,57 +701,61 @@ contract Purgecoin {
     function wire(address[] calldata addresses) external {
         if (msg.sender != bonds) revert OnlyBonds();
 
-        address game_ = addresses.length > 0 ? addresses[0] : address(0);
-        address nft_ = addresses.length > 1 ? addresses[1] : address(0);
-        address trophies_ = addresses.length > 2 ? addresses[2] : address(0);
-        address questModule_ = addresses.length > 3 ? addresses[3] : address(0);
-        address jackpots_ = addresses.length > 4 ? addresses[4] : address(0);
+        _setGame(addresses.length > 0 ? addresses[0] : address(0));
+        _setNft(addresses.length > 1 ? addresses[1] : address(0));
+        _setTrophies(addresses.length > 2 ? addresses[2] : address(0));
+        _setQuestModule(addresses.length > 3 ? addresses[3] : address(0));
+        _setJackpots(addresses.length > 4 ? addresses[4] : address(0));
+    }
 
-        if (game_ != address(0)) {
-            address currentGame = address(purgeGame);
-            if (currentGame == address(0)) {
-                purgeGame = IPurgeGame(game_);
-            } else if (game_ != currentGame) {
-                revert AlreadyWired();
-            }
+    function _setGame(address game_) private {
+        if (game_ == address(0)) return;
+        address current = address(purgeGame);
+        if (current == address(0)) {
+            purgeGame = IPurgeGame(game_);
+        } else if (game_ != current) {
+            revert AlreadyWired();
         }
+    }
 
-        if (nft_ != address(0)) {
-            address currentNft = address(purgeGameNFT);
-            if (currentNft == address(0)) {
-                purgeGameNFT = PurgeGameNFT(nft_);
-            } else if (nft_ != currentNft) {
-                revert AlreadyWired();
-            }
+    function _setNft(address nft_) private {
+        if (nft_ == address(0)) return;
+        address current = address(purgeGameNFT);
+        if (current == address(0)) {
+            purgeGameNFT = PurgeGameNFT(nft_);
+        } else if (nft_ != current) {
+            revert AlreadyWired();
         }
+    }
 
-        if (trophies_ != address(0)) {
-            address currentTrophies = address(purgeGameTrophies);
-            if (currentTrophies == address(0)) {
-                purgeGameTrophies = IPurgeGameTrophies(trophies_);
-            } else if (trophies_ != currentTrophies) {
-                revert AlreadyWired();
-            }
+    function _setTrophies(address trophies_) private {
+        if (trophies_ == address(0)) return;
+        address current = address(purgeGameTrophies);
+        if (current == address(0)) {
+            purgeGameTrophies = IPurgeGameTrophies(trophies_);
+        } else if (trophies_ != current) {
+            revert AlreadyWired();
         }
+    }
 
-        if (questModule_ != address(0)) {
-            address currentQuest = address(questModule);
-            if (currentQuest == address(0)) {
-                questModule = IPurgeQuestModule(questModule_);
-            } else if (questModule_ != currentQuest) {
-                revert AlreadyWired();
-            }
+    function _setQuestModule(address questModule_) private {
+        if (questModule_ == address(0)) return;
+        address current = address(questModule);
+        if (current == address(0)) {
+            questModule = IPurgeQuestModule(questModule_);
+        } else if (questModule_ != current) {
+            revert AlreadyWired();
         }
+    }
 
-        if (jackpots_ != address(0)) {
-            address currentJackpots = jackpots;
-            if (currentJackpots == address(0)) {
-                jackpots = jackpots_;
-            } else if (jackpots_ != currentJackpots) {
-                revert AlreadyWired();
-            }
+    function _setJackpots(address jackpots_) private {
+        if (jackpots_ == address(0)) return;
+        address current = jackpots;
+        if (current == address(0)) {
+            jackpots = jackpots_;
+        } else if (jackpots_ != current) {
+            revert AlreadyWired();
         }
-
     }
 
     /// @notice One-time presale mint from the affiliate contract; callable only by affiliate.

@@ -37,7 +37,6 @@ interface IPurgeGameTrophies {
         bool invertTrophy;
     }
 
-    function wire(address[] calldata addresses) external;
     function wireAndPrime(address[] calldata addresses, uint24 firstLevel) external;
 
     function clearStakePreview(uint24 level) external;
@@ -252,21 +251,16 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     // ---------------------------------------------------------------------
     // Constructor
     // ---------------------------------------------------------------------
-    constructor(address nft_) {
-        if (nft_ == address(0)) revert ZeroAddress();
+    constructor(address nft_, address coin_) {
+        if (nft_ == address(0) || coin_ == address(0)) revert ZeroAddress();
         nft = IPurgeGameNftModule(nft_);
+        coinAddress = coin_;
+        coin = IPurgecoinMinimal(coin_);
     }
 
     // ---------------------------------------------------------------------
     // Wiring
     // ---------------------------------------------------------------------
-    /// @notice Wire game and coin contracts using an address array ([game, coin]); set-once per slot.
-    function wire(address[] calldata addresses) external override {
-        address gameAddr = addresses.length > 0 ? addresses[0] : address(0);
-        address coinAddr = addresses.length > 1 ? addresses[1] : address(0);
-        _wire(gameAddr, coinAddr);
-    }
-
     function wireAndPrime(address[] calldata addresses, uint24 firstLevel) external override {
         address gameAddr = addresses.length > 0 ? addresses[0] : address(0);
         address coinAddr = addresses.length > 1 ? addresses[1] : address(0);
@@ -1478,11 +1472,10 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
 
     function _wire(address game_, address coin_) private {
         if (gameAddress != address(0)) revert AlreadyWired();
-        if (game_ == address(0) || coin_ == address(0)) revert ZeroAddress();
-        if (msg.sender != coin_) revert OnlyCoin();
+        if (game_ == address(0)) revert ZeroAddress();
+        if (msg.sender != coinAddress) revert OnlyCoin();
+        if (coin_ != address(0) && coin_ != coinAddress) revert Unauthorized();
         gameAddress = game_;
-        coinAddress = coin_;
         game = IPurgeGameMinimal(game_);
-        coin = IPurgecoinMinimal(coin_);
     }
 }

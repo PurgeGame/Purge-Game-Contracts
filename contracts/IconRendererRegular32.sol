@@ -241,22 +241,26 @@ contract IconRendererRegular32 {
     /// @notice Wire both the game controller and ERC721 contract in a single call.
     /// @dev Callable only by bonds; set-once semantics.
     function wire(address[] calldata addresses) external onlyBonds {
-        address gameAddr = addresses.length > 0 ? addresses[0] : address(0);
-        address nftAddr = addresses.length > 1 ? addresses[1] : address(0);
-        if (gameAddr != address(0)) {
-            if (game == address(0)) {
-                game = gameAddr;
-            } else if (game != gameAddr) {
-                revert E();
-            }
+        _setGame(addresses.length > 0 ? addresses[0] : address(0));
+        _setNft(addresses.length > 1 ? addresses[1] : address(0));
+    }
+
+    function _setGame(address gameAddr) private {
+        if (gameAddr == address(0)) return;
+        if (game == address(0)) {
+            game = gameAddr;
+        } else if (game != gameAddr) {
+            revert E();
         }
-        if (nftAddr != address(0)) {
-            address currentNft = address(nft);
-            if (currentNft == address(0)) {
-                nft = IERC721Lite(nftAddr);
-            } else if (currentNft != nftAddr) {
-                revert E();
-            }
+    }
+
+    function _setNft(address nftAddr) private {
+        if (nftAddr == address(0)) return;
+        address current = address(nft);
+        if (current == address(0)) {
+            nft = IERC721Lite(nftAddr);
+        } else if (current != nftAddr) {
+            revert E();
         }
     }
 

@@ -100,7 +100,10 @@ contract IconRendererTrophy32 {
 
     /// @notice Wire NFT contract in a single call; callable only by bonds, set-once.
     function wire(address[] calldata addresses) external onlyBonds {
-        address nftAddr = addresses.length > 1 ? addresses[1] : address(0);
+        _setNft(addresses.length > 0 ? addresses[0] : address(0));
+    }
+
+    function _setNft(address nftAddr) private {
         if (nftAddr == address(0)) return;
         address current = address(nft);
         if (current == address(0)) {

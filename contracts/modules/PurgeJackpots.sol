@@ -144,36 +144,38 @@ contract PurgeJackpots is IPurgeJackpots {
     function wire(address[] calldata addresses) external override {
         if (msg.sender != bonds) revert OnlyBonds();
 
-        address coinAddr = addresses.length > 0 ? addresses[0] : address(0);
-        address gameAddr = addresses.length > 1 ? addresses[1] : address(0);
-        address trophiesAddr = addresses.length > 2 ? addresses[2] : address(0);
+        _setCoin(addresses.length > 0 ? addresses[0] : address(0));
+        _setGame(addresses.length > 1 ? addresses[1] : address(0));
+        _setTrophies(addresses.length > 2 ? addresses[2] : address(0));
+    }
 
-        address currentCoin = address(coin);
-        if (coinAddr != address(0)) {
-            if (currentCoin == address(0)) {
-                coin = IPurgeCoinJackpotView(coinAddr);
-                currentCoin = coinAddr;
-            } else if (coinAddr != currentCoin) {
-                revert AlreadyWired();
-            }
+    function _setCoin(address coinAddr) private {
+        if (coinAddr == address(0)) return;
+        address current = address(coin);
+        if (current == address(0)) {
+            coin = IPurgeCoinJackpotView(coinAddr);
+        } else if (coinAddr != current) {
+            revert AlreadyWired();
         }
+    }
 
-        address currentGame = address(purgeGame);
-        if (gameAddr != address(0)) {
-            if (currentGame == address(0)) {
-                purgeGame = IPurgeGame(gameAddr);
-            } else if (gameAddr != currentGame) {
-                revert AlreadyWired();
-            }
+    function _setGame(address gameAddr) private {
+        if (gameAddr == address(0)) return;
+        address current = address(purgeGame);
+        if (current == address(0)) {
+            purgeGame = IPurgeGame(gameAddr);
+        } else if (gameAddr != current) {
+            revert AlreadyWired();
         }
+    }
 
-        address currentTrophies = address(purgeGameTrophies);
-        if (trophiesAddr != address(0)) {
-            if (currentTrophies == address(0)) {
-                purgeGameTrophies = IPurgeGameTrophies(trophiesAddr);
-            } else if (trophiesAddr != currentTrophies) {
-                revert AlreadyWired();
-            }
+    function _setTrophies(address trophiesAddr) private {
+        if (trophiesAddr == address(0)) return;
+        address current = address(purgeGameTrophies);
+        if (current == address(0)) {
+            purgeGameTrophies = IPurgeGameTrophies(trophiesAddr);
+        } else if (trophiesAddr != current) {
+            revert AlreadyWired();
         }
     }
 

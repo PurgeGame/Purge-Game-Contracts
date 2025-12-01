@@ -68,7 +68,6 @@ contract PurgeAffiliate {
     IPurgeCoinAffiliate private coin;
     IPurgeGame private purgeGame;
     IPurgeGameTrophies private trophies;
-    address public payer;
 
     // ---------------------------------------------------------------------
     // Affiliate state
@@ -148,59 +147,53 @@ contract PurgeAffiliate {
     /// @dev Each address can be set once; non-zero updates must match the existing value.
     function wire(address[] calldata addresses) external {
         if (msg.sender != bonds) revert OnlyBonds();
-        address coinAddr = addresses.length > 0 ? addresses[0] : address(0);
-        address gameAddr = addresses.length > 1 ? addresses[1] : address(0);
-        address trophiesAddr = addresses.length > 2 ? addresses[2] : address(0);
-        address currentCoin = address(coin);
-        if (currentCoin == address(0)) {
-            if (coinAddr == address(0)) revert ZeroAddress();
+        _setCoin(addresses.length > 0 ? addresses[0] : address(0));
+        _setGame(addresses.length > 1 ? addresses[1] : address(0));
+        _setTrophies(addresses.length > 2 ? addresses[2] : address(0));
+    }
+
+    function _setCoin(address coinAddr) private {
+        if (coinAddr == address(0)) {
+            if (address(coin) == address(0)) revert ZeroAddress();
+            return;
+        }
+        address current = address(coin);
+        if (current == address(0)) {
             coin = IPurgeCoinAffiliate(coinAddr);
             presaleShutdown = true; // stop presale once coin is wired
             preCoinActive = false;
             coin.affiliatePrimePresale();
-        } else if (coinAddr != address(0) && coinAddr != currentCoin) {
+        } else if (coinAddr != current) {
             revert AlreadyConfigured();
         }
-
-        bool gameWasUnset = address(purgeGame) == address(0);
-        if (gameAddr != address(0)) {
-            address currentGame = address(purgeGame);
-            if (currentGame == address(0)) {
-                purgeGame = IPurgeGame(gameAddr);
-                if (gameWasUnset && rewardSeedEth != 0) {
-                    uint256 seed = rewardSeedEth;
-                    rewardSeedEth = 0;
-                    (bool ok, ) = payable(gameAddr).call{value: seed}("");
-                    if (!ok) revert Insufficient();
-                }
-                referralLocksActive = true; // allow locking of referral codes only once the game is wired
-            } else if (gameAddr != currentGame) {
-                revert AlreadyConfigured();
-            }
-        }
-        if (trophiesAddr != address(0)) {
-            address currentTrophies = address(trophies);
-            if (currentTrophies == address(0)) {
-                trophies = IPurgeGameTrophies(trophiesAddr);
-            } else if (trophiesAddr != currentTrophies) {
-                revert AlreadyConfigured();
-            }
-        }
     }
-    /// @notice Set the contract permitted to invoke `payAffiliate` directly (alongside the coin and bonds).
-    /// @dev Set-once: subsequent calls must repeat the existing payer address.
-    function setPayer(address payer_) external {
-        address coinAddr = address(coin);
-        if (msg.sender != bonds && msg.sender != coinAddr) revert OnlyAuthorized();
-        if (payer_ == address(0)) revert ZeroAddress();
-        address current = payer;
+
+    function _setGame(address gameAddr) private {
+        if (gameAddr == address(0)) return;
+        address current = address(purgeGame);
         if (current == address(0)) {
-            payer = payer_;
-        } else if (current != payer_) {
+            purgeGame = IPurgeGame(gameAddr);
+            uint256 seed = rewardSeedEth;
+            if (seed != 0) {
+                rewardSeedEth = 0;
+                (bool ok, ) = payable(gameAddr).call{value: seed}("");
+                if (!ok) revert Insufficient();
+            }
+            referralLocksActive = true; // allow locking of referral codes only once the game is wired
+        } else if (gameAddr != current) {
             revert AlreadyConfigured();
         }
     }
 
+    function _setTrophies(address trophiesAddr) private {
+        if (trophiesAddr == address(0)) return;
+        address current = address(trophies);
+        if (current == address(0)) {
+            trophies = IPurgeGameTrophies(trophiesAddr);
+        } else if (trophiesAddr != current) {
+            revert AlreadyConfigured();
+        }
+    }
     // ---------------------------------------------------------------------
     // External player entrypoints
     // ---------------------------------------------------------------------
@@ -302,7 +295,7 @@ contract PurgeAffiliate {
     // Gameplay entrypoints (coin only)
     // ---------------------------------------------------------------------
     /// @notice Credit affiliate rewards for a purchase (invoked by trusted gameplay contracts).
-    /// @dev Core payout logic used by gameplay modules; callable only by the coin contract or the configured payer.
+    /// @dev Core payout logic used by gameplay modules; callable only by the coin contract or bonds.
     function payAffiliate(
         uint256 amount,
         bytes32 code,
@@ -311,7 +304,7 @@ contract PurgeAffiliate {
     ) external returns (uint256 playerRakeback) {
         address caller = msg.sender;
         address coinAddr = address(coin);
-        if (caller != coinAddr && caller != payer && caller != bonds) revert OnlyAuthorized();
+        if (caller != coinAddr && caller != bonds) revert OnlyAuthorized();
 
         bool coinActive = coinAddr != address(0);
         bytes32 storedCode = playerReferralCode[sender];

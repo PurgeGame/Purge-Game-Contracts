@@ -100,14 +100,16 @@ contract PurgeQuestModule is IPurgeQuestModule {
 
     /// @notice Wire the Purge game contract using an address array ([game]); set-once per slot.
     function wire(address[] calldata addresses) external onlyCoin {
-        address gameAddr = addresses.length > 0 ? addresses[0] : address(0);
-        if (gameAddr != address(0)) {
-            address currentGame = address(questGame);
-            if (currentGame == address(0)) {
-                questGame = IPurgeGame(gameAddr);
-            } else if (gameAddr != currentGame) {
-                revert AlreadyWired();
-            }
+        _setGame(addresses.length > 0 ? addresses[0] : address(0));
+    }
+
+    function _setGame(address gameAddr) private {
+        if (gameAddr == address(0)) return;
+        address current = address(questGame);
+        if (current == address(0)) {
+            questGame = IPurgeGame(gameAddr);
+        } else if (gameAddr != current) {
+            revert AlreadyWired();
         }
     }
 
