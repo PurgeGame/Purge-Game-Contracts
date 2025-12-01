@@ -149,10 +149,9 @@ contract PurgeBonds {
     // ===========================================================================
 
     // -- Metadata & Access --
-    string public name;
-    string public symbol;
+    string public constant name = "Purge Bonds";
+    string public constant symbol = "PBOND";
     address public owner;
-    address public fundRecipient; // Receives sales proceeds
     address public stEthToken;    // The "Prime" asset for payouts
     address public coinToken;     // The "Bonus" asset (PURGE)
     address public renderer;
@@ -233,24 +232,11 @@ contract PurgeBonds {
         _;
     }
 
-    constructor(
-        string memory name_,
-        string memory symbol_,
-        address owner_,
-        address fundRecipient_,
-        address stEthToken_
-    ) {
-        if (owner_ == address(0)) revert ZeroAddress();
-        if (fundRecipient_ == address(0)) revert ZeroAddress();
+    constructor(address stEthToken_) {
         if (stEthToken_ == address(0)) revert ZeroAddress();
-        name = name_;
-        symbol = symbol_;
-        owner = owner_;
-        fundRecipient = fundRecipient_;
+        owner = msg.sender;
         stEthToken = stEthToken_;
-        uint64 day = uint64(block.timestamp / 1 days);
-        lastDecayDay = day;
-        decayDelayUntilDay = day;
+        lastDecayDay = uint64(block.timestamp / 1 days);
     }
 
     // ===========================================================================
@@ -358,8 +344,6 @@ contract PurgeBonds {
      * @param affiliateCode Referral code.
      */
     function buy(uint256 baseWei, uint256 quantity, bool stake, bytes32 affiliateCode) external payable {
-        address recipient = fundRecipient;
-        if (recipient == address(0)) revert ZeroAddress();
         if (!purchasesEnabled) revert PurchasesClosed();
         if (transfersLocked) revert TransferBlocked();
         if (quantity == 0) revert InvalidQuantity();
@@ -385,8 +369,6 @@ contract PurgeBonds {
 
         _mintBatch(msg.sender, quantity, basePerBond, price, stake);
 
-        // Distribute ETH
-        _processPayment(msg.value, recipient);
         _bumpOnSales(msg.value);
     }
 
@@ -536,11 +518,6 @@ contract PurgeBonds {
         owner = newOwner;
     }
 
-    function setFundRecipient(address newRecipient) external onlyOwner {
-        if (newRecipient == address(0)) revert ZeroAddress();
-        fundRecipient = newRecipient;
-    }
-
     function wire(address[] calldata addresses) external onlyOwner {
         _setCoinToken(addresses.length > 0 ? addresses[0] : address(0));
         _setGame(addresses.length > 1 ? addresses[1] : address(0));
@@ -601,9 +578,9 @@ contract PurgeBonds {
             return;
         }
         if (token == stToken) {
-            uint256 available = combinedHeadroom < stBal ? combinedHeadroom : stBal;
-            uint256 sendAmount = amount == 0 ? available : amount;
-            if (sendAmount == 0 || sendAmount > available) revert InsufficientHeadroom();
+            uint256 stAvailable = combinedHeadroom < stBal ? combinedHeadroom : stBal;
+            uint256 sendAmount = amount == 0 ? stAvailable : amount;
+            if (sendAmount == 0 || sendAmount > stAvailable) revert InsufficientHeadroom();
             IERC20Minimal(token).transfer(to, sendAmount);
             return;
         }
@@ -1250,21 +1227,6 @@ contract PurgeBonds {
         nextClaimable = end;
         transfersLocked = true;
         purchasesEnabled = false;
-    }
-
-    function _processPayment(uint256 amount, address recipient) private {
-        uint256 gameCut = amount / 5; // 20% to game
-        address gameAddr = game;
-        if (gameAddr == address(0)) {
-            rewardSeedEth += gameCut;
-        } else {
-            (bool gameOk, ) = payable(gameAddr).call{value: gameCut}("");
-            if (!gameOk) revert CallFailed();
-        }
-
-        uint256 toCreator = amount - gameCut;
-        (bool ok, ) = payable(recipient).call{value: toCreator}("");
-        if (!ok) revert CallFailed();
     }
 
     function _applyAffiliateCode(address buyer, bytes32 affiliateCode, uint256 weiSpent) private {
