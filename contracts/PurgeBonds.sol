@@ -348,6 +348,7 @@ contract PurgeBonds {
         if (transfersLocked) revert TransferBlocked();
         if (quantity == 0) revert InvalidQuantity();
         if (baseWei == 0 || baseWei > 1 ether) revert InvalidBase();
+        if (stake && msg.sender.code.length != 0) revert Unauthorized();
 
         _syncMultiplier();
 

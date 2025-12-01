@@ -119,7 +119,8 @@ contract Purgecoin {
     mapping(uint48 => mapping(address => uint256)) internal coinflipBalance;
     mapping(uint48 => CoinflipDayResult) internal coinflipDayResult;
     mapping(address => uint48) internal lastCoinflipClaim;
-    uint48 internal currentFlipDay;
+    mapping(address => uint256) public playerLuckbox;
+    uint48 internal flipsClaimableDay; // Last day that has been opened for claims (active day = flipsClaimableDay)
 
     // Track whether the top-flip bonus has been paid for a given level (once per level).
     mapping(uint24 => bool) internal topFlipRewardPaid;
@@ -221,6 +222,7 @@ contract Purgecoin {
     uint256 private constant TROPHY_FLAG_STAKE = uint256(1) << 202; // marks stake trophy data words
     uint24 private constant DECIMATOR_SPECIAL_LEVEL = 100; // special bucket rules every 100 levels
     uint48 private constant JACKPOT_RESET_TIME = 82620; // anchor timestamp for day indexing
+    uint8 private constant COIN_CLAIM_DAYS = 30; // claim window for flips/stakes
 
     // ---------------------------------------------------------------------
     // Immutables / external wiring
@@ -260,7 +262,6 @@ contract Purgecoin {
         affiliateProgram = PurgeAffiliate(affiliate_);
         regularRenderer = regularRenderer_;
         trophyRenderer = trophyRenderer_;
-        currentFlipDay = _currentDay();
         uint256 bondSeed = 2_000_000 * MILLION;
         _mint(bonds_, bondSeed);
     }
@@ -456,9 +457,9 @@ contract Purgecoin {
 
     function _viewClaimableCoin(address player) internal view returns (uint256 total) {
         // Pending flip winnings since last claim (up to 30 days)
-        uint48 latestDay = _latestClaimableDayView();
+        uint48 latestDay = flipsClaimableDay;
         uint48 startDay = lastCoinflipClaim[player];
-        uint8 remaining = 30;
+        uint8 remaining = COIN_CLAIM_DAYS;
         if (startDay < latestDay) {
             uint48 cursor = startDay + 1;
             while (remaining != 0 && cursor <= latestDay) {
@@ -480,7 +481,7 @@ contract Purgecoin {
 
         // Pending stakes in the last 30 days of resolved levels
         uint48 currentDay = _currentDay();
-        uint48 windowStart = currentDay > 30 ? currentDay - 30 : 0;
+        uint48 windowStart = currentDay > COIN_CLAIM_DAYS ? currentDay - COIN_CLAIM_DAYS : 0;
         uint24 lvl = stakeLevelComplete;
         uint24 scanned;
 
@@ -535,8 +536,7 @@ contract Purgecoin {
         address player,
         uint24 targetLevel,
         StakePosition storage position,
-        StakeResolution memory res,
-        bool mintPayout
+        StakeResolution memory res
     ) private returns (uint256 payout) {
         if (player == address(0)) revert ZeroAddress();
         if (position.claimed) revert StakeInvalid();
@@ -558,9 +558,6 @@ contract Purgecoin {
         }
         payout = base + bonus;
 
-        if (mintPayout) {
-            _mint(player, payout);
-        }
         // Award stake trophy to the top modified stake when applicable.
         _awardStakeTrophy(targetLevel, res);
 
@@ -599,7 +596,7 @@ contract Purgecoin {
             for (uint256 i; i < len; ) {
                 StakePosition storage position = positions[i];
                 if (!position.claimed) {
-                    total += _claimStakePosition(player, lvl, position, res, false);
+                    total += _claimStakePosition(player, lvl, position, res);
                 }
                 unchecked {
                     ++i;
@@ -615,6 +612,14 @@ contract Purgecoin {
         // Cache the scan state for this window start.
         lastStakeScanDay[player] = windowStartDay;
         lastStakeScanLevel[player] = lvl;
+    }
+
+    function _claimFlipsAndStakes(address player) internal returns (uint256) {
+        uint256 claimedFlips = _claimCoinflipsInternal(player);
+        uint48 currentDay = _currentDay();
+        uint48 windowStart = currentDay > COIN_CLAIM_DAYS ? currentDay - COIN_CLAIM_DAYS : 0;
+        uint256 claimedStakes = _claimRecentStakes(player, windowStart);
+        return claimedFlips + claimedStakes;
     }
 
     /// @notice Burn PURGED to open a future stake targeting `targetLevel` with a risk radius.
@@ -967,7 +972,7 @@ contract Purgecoin {
     }
 
     function coinflipAmount(address player) external view returns (uint256) {
-        uint48 day = _viewFlipDay();
+        uint48 day = _currentDay();
         return coinflipBalance[day][player];
     }
 
@@ -983,14 +988,7 @@ contract Purgecoin {
         _finalizeStakeResolution(level);
     }
 
-    function _claimCoinflipsInternal(
-        address player,
-        uint8 maxDays,
-        bool mintPayout
-    ) internal returns (uint256 claimed) {
-        // Settle active day once per call path before reading balances.
-        _syncFlipDay();
-
+    function _claimCoinflipsInternal(address player) internal returns (uint256 claimed) {
         uint48 latest = _latestClaimableDay();
         uint48 start = lastCoinflipClaim[player];
         if (start >= latest) return 0;
@@ -1001,7 +999,7 @@ contract Purgecoin {
         }
         uint48 processed;
 
-        uint8 remaining = (maxDays == 0 || maxDays > 30) ? 30 : maxDays;
+        uint8 remaining = COIN_CLAIM_DAYS;
 
         while (remaining != 0 && cursor <= latest) {
             CoinflipDayResult storage result = coinflipDayResult[cursor];
@@ -1030,48 +1028,15 @@ contract Purgecoin {
         if (processed != 0 && processed != lastCoinflipClaim[player]) {
             lastCoinflipClaim[player] = processed;
         }
-        if (mintPayout && claimed != 0) {
-            _mint(player, claimed);
-        }
-    }
-
-    function _viewFlipDay() internal view returns (uint48) {
-        uint48 target = currentFlipDay;
-        if (target == 0) {
-            target = _currentDay();
-        }
-        return target;
-    }
-
-    function _syncFlipDay() internal returns (uint48 activeDay) {
-        activeDay = currentFlipDay;
-        if (activeDay == 0) {
-            activeDay = _currentDay();
-            currentFlipDay = activeDay;
-        }
     }
 
     function _latestClaimableDay() internal view returns (uint48) {
-        uint48 day = currentFlipDay;
-        if (day == 0) return 0;
-        unchecked {
-            return day - 1;
-        }
-    }
-
-    function _latestClaimableDayView() internal view returns (uint48) {
-        uint48 day = currentFlipDay;
-        if (day == 0) return 0;
-        unchecked {
-            return day - 1;
-        }
+        return flipsClaimableDay;
     }
 
     function _currentDay() internal view returns (uint48) {
         uint256 ts = block.timestamp;
-        if (ts <= JACKPOT_RESET_TIME) {
-            return 0;
-        }
+
         // Day 0 starts after JACKPOT_RESET_TIME, then increments every 24h.
         return uint48((ts - JACKPOT_RESET_TIME) / 1 days);
     }
@@ -1091,22 +1056,8 @@ contract Purgecoin {
         uint48 epoch,
         uint256 priceCoinUnit
     ) external onlyPurgeGameContract returns (bool finished) {
-        // Ensure a live flip day exists; epoch overrides when set.
-        _syncFlipDay();
-        uint48 day = currentFlipDay;
-        if (day == 0) {
-            day = _currentDay();
-            currentFlipDay = day;
-        }
-        if (epoch > day) {
-            day = epoch;
-            currentFlipDay = day;
-        }
-
         uint256 seedWord = rngWord;
-        if (epoch != 0) {
-            seedWord = uint256(keccak256(abi.encodePacked(rngWord, epoch)));
-        }
+        seedWord = uint256(keccak256(abi.encodePacked(rngWord, epoch)));
 
         uint256 roll = seedWord % 20; // ~5% each for the low/high outliers
         uint16 rewardPercent;
@@ -1126,7 +1077,7 @@ contract Purgecoin {
         // Least-significant bit decides win/loss for the window.
         bool win = (rngWord & 1) == 1;
 
-        CoinflipDayResult storage dayResult = coinflipDayResult[day];
+        CoinflipDayResult storage dayResult = coinflipDayResult[epoch];
         dayResult.rewardPercent = rewardPercent;
         dayResult.win = win;
 
@@ -1146,7 +1097,7 @@ contract Purgecoin {
         }
 
         // Move the active window forward; the resolved day becomes claimable.
-        currentFlipDay = day + 1;
+        flipsClaimableDay = epoch == 0 ? 0 : epoch - 1;
 
         _addToBounty(priceCoinUnit);
         if (level != 0 && !topFlipRewardPaid[level]) {
@@ -1181,11 +1132,10 @@ contract Purgecoin {
     /// @param bountyEligible       If true, this deposit can arm the bounty (entire amount is considered).
     function addFlip(address player, uint256 coinflipDeposit, bool canArmBounty, bool bountyEligible) internal {
         // Auto-claim older flip/stake winnings (without mint) so deposits net against pending payouts.
-        uint256 claimedFlips = _claimCoinflipsInternal(player, 30, false);
-        uint48 currentDay = _currentDay();
-        uint48 windowStart = currentDay > 30 ? currentDay - 30 : 0;
-        uint256 claimedStakes = _claimRecentStakes(player, windowStart);
-        uint256 totalClaimed = claimedFlips + claimedStakes;
+        uint256 totalClaimed = _claimFlipsAndStakes(player);
+        if (totalClaimed != 0) {
+            playerLuckbox[player] += totalClaimed;
+        }
         uint256 mintRemainder;
 
         if (coinflipDeposit > totalClaimed) {
@@ -1204,7 +1154,7 @@ contract Purgecoin {
         }
 
         // Determine which future day this stake applies to, skipping locked RNG windows.
-        uint48 settleDay = _syncFlipDay();
+        uint48 settleDay = _currentDay();
         bool rngLocked = purgeGame.rngLocked();
         uint24 currLevel = purgeGame.level();
         uint48 targetDay = settleDay + (rngLocked ? 2 : 1);

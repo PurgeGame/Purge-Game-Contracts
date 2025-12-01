@@ -572,7 +572,7 @@ contract PurgeGame is PurgeGameStorage {
 
         emit Advance(_gameState, _phase);
 
-        if (_gameState != 0 && cap == 0) coinContract.creditFlip(caller, priceCoin);
+        if (_gameState != 0 && cap == 0) coinContract.creditFlip(caller, priceCoin >> 1);
     }
 
     // --- Purchases: schedule NFT mints (traits precomputed) ----------------------------------------
