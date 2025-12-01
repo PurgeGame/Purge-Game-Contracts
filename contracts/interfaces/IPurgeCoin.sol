@@ -15,7 +15,6 @@ interface IPurgeCoin {
 
     function processCoinflipPayouts(
         uint24 level,
-        uint32 cap,
         bool bonusFlip,
         uint256 rngWord,
         uint48 epoch,

@@ -1280,7 +1280,7 @@ contract PurgeGame is PurgeGameStorage {
         if (rngWordByDay[day] == 0) {
             rngWordByDay[day] = currentWord;
             if (lvl != 0) {
-                coin.processCoinflipPayouts(lvl, 0, false, currentWord, day, priceCoin);
+                coin.processCoinflipPayouts(lvl, false, currentWord, day, priceCoin);
             }
         }
         return currentWord;

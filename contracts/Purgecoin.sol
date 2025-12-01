@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+/// @title Purgecoin
+/// @notice ERC20-style game token that doubles as accounting for coinflip wagers, stakes, quests, and jackpots.
+/// @dev Acts as the hub for gameplay modules (game, NFTs, trophies, quests, jackpots). Mint/burn only occurs
+///      through explicit gameplay flows; there is intentionally no public mint.
 import {PurgeGameNFT} from "./PurgeGameNFT.sol";
 import {IPurgeGameTrophies, PURGE_TROPHY_KIND_STAKE} from "./PurgeGameTrophies.sol";
 import {PurgeAffiliate} from "./PurgeAffiliate.sol";
@@ -16,6 +20,7 @@ contract Purgecoin {
     // ---------------------------------------------------------------------
     // Events
     // ---------------------------------------------------------------------
+    // Lightweight ERC20 events plus gameplay signals used by off-chain indexers/clients.
     event Transfer(address indexed from, address indexed to, uint256 amount);
     event Approval(address indexed owner, address indexed spender, uint256 amount);
     event StakeCreated(address indexed player, uint24 targetLevel, uint8 risk, uint256 principal);
@@ -31,6 +36,7 @@ contract Purgecoin {
     // ---------------------------------------------------------------------
     // Errors
     // ---------------------------------------------------------------------
+    // Short, custom errors to save gas and keep branch intent explicit.
     error OnlyGame();
     error BettingPaused();
     error Zero();
@@ -48,6 +54,7 @@ contract Purgecoin {
     // ---------------------------------------------------------------------
     // ERC20 state
     // ---------------------------------------------------------------------
+    // Minimal ERC20 metadata/state; transfers are unchecked beyond underflow protection in Solidity 0.8.
     string public name = "Purgecoin";
     string public symbol = "PURGE";
     uint256 public totalSupply;
@@ -57,16 +64,19 @@ contract Purgecoin {
     // ---------------------------------------------------------------------
     // Types used in storage
     // ---------------------------------------------------------------------
+    // Leaderboard entry; score is stored in whole coins to fit in uint96.
     struct PlayerScore {
         address player;
         uint96 score;
     }
 
+    // Outcome for a single coinflip day. rewardPercent is basis points / 100 (e.g., 150 => 1.5x principal).
     struct CoinflipDayResult {
         uint16 rewardPercent;
         bool win;
     }
 
+    // Individual stake placed by a player on a target level and risk band.
     struct StakePosition {
         uint256 principal;
         uint256 modifiedAmount;
@@ -75,6 +85,7 @@ contract Purgecoin {
         bool claimed;
     }
 
+    // Aggregated resolution data for a level, cached when finalized.
     struct StakeResolution {
         uint8 winningRiskLevels;
         uint256 winningModifiedTotal;
@@ -84,6 +95,7 @@ contract Purgecoin {
         bool resolved;
     }
 
+    // Tracks the best stake within a risk bucket for a specific level.
     struct StakeTop {
         address player;
         uint256 modifiedAmount;
@@ -92,6 +104,7 @@ contract Purgecoin {
     // ---------------------------------------------------------------------
     // Game wiring & session state
     // ---------------------------------------------------------------------
+    // Core modules; set once via `wire`.
     IPurgeGame internal purgeGame;
     PurgeGameNFT internal purgeGameNFT;
     IPurgeGameTrophies internal purgeGameTrophies;
@@ -99,17 +112,21 @@ contract Purgecoin {
     PurgeAffiliate public immutable affiliateProgram;
     address public jackpots;
 
+    // Highest level whose stakes have been marked as resolved by the game.
     uint24 internal stakeLevelComplete;
 
+    // Coinflip accounting keyed by day window.
     mapping(uint48 => mapping(address => uint256)) internal coinflipBalance;
     mapping(uint48 => CoinflipDayResult) internal coinflipDayResult;
     mapping(address => uint48) internal lastCoinflipClaim;
     uint48 internal currentFlipDay;
 
+    // Live and per-day/per-level leaderboards for biggest pending flip.
     PlayerScore public topBettor;
     mapping(uint48 => PlayerScore) internal coinflipTopByDay;
     mapping(uint24 => PlayerScore) internal coinflipTopByLevel;
 
+    // Tracks total PURGE minted to a player via winnings (for leaderboards and luck mechanics).
     mapping(address => uint256) public playerLuckbox;
     PlayerScore public biggestLuckbox;
 
@@ -119,18 +136,27 @@ contract Purgecoin {
         return _viewClaimableCoin(player);
     }
 
+    // Player stakes keyed by player -> target level.
     mapping(address => mapping(uint24 => StakePosition[])) internal stakePositions;
+    // Sum of modified stake amounts per level+risk (used to split free-money bonus).
     mapping(uint24 => mapping(uint8 => uint256)) internal stakeModifiedTotals;
+    // Level/risk leaderboard (highest modified stake).
     mapping(uint24 => mapping(uint8 => StakeTop)) internal stakeTopByLevelAndRisk;
+    // Cached stake resolution for a level once computed.
     mapping(uint24 => StakeResolution) internal stakeResolutionInfo;
+    // Cursors used to bound per-player stake scans.
     mapping(address => uint24) internal lastStakeScanLevel;
     mapping(address => uint48) internal lastStakeScanDay;
+    // Tracks remaining presale claim allocation minted to this contract.
     uint256 public presaleClaimableRemaining;
 
+    // Bounty state; bounty is credited as future coinflip stake for the owed player.
     uint128 public currentBounty = 1_000_000_000;
     uint128 public biggestFlipEver = 1_000_000_000;
     address internal bountyOwedTo;
+    // stakeResolutionDay[level] stores the coinflip day used to resolve that level's stakes.
     mapping(uint24 => uint48) internal stakeResolutionDay;
+    // Prevents duplicate trophy minting when a level's stake prize resolves.
     mapping(uint24 => bool) internal stakeTrophyAwarded;
     address public immutable bonds;
     address public immutable regularRenderer;
@@ -190,14 +216,14 @@ contract Purgecoin {
     uint256 private constant MILLION = 1e6; // token has 6 decimals
     uint256 private constant MIN = 100 * MILLION; // min burn / min flip (100 PURGED)
     uint8 private constant MAX_RISK = 25; // staking risk 1..25
-    uint16 private constant COINFLIP_EXTRA_MIN_PERCENT = 78;
-    uint16 private constant COINFLIP_EXTRA_RANGE = 38;
-    uint16 private constant BPS_DENOMINATOR = 10_000;
-    uint256 private constant STAKE_PRINCIPAL_FACTOR = MILLION;
-    uint256 private constant TROPHY_BASE_LEVEL_SHIFT = 128;
-    uint256 private constant TROPHY_FLAG_STAKE = uint256(1) << 202;
-    uint24 private constant DECIMATOR_SPECIAL_LEVEL = 100;
-    uint48 private constant JACKPOT_RESET_TIME = 82620;
+    uint16 private constant COINFLIP_EXTRA_MIN_PERCENT = 78; // base % on non-extreme flips
+    uint16 private constant COINFLIP_EXTRA_RANGE = 38; // roll range (add to min) => [78..115]
+    uint16 private constant BPS_DENOMINATOR = 10_000; // basis point math helper
+    uint256 private constant STAKE_PRINCIPAL_FACTOR = MILLION; // round stake weights to whole coins
+    uint256 private constant TROPHY_BASE_LEVEL_SHIFT = 128; // bit position used for stake trophies
+    uint256 private constant TROPHY_FLAG_STAKE = uint256(1) << 202; // marks stake trophy data words
+    uint24 private constant DECIMATOR_SPECIAL_LEVEL = 100; // special bucket rules every 100 levels
+    uint48 private constant JACKPOT_RESET_TIME = 82620; // anchor timestamp for day indexing
 
     // ---------------------------------------------------------------------
     // Immutables / external wiring
@@ -232,14 +258,22 @@ contract Purgecoin {
     }
 
     /// @notice Burn PURGE to increase the caller’s coinflip stake, applying streak bonuses when eligible.
-    /// @param amount Amount (6 decimals) to burn; must satisfy the global minimum.
+    /// @param amount Amount (6 decimals) to burn; must satisfy the global minimum, or zero to just cash out.
     function depositCoinflip(uint256 amount) external {
+        // Allow zero-amount calls to act as a cash-out of pending winnings without adding a new stake.
+        if (amount == 0) {
+            addFlip(msg.sender, 0, false, false, false);
+            emit CoinflipDeposit(msg.sender, 0);
+            return;
+        }
         if (amount < MIN) revert AmountLTMin();
 
         address caller = msg.sender;
 
+        // Burn first so reentrancy into downstream module calls cannot spend the same balance twice.
         _burn(caller, amount);
 
+        // Quests can layer on bonus flip credit when the quest is active/completed.
         IPurgeQuestModule module = questModule;
         uint256 questReward;
         (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleFlip(
@@ -248,9 +282,11 @@ contract Purgecoin {
         );
         questReward = _questApplyReward(caller, reward, hardMode, questType, streak, completed);
 
+        // Principal + quest bonus become the pending flip stake.
         uint256 creditedFlip = amount + questReward;
         addFlip(caller, creditedFlip, true, true, false);
 
+        // Track "luckbox" (total minted winnings) and record the largest to date.
         uint256 luckboxBalance = playerLuckbox[caller];
         PlayerScore storage record = biggestLuckbox;
         uint256 wholeCoins = luckboxBalance / MILLION;
@@ -269,6 +305,7 @@ contract Purgecoin {
         uint256 amount = affiliateProgram.consumePresaleCoin(msg.sender);
         if (amount == 0) return;
         if (amount > presaleClaimableRemaining) revert Insufficient();
+        // Pull from presale escrow minted to this contract.
         presaleClaimableRemaining -= amount;
         _transfer(address(this), msg.sender, amount);
     }
@@ -284,14 +321,17 @@ contract Purgecoin {
         if (moduleAddr == address(0)) revert ZeroAddress();
 
         address caller = msg.sender;
+        // Burn first to anchor the amount used for bonuses.
         _burn(caller, amount);
 
         uint256 effectiveAmount = amount;
+        // Trophies can boost the effective contribution.
         uint8 decBonusPct = purgeGameTrophies.decStakeBonus(caller);
         if (decBonusPct != 0) {
             effectiveAmount += (effectiveAmount * decBonusPct) / 100;
         }
 
+        // Bucket logic selects how many people share a jackpot slice; special every DECIMATOR_SPECIAL_LEVEL.
         bool specialDec = (lvl % DECIMATOR_SPECIAL_LEVEL) == 0;
         uint8 bucket = specialDec
             ? _decBucketDenominatorFromLevels(purgeGame.ethMintLevelCount(caller))
@@ -301,12 +341,14 @@ contract Purgecoin {
         IPurgeQuestModule module = questModule;
         (uint32 streak, , , ) = module.playerQuestStates(caller);
         if (streak != 0) {
+            // Quest streak: bonus contribution capped at 25%.
             uint256 bonusBps = uint256(streak) * 25; // (streak/4)%
             if (bonusBps > 2500) bonusBps = 2500; // cap at 25%
             uint256 streakBonus = (effectiveAmount * bonusBps) / BPS_DENOMINATOR;
             IPurgeJackpots(moduleAddr).recordDecBurn(caller, lvl, bucketUsed, streakBonus);
         }
 
+        // Quest module can also grant extra flip credit from a decimator burn.
         (uint256 reward, bool hardMode, uint8 questType, uint32 streak2, bool completed) = module.handleDecimator(
             caller,
             amount
@@ -323,6 +365,7 @@ contract Purgecoin {
         if (stakeTrophyAwarded[level]) return;
         if (res.winningRiskLevels == 0) return;
         if (res.topStakeWinner == address(0) || res.topStakeAmount == 0) return;
+        // Mark before external call to avoid reentrancy double-award.
         stakeTrophyAwarded[level] = true;
 
         uint256 dataWord = (uint256(0xFFFF) << 152) | (uint256(level) << TROPHY_BASE_LEVEL_SHIFT) | TROPHY_FLAG_STAKE;
@@ -333,6 +376,7 @@ contract Purgecoin {
         (, , , uint256 priceWei, , uint256 prizePoolTarget, , ,  /*earlyPurgePercent_*/) = purgeGame.gameInfo();
         uint256 priceCoinUnit = purgeGame.coinPriceUnit();
         if (priceWei == 0 || priceCoinUnit == 0) return 0;
+        // "Free money" is 10% of the ETH prize pool converted into PURGE at the current unit price.
         uint256 tenPercentEth = prizePoolTarget / 10;
         if (tenPercentEth == 0) return 0;
         return (tenPercentEth * priceCoinUnit) / priceWei;
@@ -341,6 +385,7 @@ contract Purgecoin {
     function _winningRiskLevels(uint24 level) private view returns (uint8 winningRisk) {
         if (level == 0) return 0;
         uint8 maxRisk = level < MAX_RISK ? uint8(level) : MAX_RISK;
+        // Walk backwards from the level's resolution day to count consecutive winning days (each unlocks a higher risk).
         for (uint8 step; step < maxRisk; ) {
             uint24 checkLevel = level - uint24(step);
             uint48 day = stakeResolutionDay[checkLevel];
@@ -362,12 +407,14 @@ contract Purgecoin {
             return res;
         }
 
+        // Derive winning risk range and top stake data from live totals.
         res.winningRiskLevels = _winningRiskLevels(level);
         if (res.winningRiskLevels != 0) {
             uint8 maxRisk = res.winningRiskLevels;
             address bestPlayer;
             uint256 bestModified;
             for (uint8 r = 1; r <= maxRisk; ) {
+                // Aggregate modified totals for bonus splitting.
                 res.winningModifiedTotal += stakeModifiedTotals[level][r];
                 StakeTop storage top = stakeTopByLevelAndRisk[level][r];
                 if (top.player != address(0) && top.modifiedAmount > bestModified) {
@@ -390,6 +437,7 @@ contract Purgecoin {
             return stored;
         }
 
+        // Cannot finalize until a resolution day and coinflip result are recorded.
         uint48 resDay = stakeResolutionDay[level];
         if (resDay == 0) {
             return stored;
@@ -420,6 +468,7 @@ contract Purgecoin {
                 CoinflipDayResult storage result = coinflipDayResult[cursor];
                 if (result.rewardPercent == 0 && !result.win) break;
 
+                // Only pay flip stakes on winning days; losing days zero the stake.
                 uint256 flipStake = coinflipBalance[cursor][player];
                 if (flipStake != 0 && result.win) {
                     uint256 payout = flipStake + (flipStake * uint256(result.rewardPercent) * 100) / BPS_DENOMINATOR;
@@ -457,6 +506,7 @@ contract Purgecoin {
                 break;
             }
 
+            // Include unclaimed winning stakes within the window.
             StakeResolution memory res = _stakeResolutionView(lvl);
             if (res.winningRiskLevels != 0) {
                 StakePosition[] storage positions = stakePositions[player][lvl];
@@ -495,6 +545,7 @@ contract Purgecoin {
         if (position.claimed) revert StakeInvalid();
         if (position.risk == 0 || position.risk > MAX_RISK) revert StakeInvalid();
 
+        // Determine whether the risk band fell inside the winning window.
         bool won = res.winningRiskLevels != 0 && position.risk <= res.winningRiskLevels;
         position.claimed = true;
         if (!won) {
@@ -504,6 +555,7 @@ contract Purgecoin {
 
         uint256 base = position.principal * (uint256(1) << position.risk);
         uint256 bonus;
+        // Bonus splits any free-money pot proportionally to modified stake weights.
         if (res.stakeFreeMoney != 0 && res.winningModifiedTotal != 0) {
             bonus = (position.modifiedAmount * res.stakeFreeMoney) / res.winningModifiedTotal;
         }
@@ -513,6 +565,7 @@ contract Purgecoin {
             _mint(player, payout);
             playerLuckbox[player] += payout;
         }
+        // Award stake trophy to the top modified stake when applicable.
         _awardStakeTrophy(targetLevel, res);
 
         emit StakeClaimed(player, targetLevel, position.risk, payout, true);
@@ -543,6 +596,7 @@ contract Purgecoin {
                 break;
             }
 
+            // Lock in the resolution snapshot before marking positions as claimed.
             StakeResolution memory res = _finalizeStakeResolution(lvl);
             StakePosition[] storage positions = stakePositions[player][lvl];
             uint256 len = positions.length;
@@ -582,6 +636,7 @@ contract Purgecoin {
         uint8 stakeGameState = purgeGame.gameState();
 
         uint24 effectiveLevel;
+        // effectiveLevel determines how far into the future the stake must be (during state 3 it matches currLevel).
         if (stakeGameState == 3) {
             effectiveLevel = currLevel;
         } else if (currLevel == 0) {
@@ -605,6 +660,7 @@ contract Purgecoin {
         uint256 maxRiskForTarget = uint256(targetLevel) + 1 - uint256(effectiveLevel);
         if (risk > maxRiskForTarget) revert Insufficient();
 
+        // Initialize luckbox sentinel so later winnings tracking is non-zero.
         if (playerLuckbox[sender] == 0) {
             playerLuckbox[sender] = 1;
         }
@@ -620,6 +676,7 @@ contract Purgecoin {
         if (stepBps > 250) {
             stepBps = 250;
         }
+        // Long distance stakes can pick up an extra boost if the player holds stake trophies.
         if (distance >= 20) {
             uint8 stakeTrophyBoost = purgeGameTrophies.stakeTrophyBonus(sender);
             if (stakeTrophyBoost != 0) {
@@ -632,6 +689,7 @@ contract Purgecoin {
             uint256 factor = 10_000 + stepBps;
             uint24 remaining = distance;
 
+            // Compound in batches of 4 to reduce loop overhead.
             while (remaining >= 4) {
                 boostedPrincipal = (boostedPrincipal * factor) / 10_000;
                 boostedPrincipal = (boostedPrincipal * factor) / 10_000;
@@ -650,6 +708,7 @@ contract Purgecoin {
             }
         }
 
+        // Early-game promotion: boost stakes during level 1 state 1.
         if (currLevel == 1 && stakeGameState == 1) {
             boostedPrincipal = distance >= 10 ? (boostedPrincipal * 3) / 2 : (boostedPrincipal * 6) / 5;
         }
@@ -658,6 +717,7 @@ contract Purgecoin {
         uint256 modifiedStake = boostedPrincipal - (boostedPrincipal % STAKE_PRINCIPAL_FACTOR);
         if (modifiedStake == 0) modifiedStake = STAKE_PRINCIPAL_FACTOR;
         IPurgeQuestModule module = questModule;
+        // Quest system can inject extra stake weight on successful quest progress.
         (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleStake(
             sender,
             modifiedStake,
@@ -673,6 +733,7 @@ contract Purgecoin {
             }
         }
 
+        // Track leaderboard for the target level+risk.
         StakeTop storage top = stakeTopByLevelAndRisk[targetLevel][risk];
         if (modifiedStake > top.modifiedAmount) {
             top.modifiedAmount = modifiedStake;
@@ -761,6 +822,7 @@ contract Purgecoin {
         if (presaleClaimableRemaining != 0) revert AlreadyWired();
         uint256 presaleTotal = affiliateProgram.presaleClaimableTotal();
         if (presaleTotal == 0) return;
+        // Mint once to this contract; players later pull via `claimPresaleAffiliateBonus`.
         presaleClaimableRemaining = presaleTotal;
         _mint(address(this), presaleTotal);
     }
@@ -770,6 +832,7 @@ contract Purgecoin {
         address sender = msg.sender;
         if (sender != address(purgeGame) && sender != bonds) revert OnlyGame();
         if (to == address(0)) revert ZeroAddress();
+        // Bonds can mint to themselves; PurgeGame mints to target recipients.
         _mint(to, amount);
         if (to == bonds) {
             IPurgeBonds(to).onBondMint(amount);
@@ -937,6 +1000,7 @@ contract Purgecoin {
         if (level == 0) return;
         uint48 setDay = day == 0 ? _currentDay() : day;
         if (setDay == 0) return;
+        // Cache the day used for this level's resolution and compute winning risk ranges.
         stakeResolutionDay[level] = setDay;
         stakeLevelComplete = level;
         _finalizeStakeResolution(level);
@@ -947,6 +1011,7 @@ contract Purgecoin {
         uint8 maxDays,
         bool mintPayout
     ) internal returns (uint256 claimed) {
+        // Settle active day once per call path before reading balances.
         _syncFlipDay();
 
         uint48 latest = _latestClaimableDay();
@@ -971,6 +1036,7 @@ contract Purgecoin {
             uint256 flipStake = coinflipBalance[cursor][player];
             if (flipStake != 0) {
                 if (result.win) {
+                    // Winnings = principal + (principal * rewardPercent%) where rewardPercent already in percent (not bps).
                     uint256 payout = flipStake + (flipStake * uint256(result.rewardPercent) * 100) / BPS_DENOMINATOR;
                     claimed += payout;
                 }
@@ -1030,6 +1096,7 @@ contract Purgecoin {
         if (ts <= JACKPOT_RESET_TIME) {
             return 0;
         }
+        // Day 0 starts after JACKPOT_RESET_TIME, then increments every 24h.
         return uint48((ts - JACKPOT_RESET_TIME) / 1 days);
     }
 
@@ -1039,19 +1106,17 @@ contract Purgecoin {
     ///      2. Arm bounties on the first payout window.
     ///      3. Perform cleanup and reopen betting (flip claims happen lazily per player).
     /// @param level Current PurgeGame level (used to gate 1/run and propagate stakes).
-    /// @param cap   Work cap hint. cap==0 uses defaults; otherwise applies directly.
     /// @param bonusFlip Adds 6 percentage points to the payout roll for the last flip of the purchase phase.
     /// @return finished True when all payouts and cleanup are complete.
     function processCoinflipPayouts(
         uint24 level,
-        uint32 cap,
         bool bonusFlip,
         uint256 rngWord,
         uint48 epoch,
         uint256 priceCoinUnit
     ) external onlyPurgeGameContract returns (bool finished) {
-        cap;
         level;
+        // Ensure a live flip day exists; epoch overrides when set.
         _syncFlipDay();
         uint48 day = currentFlipDay;
         if (day == 0) {
@@ -1083,6 +1148,7 @@ contract Purgecoin {
             }
         }
 
+        // Least-significant bit decides win/loss for the window.
         bool win = (rngWord & 1) == 1;
 
         CoinflipDayResult storage dayResult = coinflipDayResult[day];
@@ -1105,6 +1171,7 @@ contract Purgecoin {
             bountyOwedTo = address(0);
         }
 
+        // Move the active window forward; the resolved day becomes claimable.
         currentFlipDay = day + 1;
 
         if (priceCoinUnit != 0) {
@@ -1150,6 +1217,7 @@ contract Purgecoin {
         bool bountyEligible,
         bool skipLuckboxCheck
     ) internal {
+        // Auto-claim older flip/stake winnings (without mint) so deposits net against pending payouts.
         uint256 claimedFlips = _claimCoinflipsInternal(player, 30, false);
         uint48 currentDay = _currentDay();
         uint48 windowStart = currentDay > 30 ? currentDay - 30 : 0;
@@ -1158,12 +1226,14 @@ contract Purgecoin {
         uint256 mintRemainder;
 
         if (coinflipDeposit > totalClaimed) {
+            // Recycling: small bonus for rolling winnings forward.
             uint256 recycled = coinflipDeposit - totalClaimed;
             uint256 bonus = recycled / 100;
             uint256 bonusCap = 500 * MILLION;
             if (bonus > bonusCap) bonus = bonusCap;
             coinflipDeposit += bonus;
         } else if (totalClaimed > coinflipDeposit) {
+            // If claims exceed the new deposit, mint the difference to the player immediately.
             mintRemainder = totalClaimed - coinflipDeposit;
         }
         if (mintRemainder != 0) {
@@ -1171,6 +1241,7 @@ contract Purgecoin {
             playerLuckbox[player] += mintRemainder;
         }
 
+        // Determine which future day this stake applies to, skipping locked RNG windows.
         uint48 settleDay = _syncFlipDay();
         bool rngLocked = purgeGame.rngLocked();
         uint48 targetDay = settleDay + (rngLocked ? 2 : 1);
@@ -1207,6 +1278,7 @@ contract Purgecoin {
                 biggestFlipEver = uint128(newStake);
 
                 if (canArmBounty && bountyEligible) {
+                    // Bounty arms when the same player sets a new record with an eligible stake.
                     uint256 threshold = (bountyOwedTo != address(0)) ? (record + record / 100) : record;
                     if (eligibleStake >= threshold) {
                         bountyOwedTo = player;
@@ -1222,6 +1294,7 @@ contract Purgecoin {
     /// @param amount Amount of PURGED to add to the bounty pool.
     function _addToBounty(uint256 amount) internal {
         unchecked {
+            // Gas-optimized: wraps on overflow, which would effectively reset the bounty.
             currentBounty += uint128(amount);
         }
     }
@@ -1235,6 +1308,7 @@ contract Purgecoin {
         bool completed
     ) private returns (uint256) {
         if (!completed) return 0;
+        // Event captures quest progress for indexers/UI; raw reward is returned to the caller.
         emit QuestCompleted(player, questType, streak, reward, hardMode);
         return reward;
     }
@@ -1310,6 +1384,7 @@ contract Purgecoin {
         }
         if (entry.player == address(0)) return;
 
+        // Credit lands as future flip stake; no direct mint.
         addFlip(entry.player, amount, false, false, true);
     }
 }
