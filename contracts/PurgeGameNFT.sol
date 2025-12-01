@@ -399,7 +399,7 @@ contract PurgeGameNFT {
 
         bonus += bonusCoinReward;
         if (bonus != 0) {
-            coin.bonusCoinflip(buyer, bonus);
+            coin.creditFlip(buyer, bonus);
         }
 
         uint32 qty32 = uint32(quantity);
@@ -486,7 +486,7 @@ contract PurgeGameNFT {
             rebateMint += claimableBonus;
         }
         if (rebateMint != 0) {
-            coin.bonusCoinflip(buyer, rebateMint);
+            coin.creditFlip(buyer, rebateMint);
         }
 
         game.enqueueMap(buyer, uint32(quantity));

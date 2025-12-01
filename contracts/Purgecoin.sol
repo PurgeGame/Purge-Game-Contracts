@@ -240,6 +240,17 @@ contract Purgecoin {
         _;
     }
 
+    modifier onlyFlipContracts() {
+        address sender = msg.sender;
+        if (
+            sender != address(purgeGame) &&
+            sender != address(purgeGameNFT) &&
+            sender != address(purgeGameTrophies) &&
+            sender != address(affiliateProgram)
+        ) revert OnlyGame();
+        _;
+    }
+
     // ---------------------------------------------------------------------
     // Constructor
     // ---------------------------------------------------------------------
@@ -739,11 +750,12 @@ contract Purgecoin {
     function wire(address[] calldata addresses) external {
         if (msg.sender != bonds) revert OnlyBonds();
 
-        _setGame(addresses.length > 0 ? addresses[0] : address(0));
-        _setNft(addresses.length > 1 ? addresses[1] : address(0));
-        _setTrophies(addresses.length > 2 ? addresses[2] : address(0));
-        _setQuestModule(addresses.length > 3 ? addresses[3] : address(0));
-        _setJackpots(addresses.length > 4 ? addresses[4] : address(0));
+        uint256 len = addresses.length;
+        if (len > 0) _setGame(addresses[0]);
+        if (len > 1) _setNft(addresses[1]);
+        if (len > 2) _setTrophies(addresses[2]);
+        if (len > 3) _setQuestModule(addresses[3]);
+        if (len > 4) _setJackpots(addresses[4]);
     }
 
     function _setGame(address game_) private {
@@ -807,39 +819,24 @@ contract Purgecoin {
         _mint(address(this), presaleTotal);
     }
 
-    /// @notice Mint PURGE to the bonds contract for bond payouts (game only).
-    function bondPayment(address to, uint256 amount) external {
+    /// @notice Mint PURGE to the bonds contract for bond payouts (game or bonds caller).
+    function bondPayment(uint256 amount) external {
         address sender = msg.sender;
-        if (sender != address(purgeGame) && sender != bonds) revert OnlyGame();
-        if (to == address(0)) revert ZeroAddress();
-        // Bonds can mint to themselves; PurgeGame mints to target recipients.
-        _mint(to, amount);
-        if (to == bonds) {
-            IPurgeBonds(to).onBondMint(amount);
-        }
+        if (sender != bonds) revert OnlyGame();
+        _mint(bonds, amount);
+        IPurgeBonds(bonds).onBondMint(amount);
     }
 
     /// @notice Grant a pending coinflip stake during gameplay flows instead of minting PURGE.
     /// @dev Access: PurgeGame, NFT, or trophy module only. Zero address is ignored.
-    function bonusCoinflip(address player, uint256 amount) external onlyGameplayContracts {
-        if (player == address(0)) return;
-        if (amount != 0) {
-            addFlip(player, amount, false, false);
-        }
-    }
-
-    /// @notice Credit a coinflip stake from the affiliate program.
-    /// @dev Access: affiliate contract only; zero address is ignored.
-    function affiliateAddFlip(address player, uint256 amount) external {
-        if (msg.sender != address(affiliateProgram)) revert OnlyGame();
+    /// @notice Credit a coinflip stake from authorized contracts (game, NFT, trophies, affiliate).
+    function creditFlip(address player, uint256 amount) external onlyFlipContracts {
         if (player == address(0) || amount == 0) return;
         addFlip(player, amount, false, false);
     }
 
-    /// @notice Batch credit up to three affiliate/upline flip stakes in a single call.
-    /// @dev Access: affiliate contract only; zero amounts or addresses are skipped.
-    function affiliateAddFlipBatch(address[3] calldata players, uint256[3] calldata amounts) external {
-        if (msg.sender != address(affiliateProgram)) revert OnlyGame();
+    /// @notice Batch credit up to three flip stakes in a single call.
+    function creditFlipBatch(address[3] calldata players, uint256[3] calldata amounts) external onlyFlipContracts {
         for (uint256 i; i < 3; ) {
             address player = players[i];
             uint256 amount = amounts[i];

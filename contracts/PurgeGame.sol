@@ -21,7 +21,7 @@ interface IStETH {
 interface IPurgeBonds {
     function payBonds(
         uint256 coinAmount,
-        address stEthAddress,
+        uint256 stEthAmount,
         uint48 rngDay,
         uint256 rngWord,
         uint256 baseId,
@@ -201,6 +201,7 @@ contract PurgeGame is PurgeGameStorage {
         if (stEthToken_ == address(0) || jackpots_ == address(0) || bonds_ == address(0)) revert E();
         jackpots = jackpots_;
         bonds = bonds_;
+        if (!steth.approve(bonds_, type(uint256).max)) revert E();
         deployTimestamp = uint48(block.timestamp);
     }
 
@@ -571,7 +572,7 @@ contract PurgeGame is PurgeGameStorage {
 
         emit Advance(_gameState, _phase);
 
-        if (_gameState != 0 && cap == 0) coinContract.bonusCoinflip(caller, priceCoin);
+        if (_gameState != 0 && cap == 0) coinContract.creditFlip(caller, priceCoin);
     }
 
     // --- Purchases: schedule NFT mints (traits precomputed) ----------------------------------------
@@ -1245,7 +1246,7 @@ contract PurgeGame is PurgeGameStorage {
         }
 
         uint256 ethBal = address(this).balance;
-        bondContract.payBonds{value: ethBal}(0, address(steth), day, 0, 0, 0);
+        bondContract.payBonds{value: ethBal}(0, stBal, day, 0, 0, 0);
     }
 
     // --- Reward vault & liquidity -----------------------------------------------------
@@ -1371,7 +1372,7 @@ contract PurgeGame is PurgeGameStorage {
 
         // Single hop into bonds: registers stETH, mints bond coin, and runs one resolve slice if pending.
         if (skim != 0 || bondMint != 0 || bondContract.resolvePending()) {
-            bondContract.payBonds{value: 0}(bondMint, address(steth), day, rngWord, 0, 50);
+            bondContract.payBonds{value: 0}(bondMint, skim, day, rngWord, 0, 50);
         }
     }
 
@@ -1489,7 +1490,7 @@ contract PurgeGame is PurgeGameStorage {
             flipCredit += (count + bonusTenths) * priceUnit;
         }
 
-        coin.bonusCoinflip(caller, flipCredit);
+        coin.creditFlip(caller, flipCredit);
     }
 
     function onTokenTransfer(address from, uint256 amount, bytes calldata) external {
@@ -1510,7 +1511,7 @@ contract PurgeGame is PurgeGameStorage {
         uint256 baseCredit = (amount * luckPerLink) / 1 ether;
         uint256 credit = (baseCredit * mult) / 1000;
         if (credit != 0) {
-            coin.bonusCoinflip(from, credit);
+            coin.creditFlip(from, credit);
         }
     }
 

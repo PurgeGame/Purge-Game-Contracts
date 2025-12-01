@@ -104,7 +104,7 @@ interface IPurgeGameMinimal is IPurgeGameExternal {
 }
 
 interface IPurgecoinMinimal {
-    function bonusCoinflip(address player, uint256 amount) external;
+    function creditFlip(address player, uint256 amount) external;
     function burnCoin(address target, uint256 amount) external;
 
     function affiliateProgram() external view returns (address);
@@ -1202,7 +1202,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         }
 
         if (ctx.coinClaimed) {
-            coin.bonusCoinflip(msg.sender, ctx.coinAmount);
+            coin.creditFlip(msg.sender, ctx.coinAmount);
         }
     }
 
@@ -1346,7 +1346,7 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         }
 
         uint256 priceUnit = game.coinPriceUnit();
-        coin.bonusCoinflip(sender, _purgeTrophyReward(priceUnit));
+        coin.creditFlip(sender, _purgeTrophyReward(priceUnit));
     }
 
     function isTrophy(uint256 tokenId) external view override returns (bool) {

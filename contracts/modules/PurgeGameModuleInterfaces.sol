@@ -15,7 +15,8 @@ interface IPurgeCoinModule {
         uint256 priceCoinUnit
     ) external returns (bool);
 
-    function bonusCoinflip(address player, uint256 amount) external;
+    function creditFlip(address player, uint256 amount) external;
+    function creditFlipBatch(address[3] calldata players, uint256[3] calldata amounts) external;
 
     function addToBounty(uint256 amount) external;
 

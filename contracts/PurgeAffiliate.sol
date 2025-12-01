@@ -7,8 +7,8 @@ import {IPurgeGameTrophies} from "./PurgeGameTrophies.sol";
 interface IPurgeCoinAffiliate {
     function balanceOf(address account) external view returns (uint256);
     function presaleDistribute(address buyer, uint256 amountBase) external;
-    function affiliateAddFlip(address player, uint256 amount) external;
-    function affiliateAddFlipBatch(address[3] calldata players, uint256[3] calldata amounts) external;
+    function creditFlip(address player, uint256 amount) external;
+    function creditFlipBatch(address[3] calldata players, uint256[3] calldata amounts) external;
     function affiliateQuestReward(address player, uint256 amount) external returns (uint256);
     function affiliatePrimePresale() external;
 }
@@ -427,7 +427,7 @@ contract PurgeAffiliate {
         }
 
         if (players[0] != address(0) || players[1] != address(0) || players[2] != address(0)) {
-            coin.affiliateAddFlipBatch(players, amounts);
+            coin.creditFlipBatch(players, amounts);
         } else if (!coinActive && playerRakeback != 0) {
             presaleCoinEarned[sender] += playerRakeback;
             presaleClaimableTotal += playerRakeback;

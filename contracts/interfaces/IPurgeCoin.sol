@@ -7,7 +7,8 @@ interface IPurgeCoin {
     function jackpots() external view returns (address);
     function affiliateProgram() external view returns (address);
 
-    function bonusCoinflip(address player, uint256 amount) external;
+    function creditFlip(address player, uint256 amount) external;
+    function creditFlipBatch(address[3] calldata players, uint256[3] calldata amounts) external;
 
     function burnCoin(address target, uint256 amount) external;
 
@@ -51,5 +52,5 @@ interface IPurgeCoin {
 
     function getPlayerQuestView(address player) external view returns (PlayerQuestView memory viewData);
 
-    function bondPayment(address to, uint256 amount) external;
+    function bondPayment(uint256 amount) external;
 }

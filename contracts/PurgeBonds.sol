@@ -36,7 +36,7 @@ interface IPurgeGameLike {
 }
 
 interface IPurgeCoinBondMinter {
-    function bondPayment(address to, uint256 amount) external;
+    function bondPayment(uint256 amount) external;
 }
 
 interface IPurgeAffiliateLike {
@@ -162,14 +162,12 @@ contract PurgeBonds {
     // -- Financial Accounting --
     // `pool` variables track actual assets held.
     // `Owed` variables track liabilities (if everyone won).
-    uint256 public ethPool;
-    uint256 public stEthPool;
     uint256 public bondPool;      // Tracks PURGE available for claims
     uint256 public bondCoin;      // Redundant tracker for bond payouts logic
     uint256 public totalEthOwed;  // Aggregate ETH liability
+    uint256 public payoutObligation; // Aggregate ETH + stETH reserved for bond payouts
     uint256 public totalCoinOwed; // Aggregate weighted PURGE liability
     uint256 public rewardSeedEth; // Accumulator for game rewards from unwired state
-    uint256 private stEthAccounted; // Internal accounting to prevent donation attacks
 
     // -- Resolution State --
     bool public resolvePending;
@@ -224,6 +222,11 @@ contract PurgeBonds {
         _;
     }
 
+    modifier onlyGame() {
+        if (msg.sender != game) revert Unauthorized();
+        _;
+    }
+
     modifier onlyOwnerOrGame() {
         address sender = msg.sender;
         if (sender != owner && sender != game) revert Unauthorized();
@@ -256,9 +259,9 @@ contract PurgeBonds {
 
     /**
      * @notice Main entry point to fund the contract and trigger bond resolution.
-     * @dev Callable by owner or game. Automatically batches resolution if budgets allow.
+     * @dev Callable by the game only. Automatically batches resolution if budgets allow.
      * @param coinAmount Amount of PURGE tokens being sent/credited.
-     * @param stEthAddress Address check for safety.
+     * @param stEthAmount Amount of stETH being credited by the caller.
      * @param rngDay The game day to fetch RNG for (if not provided via `rngWord`).
      * @param rngWord The random seed for resolution (overrides `rngDay` if non-zero).
      * @param baseId Explicit start ID for resolution (0 = auto).
@@ -266,55 +269,39 @@ contract PurgeBonds {
      */
     function payBonds(
         uint256 coinAmount,
-        address stEthAddress,
+        uint256 stEthAmount,
         uint48 rngDay,
         uint256 rngWord,
         uint256 baseId,
         uint256 maxBonds
-    ) external payable onlyOwnerOrGame {
-        // 1. Ingest ETH
-        ethPool += msg.value;
-
-        // 2. Ingest Coin (PURGE)
+    ) external payable onlyGame {
+        // 1. Ingest Coin (PURGE)
         uint256 bondAdded;
         if (coinAmount != 0) {
             address coin = coinToken;
-            if (coin == address(0)) revert ZeroAddress();
-            
-            // Game mints directly; Users transfer.
-            // Note: Users taking a 75% haircut on "donation" is a specific game mechanic.
-            if (msg.sender == game) {
-                IPurgeCoinBondMinter(coin).bondPayment(address(this), coinAmount);
-                bondAdded = coinAmount; 
-            } else {
-                IERC20Minimal(coin).transferFrom(msg.sender, address(this), coinAmount);
-                bondAdded = coinAmount / 4; // 25% credited to pool
-                bondPool += bondAdded;
-                bondCoin += bondAdded;
-            }
+
+            IPurgeCoinBondMinter(coin).bondPayment(coinAmount);
+            bondAdded = coinAmount;
         }
 
-        // 3. Ingest stETH (Rebase/Donation check)
+        // 2. Ingest stETH (Rebase/Donation check)
         uint256 stAdded;
-        if (stEthAddress != address(0)) {
-            if (stEthToken == address(0)) {
-                stEthToken = stEthAddress;
-            } else if (stEthToken != stEthAddress) {
-                revert InvalidToken();
-            }
-            uint256 bal = IERC20Minimal(stEthToken).balanceOf(address(this));
-            if (bal > stEthAccounted) {
-                stAdded = bal - stEthAccounted;
-                stEthPool += stAdded;
-                stEthAccounted = bal;
-            }
+        if (stEthAmount != 0) {
+            IERC20Minimal(stEthToken).transferFrom(msg.sender, address(this), stEthAmount);
+            stAdded = stEthAmount;
         }
+        payoutObligation += msg.value + stAdded;
 
         emit BondsPaid(msg.value, stAdded, bondAdded);
 
-        // 4. Schedule Resolution
+        // 3. Schedule Resolution
         uint256 budget = msg.value + stAdded;
-        if ((rngWord != 0 || rngDay != 0) && ethPool > 1 ether && !resolvePending && budget != 0) {
+        uint256 holdings = address(this).balance;
+        address stToken = stEthToken;
+        if (stToken != address(0)) {
+            holdings += IERC20Minimal(stToken).balanceOf(address(this));
+        }
+        if ((rngWord != 0 || rngDay != 0) && holdings > 1 ether && !resolvePending && budget != 0) {
             uint256 startId = _resolveStart(baseId);
             if (startId != 0) {
                 _scheduleResolve(startId, rngDay, rngWord, maxBonds, budget);
@@ -500,21 +487,16 @@ contract PurgeBonds {
         uint256 ethPaid;
         uint256 stEthPaid;
         address stToken = stEthToken;
+        uint256 ethBal = address(this).balance;
+        uint256 stBal = stToken == address(0) ? 0 : IERC20Minimal(stToken).balanceOf(address(this));
         
-        if (stEthPool >= 1 ether) {
-            stEthPool -= 1 ether;
-            stEthPaid = 1 ether;
-            IERC20Minimal(stToken).transfer(to, stEthPaid);
-            if (stEthAccounted >= stEthPaid) {
-                stEthAccounted -= stEthPaid;
-            } else {
-                stEthAccounted = 0;
-            }
-        } else if (ethPool >= 1 ether) {
-            ethPool -= 1 ether;
+        if (ethBal >= 1 ether) {
             ethPaid = 1 ether;
             (bool ok, ) = payable(to).call{value: ethPaid}("");
             if (!ok) revert CallFailed();
+        } else if (stBal >= 1 ether) {
+            stEthPaid = 1 ether;
+            IERC20Minimal(stToken).transfer(to, stEthPaid);
         } else {
             revert InsufficientPayout();
         }
@@ -527,6 +509,15 @@ contract PurgeBonds {
             }
             bondCoin -= bondShare;
             IERC20Minimal(coinToken).transfer(to, bondShare);
+        }
+
+        uint256 paid = ethPaid + stEthPaid;
+        if (paid != 0) {
+            if (payoutObligation <= paid) {
+                payoutObligation = 0;
+            } else {
+                payoutObligation -= paid;
+            }
         }
 
         // 4. Update Global Obligations
@@ -584,21 +575,36 @@ contract PurgeBonds {
      */
     function sendAsset(address token, address to, uint256 amount) external onlyOwner {
         if (to == address(0)) revert ZeroAddress();
+
+        address stToken = stEthToken;
+        uint256 stBal = stToken == address(0) ? 0 : IERC20Minimal(stToken).balanceOf(address(this));
+        uint256 totalBal = address(this).balance + stBal;
+        uint256 obligation = payoutObligation;
+        uint256 combinedHeadroom = totalBal > obligation ? totalBal - obligation : 0;
+
         if (token == address(0)) {
-            uint256 headroom = _ethHeadroom();
-            if (amount == 0) amount = headroom;
-            if (amount == 0 || amount > headroom) revert InsufficientHeadroom();
-            ethPool -= amount;
-            (bool ok, ) = payable(to).call{value: amount}("");
-            if (!ok) revert CallFailed();
+            uint256 requested = amount == 0 ? combinedHeadroom : amount;
+            if (requested == 0 || requested > combinedHeadroom) revert InsufficientHeadroom();
+
+            uint256 ethBal = address(this).balance;
+            uint256 ethSend = requested <= ethBal ? requested : ethBal;
+            uint256 remaining = requested - ethSend;
+
+            if (ethSend != 0) {
+                (bool ok, ) = payable(to).call{value: ethSend}("");
+                if (!ok) revert CallFailed();
+            }
+            if (remaining != 0) {
+                if (stToken == address(0) || remaining > stBal) revert InsufficientHeadroom();
+                IERC20Minimal(stToken).transfer(to, remaining);
+            }
             return;
         }
-        if (token == stEthToken) {
-            uint256 headroom = _stEthHeadroom();
-            if (amount == 0) amount = headroom;
-            if (amount == 0 || amount > headroom) revert InsufficientHeadroom();
-            stEthAccounted -= amount;
-            IERC20Minimal(token).transfer(to, amount);
+        if (token == stToken) {
+            uint256 available = combinedHeadroom < stBal ? combinedHeadroom : stBal;
+            uint256 sendAmount = amount == 0 ? available : amount;
+            if (sendAmount == 0 || sendAmount > available) revert InsufficientHeadroom();
+            IERC20Minimal(token).transfer(to, sendAmount);
             return;
         }
         if (token != coinToken) revert InvalidToken();
@@ -662,7 +668,6 @@ contract PurgeBonds {
 
         ethOut = address(this).balance;
         if (ethOut != 0) {
-            ethPool = 0;
             (bool ok, ) = payable(to).call{value: ethOut}("");
             if (!ok) revert CallFailed();
         }
@@ -671,8 +676,6 @@ contract PurgeBonds {
         if (stToken != address(0)) {
             stEthOut = IERC20Minimal(stToken).balanceOf(address(this));
             if (stEthOut != 0) {
-                stEthPool = 0;
-                stEthAccounted = 0;
                 IERC20Minimal(stToken).transfer(to, stEthOut);
             }
         }
@@ -687,6 +690,7 @@ contract PurgeBonds {
                 IERC20Minimal(coin).transfer(to, coinOut);
             }
         }
+        payoutObligation = 0;
         _burnAllBonds();
     }
 
@@ -788,10 +792,13 @@ contract PurgeBonds {
      */
     function pendingShares() external view returns (uint256 ethShare, uint256 stEthShare, uint256 bondShare) {
         if (_currentIndex <= 1) return (0, 0, 0);
-        if (stEthPool >= 1 ether) {
-            stEthShare = 1 ether;
-        } else if (ethPool >= 1 ether) {
+        uint256 ethBal = address(this).balance;
+        address stToken = stEthToken;
+        uint256 stBal = stToken == address(0) ? 0 : IERC20Minimal(stToken).balanceOf(address(this));
+        if (ethBal >= 1 ether) {
             ethShare = 1 ether;
+        } else if (stBal >= 1 ether) {
+            stEthShare = 1 ether;
         }
         uint256 coinOwed = totalCoinOwed;
         if (coinOwed != 0 && bondCoin != 0) {
@@ -1117,7 +1124,12 @@ contract PurgeBonds {
         if (resolvePending) revert ResolvePendingAlready();
         if (rngWord == 0 && rngDay == 0) revert InvalidRng();
         if (budgetWei == 0) revert InsufficientEthForResolve();
-        if (ethPool <= 1 ether) revert InsufficientEthForResolve();
+        uint256 holdings = address(this).balance;
+        address stToken = stEthToken;
+        if (stToken != address(0)) {
+            holdings += IERC20Minimal(stToken).balanceOf(address(this));
+        }
+        if (holdings <= 1 ether) revert InsufficientEthForResolve();
 
         uint256 maxId = _currentIndex - 1;
         if (maxId == 0 || startId == 0 || startId > maxId) revert InvalidToken();
@@ -1223,11 +1235,9 @@ contract PurgeBonds {
         burnedCount = minted;
         totalEthOwed = 0;
         totalCoinOwed = 0;
-        ethPool = 0;
-        stEthPool = 0;
-        stEthAccounted = 0;
         bondPool = 0;
         bondCoin = 0;
+        payoutObligation = 0;
         resolvePending = false;
         pendingRngWord = 0;
         pendingRngDay = 0;
@@ -1340,19 +1350,6 @@ contract PurgeBonds {
             _inPendingWindow(tokenId);
     }
 
-    function _ethHeadroom() private view returns (uint256) {
-        uint256 owed = totalEthOwed;
-        uint256 pool = ethPool;
-        if (pool <= owed) return 0;
-        return pool - owed;
-    }
-
-    function _stEthHeadroom() private view returns (uint256) {
-        uint256 accounted = stEthAccounted;
-        if (accounted <= stEthPool) return 0;
-        return accounted - stEthPool;
-    }
-
     function bondOutcome(
         uint256 tokenId,
         uint256 rngWord
@@ -1460,9 +1457,6 @@ contract PurgeBonds {
         if (tid > lowestUnresolved) lowestUnresolved = tid;
         
         complete = tid > maxId;
-        if (complete && burnedCount >= (_currentIndex - 1)) {
-            stEthPool = 0; // Cleanup dust if supply is 0
-        }
     }
 
     // Cleans up losers behind the resolution cursor
