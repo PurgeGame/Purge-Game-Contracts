@@ -132,6 +132,14 @@ contract PurgeJackpots is IPurgeJackpots {
         _;
     }
 
+    /// @notice Wire using address array ([coin, game, trophies]) for uniform wiring calls.
+    function wire(address[] calldata addresses) external {
+        address coinAddr = addresses.length > 0 ? addresses[0] : address(0);
+        address gameAddr = addresses.length > 1 ? addresses[1] : address(0);
+        address trophiesAddr = addresses.length > 2 ? addresses[2] : address(0);
+        wire(coinAddr, gameAddr, trophiesAddr);
+    }
+
     /// @dev One-time wiring called by Purgecoin to connect the game, coin, and trophies contracts.
     function wire(address coin_, address purgeGame_, address trophies_) external override {
         if (address(coin) != address(0)) revert AlreadyWired();

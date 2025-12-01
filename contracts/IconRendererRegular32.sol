@@ -230,6 +230,13 @@ contract IconRendererRegular32 {
         _;
     }
 
+    /// @notice Wire using an address array ([game, nft]) for consistent wiring entrypoints.
+    function wire(address[] calldata addresses) external {
+        address gameAddr = addresses.length > 0 ? addresses[0] : address(0);
+        address nftAddr = addresses.length > 1 ? addresses[1] : address(0);
+        wireContracts(gameAddr, nftAddr);
+    }
+
     /// @notice Wire both the game controller and ERC721 contract in a single call.
     /// @dev Callable only by the PURGE coin contract. Allows sequencing by wiring game first, then NFT.
     function wireContracts(address game_, address nft_) external {

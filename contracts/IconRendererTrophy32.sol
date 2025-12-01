@@ -90,6 +90,13 @@ contract IconRendererTrophy32 {
         return registry.setTopAffiliateColor(msg.sender, tokenId, trophyHex);
     }
 
+    /// @notice Wire using an address array ([game, nft]) for consistent wiring entrypoints.
+    function wire(address[] calldata addresses) external {
+        address gameAddr = addresses.length > 0 ? addresses[0] : address(0);
+        address nftAddr = addresses.length > 1 ? addresses[1] : address(0);
+        wireContracts(gameAddr, nftAddr);
+    }
+
     function wireContracts(address /*game_*/, address nft_) external {
         if (msg.sender != address(coin)) revert E();
         nft = IERC721Lite(nft_);

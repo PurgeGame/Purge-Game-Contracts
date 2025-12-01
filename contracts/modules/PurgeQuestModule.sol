@@ -97,6 +97,12 @@ contract PurgeQuestModule is IPurgeQuestModule {
         coin = coin_;
     }
 
+    /// @notice Wire the Purge game contract using an address array ([game]).
+    function wire(address[] calldata addresses) external onlyCoin {
+        address gameAddr = addresses.length > 0 ? addresses[0] : address(0);
+        wireGame(gameAddr);
+    }
+
     /// @notice Wire the Purge game contract after deployment.
     /// @dev Hard gated by `coin` to avoid griefing.
     function wireGame(address game_) external onlyCoin {

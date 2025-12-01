@@ -110,6 +110,9 @@ contract PurgeGame is PurgeGameStorage {
     uint256 private immutable vrfSubscriptionId; // VRF subscription identifier
     address private immutable linkToken; // LINK token contract for top-ups
 
+    uint256 private constant DEPLOY_IDLE_TIMEOUT = (365 days * 5) / 2; // 2.5 years
+    uint48 private constant LEVEL_START_SENTINEL = type(uint48).max;
+
     // -----------------------
     // Game Constants
     // -----------------------
@@ -195,6 +198,7 @@ contract PurgeGame is PurgeGameStorage {
         bonds = bonds_;
         // Allow Purgecoin to pull stETH for yield skims during Burnie.
         IStETH(stEthToken_).approve(purgeCoinContract, type(uint256).max);
+        deployTimestamp = uint48(block.timestamp);
     }
 
     // --- View: lightweight game status -------------------------------------------------
@@ -386,8 +390,20 @@ contract PurgeGame is PurgeGameStorage {
         uint48 ts = uint48(block.timestamp);
         uint48 day = uint48((ts - JACKPOT_RESET_TIME) / 1 days);
         IPurgeCoin coinContract = coin;
+        uint48 lst = levelStartTime;
+        if (lst == LEVEL_START_SENTINEL) {
+            uint48 deployTs = deployTimestamp;
+            if (
+                deployTs != 0 &&
+                uint256(ts) >= uint256(deployTs) + DEPLOY_IDLE_TIMEOUT // uint256 to avoid uint48 overflow
+            ) {
+                _drainToBonds(day);
+                gameState = 0;
+                return;
+            }
+        }
         // Liveness drain
-        if (ts - 365 days > levelStartTime) {
+        if (ts - 365 days > lst) {
             _drainToBonds(day);
             gameState = 0;
             return;
@@ -1187,6 +1203,26 @@ contract PurgeGame is PurgeGameStorage {
 
         IPurgeBonds bondContract = IPurgeBonds(bondsAddr);
         bondContract.notifyGameOver();
+
+        // Best-effort RNG request; ignored if it fails.
+        try
+            vrfCoordinator.requestRandomWords(
+                VRFRandomWordsRequest({
+                    keyHash: vrfKeyHash,
+                    subId: vrfSubscriptionId,
+                    requestConfirmations: VRF_REQUEST_CONFIRMATIONS,
+                    callbackGasLimit: VRF_CALLBACK_GAS_LIMIT,
+                    numWords: 1,
+                    extraArgs: bytes("")
+                })
+            )
+        returns (uint256 id) {
+            vrfRequestId = id;
+            rngFulfilled = false;
+            rngWordCurrent = 0;
+            rngLockedFlag = true;
+            rngRequestTime = uint48(block.timestamp);
+        } catch {}
 
         uint256 stBal = steth.balanceOf(address(this));
         if (stBal != 0) {

@@ -32,7 +32,6 @@ contract Purgecoin {
     // ---------------------------------------------------------------------
     // Errors
     // ---------------------------------------------------------------------
-    error OnlyDeployer();
     error OnlyGame();
     error BettingPaused();
     error Zero();
@@ -43,7 +42,6 @@ contract Purgecoin {
     error StakeInvalid();
     error ZeroAddress();
     error NotDecimatorWindow();
-    error OnlyAffiliate();
     error OnlyBonds();
 
     // ---------------------------------------------------------------------
@@ -127,6 +125,7 @@ contract Purgecoin {
     mapping(uint24 => StakeResolution) internal stakeResolutionInfo;
     mapping(address => uint24) internal lastStakeScanLevel;
     mapping(address => uint48) internal lastStakeScanDay;
+    uint256 public presaleClaimableRemaining;
 
     uint128 public currentBounty = 1_000_000_000;
     uint128 public biggestFlipEver = 1_000_000_000;
@@ -195,25 +194,17 @@ contract Purgecoin {
     uint256 private constant STAKE_PRINCIPAL_FACTOR = MILLION;
     uint256 private constant TROPHY_BASE_LEVEL_SHIFT = 128;
     uint256 private constant TROPHY_FLAG_STAKE = uint256(1) << 202;
-    uint256 private constant PRESALE_SUPPLY_TOKENS = 4_000_000;
     uint24 private constant DECIMATOR_SPECIAL_LEVEL = 100;
     uint48 private constant JACKPOT_RESET_TIME = 82620;
 
     // ---------------------------------------------------------------------
     // Immutables / external wiring
     // ---------------------------------------------------------------------
-    address private immutable creator; // deployer / ETH sink
-
     // ---------------------------------------------------------------------
     // Modifiers
     // ---------------------------------------------------------------------
     modifier onlyPurgeGameContract() {
         if (msg.sender != address(purgeGame)) revert OnlyGame();
-        _;
-    }
-
-    modifier onlyAffiliateContract() {
-        if (msg.sender != address(affiliateProgram)) revert OnlyAffiliate();
         _;
     }
 
@@ -227,18 +218,13 @@ contract Purgecoin {
     // ---------------------------------------------------------------------
     // Constructor
     // ---------------------------------------------------------------------
-    /**
-     * @dev Mints the initial presale allocation to the contract and creator.
-     */
     constructor(address bonds_) {
         if (bonds_ == address(0)) revert ZeroAddress();
-        creator = msg.sender;
         bonds = bonds_;
-        affiliateProgram = new PurgeAffiliate(msg.sender);
+        affiliateProgram = new PurgeAffiliate(bonds_);
         currentFlipDay = _currentDay();
-        uint256 presaleAmount = PRESALE_SUPPLY_TOKENS * MILLION;
-        _mint(address(this), presaleAmount);
-        _mint(creator, presaleAmount);
+        uint256 bondSeed = 2_000_000 * MILLION;
+        _mint(bonds_, bondSeed);
     }
 
     receive() external payable {}
@@ -274,6 +260,15 @@ contract Purgecoin {
         }
 
         emit CoinflipDeposit(caller, amount);
+    }
+
+    /// @notice Claim presale/early affiliate bonuses that were deferred to the affiliate contract.
+    function claimPresaleAffiliateBonus() external {
+        uint256 amount = affiliateProgram.consumePresaleCoin(msg.sender);
+        if (amount == 0) return;
+        if (amount > presaleClaimableRemaining) revert Insufficient();
+        presaleClaimableRemaining -= amount;
+        _transfer(address(this), msg.sender, amount);
     }
 
     /// @notice Burn PURGE during an active Decimator window to accrue weighted participation.
@@ -697,19 +692,17 @@ contract Purgecoin {
         emit StakeCreated(sender, targetLevel, risk, burnAmt);
     }
 
-    /// @notice Claim presale/early affiliate bonuses that were deferred to the affiliate contract.
-    function claimPresaleAffiliateBonus() external {
-        PurgeAffiliate program = affiliateProgram;
-        if (address(program) == address(0)) revert ZeroAddress();
-        uint256 amount = program.consumePresaleCoin(msg.sender);
-        if (amount == 0) return;
-        _mint(msg.sender, amount);
-    }
-
-    /// @notice Transfer presale inventory to a buyer (affiliate contract only).
-    function presaleDistribute(address buyer, uint256 amountBase) external onlyAffiliateContract {
-        if (buyer == address(0)) revert ZeroAddress();
-        _transfer(address(this), buyer, amountBase);
+    /// @notice Wire the game, NFT, renderers, and supporting modules using an address array.
+    /// @dev Order: [game, nft, trophies, regular renderer, trophy renderer, quest module, jackpots].
+    function wire(address[] calldata addresses) external {
+        address game_ = addresses.length > 0 ? addresses[0] : address(0);
+        address nft_ = addresses.length > 1 ? addresses[1] : address(0);
+        address trophies_ = addresses.length > 2 ? addresses[2] : address(0);
+        address regularRenderer_ = addresses.length > 3 ? addresses[3] : address(0);
+        address trophyRenderer_ = addresses.length > 4 ? addresses[4] : address(0);
+        address questModule_ = addresses.length > 5 ? addresses[5] : address(0);
+        address jackpots_ = addresses.length > 6 ? addresses[6] : address(0);
+        wire(game_, nft_, trophies_, regularRenderer_, trophyRenderer_, questModule_, jackpots_);
     }
 
     /// @notice Wire the game, NFT, renderers, and supporting modules required by Purgecoin.
@@ -723,7 +716,7 @@ contract Purgecoin {
         address questModule_,
         address jackpots_
     ) external {
-        if (msg.sender != creator || jackpots != address(0)) revert OnlyDeployer();
+        if (msg.sender != bonds || jackpots != address(0)) revert OnlyBonds();
 
         purgeGame = IPurgeGame(game_);
         purgeGameNFT = PurgeGameNFT(nft_);
@@ -737,10 +730,17 @@ contract Purgecoin {
         purgeGameNFT.wireAll(game_, trophies_);
         purgeGameTrophies.wireAndPrime(game_, address(this), 1);
         _wireAffiliate(game_, trophies_);
+
+        // Initialize presale claimable supply from the affiliate program (if any) and reserve it on this contract.
+        uint256 presaleTotal = affiliateProgram.presaleClaimableTotal();
+        if (presaleTotal != 0) {
+            presaleClaimableRemaining = presaleTotal;
+            _mint(address(this), presaleTotal);
+        }
     }
 
     function wireAffiliate(address affiliate_) external {
-        if (msg.sender != creator || affiliateOverride) revert OnlyDeployer();
+        if (msg.sender != bonds || affiliateOverride) revert OnlyBonds();
         if (affiliate_ == address(0)) revert ZeroAddress();
         affiliateOverride = true;
         affiliateProgram = PurgeAffiliate(affiliate_);

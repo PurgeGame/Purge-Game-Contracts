@@ -260,6 +260,13 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     // ---------------------------------------------------------------------
     // Wiring
     // ---------------------------------------------------------------------
+    /// @notice Wire game and coin contracts using an address array ([game, coin]).
+    function wire(address[] calldata addresses) external {
+        address gameAddr = addresses.length > 0 ? addresses[0] : address(0);
+        address coinAddr = addresses.length > 1 ? addresses[1] : address(0);
+        wire(gameAddr, coinAddr);
+    }
+
     function wire(address game_, address coin_) external override {
         _wire(game_, coin_);
     }

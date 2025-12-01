@@ -957,6 +957,13 @@ contract PurgeGameNFT {
         _;
     }
 
+    /// @notice Wire game and trophy module using an address array ([game, trophies]).
+    function wire(address[] calldata addresses) external onlyCoinContract {
+        address gameAddr = addresses.length > 0 ? addresses[0] : address(0);
+        address trophiesAddr = addresses.length > 1 ? addresses[1] : address(0);
+        wireAll(gameAddr, trophiesAddr);
+    }
+
     function wireAll(address game_, address trophies_) external onlyCoinContract {
         _wireGame(game_);
         _wireTrophies(trophies_);

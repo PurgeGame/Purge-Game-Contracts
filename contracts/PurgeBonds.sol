@@ -29,7 +29,16 @@ interface IPurgeCoinBondMinter {
     function bondPayment(address to, uint256 amount) external;
 }
 
-/// @notice PurgeBonds — a lightweight ERC721 used to beta test bond-like payouts for the creator flows.
+interface IPurgeAffiliateLike {
+    function payAffiliate(uint256 amount, bytes32 code, address sender, uint24 lvl) external returns (uint256);
+}
+
+interface IPurgeGamePrice {
+    function mintPrice() external view returns (uint256);
+    function coinPriceUnit() external view returns (uint256);
+}
+
+/// @notice PurgeBonds — a lightweight ERC721 used to beta test bond-like payouts for the game flows.
 ///         Supports public purchases with a user-supplied risk, dynamic pricing, sequential claim gating,
 ///         and proportional ETH/stETH/coin bond pool distribution on claim.
 contract PurgeBonds {
@@ -59,6 +68,7 @@ contract PurgeBonds {
     error AlreadyConfigured();
     error GameOver();
     error ShutdownPendingResolution();
+    error ExpiredSweepLocked();
 
     // ---------------------------------------------------------------------
     // Events
@@ -80,12 +90,13 @@ contract PurgeBonds {
     // ---------------------------------------------------------------------
     string public name;
     string public symbol;
-    address public owner; // creator contract / admin
+    address public owner; // admin
     address public fundRecipient;
     address public stEthToken;
     address public coinToken;
     address public renderer;
     address public game;
+    address public affiliateProgram;
     bool public decayPaused;
     uint256 public bondCoin; // PURGE reserved for bond payouts
     uint256 public totalEthOwed; // Sum of ETH owed across all bonds
@@ -107,6 +118,8 @@ contract PurgeBonds {
     bool public purchasesEnabled = true;
     bool public gameOver;
     uint256 public shutdownBurnCursor;
+    uint256 public gameOverTimestamp;
+    bool public allBondsBurned;
 
     uint256 private nextId = 1;
     uint256 private nextClaimable = 1;
@@ -140,6 +153,7 @@ contract PurgeBonds {
     uint8 private constant MAX_RISK = 59; // Keeps 1 ether >> risk non-zero
     uint256 private constant COIN_WEIGHT_UNMARKETABLE = 5; // Unmarketable (staked) bonds get full weight
     uint256 private constant COIN_WEIGHT_MARKETABLE = 1; // Marketable bonds get 20% of the coin payout
+    uint256 private constant AFFILIATE_PRESALE_PRICE_PER_1000_WEI = 0.025 ether; // price per 1,000 coin during presale
 
     modifier onlyOwner() {
         if (msg.sender != owner) revert Unauthorized();
@@ -293,13 +307,13 @@ contract PurgeBonds {
     // Minting
     // ---------------------------------------------------------------------
 
-    function buy(uint8 risk) external payable nonReentrant returns (uint256 tokenId) {
-        tokenId = _buy(risk, false);
+    function buy(uint8 risk, bytes32 affiliateCode) external payable nonReentrant returns (uint256 tokenId) {
+        tokenId = _buy(risk, false, affiliateCode);
     }
 
     /// @notice Purchase a bond and permanently stake it (non-transferable).
-    function buyStaked(uint8 risk) external payable nonReentrant returns (uint256 tokenId) {
-        tokenId = _buy(risk, true);
+    function buyStaked(uint8 risk, bytes32 affiliateCode) external payable nonReentrant returns (uint256 tokenId) {
+        tokenId = _buy(risk, true, affiliateCode);
     }
 
     /// @notice Purchase multiple bonds using a desired base pool amount (<= 1 ETH) and quantity.
@@ -307,20 +321,22 @@ contract PurgeBonds {
     ///      Caller must send the exact aggregate price for the derived risk across all mints.
     function buyWithBase(
         uint256 baseWei,
-        uint256 quantity
+        uint256 quantity,
+        bytes32 affiliateCode
     ) external payable nonReentrant returns (uint256 firstTokenId) {
-        firstTokenId = _buyWithBase(baseWei, quantity, false);
+        firstTokenId = _buyWithBase(baseWei, quantity, false, affiliateCode);
     }
 
     /// @notice Same as buyWithBase but permanently stakes the minted bonds (non-transferable).
     function buyStakedWithBase(
         uint256 baseWei,
-        uint256 quantity
+        uint256 quantity,
+        bytes32 affiliateCode
     ) external payable nonReentrant returns (uint256 firstTokenId) {
-        firstTokenId = _buyWithBase(baseWei, quantity, true);
+        firstTokenId = _buyWithBase(baseWei, quantity, true, affiliateCode);
     }
 
-    function _buy(uint8 risk, bool stake) private returns (uint256 tokenId) {
+    function _buy(uint8 risk, bool stake, bytes32 affiliateCode) private returns (uint256 tokenId) {
         address recipient = fundRecipient;
         if (recipient == address(0)) revert ZeroAddress();
         if (!purchasesEnabled) revert PurchasesClosed();
@@ -330,6 +346,7 @@ contract PurgeBonds {
         uint256 price = _priceForRisk(risk);
         if (msg.value != price) revert WrongPrice();
 
+        _applyAffiliateCode(msg.sender, affiliateCode, msg.value);
         _processPayment(msg.value, recipient);
 
         tokenId = _mint(msg.sender, risk, price, stake);
@@ -338,7 +355,12 @@ contract PurgeBonds {
         _bumpMultiplier(msg.value);
     }
 
-    function _buyWithBase(uint256 baseWei, uint256 quantity, bool stake) private returns (uint256 firstTokenId) {
+    function _buyWithBase(
+        uint256 baseWei,
+        uint256 quantity,
+        bool stake,
+        bytes32 affiliateCode
+    ) private returns (uint256 firstTokenId) {
         address recipient = fundRecipient;
         if (recipient == address(0)) revert ZeroAddress();
         if (!purchasesEnabled) revert PurchasesClosed();
@@ -356,6 +378,7 @@ contract PurgeBonds {
         uint8 risk = _riskForBase(basePerBond);
 
         uint256 remaining = msg.value;
+        _applyAffiliateCode(msg.sender, affiliateCode, msg.value);
         for (uint256 i; i < quantity; ) {
             uint256 price = _priceForRisk(risk);
             if (price == 0 || remaining < price) revert WrongPrice();
@@ -377,7 +400,7 @@ contract PurgeBonds {
         _processPayment(msg.value, recipient);
     }
 
-    /// @notice Backdoor mint for the owner (creator contract) to manually mint without payment if needed.
+    /// @notice Backdoor mint for the owner to manually mint without payment if needed.
     function mintTo(address to) external onlyOwner returns (uint256 tokenId) {
         tokenId = _mint(to, 0, 0, false);
     }
@@ -426,6 +449,11 @@ contract PurgeBonds {
         fundRecipient = newRecipient;
     }
 
+    function setAffiliateProgram(address affiliate_) external onlyOwner {
+        if (affiliate_ == address(0)) revert ZeroAddress();
+        affiliateProgram = affiliate_;
+    }
+
     function setStEthToken(address token) external onlyOwner {
         if (token == address(0)) revert ZeroAddress();
         stEthToken = token;
@@ -439,10 +467,17 @@ contract PurgeBonds {
         _setGame(game_);
     }
 
+    /// @notice Wire the coin and game contracts using a generic address array.
+    /// @dev Order: [coin token, game]. Same access control as `wireContracts`.
+    function wire(address[] calldata addresses) external onlyOwner {
+        address coinAddr = addresses.length > 0 ? addresses[0] : address(0);
+        address gameAddr = addresses.length > 1 ? addresses[1] : address(0);
+        _wire(coinAddr, gameAddr);
+    }
+
     /// @notice Wire the coin and game contracts once post-deploy.
     function wireContracts(address coinToken_, address game_) external onlyOwner {
-        _setCoinToken(coinToken_);
-        _setGame(game_);
+        _wire(coinToken_, game_);
     }
 
     /// @notice Permanently enter shutdown mode after the game triggers its liveness drain.
@@ -453,6 +488,10 @@ contract PurgeBonds {
             decayPaused = true;
             transfersLocked = true;
             transfersLockedAt = uint64(block.timestamp);
+            gameOverTimestamp = block.timestamp;
+        } else if (gameOverTimestamp == 0) {
+            // Backfill timestamp if it was missing for some reason.
+            gameOverTimestamp = block.timestamp;
         }
 
         if (shutdownBurnCursor == 0) {
@@ -540,6 +579,47 @@ contract PurgeBonds {
     function setStakeRateBps(uint16 rateBps) external onlyOwner {
         if (rateBps < 2500 || rateBps > 15_000) revert InvalidRate(); // 25% - 150%
         stakeRateBps = rateBps;
+    }
+
+    /// @notice One year after game end, sweep all ETH/stETH/coin held by the bond contract and delete remaining bonds.
+    /// @dev Coin sweep zeroes bondCoin/bondPool/totalCoinOwed so subsequent claims no longer expect coin.
+    function sweepExpiredPools(
+        address to
+    ) external onlyOwner nonReentrant returns (uint256 ethOut, uint256 stEthOut, uint256 coinOut) {
+        if (to == address(0)) revert ZeroAddress();
+        uint256 endedAt = gameOverTimestamp;
+        if (endedAt == 0 || block.timestamp <= endedAt + 365 days) revert ExpiredSweepLocked();
+
+        ethOut = address(this).balance;
+        if (ethOut != 0) {
+            ethPool = 0;
+            (bool ok, ) = payable(to).call{value: ethOut}("");
+            if (!ok) revert CallFailed();
+        }
+
+        address stToken = stEthToken;
+        if (stToken != address(0)) {
+            stEthOut = IERC20Minimal(stToken).balanceOf(address(this));
+            if (stEthOut != 0) {
+                stEthPool = 0;
+                stEthAccounted = 0;
+                if (!IERC20Minimal(stToken).transfer(to, stEthOut)) revert CallFailed();
+            }
+        }
+
+        address coin = coinToken;
+        if (coin != address(0)) {
+            coinOut = IERC20Minimal(coin).balanceOf(address(this));
+            if (coinOut != 0) {
+                bondCoin = 0;
+                bondPool = 0;
+                totalCoinOwed = 0;
+                if (!IERC20Minimal(coin).transfer(to, coinOut)) revert CallFailed();
+            }
+        }
+
+        // After funds are swept, permanently delete all bonds.
+        _burnAllBonds();
     }
 
     /// @notice After shutdown, burn remaining unmatured bonds to release excess ETH/stETH.
@@ -654,7 +734,7 @@ contract PurgeBonds {
         }
 
         totalEthOwed -= 1 ether;
-        totalCoinOwed -= coinWeight;
+        _decreaseTotalCoinOwed(coinWeight);
         emit Claimed(to, tokenId, ethShare, stShare, bondShare);
     }
 
@@ -663,6 +743,7 @@ contract PurgeBonds {
     // ---------------------------------------------------------------------
 
     function _isInactive(uint256 tokenId) private view returns (bool) {
+        if (allBondsBurned) return true;
         uint256 floor = lowestUnresolved;
         if (floor == 0) {
             floor = 1;
@@ -671,6 +752,7 @@ contract PurgeBonds {
     }
 
     function _exists(uint256 tokenId) private view returns (bool) {
+        if (allBondsBurned) return false;
         if (tokenId == 0 || tokenId >= nextId) return false;
         if (claimed[tokenId]) return false;
         if (_isInactive(tokenId)) return false;
@@ -684,6 +766,7 @@ contract PurgeBonds {
 
     function balanceOf(address account) public view returns (uint256) {
         if (account == address(0)) revert ZeroAddress();
+        if (allBondsBurned) return 0;
         uint256 owned = _balanceOf[account];
         uint256 burned = _burnedBalance[account];
         if (burned >= owned) return 0;
@@ -697,6 +780,7 @@ contract PurgeBonds {
     }
 
     function totalSupply() external view returns (uint256) {
+        if (allBondsBurned) return 0;
         uint256 minted = nextId - 1;
         if (burnedCount > minted) return 0;
         return minted - burnedCount;
@@ -1038,20 +1122,87 @@ contract PurgeBonds {
         return mult;
     }
 
+    function _decreaseTotalCoinOwed(uint256 amount) private {
+        if (amount == 0) return;
+        uint256 owed = totalCoinOwed;
+        if (owed <= amount) {
+            totalCoinOwed = 0;
+        } else {
+            totalCoinOwed = owed - amount;
+        }
+    }
+
+    function _burnAllBonds() private {
+        if (allBondsBurned) return;
+        allBondsBurned = true;
+        uint256 minted = nextId - 1;
+        burnedCount = minted;
+        totalEthOwed = 0;
+        totalCoinOwed = 0;
+        ethPool = 0;
+        stEthPool = 0;
+        stEthAccounted = 0;
+        bondPool = 0;
+        bondCoin = 0;
+        resolvePending = false;
+        pendingRngWord = 0;
+        pendingRngDay = 0;
+        pendingResolveBase = 0;
+        pendingResolveMax = 0;
+        pendingResolveBudget = 0;
+        uint256 end = nextId;
+        lowestUnresolved = end;
+        shutdownBurnCursor = end;
+        nextClaimable = end;
+        transfersLocked = true;
+        purchasesEnabled = false;
+    }
+
     function _guardPurchases() private view {
         if (resolvePending) revert ResolvePendingAlready();
         if (transfersLocked) revert TransferBlocked();
     }
 
     function _processPayment(uint256 amount, address recipient) private {
-        uint256 seed;
-        if (game == address(0)) {
-            seed = amount / 2;
-            rewardSeedEth += seed;
+        uint256 gameCut = amount / 5; // 20% to game fund
+        address gameAddr = game;
+        if (gameAddr == address(0)) {
+            rewardSeedEth += gameCut;
+        } else {
+            (bool gameOk, ) = payable(gameAddr).call{value: gameCut}("");
+            if (!gameOk) revert CallFailed();
         }
-        uint256 toSend = amount - seed;
-        (bool ok, ) = payable(recipient).call{value: toSend}("");
+
+        uint256 toCreator = amount - gameCut;
+        (bool ok, ) = payable(recipient).call{value: toCreator}("");
         if (!ok) revert CallFailed();
+    }
+
+    function _applyAffiliateCode(address buyer, bytes32 affiliateCode, uint256 weiSpent) private {
+        address affiliate = affiliateProgram;
+        if (affiliate == address(0) || affiliateCode == bytes32(0) || weiSpent == 0) return;
+
+        uint256 coinBase;
+        bool usedFallbackPrice;
+        address game_ = game;
+        if (game_ != address(0)) {
+            uint256 priceWei = IPurgeGamePrice(game_).mintPrice();
+            uint256 priceCoinUnit = IPurgeGamePrice(game_).coinPriceUnit();
+            if (priceWei != 0 && priceCoinUnit != 0) {
+                coinBase = (weiSpent * priceCoinUnit) / priceWei;
+            }
+        }
+        if (coinBase == 0) {
+            usedFallbackPrice = true;
+            uint256 pricePer1000 = AFFILIATE_PRESALE_PRICE_PER_1000_WEI;
+            coinBase = (weiSpent * 1000 * 1e6) / pricePer1000; // convert to 6-decimal coin base units
+        }
+
+        uint256 pct = usedFallbackPrice ? 10 : 3;
+        uint256 affiliateAmount = (coinBase * pct) / 100;
+        if (affiliateAmount == 0) return;
+
+        IPurgeAffiliateLike(affiliate).payAffiliate(affiliateAmount, affiliateCode, buyer, 0);
     }
 
     function _setCoinToken(address token) private {
@@ -1062,6 +1213,11 @@ contract PurgeBonds {
             return;
         }
         coinToken = token;
+    }
+
+    function _wire(address coinAddr, address gameAddr) private {
+        _setCoinToken(coinAddr);
+        _setGame(gameAddr);
     }
 
     function _setGame(address game_) private {
@@ -1092,6 +1248,7 @@ contract PurgeBonds {
     }
 
     function _inPendingWindow(uint256 tokenId) private view returns (bool) {
+        if (allBondsBurned) return false;
         if (!resolvePending) return false;
         uint256 start = pendingResolveBase;
         uint256 end = pendingResolveMax;
@@ -1181,7 +1338,7 @@ contract PurgeBonds {
                 if (holder != address(0)) {
                     uint256 basePrice = _basePrice(riskOf[tid]);
                     totalEthOwed -= basePrice;
-                    totalCoinOwed -= basePrice * _coinWeightMultiplier(tid);
+                    _decreaseTotalCoinOwed(basePrice * _coinWeightMultiplier(tid));
 
                     claimed[tid] = true;
 
@@ -1256,7 +1413,7 @@ contract PurgeBonds {
             if (holder != address(0)) {
                 uint256 basePrice = _basePrice(riskOf[tid]);
                 totalEthOwed -= basePrice;
-                totalCoinOwed -= basePrice * _coinWeightMultiplier(tid);
+                _decreaseTotalCoinOwed(basePrice * _coinWeightMultiplier(tid));
 
                 claimed[tid] = true;
                 address approved = _tokenApproval[tid];

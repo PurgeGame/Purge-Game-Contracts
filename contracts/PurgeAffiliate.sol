@@ -21,7 +21,7 @@ contract PurgeAffiliate {
     // ---------------------------------------------------------------------
     // Errors
     // ---------------------------------------------------------------------
-    error OnlyCreator();
+    error OnlyBonds();
     error OnlyAuthorized();
     error Zero();
     error Insufficient();
@@ -49,16 +49,19 @@ contract PurgeAffiliate {
     // ---------------------------------------------------------------------
     uint256 private constant MILLION = 1e6; // token has 6 decimals
     bytes32 private constant REF_CODE_LOCKED = bytes32(uint256(1));
-    uint256 private constant PRESALE_SUPPLY_TOKENS = 4_000_000;
-    uint256 private constant PRESALE_START_PRICE = 0.000012 ether;
-    uint256 private constant PRESALE_END_PRICE = 0.000018 ether;
-    uint256 private constant PRESALE_PRICE_SLOPE = (PRESALE_END_PRICE - PRESALE_START_PRICE) / PRESALE_SUPPLY_TOKENS;
-    uint256 private constant PRESALE_MAX_ETH_PER_TX = 0.25 ether;
+    uint256 private constant PRESALE_SUPPLY_TOKENS = 10_000_000;
+    uint256 private constant PRESALE_DECAY_CUTOFF_TOKENS = 3_000_000;
+    uint256 private constant PRESALE_PRICE_START_1000 = 0.01 ether; // price per 1,000 tokens
+    uint256 private constant PRESALE_PRICE_INC_PER_ETH_1000 = 0.0005 ether; // bump per 1 ETH sold (per 1,000 tokens)
+    uint256 private constant PRESALE_PRICE_DECAY_1000 = 0.0005 ether; // daily decay (per 1,000 tokens)
+    uint256 private constant PRESALE_PRICE_DIVISOR = 1000; // pricePer1000 / 1000 = price per token
+    uint256 private constant PRESALE_PRICE_FLOOR_1000 = 0.0075 ether; // minimum price per 1,000 tokens
+    uint256 private constant PRESALE_MAX_ETH_PER_TX = 1 ether;
 
     // ---------------------------------------------------------------------
     // Immutable / wiring
     // ---------------------------------------------------------------------
-    address private immutable creator;
+    address public immutable bonds;
 
     IPurgeCoinAffiliate private coin;
     IPurgeGame private purgeGame;
@@ -72,6 +75,7 @@ contract PurgeAffiliate {
     mapping(uint24 => mapping(address => uint256)) public affiliateCoinEarned;
     mapping(address => bytes32) private playerReferralCode;
     mapping(address => uint256) public presaleCoinEarned;
+    uint256 public presaleClaimableTotal;
     mapping(address => uint256) public presalePrincipal; // principal bought while coin is unwired
     uint96 public totalPresaleSold;
     mapping(uint24 => PlayerScore) private affiliateTopByLevel;
@@ -79,29 +83,84 @@ contract PurgeAffiliate {
     bool private preCoinActive = true;
     uint256 private rewardSeedEth; // holds 80% of presale proceeds before game is wired
     bool private presaleShutdown; // permanently stops new presale purchases once coin is wired
+    uint256 private presalePricePer1000 = PRESALE_PRICE_START_1000;
+    uint48 private presaleLastDay;
+    bool private presaleIncreasedToday;
+    bool private referralLocksActive;
+
+    function _applyPresaleDecay() private returns (uint256 pricePer1000) {
+        uint48 day = uint48(block.timestamp / 1 days);
+        uint48 last = presaleLastDay;
+        // Stop decay entirely after the cutoff supply is sold.
+        if (uint256(totalPresaleSold) / MILLION >= PRESALE_DECAY_CUTOFF_TOKENS) {
+            presaleLastDay = day;
+            presaleIncreasedToday = false;
+            return presalePricePer1000;
+        }
+        if (last == 0) {
+            presaleLastDay = day;
+            return presalePricePer1000;
+        }
+        if (day > last) {
+            uint256 daysElapsed = uint256(day) - uint256(last);
+            if (presaleIncreasedToday && daysElapsed != 0) {
+                unchecked {
+                    --daysElapsed; // skip one day of decay if price increased last day
+                }
+            }
+            if (daysElapsed != 0) {
+                uint256 decay = daysElapsed * PRESALE_PRICE_DECAY_1000;
+                uint256 p = presalePricePer1000;
+                if (decay >= p || p - decay < PRESALE_PRICE_FLOOR_1000) {
+                    presalePricePer1000 = PRESALE_PRICE_FLOOR_1000;
+                } else {
+                    presalePricePer1000 = p - decay;
+                }
+            }
+            presaleLastDay = day;
+            presaleIncreasedToday = false;
+        }
+        return presalePricePer1000;
+    }
+
+    function _bumpPresalePrice(uint256 ethPaid) private {
+        if (ethPaid == 0) return;
+        uint256 bump = (ethPaid * PRESALE_PRICE_INC_PER_ETH_1000) / 1 ether;
+        if (bump == 0) return;
+        presalePricePer1000 += bump;
+        presaleIncreasedToday = true;
+    }
 
     // ---------------------------------------------------------------------
     // Constructor
     // ---------------------------------------------------------------------
-    constructor(address creator_) {
-        if (creator_ == address(0)) revert ZeroAddress();
-        creator = creator_;
+    constructor(address bonds_) {
+        if (bonds_ == address(0)) revert ZeroAddress();
+        bonds = bonds_;
     }
 
     // ---------------------------------------------------------------------
     // Wiring
     // ---------------------------------------------------------------------
+    /// @notice Wire coin, game, and trophies via an address array ([coin, game, trophies]).
+    function wire(address[] calldata addresses) external {
+        address coinAddr = addresses.length > 0 ? addresses[0] : address(0);
+        address gameAddr = addresses.length > 1 ? addresses[1] : address(0);
+        address trophiesAddr = addresses.length > 2 ? addresses[2] : address(0);
+        wire(coinAddr, gameAddr, trophiesAddr);
+    }
+
     function wire(address coin_, address game_, address trophies_) external {
         address coinAddr = address(coin);
         if (coinAddr == address(0)) {
             if (coin_ == address(0)) revert ZeroAddress();
-            if (msg.sender != creator && msg.sender != coin_) revert OnlyCreator();
+            if (msg.sender != bonds) revert OnlyBonds();
             coin = IPurgeCoinAffiliate(coin_);
             coinAddr = coin_;
             presaleShutdown = true; // stop presale once coin is wired
         } else {
-            if (msg.sender != creator && msg.sender != coinAddr) revert OnlyCreator();
-            if (coin_ != address(0) && coin_ != coinAddr) revert OnlyCreator();
+            if (msg.sender != bonds) revert OnlyBonds();
+            if (coin_ != address(0) && coin_ != coinAddr) revert OnlyBonds();
         }
 
         bool gameWasUnset = address(purgeGame) == address(0);
@@ -113,6 +172,7 @@ contract PurgeAffiliate {
                 (bool ok, ) = payable(game_).call{value: seed}("");
                 if (!ok) revert Insufficient();
             }
+            referralLocksActive = true; // allow locking of referral codes only once the game is wired
         }
         if (trophies_ != address(0)) {
             trophies = IPurgeGameTrophies(trophies_);
@@ -124,10 +184,10 @@ contract PurgeAffiliate {
         }
     }
 
-    /// @notice Set the contract permitted to invoke `payAffiliate` directly (alongside the coin).
+    /// @notice Set the contract permitted to invoke `payAffiliate` directly (alongside the coin and bonds).
     function setPayer(address payer_) external {
         address coinAddr = address(coin);
-        if (msg.sender != creator && msg.sender != coinAddr) revert OnlyAuthorized();
+        if (msg.sender != bonds) revert OnlyAuthorized();
         if (payer_ == address(0)) revert ZeroAddress();
         payer = payer_;
     }
@@ -171,32 +231,30 @@ contract PurgeAffiliate {
         if (ethIn > PRESALE_MAX_ETH_PER_TX) revert PresalePerTxLimit();
 
         if (!preCoinActive) revert PresaleExceedsRemaining();
+        uint256 pricePer1000 = _applyPresaleDecay();
         uint256 inventoryTokens = presaleInventoryBase / MILLION;
         if (inventoryTokens == 0) revert PresaleExceedsRemaining();
-        uint256 tokensSold = PRESALE_SUPPLY_TOKENS - inventoryTokens;
 
-        uint256 price = PRESALE_START_PRICE + PRESALE_PRICE_SLOPE * tokensSold;
-        if (price > PRESALE_END_PRICE) price = PRESALE_END_PRICE;
-        if (price == 0 || price > ethIn) revert Insufficient();
-
-        uint256 tokensOut = ethIn / price;
+        // price per token = pricePer1000 / 1000
+        uint256 tokensOut = (ethIn * PRESALE_PRICE_DIVISOR) / pricePer1000;
         if (tokensOut == 0) revert Insufficient();
         if (tokensOut > inventoryTokens) {
             tokensOut = inventoryTokens;
         }
 
-        uint256 costWei = tokensOut * price;
+        uint256 costWei = (tokensOut * pricePer1000) / PRESALE_PRICE_DIVISOR;
         uint256 refund = ethIn - costWei;
 
         amountBase = tokensOut * MILLION;
         totalPresaleSold = uint96(uint256(totalPresaleSold) + amountBase);
+        presaleClaimableTotal += amountBase;
 
         address payable buyer = payable(msg.sender);
         presaleInventoryBase -= amountBase;
         presalePrincipal[buyer] += amountBase;
         presaleCoinEarned[buyer] += amountBase;
 
-        uint256 gameCut = (costWei * 80) / 100;
+        uint256 gameCut = costWei;
         rewardSeedEth += gameCut;
 
         if (refund != 0) {
@@ -204,9 +262,19 @@ contract PurgeAffiliate {
             if (!refundOk) revert Insufficient();
         }
 
-        uint256 creatorCut = costWei - gameCut;
-        (bool ok, ) = payable(creator).call{value: creatorCut}("");
-        if (!ok) revert Insufficient();
+        // All proceeds go to the game (or seed pool if unwired); no admin cut.
+        if (gameCut != costWei) {
+            address gameAddr = address(purgeGame);
+            if (gameAddr != address(0)) {
+                uint256 delta = costWei - gameCut;
+                (bool ok, ) = payable(gameAddr).call{value: delta}("");
+                if (!ok) revert Insufficient();
+            } else {
+                rewardSeedEth += costWei - gameCut;
+            }
+        }
+
+        _bumpPresalePrice(costWei);
 
         address affiliateAddr = _referrerAddress(buyer);
         if (affiliateAddr != address(0) && affiliateAddr != buyer) {
@@ -234,7 +302,7 @@ contract PurgeAffiliate {
     ) external returns (uint256 playerRakeback) {
         address caller = msg.sender;
         address coinAddr = address(coin);
-        if (caller != coinAddr && caller != payer) revert OnlyAuthorized();
+        if (caller != coinAddr && caller != payer && caller != bonds) revert OnlyAuthorized();
 
         bool coinActive = coinAddr != address(0);
         bytes32 storedCode = playerReferralCode[sender];
@@ -244,7 +312,9 @@ contract PurgeAffiliate {
         if (storedCode == bytes32(0)) {
             AffiliateCodeInfo storage candidate = affiliateCode[code];
             if (candidate.owner == address(0) || candidate.owner == sender) {
-                playerReferralCode[sender] = REF_CODE_LOCKED;
+                if (referralLocksActive) {
+                    playerReferralCode[sender] = REF_CODE_LOCKED;
+                }
                 return 0;
             }
             playerReferralCode[sender] = code;
@@ -253,14 +323,14 @@ contract PurgeAffiliate {
         } else {
             info = affiliateCode[storedCode];
             if (info.owner == address(0)) {
-                playerReferralCode[sender] = REF_CODE_LOCKED;
+                playerReferralCode[sender] = referralLocksActive ? REF_CODE_LOCKED : bytes32(0);
                 return 0;
             }
         }
 
         address affiliateAddr = info.owner;
         if (affiliateAddr == address(0) || affiliateAddr == sender) {
-            playerReferralCode[sender] = REF_CODE_LOCKED;
+            playerReferralCode[sender] = referralLocksActive ? REF_CODE_LOCKED : bytes32(0);
             return 0;
         }
         uint8 rakebackPct = info.rakeback;
@@ -298,6 +368,7 @@ contract PurgeAffiliate {
             }
         } else if (totalFlipAward != 0) {
             presaleCoinEarned[affiliateAddr] += totalFlipAward;
+            presaleClaimableTotal += totalFlipAward;
         }
 
         _updateTopAffiliate(affiliateAddr, newTotal, lvl);
@@ -325,6 +396,7 @@ contract PurgeAffiliate {
                     }
                 } else if (!coinActive) {
                     presaleCoinEarned[upline] += totalUpline;
+                    presaleClaimableTotal += totalUpline;
                 }
             }
 
@@ -346,6 +418,7 @@ contract PurgeAffiliate {
                         amounts[cursor] = totalUpline2;
                     } else if (!coinActive) {
                         presaleCoinEarned[upline2] += totalUpline2;
+                        presaleClaimableTotal += totalUpline2;
                     }
                 }
             }
@@ -355,6 +428,7 @@ contract PurgeAffiliate {
             coin.affiliateAddFlipBatch(players, amounts);
         } else if (!coinActive && playerRakeback != 0) {
             presaleCoinEarned[sender] += playerRakeback;
+            presaleClaimableTotal += playerRakeback;
         }
 
         emit Affiliate(amount, storedCode, sender);
@@ -369,6 +443,11 @@ contract PurgeAffiliate {
         if (amount != 0) {
             presaleCoinEarned[player] = 0;
             presalePrincipal[player] = 0;
+            if (amount <= presaleClaimableTotal) {
+                presaleClaimableTotal -= amount;
+            } else {
+                presaleClaimableTotal = 0;
+            }
         }
     }
 
