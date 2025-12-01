@@ -208,6 +208,7 @@ contract IconRendererRegular32 {
     // Linked contracts (set once).
     address private game; // PurgeGame contract (authorised caller)
     IERC721Lite private nft; // PurgeGameNFT ERC721 contract
+    address public bonds; // Optional bonds contract (set post-deploy)
 
     // --- Square geometry (for trophy sizing vs inner side) -----------------
     uint32 private constant SQUARE_SIDE_100 = 100; // <rect width/height>
@@ -234,6 +235,12 @@ contract IconRendererRegular32 {
         if (msg.sender != address(coin)) revert E();
         game = game_;
         nft = IERC721Lite(nft_);
+    }
+
+    /// @notice Set the bonds contract address post-deploy (coin-only).
+    function setBonds(address bonds_) external {
+        if (msg.sender != address(coin) || bonds_ == address(0) || bonds != address(0)) revert E();
+        bonds = bonds_;
     }
 
     /// @notice Capture the starting trait‑remaining snapshot for the new epoch.

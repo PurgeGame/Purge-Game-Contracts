@@ -222,7 +222,8 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
     /// @notice Computes prize pool splits for the next jackpot.
     function calcPrizePoolForJackpot(
         uint24 lvl,
-        uint256 rngWord
+        uint256 rngWord,
+        address stethAddr
     ) external returns (uint256 effectiveWei) {
         if (nextPrizePool != 0) {
             currentPrizePool += nextPrizePool;
@@ -253,9 +254,8 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         effectiveWei = mapWei;
 
         if ((lvl % 100) == 0) {
-            address stAddr = stethTokenAddress;
-            if (stAddr != address(0)) {
-                uint256 stBal = IStETH(stAddr).balanceOf(address(this));
+            if (stethAddr != address(0)) {
+                uint256 stBal = IStETH(stethAddr).balanceOf(address(this));
                 if (stBal > principalStEth) {
                     uint256 yieldPool = stBal - principalStEth;
                     if (level100RollTotal < 5) {

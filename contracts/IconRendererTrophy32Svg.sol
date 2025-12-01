@@ -36,6 +36,7 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg {
     IColorRegistry private immutable registry;
     ITrophySvgAssets private immutable assets;
     IERC721Lite private nft;
+    address public bonds; // Optional bonds contract (set post-deploy)
 
     error E();
 
@@ -95,6 +96,12 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg {
     function setNft(address nft_) external override {
         if (msg.sender != address(coin)) revert E();
         nft = IERC721Lite(nft_);
+    }
+
+    /// @notice Set the bonds contract address post-deploy (coin-only).
+    function setBonds(address bonds_) external {
+        if (msg.sender != address(coin) || bonds_ == address(0) || bonds != address(0)) revert E();
+        bonds = bonds_;
     }
 
     function trophySvg(SvgParams calldata params) external view override returns (string memory) {

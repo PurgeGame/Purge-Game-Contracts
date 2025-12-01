@@ -9,8 +9,7 @@ pragma solidity ^0.8.26;
  * Storage layout summary (slots 0-3):
  * - Slot 0: level timers + airdrop cursors + FSM (level / gameState)
  * - Slot 1: exterminator pointer + rebuild cursor + jackpot counters + decimator latch
- * - Slot 2: stETH address + RNG / trait flags
- * - Slot 3: price (wei) + priceCoin (unit), both uint128
+ * - Slot 2: RNG / trait flags (pricing and other scalars pack after the flag block)
  * Everything else starts at slot 4+ (full-width balances, arrays, mappings).
  */
 abstract contract PurgeGameStorage {
@@ -38,7 +37,6 @@ abstract contract PurgeGameStorage {
     bool internal decWindowOpen = true; // latch to hold decimator window open until RNG is requested
 
     // Slot 2: RNG/trait flags + stETH address.
-    address internal stethTokenAddress; // stETH token contract used for staking
     bool internal earlyPurgeBoostArmed; // true if the next jackpot should apply the boost
     bool internal rngLockedFlag; // true while waiting for VRF fulfillment
     bool internal rngFulfilled = true; // tracks VRF lifecycle; default true pre-first request
@@ -86,6 +84,5 @@ abstract contract PurgeGameStorage {
     // ---------------------------------------------------------------------
     // RNG history
     // ---------------------------------------------------------------------
-    mapping(uint48 => uint256) internal rngWordByDay; // VRF words keyed by dailyIdx
-    mapping(uint48 => bool) internal rngWordRecorded; // bookkeeping flag to avoid double-recording a day
+    mapping(uint48 => uint256) internal rngWordByDay; // VRF words keyed by dailyIdx; 0 means "not yet recorded"
 }

@@ -133,7 +133,7 @@ contract Purgecoin {
     address internal bountyOwedTo;
     mapping(uint24 => uint48) internal stakeResolutionDay;
     mapping(uint24 => bool) internal stakeTrophyAwarded;
-    address public bonds;
+    address public immutable bonds;
 
     // ---------------------------------------------------------------------
     // ERC20 state
@@ -230,8 +230,10 @@ contract Purgecoin {
     /**
      * @dev Mints the initial presale allocation to the contract and creator.
      */
-    constructor() {
+    constructor(address bonds_) {
+        if (bonds_ == address(0)) revert ZeroAddress();
         creator = msg.sender;
+        bonds = bonds_;
         affiliateProgram = new PurgeAffiliate(msg.sender);
         currentFlipDay = _currentDay();
         uint256 presaleAmount = PRESALE_SUPPLY_TOKENS * MILLION;
@@ -719,8 +721,7 @@ contract Purgecoin {
         address regularRenderer_,
         address trophyRenderer_,
         address questModule_,
-        address jackpots_,
-        address bonds_
+        address jackpots_
     ) external {
         if (msg.sender != creator || jackpots != address(0)) revert OnlyDeployer();
 
@@ -730,8 +731,6 @@ contract Purgecoin {
         questModule = IPurgeQuestModule(questModule_);
         questModule.wireGame(game_);
         jackpots = jackpots_;
-        bonds = bonds_;
-        purgeGame.setBonds(bonds_);
         IPurgeJackpots(jackpots_).wire(address(this), game_, trophies_);
         IPurgeRenderer(regularRenderer_).wireContracts(game_, nft_);
         IPurgeRenderer(trophyRenderer_).wireContracts(game_, nft_);

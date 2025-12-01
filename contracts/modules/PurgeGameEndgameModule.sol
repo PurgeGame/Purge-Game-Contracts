@@ -31,18 +31,19 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
      * @param lvl Current level index (1-based) that just completed.
      * @param cap Optional cap for batched payouts; zero falls back to DEFAULT_PAYOUTS_PER_TX.
      * @param rngWord Randomness used for jackpot and ticket selection.
-     * @param jackpots Address of the jackpots contract to invoke.
+     * @param jackpotsAddr Address of the jackpots contract to invoke.
      * @param trophiesContract Delegate that handles trophy minting and reward distribution.
      */
     function finalizeEndgame(
         uint24 lvl,
         uint32 cap,
         uint256 rngWord,
-        address jackpots,
+        address jackpotsAddr,
         IPurgeGameTrophiesModule trophiesContract
     ) external {
         uint24 prevLevel = lvl - 1;
         bool traitWin = lastExterminatedTrait != TRAIT_ID_TIMEOUT;
+        if (jackpotsAddr == address(0)) revert E();
         if (traitWin) {
             _primeTraitPayouts(prevLevel, rngWord, trophiesContract);
         }
@@ -62,13 +63,13 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
                 } else {
                     bafPoolWei = (rewardPool * (prevLevel == 50 ? 25 : 10)) / 100;
                 }
-                _rewardJackpot(0, bafPoolWei, prevLevel, rngWord, jackpots, true);
+                _rewardJackpot(0, bafPoolWei, prevLevel, rngWord, jackpotsAddr, true);
             }
             bool decWindow = prevLevel % 10 == 5 && prevLevel >= 15 && prevLevel % 100 != 95;
             if (decWindow) {
                 // Fire decimator jackpots midway through each decile except the 95th to avoid overlap with final bands.
                 uint256 decPoolWei = (rewardPool * 15) / 100;
-                _rewardJackpot(1, decPoolWei, prevLevel, rngWord, jackpots, true);
+                _rewardJackpot(1, decPoolWei, prevLevel, rngWord, jackpotsAddr, true);
             }
 
             phase = 0;
@@ -242,7 +243,7 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
      * @param poolWei Amount forwarded; if `consumeCarry` is true, rewardPool is debited by poolWei - returnWei.
      * @param lvl Level tied to the jackpot.
      * @param rngWord Randomness used by the jackpot contract.
-     * @param jackpots Jackpots contract to call.
+     * @param jackpotsAddr Jackpots contract to call.
      * @param consumeCarry Whether to deduct the net spend from rewardPool.
      */
     function _rewardJackpot(
@@ -250,12 +251,15 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         uint256 poolWei,
         uint24 lvl,
         uint256 rngWord,
-        address jackpots,
+        address jackpotsAddr,
         bool consumeCarry
     ) private {
+        uint256 trophyPoolDelta;
+        uint256 returnWei;
+
         if (kind == 0) {
-            (address[] memory winnersArr, uint256[] memory amountsArr, uint256 trophyPoolDelta, uint256 returnWei) = IPurgeJackpots(
-                jackpots
+            (address[] memory winnersArr, uint256[] memory amountsArr, uint256 delta, uint256 refund) = IPurgeJackpots(
+                jackpotsAddr
             ).runBafJackpot(poolWei, lvl, rngWord);
             for (uint256 i; i < winnersArr.length; ) {
                 _addClaimableEth(winnersArr[i], amountsArr[i]);
@@ -263,30 +267,19 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
                     ++i;
                 }
             }
-            if (trophyPoolDelta != 0) {
-                trophyPool += trophyPoolDelta;
-            }
-            if (consumeCarry) {
-                rewardPool -= (poolWei - returnWei);
-            }
+            trophyPoolDelta = delta;
+            returnWei = refund;
         } else if (kind == 1) {
-            (address[] memory winnersArr, uint256[] memory amountsArr, uint256 trophyPoolDelta, uint256 returnWei) = IPurgeJackpots(
-                jackpots
-            ).runDecimatorJackpot(poolWei, lvl, rngWord);
-            for (uint256 i; i < winnersArr.length; ) {
-                _addClaimableEth(winnersArr[i], amountsArr[i]);
-                unchecked {
-                    ++i;
-                }
-            }
-            if (trophyPoolDelta != 0) {
-                trophyPool += trophyPoolDelta;
-            }
-            if (consumeCarry) {
-                rewardPool -= (poolWei - returnWei);
-            }
+            (trophyPoolDelta, returnWei) = IPurgeJackpots(jackpotsAddr).runDecimatorJackpot(poolWei, lvl, rngWord);
         } else {
             revert E();
+        }
+
+        if (trophyPoolDelta != 0) {
+            trophyPool += trophyPoolDelta;
+        }
+        if (consumeCarry) {
+            rewardPool -= (poolWei - returnWei);
         }
     }
 

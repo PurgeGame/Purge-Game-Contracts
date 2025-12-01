@@ -32,6 +32,7 @@ interface IPurgeGameJackpotModule {
 
     function calcPrizePoolForJackpot(
         uint24 lvl,
-        uint256 rngWord
+        uint256 rngWord,
+        address stethAddr
     ) external returns (uint256 effectiveWei);
 }

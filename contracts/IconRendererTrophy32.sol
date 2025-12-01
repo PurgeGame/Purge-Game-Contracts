@@ -29,6 +29,7 @@ contract IconRendererTrophy32 {
     IIcons32 private immutable icons;
     IColorRegistry private immutable registry;
     IIconRendererTrophy32Svg private svgRenderer;
+    address public bonds; // Optional bonds contract (set post-deploy)
 
     IERC721Lite private nft;
 
@@ -45,6 +46,12 @@ contract IconRendererTrophy32 {
         registry = IColorRegistry(registry_);
         if (svgRenderer_ == address(0)) revert E();
         svgRenderer = IIconRendererTrophy32Svg(svgRenderer_);
+    }
+
+    /// @notice Set the bonds contract address post-deploy (coin-only).
+    function setBonds(address bonds_) external {
+        if (msg.sender != address(coin) || bonds_ == address(0) || bonds != address(0)) revert E();
+        bonds = bonds_;
     }
 
     function setMyColors(

@@ -98,8 +98,9 @@ contract PurgeGame is PurgeGameStorage {
     IPurgeCoin private immutable coin; // Trusted coin/game-side coordinator (PURGE ERC20)
     IPurgeGameNFT private immutable nft; // ERC721 interface for mint/burn/metadata surface
     IPurgeGameTrophies private immutable trophies; // Dedicated trophy module
-    address public bonds; // Bond contract for resolution and metadata
+    address public immutable bonds; // Bond contract for resolution and metadata
     IStETH private immutable steth; // stETH token held by the game
+    address private immutable jackpots; // PurgeJackpots contract
     address private immutable endgameModule; // Delegate module for endgame settlement
     address private immutable jackpotModule; // Delegate module for jackpot routines
     IVRFCoordinator private immutable vrfCoordinator; // Chainlink VRF coordinator
@@ -156,6 +157,8 @@ contract PurgeGame is PurgeGameStorage {
      * @param vrfSubscriptionId_ VRF subscription identifier
      * @param linkToken_        LINK token contract (ERC677) for VRF billing
      * @param stEthToken_       stETH token address
+     * @param jackpots_         PurgeJackpots contract address (wires Decimator/BAF jackpots)
+     * @param bonds_            Bonds contract address
      *
      * @dev ERC721 sentinel trophy token is minted lazily during the first transition to state 2.
      */
@@ -170,7 +173,9 @@ contract PurgeGame is PurgeGameStorage {
         bytes32 vrfKeyHash_,
         uint256 vrfSubscriptionId_,
         address linkToken_,
-        address stEthToken_
+        address stEthToken_,
+        address jackpots_,
+        address bonds_
     ) {
         coin = IPurgeCoin(purgeCoinContract);
         renderer = IPurgeRendererLike(renderer_);
@@ -183,7 +188,9 @@ contract PurgeGame is PurgeGameStorage {
         vrfSubscriptionId = vrfSubscriptionId_;
         linkToken = linkToken_;
         steth = IStETH(stEthToken_);
-        stethTokenAddress = stEthToken_;
+        if (stEthToken_ == address(0) || jackpots_ == address(0) || bonds_ == address(0)) revert E();
+        jackpots = jackpots_;
+        bonds = bonds_;
         // Allow Purgecoin to pull stETH for yield skims during Burnie.
         IStETH(stEthToken_).approve(purgeCoinContract, type(uint256).max);
     }
@@ -246,11 +253,6 @@ contract PurgeGame is PurgeGameStorage {
 
     function rngWordForDay(uint48 day) external view returns (uint256) {
         return rngWordByDay[day];
-    }
-
-    function setBonds(address bonds_) external {
-        if (msg.sender != address(coin) || bonds_ == address(0)) revert E();
-        bonds = bonds_;
     }
 
     function getEarlyPurgePercent() external view returns (uint8) {
@@ -347,7 +349,6 @@ contract PurgeGame is PurgeGameStorage {
     function recordMint(
         address player,
         uint24 lvl,
-        bool creditNext,
         bool coinMint,
         uint256 costWei,
         uint32 mintUnits
@@ -355,7 +356,7 @@ contract PurgeGame is PurgeGameStorage {
         if (msg.sender != address(nft)) revert E();
 
         if (coinMint) {
-            if (creditNext || msg.value != 0) revert E();
+            if (msg.value != 0) revert E();
             return _recordMintData(player, lvl, true, 0);
         }
 
@@ -790,7 +791,6 @@ contract PurgeGame is PurgeGameStorage {
 
     /// @notice Delegatecall into the endgame module to resolve slow settlement paths.
     function _runEndgameModule(uint24 lvl, uint32 cap, uint256 rngWord) internal {
-        address jackpots = coin.jackpots();
         if (jackpots == address(0)) revert E();
         (bool ok, ) = endgameModule.delegatecall(
             abi.encodeWithSelector(
@@ -821,8 +821,8 @@ contract PurgeGame is PurgeGameStorage {
             trophyPool -= amount;
             rewardPool += amount;
         } else if (op == PurgeGameExternalOp.DecJackpotClaim) {
-            address jackpots = coin.jackpots();
-            if (jackpots == address(0) || msg.sender != jackpots) revert E();
+            address jackpotsAddr = jackpots;
+            if (jackpotsAddr == address(0) || msg.sender != jackpotsAddr) revert E();
             _addClaimableEth(account, amount);
         } else {
             revert E();
@@ -1115,8 +1115,9 @@ contract PurgeGame is PurgeGameStorage {
 
         uint256 pool = decimatorHundredPool;
 
-        address jackpots = coin.jackpots();
-        (, , uint256 trophyPoolDelta, uint256 returnWei) = IPurgeJackpots(jackpots).runDecimatorJackpot(pool, lvl, rngWord);
+        address jackpotsAddr = jackpots;
+        if (jackpotsAddr == address(0)) revert E();
+        (uint256 trophyPoolDelta, uint256 returnWei) = IPurgeJackpots(jackpotsAddr).runDecimatorJackpot(pool, lvl, rngWord);
 
         if (trophyPoolDelta != 0) {
             trophyPool += trophyPoolDelta;
@@ -1148,11 +1149,7 @@ contract PurgeGame is PurgeGameStorage {
 
     function _calcPrizePoolForJackpot(uint24 lvl, uint256 rngWord) internal returns (uint256 effectiveWei) {
         (bool ok, bytes memory data) = jackpotModule.delegatecall(
-            abi.encodeWithSelector(
-                IPurgeGameJackpotModule.calcPrizePoolForJackpot.selector,
-                lvl,
-                rngWord
-            )
+            abi.encodeWithSelector(IPurgeGameJackpotModule.calcPrizePoolForJackpot.selector, lvl, rngWord, address(steth))
         );
         if (!ok) revert E();
         return abi.decode(data, (uint256));
@@ -1194,7 +1191,7 @@ contract PurgeGame is PurgeGameStorage {
 
         uint256 ethBal = address(this).balance;
         IPurgeBonds bondContract = IPurgeBonds(bondsAddr);
-        bondContract.payBonds{value: ethBal}(0, stethTokenAddress, day, 0, 0, 0);
+        bondContract.payBonds{value: ethBal}(0, address(steth), day, 0, 0, 0);
     }
 
     // --- Reward vault & liquidity -----------------------------------------------------
@@ -1260,9 +1257,9 @@ contract PurgeGame is PurgeGameStorage {
             return 1;
         }
 
-        if (!rngWordRecorded[day]) {
+        // Record the word once per day; using a zero sentinel since VRF returning 0 is effectively impossible.
+        if (rngWordByDay[day] == 0) {
             rngWordByDay[day] = currentWord;
-            rngWordRecorded[day] = true;
             if (lvl != 0) {
                 coin.processCoinflipPayouts(lvl, 0, false, currentWord, day, priceCoin);
             }
@@ -1405,7 +1402,7 @@ contract PurgeGame is PurgeGameStorage {
 
         // Single hop into bonds: registers stETH, mints bond coin, and runs one resolve slice if pending.
         if (skim != 0 || bondMint != 0 || bondContract.resolvePending()) {
-            bondContract.payBonds{value: 0}(bondMint, stethTokenAddress, day, rngWord, 0, 50);
+            bondContract.payBonds{value: 0}(bondMint, address(steth), day, rngWord, 0, 50);
         }
     }
 

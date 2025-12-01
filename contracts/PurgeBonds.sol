@@ -56,6 +56,7 @@ contract PurgeBonds {
     error InsufficientHeadroom();
     error TransferBlocked();
     error InvalidRate();
+    error AlreadyConfigured();
 
     // ---------------------------------------------------------------------
     // Events
@@ -103,9 +104,11 @@ contract PurgeBonds {
 
     uint256 private nextId = 1;
     uint256 private nextClaimable = 1;
+    uint256 private burnedCount;
 
     mapping(uint256 => address) private _ownerOf;
     mapping(address => uint256) private _balanceOf;
+    mapping(address => uint256) private _burnedBalance;
     mapping(uint256 => address) private _tokenApproval;
     mapping(address => mapping(address => bool)) private _operatorApproval;
     mapping(uint256 => uint8) public riskOf;
@@ -231,7 +234,8 @@ contract PurgeBonds {
         uint256 maxBonds,
         uint256 budgetWei
     ) external {
-        if (msg.sender != owner && msg.sender != game) revert Unauthorized();
+        address sender = msg.sender;
+        if (sender != owner && sender != game) revert Unauthorized();
         uint256 startId = _resolveStart(baseId);
         _scheduleResolve(startId, rngDay, rngWord, maxBonds, budgetWei);
     }
@@ -422,19 +426,17 @@ contract PurgeBonds {
     }
 
     function setCoinToken(address token) external onlyOwner {
-        if (token == address(0)) revert ZeroAddress();
-        coinToken = token;
+        _setCoinToken(token);
     }
 
     function setGame(address game_) external onlyOwner {
-        if (game_ == address(0)) revert ZeroAddress();
-        game = game_;
-        uint256 seed = rewardSeedEth;
-        if (seed != 0) {
-            rewardSeedEth = 0;
-            (bool ok, ) = payable(game_).call{value: seed}("");
-            if (!ok) revert CallFailed();
-        }
+        _setGame(game_);
+    }
+
+    /// @notice Wire the coin and game contracts once post-deploy.
+    function wireContracts(address coinToken_, address game_) external onlyOwner {
+        _setCoinToken(coinToken_);
+        _setGame(game_);
     }
 
     /// @notice Send PURGE held by this contract, excluding the reserved bondCoin balance.
@@ -540,6 +542,7 @@ contract PurgeBonds {
             }
             if (!claimReady[tid]) {
                 claimReady[tid] = true;
+                _clearApproval(tid);
                 uint256 basePrice = _basePrice(riskOf[tid]);
                 if (basePrice < 1 ether) {
                     uint256 delta = 1 ether - basePrice;
@@ -566,6 +569,9 @@ contract PurgeBonds {
 
         uint256 supply = nextId - 1;
         if (supply == 0) revert InvalidToken();
+
+        address holder = _ownerOf[tokenId];
+        _burnToken(tokenId, holder);
 
         uint256 ethShare = ethPool / supply;
         uint256 stShare = stEthPool / supply;
@@ -614,23 +620,55 @@ contract PurgeBonds {
     // Views
     // ---------------------------------------------------------------------
 
+    function _isInactive(uint256 tokenId) private view returns (bool) {
+        uint256 floor = lowestUnresolved;
+        if (floor == 0) {
+            floor = 1;
+        }
+        return tokenId < floor && !claimReady[tokenId];
+    }
+
+    function _exists(uint256 tokenId) private view returns (bool) {
+        if (tokenId == 0 || tokenId >= nextId) return false;
+        if (claimed[tokenId]) return false;
+        if (_isInactive(tokenId)) return false;
+        return _ownerOf[tokenId] != address(0);
+    }
+
+    function _requireActiveToken(uint256 tokenId) private view returns (address holder) {
+        if (!_exists(tokenId)) revert InvalidToken();
+        holder = _ownerOf[tokenId];
+    }
+
     function balanceOf(address account) public view returns (uint256) {
         if (account == address(0)) revert ZeroAddress();
-        return _balanceOf[account];
+        uint256 owned = _balanceOf[account];
+        uint256 burned = _burnedBalance[account];
+        if (burned >= owned) return 0;
+        unchecked {
+            return owned - burned;
+        }
     }
 
     function ownerOf(uint256 tokenId) public view returns (address) {
-        address o = _ownerOf[tokenId];
-        if (o == address(0)) revert InvalidToken();
-        return o;
+        return _requireActiveToken(tokenId);
     }
 
     function totalSupply() external view returns (uint256) {
-        return nextId - 1;
+        uint256 minted = nextId - 1;
+        if (burnedCount > minted) return 0;
+        return minted - burnedCount;
     }
 
     function pendingShares() external view returns (uint256 ethShare, uint256 stEthShare, uint256 bondShare) {
         uint256 supply = nextId - 1;
+        if (burnedCount < supply) {
+            unchecked {
+                supply -= burnedCount;
+            }
+        } else {
+            supply = 0;
+        }
         if (supply == 0) return (0, 0, 0);
         ethShare = ethPool / supply;
         stEthShare = stEthPool / supply;
@@ -641,6 +679,7 @@ contract PurgeBonds {
     }
 
     function getApproved(uint256 tokenId) public view returns (address) {
+        _requireActiveToken(tokenId);
         return _tokenApproval[tokenId];
     }
 
@@ -656,7 +695,7 @@ contract PurgeBonds {
     }
 
     function tokenURI(uint256 tokenId) external view returns (string memory) {
-        if (_ownerOf[tokenId] == address(0)) revert InvalidToken();
+        _requireActiveToken(tokenId);
         address renderer_ = renderer;
         if (renderer_ == address(0)) revert ZeroAddress();
         uint32 created = createdDistance[tokenId];
@@ -742,8 +781,7 @@ contract PurgeBonds {
     }
 
     function _isApprovedOrOwner(address spender, uint256 tokenId) private view returns (bool) {
-        address holder = _ownerOf[tokenId];
-        if (holder == address(0)) revert InvalidToken();
+        address holder = _requireActiveToken(tokenId);
         return (spender == holder || _tokenApproval[tokenId] == spender || _operatorApproval[holder][spender]);
     }
 
@@ -756,15 +794,20 @@ contract PurgeBonds {
     }
 
     function _resolveStart(uint256 baseId) private returns (uint256 startId) {
+        uint256 floor = lowestUnresolved;
+        if (floor == 0) {
+            floor = 1;
+        }
         if (baseId != 0) {
+            if (baseId < floor) baseId = floor;
             resolveBaseId = baseId;
             return baseId;
         }
         startId = resolveBaseId;
-        if (startId == 0) {
+        if (startId == 0 || startId < floor) {
             startId = nextClaimable;
-            if (startId == 0) {
-                startId = 1;
+            if (startId == 0 || startId < floor) {
+                startId = floor;
             }
             resolveBaseId = startId;
         }
@@ -827,6 +870,17 @@ contract PurgeBonds {
         pendingResolveBudget = 0;
         pendingRngDay = 0;
         transfersLocked = false;
+    }
+
+    function _clearApproval(uint256 tokenId) private {
+        address approved = _tokenApproval[tokenId];
+        if (approved != address(0)) {
+            _tokenApproval[tokenId] = address(0);
+            address holder = _ownerOf[tokenId];
+            if (holder != address(0)) {
+                emit Approval(holder, address(0), tokenId);
+            }
+        }
     }
 
     function _scheduleResolve(
@@ -958,6 +1012,32 @@ contract PurgeBonds {
         if (!ok) revert CallFailed();
     }
 
+    function _setCoinToken(address token) private {
+        if (token == address(0)) revert ZeroAddress();
+        address current = coinToken;
+        if (current != address(0)) {
+            if (current != token) revert AlreadyConfigured();
+            return;
+        }
+        coinToken = token;
+    }
+
+    function _setGame(address game_) private {
+        if (game_ == address(0)) revert ZeroAddress();
+        address current = game;
+        if (current != address(0)) {
+            if (current != game_) revert AlreadyConfigured();
+            return;
+        }
+        game = game_;
+        uint256 seed = rewardSeedEth;
+        if (seed != 0) {
+            rewardSeedEth = 0;
+            (bool ok, ) = payable(game_).call{value: seed}("");
+            if (!ok) revert CallFailed();
+        }
+    }
+
     function _riskForBase(uint256 baseWei) private pure returns (uint8 risk) {
         if (baseWei == 0 || baseWei > 1 ether) revert InvalidBase();
         uint256 base = 1 ether;
@@ -1000,6 +1080,7 @@ contract PurgeBonds {
         uint256 tokenId,
         uint256 rngWord
     ) public view returns (bool win, uint16 chanceBps, uint256 roll) {
+        _requireActiveToken(tokenId);
         chanceBps = winChanceBps[tokenId];
         if (chanceBps == 0) {
             chanceBps = 1; // minimal non-zero chance if none recorded
@@ -1028,7 +1109,7 @@ contract PurgeBonds {
             state = _lcgStep(state);
             uint256 candidate = (state % maxId) + 1;
             address bondOwner = _ownerOf[candidate];
-            if (bondOwner == address(0)) {
+            if (bondOwner == address(0) || _isInactive(candidate) || claimed[candidate]) {
                 unchecked {
                     ++attempts;
                 }
@@ -1086,8 +1167,14 @@ contract PurgeBonds {
             entropy = _lcgStep(entropy);
             uint256 candidate = (entropy % maxId) + 1;
             address bondOwner = _ownerOf[candidate];
-            uint256 chance = claimReady[candidate] ? 10_000 : uint256(winChanceBps[candidate]);
-            if (bondOwner != address(0) && chance != 0) {
+            if (bondOwner != address(0) && !_isInactive(candidate) && !claimed[candidate]) {
+                uint256 chance = claimReady[candidate] ? 10_000 : uint256(winChanceBps[candidate]);
+                if (chance == 0) {
+                    unchecked {
+                        ++i;
+                    }
+                    continue;
+                }
                 // Discount unstaked bonds by 30% when matured; staked keep full weight.
                 if (claimReady[candidate] && !staked[candidate]) {
                     chance = (chance * 7) / 10; // 70% weight
@@ -1140,6 +1227,7 @@ contract PurgeBonds {
         if (win) {
             if (!claimReady[tokenId]) {
                 claimReady[tokenId] = true;
+                _clearApproval(tokenId);
                 emit ClaimEnabled(tokenId);
                 if (basePrice < 1 ether) {
                     uint256 delta = 1 ether - basePrice;
@@ -1148,52 +1236,93 @@ contract PurgeBonds {
                 }
             }
         } else {
-            totalEthOwed -= basePrice;
-            totalCoinOwed -= basePrice * weight;
-            claimed[tokenId] = true;
-            emit BondBurned(tokenId);
+            // Losing bonds are accounted and burned in batch when the resolve cursor advances.
         }
         emit BondResolved(tokenId, win, chance, roll);
     }
 
     function _burnInactiveUpTo(uint256 targetId) private {
         uint256 tid = lowestUnresolved;
+        if (tid == 0) {
+            tid = 1;
+        }
+        if (targetId < tid) return;
+
+        uint256 burned;
+        address ownerCursor;
+        uint256 ownerBurns;
+
         while (tid <= targetId) {
-            if (!claimReady[tid]) {
-                address holder = _ownerOf[tid];
-                if (holder != address(0)) {
-                    if (!claimed[tid]) {
-                        uint256 basePrice = _basePrice(riskOf[tid]);
-                        totalEthOwed -= basePrice;
-                        totalCoinOwed -= basePrice * _coinWeightMultiplier(tid);
+            bool resolvedWinner = claimReady[tid] || claimed[tid];
+            if (resolvedWinner) {
+                unchecked {
+                    ++tid;
+                }
+                continue;
+            }
+
+            address holder = _ownerOf[tid];
+            if (holder != address(0)) {
+                uint256 basePrice = _basePrice(riskOf[tid]);
+                totalEthOwed -= basePrice;
+                totalCoinOwed -= basePrice * _coinWeightMultiplier(tid);
+
+                claimed[tid] = true;
+                address approved = _tokenApproval[tid];
+                if (approved != address(0)) {
+                    _tokenApproval[tid] = address(0);
+                }
+
+                if (ownerCursor != holder) {
+                    if (ownerCursor != address(0) && ownerBurns != 0) {
+                        _burnedBalance[ownerCursor] += ownerBurns;
                     }
-                    claimed[tid] = true;
-                    _burnLikeMain(holder, tid);
+                    ownerCursor = holder;
+                    ownerBurns = 1;
+                } else {
+                    unchecked {
+                        ++ownerBurns;
+                    }
+                }
+
+                emit BondBurned(tid);
+                emit Transfer(holder, address(0), tid);
+                unchecked {
+                    ++burned;
                 }
             }
+
             unchecked {
                 ++tid;
             }
         }
+
+        if (ownerCursor != address(0) && ownerBurns != 0) {
+            _burnedBalance[ownerCursor] += ownerBurns;
+        }
+        if (burned != 0) {
+            burnedCount += burned;
+        }
         lowestUnresolved = tid;
     }
 
-    // Mirror main NFT burn pattern: emit Transfer to address(0) and zero ownership.
-    function _burnLikeMain(address owner_, uint256 tokenId) private {
-        delete _tokenApproval[tokenId];
-        _ownerOf[tokenId] = address(0);
-        uint256 bal = _balanceOf[owner_];
-        if (bal != 0) {
-            _balanceOf[owner_] = bal - 1;
+    function _burnToken(uint256 tokenId, address holder) private {
+        if (holder == address(0)) return;
+        unchecked {
+            _burnedBalance[holder] += 1;
         }
-        if (staked[tokenId]) {
-            delete staked[tokenId];
+        unchecked {
+            ++burnedCount;
         }
-        emit Transfer(owner_, address(0), tokenId);
+        address approved = _tokenApproval[tokenId];
+        if (approved != address(0)) {
+            _tokenApproval[tokenId] = address(0);
+        }
+        emit Transfer(holder, address(0), tokenId);
     }
 
     function _isResolved(uint256 tokenId) private view returns (bool) {
-        return claimReady[tokenId] || claimed[tokenId];
+        return claimReady[tokenId] || claimed[tokenId] || _isInactive(tokenId);
     }
 
     function _currentDistance(uint256 tokenId) private view returns (uint256) {

@@ -604,12 +604,7 @@ contract PurgeJackpots is IPurgeJackpots {
         external
         override
         onlyGame
-        returns (
-            address[] memory winners,
-            uint256[] memory amounts,
-            uint256 trophyPoolDelta,
-            uint256 returnAmountWei
-        )
+        returns (uint256 trophyPoolDelta, uint256 returnAmountWei)
     {
         uint256 totalBurn;
         // Track provisional trophy winner among winning subbuckets across all denominators.
@@ -643,7 +638,7 @@ contract PurgeJackpots is IPurgeJackpots {
             if (_hasDecPlaceholder(lvl)) {
                 purgeGameTrophies.burnDecPlaceholder(lvl);
             }
-            return (new address[](0), new uint256[](0), 0, refund);
+            return (0, refund);
         }
 
         uint256 totalPool = poolWei;
@@ -665,7 +660,7 @@ contract PurgeJackpots is IPurgeJackpots {
                 purgeGameTrophies.burnDecPlaceholder(lvl);
             }
         }
-        return (new address[](0), new uint256[](0), 0, 0);
+        return (0, 0);
     }
 
     // ---------------------------------------------------------------------

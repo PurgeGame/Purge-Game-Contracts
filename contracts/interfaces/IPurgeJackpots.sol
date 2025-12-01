@@ -12,7 +12,7 @@ interface IPurgeJackpots {
         uint256 poolWei,
         uint24 lvl,
         uint256 rngWord
-    ) external returns (address[] memory winners, uint256[] memory amounts, uint256 trophyPoolDelta, uint256 returnAmountWei);
+    ) external returns (uint256 trophyPoolDelta, uint256 returnAmountWei);
 
     function consumeDecClaim(address player, uint24 lvl) external returns (uint256 amountWei);
     function claimDecimatorJackpot(uint24 lvl) external;

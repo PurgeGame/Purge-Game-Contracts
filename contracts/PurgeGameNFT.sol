@@ -345,7 +345,6 @@ contract PurgeGameNFT {
             if (msg.value != 0) revert E();
             _coinReceive(buyer, uint32(quantity), quantity * priceCoinUnit, targetLevel, 0);
         } else {
-            bool creditNext = (state == 3 || state == 1);
             bonusCoinReward = (quantity / 10) * priceCoinUnit;
             uint256 expectedWei = priceWei * quantity;
             bonus = _processEthPurchase(
@@ -355,7 +354,6 @@ contract PurgeGameNFT {
                 targetLevel,
                 state,
                 false,
-                creditNext,
                 useClaimable,
                 expectedWei,
                 priceCoinUnit
@@ -424,7 +422,6 @@ contract PurgeGameNFT {
             _coinReceive(buyer, uint32(quantity), coinCost, lvl, 0);
             bonus = mapRebate;
         } else {
-            bool creditNext = (state == 3 || state == 1);
             bonus = _processEthPurchase(
                 buyer,
                 scaledQty,
@@ -432,7 +429,6 @@ contract PurgeGameNFT {
                 lvl,
                 state,
                 true,
-                creditNext,
                 useClaimable,
                 expectedWei,
                 priceUnit
@@ -470,7 +466,6 @@ contract PurgeGameNFT {
         uint24 lvl,
         uint8 gameState,
         bool mapPurchase,
-        bool creditNextPool,
         bool useClaimable,
         uint256 expectedWei,
         uint256 priceUnit
@@ -503,12 +498,11 @@ contract PurgeGameNFT {
 
         uint256 streakBonus;
         if (useClaimable) {
-            streakBonus = game.recordMint(payer, lvl, creditNextPool, false, expectedWei, mintUnits);
+            streakBonus = game.recordMint(payer, lvl, false, expectedWei, mintUnits);
         } else {
             streakBonus = game.recordMint{value: expectedWei}(
                 payer,
                 lvl,
-                creditNextPool,
                 false,
                 expectedWei,
                 mintUnits
@@ -571,7 +565,7 @@ contract PurgeGameNFT {
         else if (stepMod == 18) amount = (amount * 9) / 10;
         if (discount != 0) amount -= discount;
         coin.burnCoin(payer, amount);
-        game.recordMint(payer, lvl, false, true, 0, 0);
+        game.recordMint(payer, lvl, true, 0, 0);
         uint32 questQuantity = quantity / 4; // coin mints track full-price equivalents for quests
         if (questQuantity != 0) {
             coin.notifyQuestMint(payer, questQuantity, false);

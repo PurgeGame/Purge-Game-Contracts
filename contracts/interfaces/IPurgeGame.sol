@@ -41,8 +41,6 @@ interface IPurgeGame is IPurgeGameExternal {
 
     function principalStEthBalance() external view returns (uint256);
 
-    function setBonds(address bonds_) external;
-
     function purchaseInfo()
         external
         view
@@ -59,7 +57,6 @@ interface IPurgeGame is IPurgeGameExternal {
     function recordMint(
         address player,
         uint24 lvl,
-        bool creditNext,
         bool coinMint,
         uint256 costWei,
         uint32 mintUnits
