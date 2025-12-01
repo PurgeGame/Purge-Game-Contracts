@@ -28,8 +28,7 @@ contract IconRendererTrophy32 {
     IPurgedRead private immutable coin;
     IIcons32 private immutable icons;
     IColorRegistry private immutable registry;
-    IIconRendererTrophy32Svg private svgRenderer;
-    address public bonds; // Optional bonds contract (set post-deploy)
+    IIconRendererTrophy32Svg private immutable svgRenderer;
 
     IERC721Lite private nft;
 
@@ -46,12 +45,6 @@ contract IconRendererTrophy32 {
         registry = IColorRegistry(registry_);
         if (svgRenderer_ == address(0)) revert E();
         svgRenderer = IIconRendererTrophy32Svg(svgRenderer_);
-    }
-
-    /// @notice Set the bonds contract address post-deploy (coin-only).
-    function setBonds(address bonds_) external {
-        if (msg.sender != address(coin) || bonds_ == address(0) || bonds != address(0)) revert E();
-        bonds = bonds_;
     }
 
     function setMyColors(
@@ -97,9 +90,8 @@ contract IconRendererTrophy32 {
         return registry.setTopAffiliateColor(msg.sender, tokenId, trophyHex);
     }
 
-    function wireContracts(address game_, address nft_) external {
+    function wireContracts(address /*game_*/, address nft_) external {
         if (msg.sender != address(coin)) revert E();
-        game_;
         nft = IERC721Lite(nft_);
         svgRenderer.setNft(nft_);
     }
@@ -109,6 +101,12 @@ contract IconRendererTrophy32 {
         uint256 data,
         uint32[4] calldata extras
     ) external view returns (string memory) {
+        // `data` carries the packed trophy word emitted by the game:
+        // bits [167:152]=exterminated trait (0xFFFF placeholder), [151:128]=level,
+        // [204:200]=trophy type flags, [228:205]=staked level, [127:0]=owed ETH.
+        // `extras` is a small status bundle set by the caller: extras[0] status bits
+        // (bit31=bond render, bit0=staked, bit1=matured), extras[1]=bond created distance,
+        // extras[2]=bond current distance, extras[3]=chance bps | (bit31=staked).
         return _tokenURI(tokenId, data, extras);
     }
 

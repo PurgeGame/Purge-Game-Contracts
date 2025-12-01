@@ -406,6 +406,20 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         trophyData_[tokenId] = updated;
     }
 
+    // Assign reward with a 10-claim schedule (used for stake/affiliate 1% slices).
+    function _addTrophyRewardInternalClaimsTen(uint256 tokenId, uint256 amountWei, uint24 startLevel) private {
+        if (amountWei == 0) return;
+        uint256 info = trophyData_[tokenId];
+        uint256 owed = (info & TROPHY_OWED_MASK) + amountWei;
+        uint256 base = uint256((startLevel - 1) & 0xFFFFFF);
+        uint256 updated = (info &
+            ~(TROPHY_OWED_MASK | (uint256(0xFFFFFF) << TROPHY_BASE_LEVEL_SHIFT) | TROPHY_CLAIMS_MASK)) |
+            (owed & TROPHY_OWED_MASK) |
+            (base << TROPHY_BASE_LEVEL_SHIFT) |
+            (uint256(10) << TROPHY_CLAIMS_SHIFT);
+        trophyData_[tokenId] = updated;
+    }
+
     function _addStakedTrophy(uint256 tokenId) private {
         stakedTrophyIndex[tokenId] = stakedTrophyIds.length + 1;
         stakedTrophyIds.push(tokenId);
@@ -1361,6 +1375,21 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         return true;
     }
 
+    function _rewardTrophyClaimsTen(
+        uint24 level,
+        uint8 kind,
+        uint256 amountWei
+    ) private returns (bool paid) {
+        (uint256 previousBase, uint256 currentBase) = nft.getBasePointers();
+        uint24 currentLevel = game.level();
+        uint256 tokenId = _placeholderTokenId(level, kind, previousBase, currentBase, currentLevel);
+        if (tokenId == 0) return false;
+        address owner = address(uint160(nft.packedOwnershipOf(tokenId)));
+        if (owner == address(0)) return false; // burned placeholder
+        _addTrophyRewardInternalClaimsTen(tokenId, amountWei, level);
+        return true;
+    }
+
     function rewardRandomStaked(
         uint256 rngSeed,
         uint256 amountWei,
@@ -1394,15 +1423,18 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
     }
 
     function _rewardEndgame(uint24 level, uint256 rngSeed, uint256 scaledPool) private returns (uint256 paidTotal) {
-        uint256 halfPercent = scaledPool / 200; // 0.5% of the scaled pool
-        uint256 affiliateAmount = halfPercent << 1; // 1%
-        uint256 stakeAmount = halfPercent;
+        // Scale off the reward pool (already scaled by caller); stake + affiliate trophies each get 1%, random staked gets 0.5%.
+        uint256 onePercent = scaledPool / 100;
+        uint256 halfPercent = scaledPool / 200;
+        uint256 affiliateAmount = onePercent;
+        uint256 stakeAmount = onePercent;
         uint256 randomAmount = halfPercent;
 
-        if (rewardTrophy(level, PURGE_TROPHY_KIND_AFFILIATE, affiliateAmount)) {
+        // Treat the stake/affiliate slices as assignment-style rewards so they vest over 10 claims.
+        if (_rewardTrophyClaimsTen(level, PURGE_TROPHY_KIND_AFFILIATE, affiliateAmount)) {
             paidTotal += affiliateAmount;
         }
-        if (rewardTrophy(level, PURGE_TROPHY_KIND_STAKE, stakeAmount)) {
+        if (_rewardTrophyClaimsTen(level, PURGE_TROPHY_KIND_STAKE, stakeAmount)) {
             paidTotal += stakeAmount;
         }
         if (rewardRandomStaked(rngSeed, randomAmount, level)) {

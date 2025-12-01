@@ -143,6 +143,8 @@ contract IconRendererRegular32 {
     /// @param k        Channel index: 0=outline, 1=flame, 2=diamond, 3=square.
     /// @param defColor Final fallback color (e.g., theme default).
     function _resolve(uint256 tokenId, uint8 k, string memory defColor) private view returns (string memory) {
+        // Assumes the NFT exists; `ownerOf` is allowed to revert here because renderer
+        // is only called after the game has minted.
         string memory s = registry.tokenColor(tokenId, k);
         if (bytes(s).length != 0) return s;
 
@@ -179,9 +181,9 @@ contract IconRendererRegular32 {
     // ---------------------------------------------------------------------
 
     // Canonical palette (indexed 0..7). Stored intentionally (non‑zero) for direct lookup.
-    uint24[8] private BASE_COLOR = [0xf409cd, 0x7c2bff, 0x30d100, 0xed0e11, 0x1317f7, 0xf7931a, 0x5e5e5e, 0xab8d3f];
+    uint24[8] private constant BASE_COLOR = [0xf409cd, 0x7c2bff, 0x30d100, 0xed0e11, 0x1317f7, 0xf7931a, 0x5e5e5e, 0xab8d3f];
 
-    int16[8] private BASE_VARIANT_BIAS = [
+    int16[8] private constant BASE_VARIANT_BIAS = [
         int16(-14),
         int16(-6),
         int16(12),
@@ -199,8 +201,8 @@ contract IconRendererRegular32 {
     uint32 private constant GLOBAL_BADGE_BOOST_1e6 = 1_010_000;
 
     // Quadrant offsets.
-    int16[4] private CX = [int16(-25), int16(25), int16(-25), int16(25)];
-    int16[4] private CY = [int16(25), int16(25), int16(-25), int16(-25)];
+    int16[4] private constant CX = [int16(-25), int16(25), int16(-25), int16(25)];
+    int16[4] private constant CY = [int16(25), int16(25), int16(-25), int16(-25)];
 
     // Trait‑remaining snapshot (set by game at epoch start).
     uint32[256] private startTR;
@@ -208,8 +210,6 @@ contract IconRendererRegular32 {
     // Linked contracts (set once).
     address private game; // PurgeGame contract (authorised caller)
     IERC721Lite private nft; // PurgeGameNFT ERC721 contract
-    address public bonds; // Optional bonds contract (set post-deploy)
-
     // --- Square geometry (for trophy sizing vs inner side) -----------------
     uint32 private constant SQUARE_SIDE_100 = 100; // <rect width/height>
     uint32 private constant BORDER_STROKE_W = 2; // stroke-width in _svgHeader()
@@ -235,12 +235,6 @@ contract IconRendererRegular32 {
         if (msg.sender != address(coin)) revert E();
         game = game_;
         nft = IERC721Lite(nft_);
-    }
-
-    /// @notice Set the bonds contract address post-deploy (coin-only).
-    function setBonds(address bonds_) external {
-        if (msg.sender != address(coin) || bonds_ == address(0) || bonds != address(0)) revert E();
-        bonds = bonds_;
     }
 
     /// @notice Capture the starting trait‑remaining snapshot for the new epoch.
