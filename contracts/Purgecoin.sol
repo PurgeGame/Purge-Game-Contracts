@@ -231,8 +231,6 @@ contract Purgecoin {
         _mint(bonds_, bondSeed);
     }
 
-    receive() external payable {}
-
     /// @notice Burn PURGE to increase the caller’s coinflip stake, applying streak bonuses when eligible.
     /// @param amount Amount (6 decimals) to burn; must satisfy the global minimum.
     function depositCoinflip(uint256 amount) external {
@@ -332,8 +330,7 @@ contract Purgecoin {
     }
 
     function _stakeFreeMoneyView() private view returns (uint256) {
-        (, , , uint256 priceWei, , uint256 prizePoolTarget, , , ) = /*earlyPurgePercent_*/
-        purgeGame.gameInfo();
+        (, , , uint256 priceWei, , uint256 prizePoolTarget, , ,  /*earlyPurgePercent_*/) = purgeGame.gameInfo();
         uint256 priceCoinUnit = purgeGame.coinPriceUnit();
         if (priceWei == 0 || priceCoinUnit == 0) return 0;
         uint256 tenPercentEth = prizePoolTarget / 10;
