@@ -41,7 +41,6 @@ contract PurgeJackpots is IPurgeJackpots {
     // Track per-player BAF totals within an active level (derived from manual flip deltas).
     struct BafEntry {
         uint256 total; // total manual flips this BAF level
-        uint256 lastStake; // last observed coinflipAmount to compute deltas
         uint24 level;
     }
 
@@ -152,7 +151,6 @@ contract PurgeJackpots is IPurgeJackpots {
         if (entry.level != lvl) {
             entry.level = lvl;
             entry.total = 0;
-            entry.lastStake = 0;
         }
         if (amount == 0) return;
         unchecked {
@@ -198,6 +196,13 @@ contract PurgeJackpots is IPurgeJackpots {
     // ---------------------------------------------------------------------
     // External jackpot logic
     // ---------------------------------------------------------------------
+    /**
+     * @notice Resolve the BAF jackpot for a level.
+     * @dev Pool split (percent of `poolWei`): 10% top bettor + 10% BAF trophy, 10% random pick
+     *      between 3rd/4th leaderboard slots, 10% affiliate draw (top referrers from prior 20 levels),
+     *      10% retro tops (recent levels), 7%/3% scatter buckets from trait tickets, 5/3/2% to
+     *      staked trophy owners. Any unfilled shares are refunded to the caller via `returnAmountWei`.
+     */
     function runBafJackpot(
         uint256 poolWei,
         uint24 lvl,
@@ -225,6 +230,7 @@ contract PurgeJackpots is IPurgeJackpots {
         uint256 salt;
 
         {
+            // Slice A: top bettor (10%) and BAF trophy (10%) follow the level's leading flip volume.
             uint256 prize = P / 10;
 
             (address w, ) = _bafTop(lvl, 0);
@@ -259,7 +265,7 @@ contract PurgeJackpots is IPurgeJackpots {
             uint256 prize = P / 10;
             uint8 pick = 2 + uint8(entropy & 1);
             (address w, ) = _bafTop(lvl, pick);
-            // 10% to either the 3rd or 4th leaderboard slot (pseudo-random tie-break).
+            // Slice B: 10% to either the 3rd or 4th leaderboard slot (pseudo-random tie-break).
             uint256 sPick = _bafScore(w, lvl);
             if (_creditOrRefund(w, prize, tmpW, tmpA, n, sPick, true)) {
                 unchecked {
@@ -368,6 +374,7 @@ contract PurgeJackpots is IPurgeJackpots {
         }
 
         {
+            // Slice C: affiliate achievers (past 20 levels) share 10% across four descending prizes.
             uint256[4] memory affiliatePrizes = [(P * 5) / 100, (P * 3) / 100, (P * 2) / 100, uint256(0)];
             uint256 affiliateSlice;
             unchecked {
@@ -512,6 +519,7 @@ contract PurgeJackpots is IPurgeJackpots {
             uint256[4] memory prizes = [(slice * 5) / 10, (slice * 3) / 10, (slice * 2) / 10, uint256(0)];
 
             for (uint8 s; s < 4; ) {
+                // Slice D: retro top bettors — sample recent levels to bias toward fresh play (10% total).
                 // Retro top rewards: sample two recent levels (1..20 back) and pick the lower level.
                 unchecked {
                     ++salt;
@@ -568,6 +576,7 @@ contract PurgeJackpots is IPurgeJackpots {
         // Scatter slice: 200 total draws (4 tickets * 50 rounds). Per round, take top-2 by BAF score.
         // First bucket splits 7% evenly (max 50 winners); second bucket splits 3% evenly (max 50 winners).
         {
+            // Slice E: scatter tickets from trait sampler so casual participants can land smaller cuts.
             uint256 scatterTop = (P * 7) / 100;
             uint256 scatterSecond = (P * 3) / 100;
             address[50] memory firstWinners;
@@ -702,13 +711,16 @@ contract PurgeJackpots is IPurgeJackpots {
         onlyGame
         returns (uint256 trophyPoolDelta, uint256 returnAmountWei)
     {
+        // Decimator jackpots defer ETH distribution to per-player claims; this call snapshots winners.
         uint256 totalBurn;
         // Track provisional trophy winner among winning subbuckets across all denominators.
         address decTopWinner;
         uint192 decTopBurn;
+        bool hasPlaceholder = _hasDecPlaceholder(lvl);
 
         uint256 decSeed = rngWord;
         for (uint8 denom = 2; denom <= 20; ) {
+            // Pick a random winning subbucket for each denominator and accumulate its burn total.
             uint8 winningSub = _decWinningSubbucket(decSeed, denom);
             decBucketOffset[lvl][denom] = winningSub;
 
@@ -737,26 +749,32 @@ contract PurgeJackpots is IPurgeJackpots {
             return (0, refund);
         }
 
-        uint256 totalPool = poolWei;
+        uint256 claimPool = poolWei;
+        uint256 trophyPrize;
+        if (hasPlaceholder && decTopWinner != address(0)) {
+            trophyPrize = poolWei / 20; // 5% of Decimator pool reserved for the trophy owner
+            claimPool = poolWei - trophyPrize;
+        }
 
         DecClaimRound storage round = decClaimRound[lvl];
-        round.poolWei = totalPool;
+        round.poolWei = claimPool;
         round.totalBurn = totalBurn;
         round.level = lvl;
         round.active = true;
 
-        if (_hasDecPlaceholder(lvl)) {
+        if (hasPlaceholder) {
             if (decTopWinner != address(0)) {
                 // Trophy follows the largest burn within the winning subbuckets.
                 uint256 trophyData = (uint256(DECIMATOR_TRAIT_SENTINEL) << 152) |
                     (uint256(lvl) << TROPHY_BASE_LEVEL_SHIFT) |
                     TROPHY_FLAG_DECIMATOR;
-                purgeGameTrophies.awardTrophy(decTopWinner, lvl, PURGE_TROPHY_KIND_DECIMATOR, trophyData, 0);
+                purgeGameTrophies.awardTrophy(decTopWinner, lvl, PURGE_TROPHY_KIND_DECIMATOR, trophyData, trophyPrize);
+                trophyPoolDelta = trophyPrize;
             } else {
                 purgeGameTrophies.burnDecPlaceholder(lvl);
             }
         }
-        return (0, 0);
+        return (trophyPoolDelta, 0);
     }
 
     // ---------------------------------------------------------------------
@@ -795,6 +813,7 @@ contract PurgeJackpots is IPurgeJackpots {
     function _eligible(address player, uint256 scoreHint, bool hasHint) internal view returns (bool) {
         uint256 score = hasHint ? scoreHint : coin.coinflipAmount(player);
         if (score < 5_000 * MILLION) return false;
+        // Require at least a 6-level ETH mint streak to ensure winners are active players.
         return purgeGame.ethMintStreakCount(player) >= 6;
     }
 
@@ -848,6 +867,7 @@ contract PurgeJackpots is IPurgeJackpots {
 
         if (decBucketBurnTotal[lvl][denom][winningSub] == 0) return (0, false);
 
+        // Pro-rata share of the Decimator pool based on the burn inside the winning subbucket.
         amountWei = (round.poolWei * uint256(e.burn)) / round.totalBurn;
         winner = true;
     }
