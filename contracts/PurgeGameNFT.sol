@@ -64,7 +64,6 @@ contract PurgeGameNFT {
     error InvalidToken();
     error TrophyStakeViolation(uint8 reason);
     error StakeInvalid();
-    error LuckboxTooSmall();
     error NotTimeYet();
     error RngNotReady();
     error InvalidQuantity();
@@ -149,6 +148,9 @@ contract PurgeGameNFT {
     uint256 private _mintQueueIndex; // Tracks # of queue entries fully processed during airdrop rotation
     uint256 private _mintQueueStartOffset;
 
+    // Tracks how many level-100 mints (tokens + maps) a player has purchased with ETH for price scaling.
+    mapping(address => uint32) private _levelHundredMintCount;
+
     uint256[] private _dormantCursor; // processing cursor for each dormant range
     uint256[] private _dormantEnd; // exclusive end token id per dormant range
     uint256 private _dormantHead;
@@ -168,7 +170,6 @@ contract PurgeGameNFT {
     uint256 private constant TROPHY_LAST_CLAIM_SHIFT = 168;
 
     uint8 private constant _STAKE_ERR_TRANSFER_BLOCKED = 1;
-    uint256 private constant LUCKBOX_BYPASS_THRESHOLD = 100_000 * 1_000_000;
     uint32 private constant DORMANT_EMIT_BATCH = 3500;
 
     function _currentBaseTokenId() private view returns (uint256) {
@@ -336,7 +337,13 @@ contract PurgeGameNFT {
         if (rngLocked_ && phase >= 3 && state == 2) revert RngNotReady();
 
         uint256 coinCost = quantity * priceCoinUnit;
-        _enforceCenturyLuckbox(buyer, targetLevel, priceCoinUnit);
+        uint256 expectedWei = priceWei * quantity;
+
+        uint32 levelHundredCount;
+        if (!payInCoin && targetLevel == 100) {
+            // Level-100 ETH purchases scale price based on ETH mint history and prior level-100 mints.
+            (expectedWei, levelHundredCount) = _levelHundredCost(msg.sender, priceWei, uint32(quantity));
+        }
 
         uint256 bonus;
         uint256 bonusCoinReward;
@@ -346,7 +353,6 @@ contract PurgeGameNFT {
             _coinReceive(buyer, uint32(quantity), quantity * priceCoinUnit, targetLevel, 0);
         } else {
             bonusCoinReward = (quantity / 10) * priceCoinUnit;
-            uint256 expectedWei = priceWei * quantity;
             bonus = _processEthPurchase(
                 buyer,
                 quantity * 100,
@@ -358,6 +364,9 @@ contract PurgeGameNFT {
                 expectedWei,
                 priceCoinUnit
             );
+            if (targetLevel == 100) {
+                _levelHundredMintCount[buyer] = levelHundredCount;
+            }
             if (phase == 3 && (targetLevel % 100) > 90) {
                 bonus += (quantity * priceCoinUnit) / 5;
             }
@@ -381,7 +390,7 @@ contract PurgeGameNFT {
 
         _recordPurchase(buyer, qty32);
 
-        uint256 costAmount = payInCoin ? coinCost : (priceWei * quantity);
+        uint256 costAmount = payInCoin ? coinCost : expectedWei;
         emit TokenPurchase(buyer, qty32, payInCoin, useClaimable, costAmount, bonus);
     }
 
@@ -406,13 +415,17 @@ contract PurgeGameNFT {
         if (quantity == 0 || quantity > type(uint32).max) revert InvalidQuantity();
         if (rngLocked_) revert RngNotReady();
 
-        _enforceCenturyLuckbox(buyer, lvl, priceUnit);
-
         uint256 coinCost = quantity * (priceUnit / 4);
         uint256 scaledQty = quantity * 25;
         uint256 mapRebate = (quantity / 4) * (priceUnit / 10);
         uint256 mapBonus = (quantity / 40) * priceUnit;
         uint256 expectedWei = (priceWei * quantity) / 4;
+
+        uint32 levelHundredCount;
+        if (!payInCoin && lvl == 100) {
+            // Level-100 ETH map mints share the same scaling rules as token mints.
+            (expectedWei, levelHundredCount) = _levelHundredCost(buyer, priceWei / 4, uint32(quantity));
+        }
 
         uint256 bonus;
         uint256 claimableBonus;
@@ -433,6 +446,9 @@ contract PurgeGameNFT {
                 expectedWei,
                 priceUnit
             );
+            if (lvl == 100) {
+                _levelHundredMintCount[buyer] = levelHundredCount;
+            }
             if (phase == 3 && (lvl % 100) > 90) {
                 bonus += coinCost / 5;
             }
@@ -559,6 +575,38 @@ contract PurgeGameNFT {
         }
     }
 
+    function _levelHundredCost(
+        address buyer,
+        uint256 unitPriceWei,
+        uint32 quantity
+    ) private view returns (uint256 cost, uint32 newCount) {
+        uint32 prev = _levelHundredMintCount[buyer];
+        uint256 levelCount = game.ethMintLevelCount(buyer);
+        uint256 streakCount = game.ethMintStreakCount(buyer);
+        if (levelCount > 100) levelCount = 100;
+        if (streakCount > 100) streakCount = 100;
+
+        // Base factor is (1 - score/200), where score combines level count and streak.
+        uint256 baseFactorBps = 10000 - ((levelCount + streakCount) * 50);
+
+        for (uint32 i; i < quantity; ) {
+            uint256 ramp = prev + i;
+            if (ramp > 20) {
+                ramp = 20;
+            }
+            uint256 factorBps = baseFactorBps + (ramp * 500); // +5% per prior mint, capped at full price
+            if (factorBps > 10000) {
+                factorBps = 10000;
+            }
+            cost += (unitPriceWei * factorBps) / 10000;
+            unchecked {
+                ++i;
+            }
+        }
+
+        newCount = prev + quantity;
+    }
+
     function _coinReceive(address payer, uint32 quantity, uint256 amount, uint24 lvl, uint256 discount) private {
         uint8 stepMod = uint8(lvl % 20);
         if (stepMod == 13) amount = (amount * 3) / 2;
@@ -651,18 +699,6 @@ contract PurgeGameNFT {
             delete _pendingMintQueue;
             _mintQueueIndex = 0;
             _mintQueueStartOffset = 0;
-        }
-    }
-
-    function _enforceCenturyLuckbox(address player, uint24 lvl, uint256 unit) private view {
-        if (lvl != 0 && (lvl % 100 == 0)) {
-            uint256 luck = coin.playerLuckbox(player);
-            uint256 required = 20 * unit * ((lvl / 100) + 1);
-            if (luck < required) revert LuckboxTooSmall();
-            if (luck < required + LUCKBOX_BYPASS_THRESHOLD) {
-                uint24 lastLevel = game.ethMintLastLevel(player);
-                if (uint256(lastLevel) + 1 != uint256(lvl)) revert LuckboxTooSmall();
-            }
         }
     }
 

@@ -19,8 +19,6 @@ interface IPurgeCoinModule {
 
     function addToBounty(uint256 amount) external;
 
-    function rewardTopFlipBonus(uint48 day, uint256 amount) external;
-
     function rollDailyQuest(uint48 day, uint256 entropy) external;
     function rollDailyQuestWithOverrides(uint48 day, uint256 entropy, bool forceMintEth, bool forcePurge) external;
 }

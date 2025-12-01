@@ -121,14 +121,11 @@ contract Purgecoin {
     mapping(address => uint48) internal lastCoinflipClaim;
     uint48 internal currentFlipDay;
 
-    // Live and per-day/per-level leaderboards for biggest pending flip.
-    PlayerScore public topBettor;
-    mapping(uint48 => PlayerScore) internal coinflipTopByDay;
-    mapping(uint24 => PlayerScore) internal coinflipTopByLevel;
+    // Track whether the top-flip bonus has been paid for a given level (once per level).
+    mapping(uint24 => bool) internal topFlipRewardPaid;
 
-    // Tracks total PURGE minted to a player via winnings (for leaderboards and luck mechanics).
-    mapping(address => uint256) public playerLuckbox;
-    PlayerScore public biggestLuckbox;
+    // Live per-level leaderboard for biggest pending flip.
+    mapping(uint24 => PlayerScore) internal coinflipTopByLevel;
 
     /// @notice View-only helper to estimate claimable coin (flips + stakes) for the caller.
     function claimableCoin() external view returns (uint256) {
@@ -262,7 +259,7 @@ contract Purgecoin {
     function depositCoinflip(uint256 amount) external {
         // Allow zero-amount calls to act as a cash-out of pending winnings without adding a new stake.
         if (amount == 0) {
-            addFlip(msg.sender, 0, false, false, false);
+            addFlip(msg.sender, 0, false, false);
             emit CoinflipDeposit(msg.sender, 0);
             return;
         }
@@ -284,18 +281,7 @@ contract Purgecoin {
 
         // Principal + quest bonus become the pending flip stake.
         uint256 creditedFlip = amount + questReward;
-        addFlip(caller, creditedFlip, true, true, false);
-
-        // Track "luckbox" (total minted winnings) and record the largest to date.
-        uint256 luckboxBalance = playerLuckbox[caller];
-        PlayerScore storage record = biggestLuckbox;
-        uint256 wholeCoins = luckboxBalance / MILLION;
-        if (wholeCoins > uint256(record.score)) {
-            record.player = caller;
-            uint256 clamped = wholeCoins;
-            if (clamped > type(uint96).max) clamped = type(uint96).max;
-            record.score = uint96(clamped);
-        }
+        addFlip(caller, creditedFlip, true, true);
 
         emit CoinflipDeposit(caller, amount);
     }
@@ -355,7 +341,7 @@ contract Purgecoin {
         );
         uint256 questReward = _questApplyReward(caller, reward, hardMode, questType, streak2, completed);
         if (questReward != 0) {
-            addFlip(caller, questReward, false, false, false);
+            addFlip(caller, questReward, false, false);
         }
 
         emit DecimatorBurn(caller, amount, bucketUsed);
@@ -563,7 +549,6 @@ contract Purgecoin {
 
         if (mintPayout) {
             _mint(player, payout);
-            playerLuckbox[player] += payout;
         }
         // Award stake trophy to the top modified stake when applicable.
         _awardStakeTrophy(targetLevel, res);
@@ -659,11 +644,6 @@ contract Purgecoin {
 
         uint256 maxRiskForTarget = uint256(targetLevel) + 1 - uint256(effectiveLevel);
         if (risk > maxRiskForTarget) revert Insufficient();
-
-        // Initialize luckbox sentinel so later winnings tracking is non-zero.
-        if (playerLuckbox[sender] == 0) {
-            playerLuckbox[sender] = 1;
-        }
 
         // Burn principal
         _burn(sender, burnAmt);
@@ -840,11 +820,11 @@ contract Purgecoin {
     }
 
     /// @notice Grant a pending coinflip stake during gameplay flows instead of minting PURGE.
-    /// @dev Access: PurgeGame, NFT, or trophy module only. Zero address is ignored. Optional luckbox bonus credited directly.
+    /// @dev Access: PurgeGame, NFT, or trophy module only. Zero address is ignored.
     function bonusCoinflip(address player, uint256 amount) external onlyGameplayContracts {
         if (player == address(0)) return;
         if (amount != 0) {
-            addFlip(player, amount, false, false, false);
+            addFlip(player, amount, false, false);
         }
     }
 
@@ -853,7 +833,7 @@ contract Purgecoin {
     function affiliateAddFlip(address player, uint256 amount) external {
         if (msg.sender != address(affiliateProgram)) revert OnlyGame();
         if (player == address(0) || amount == 0) return;
-        addFlip(player, amount, false, false, false);
+        addFlip(player, amount, false, false);
     }
 
     /// @notice Batch credit up to three affiliate/upline flip stakes in a single call.
@@ -864,7 +844,7 @@ contract Purgecoin {
             address player = players[i];
             uint256 amount = amounts[i];
             if (player != address(0) && amount != 0) {
-                addFlip(player, amount, false, false, false);
+                addFlip(player, amount, false, false);
             }
             unchecked {
                 ++i;
@@ -946,7 +926,7 @@ contract Purgecoin {
         );
         uint256 questReward = _questApplyReward(player, reward, hardMode, questType, streak, completed);
         if (questReward != 0) {
-            addFlip(player, questReward, false, false, false);
+            addFlip(player, questReward, false, false);
         }
     }
 
@@ -958,7 +938,7 @@ contract Purgecoin {
         );
         uint256 questReward = _questApplyReward(player, reward, hardMode, questType, streak, completed);
         if (questReward != 0) {
-            addFlip(player, questReward, false, false, false);
+            addFlip(player, questReward, false, false);
         }
     }
 
@@ -1055,7 +1035,6 @@ contract Purgecoin {
         }
         if (mintPayout && claimed != 0) {
             _mint(player, claimed);
-            playerLuckbox[player] += claimed;
         }
     }
 
@@ -1115,7 +1094,6 @@ contract Purgecoin {
         uint48 epoch,
         uint256 priceCoinUnit
     ) external onlyPurgeGameContract returns (bool finished) {
-        level;
         // Ensure a live flip day exists; epoch overrides when set.
         _syncFlipDay();
         uint48 day = currentFlipDay;
@@ -1159,27 +1137,29 @@ contract Purgecoin {
         if (bountyOwedTo != address(0) && currentBounty > 0) {
             address to = bountyOwedTo;
             uint256 slice = currentBounty >> 1; // pay/delete half of the bounty pool
-            if (slice != 0) {
-                unchecked {
-                    currentBounty -= uint128(slice);
-                }
-                if (win) {
-                    addFlip(to, slice, false, false, false);
-                    emit BountyPaid(to, slice);
-                }
+            unchecked {
+                currentBounty -= uint128(slice);
             }
+            if (win) {
+                addFlip(to, slice, false, false);
+                emit BountyPaid(to, slice);
+            }
+
             bountyOwedTo = address(0);
         }
 
         // Move the active window forward; the resolved day becomes claimable.
         currentFlipDay = day + 1;
 
-        if (priceCoinUnit != 0) {
-            _addToBounty(priceCoinUnit);
+        _addToBounty(priceCoinUnit);
+        if (level != 0 && !topFlipRewardPaid[level]) {
+            PlayerScore memory entry = coinflipTopByLevel[level];
+            if (entry.player != address(0)) {
+                // Credit lands as future flip stake; no direct mint.
+                addFlip(entry.player, priceCoinUnit, false, false);
+                topFlipRewardPaid[level] = true;
+            }
         }
-
-        // Pay top flip bonus for the settled window; credits land in the next flip window.
-        _rewardTopFlipBonus(day, priceCoinUnit);
 
         emit CoinflipFinished(win);
         return true;
@@ -1190,17 +1170,10 @@ contract Purgecoin {
         _addToBounty(amount);
     }
 
-    function rewardTopFlipBonus(uint48 day, uint256 amount) external onlyPurgeGameContract {
-        _rewardTopFlipBonus(day, amount);
-    }
-
     /// @notice Return the top coinflip bettor recorded for a given level.
-    /// @dev Reads the level keyed leaderboard; falls back to the live entry when querying the active level.
+    /// @dev Reads the level-keyed leaderboard entry.
     function coinflipTop(uint24 lvl) external view returns (address player, uint96 score) {
         PlayerScore memory stored = coinflipTopByLevel[lvl];
-        if (lvl == purgeGame.level() && stored.player == address(0)) {
-            stored = topBettor;
-        }
         return (stored.player, stored.score);
     }
 
@@ -1209,13 +1182,11 @@ contract Purgecoin {
     /// @param coinflipDeposit      Amount to add to their current pending flip stake.
     /// @param canArmBounty         If true, a sufficiently large deposit may arm a bounty.
     /// @param bountyEligible       If true, this deposit can arm the bounty (entire amount is considered).
-    /// @param skipLuckboxCheck     If true, do not initialize `playerLuckbox` when zero.
     function addFlip(
         address player,
         uint256 coinflipDeposit,
         bool canArmBounty,
-        bool bountyEligible,
-        bool skipLuckboxCheck
+        bool bountyEligible
     ) internal {
         // Auto-claim older flip/stake winnings (without mint) so deposits net against pending payouts.
         uint256 claimedFlips = _claimCoinflipsInternal(player, 30, false);
@@ -1238,16 +1209,15 @@ contract Purgecoin {
         }
         if (mintRemainder != 0) {
             _mint(player, mintRemainder);
-            playerLuckbox[player] += mintRemainder;
         }
 
         // Determine which future day this stake applies to, skipping locked RNG windows.
         uint48 settleDay = _syncFlipDay();
         bool rngLocked = purgeGame.rngLocked();
+        uint24 currLevel = purgeGame.level();
         uint48 targetDay = settleDay + (rngLocked ? 2 : 1);
-        uint48 nowDay = _currentDay();
-        if (targetDay <= nowDay) {
-            targetDay = nowDay + 1;
+        if (targetDay <= currentDay) {
+            targetDay = currentDay + 1;
         }
 
         uint256 prevStake = coinflipBalance[targetDay][player];
@@ -1258,23 +1228,19 @@ contract Purgecoin {
         coinflipBalance[targetDay][player] = newStake;
 
         // When BAF is active, capture a persistent roster entry + index for scatter.
-        if (purgeGame.isBafLevelActive(purgeGame.level())) {
-            uint24 bafLvl = purgeGame.level();
+        if (purgeGame.isBafLevelActive(currLevel)) {
+            uint24 bafLvl = currLevel;
             address module = jackpots;
             if (module == address(0)) revert ZeroAddress();
             IPurgeJackpots(module).recordBafFlip(player, bafLvl, coinflipDeposit);
         }
 
-        if (!skipLuckboxCheck && playerLuckbox[player] == 0) {
-            playerLuckbox[player] = 1;
-        }
         // Allow leaderboard churn even while RNG is locked; only freeze global records to avoid post-RNG manipulation.
-        _updateTopBettor(player, newStake, targetDay, purgeGame.level());
+        _updateTopBettor(player, newStake, currLevel);
 
         if (!rngLocked) {
             uint256 record = biggestFlipEver;
-            address leader = topBettor.player;
-            if (newStake > record && leader == player) {
+            if (newStake > record) {
                 biggestFlipEver = uint128(newStake);
 
                 if (canArmBounty && bountyEligible) {
@@ -1355,36 +1321,11 @@ contract Purgecoin {
         return uint96(wholeTokens);
     }
 
-    function _updateTopBettor(address player, uint256 stakeScore, uint48 day, uint24 lvl) private {
+    function _updateTopBettor(address player, uint256 stakeScore, uint24 lvl) private {
         uint96 score = _score96(stakeScore);
-        PlayerScore memory candidate = PlayerScore({player: player, score: score});
-
-        PlayerScore memory current = topBettor;
-        if (score > current.score || current.player == address(0)) {
-            topBettor = candidate;
-        }
-
-        PlayerScore memory dayLeader = coinflipTopByDay[day];
-        if (score > dayLeader.score || dayLeader.player == address(0)) {
-            coinflipTopByDay[day] = candidate;
-        }
-
         PlayerScore memory levelLeader = coinflipTopByLevel[lvl];
         if (score > levelLeader.score || levelLeader.player == address(0)) {
-            coinflipTopByLevel[lvl] = candidate;
+            coinflipTopByLevel[lvl] = PlayerScore({player: player, score: score});
         }
-    }
-
-    function _rewardTopFlipBonus(uint48 day, uint256 amount) private {
-        if (amount == 0) return;
-        // Prefer the recorded leader for the requested day; fall back to current-level leader if missing.
-        PlayerScore memory entry = coinflipTopByDay[day];
-        if (entry.player == address(0)) {
-            entry = coinflipTopByLevel[purgeGame.level()];
-        }
-        if (entry.player == address(0)) return;
-
-        // Credit lands as future flip stake; no direct mint.
-        addFlip(entry.player, amount, false, false, true);
     }
 }

@@ -10,8 +10,6 @@ import {PurgeGameExternalOp} from "../interfaces/IPurgeGameExternal.sol";
 interface IPurgeCoinJackpotView {
     function coinflipAmount(address player) external view returns (uint256);
     function coinflipTop(uint24 lvl) external view returns (address player, uint96 score);
-    function biggestLuckbox() external view returns (address player, uint96 score);
-    function playerLuckbox(address player) external view returns (uint256);
     function affiliateProgram() external view returns (address);
 }
 

@@ -108,6 +108,7 @@ contract PurgeGame is PurgeGameStorage {
     bytes32 private immutable vrfKeyHash; // VRF key hash
     uint256 private immutable vrfSubscriptionId; // VRF subscription identifier
     address private immutable linkToken; // LINK token contract for top-ups
+    // Trusted collaborators: coin/nft/trophies/jackpots/modules are expected to be non-reentrant and non-malicious.
 
     uint256 private constant DEPLOY_IDLE_TIMEOUT = (365 days * 5) / 2; // 2.5 years
     uint48 private constant LEVEL_START_SENTINEL = type(uint48).max;
@@ -373,8 +374,7 @@ contract PurgeGame is PurgeGameStorage {
         if (lst == LEVEL_START_SENTINEL) {
             uint48 deployTs = deployTimestamp;
             if (
-                deployTs != 0 &&
-                uint256(ts) >= uint256(deployTs) + DEPLOY_IDLE_TIMEOUT // uint256 to avoid uint48 overflow
+                deployTs != 0 && uint256(ts) >= uint256(deployTs) + DEPLOY_IDLE_TIMEOUT // uint256 to avoid uint48 overflow
             ) {
                 _drainToBonds(day);
                 gameState = 0;
@@ -830,6 +830,7 @@ contract PurgeGame is PurgeGameStorage {
 
     /// @notice Claim the caller’s accrued ETH winnings (affiliates, jackpots, endgame payouts).
     /// @dev Leaves a 1 wei sentinel so subsequent credits remain non-zero -> cheaper SSTORE.
+    ///      burnCoin runs before zeroing state and assumes the PURGE coin cannot reenter or grief claims.
     function claimWinnings() external {
         address player = msg.sender;
         uint256 amount = claimableWinnings[player];
@@ -947,6 +948,7 @@ contract PurgeGame is PurgeGameStorage {
             uint24 total = uint24((prevData >> ETH_LEVEL_COUNT_SHIFT) & MINT_MASK_24);
             uint24 streak = uint24((prevData >> ETH_LEVEL_STREAK_SHIFT) & MINT_MASK_24);
             bool sameLevel = prevLevel == lvl;
+            bool newCentury = (prevLevel / 100) != (lvl / 100);
             uint256 levelUnitsBefore = (prevData >> ETH_LEVEL_UNITS_SHIFT) & MINT_MASK_16;
             if (!sameLevel && prevLevel + 1 != lvl) {
                 levelUnitsBefore = 0;
@@ -982,7 +984,9 @@ contract PurgeGame is PurgeGameStorage {
                 return coinReward;
             }
 
-            if (total < type(uint24).max) {
+            if (newCentury) {
+                total = 1;
+            } else if (total < type(uint24).max) {
                 unchecked {
                     total = uint24(total + 1);
                 }
@@ -1114,7 +1118,11 @@ contract PurgeGame is PurgeGameStorage {
 
         address jackpotsAddr = jackpots;
         if (jackpotsAddr == address(0)) revert E();
-        (uint256 trophyPoolDelta, uint256 returnWei) = IPurgeJackpots(jackpotsAddr).runDecimatorJackpot(pool, lvl, rngWord);
+        (uint256 trophyPoolDelta, uint256 returnWei) = IPurgeJackpots(jackpotsAddr).runDecimatorJackpot(
+            pool,
+            lvl,
+            rngWord
+        );
 
         if (trophyPoolDelta != 0) {
             trophyPool += trophyPoolDelta;
@@ -1146,7 +1154,12 @@ contract PurgeGame is PurgeGameStorage {
 
     function _calcPrizePoolForJackpot(uint24 lvl, uint256 rngWord) internal returns (uint256 effectiveWei) {
         (bool ok, bytes memory data) = jackpotModule.delegatecall(
-            abi.encodeWithSelector(IPurgeGameJackpotModule.calcPrizePoolForJackpot.selector, lvl, rngWord, address(steth))
+            abi.encodeWithSelector(
+                IPurgeGameJackpotModule.calcPrizePoolForJackpot.selector,
+                lvl,
+                rngWord,
+                address(steth)
+            )
         );
         if (!ok) revert E();
         return abi.decode(data, (uint256));
@@ -1202,7 +1215,6 @@ contract PurgeGame is PurgeGameStorage {
             rngLockedFlag = true;
             rngRequestTime = uint48(block.timestamp);
         } catch {}
-
         uint256 stBal = steth.balanceOf(address(this));
         if (stBal != 0) {
             if (!steth.transfer(bondsAddr, stBal)) revert E();
@@ -1359,6 +1371,7 @@ contract PurgeGame is PurgeGameStorage {
             IPurgeBonds(bonds).setTransfersLocked(true, day);
         }
 
+        // Hard revert if Chainlink request fails; this intentionally halts game progress until VRF funding/config is fixed.
         uint256 id = vrfCoordinator.requestRandomWords(
             VRFRandomWordsRequest({
                 keyHash: vrfKeyHash,
@@ -1387,7 +1400,7 @@ contract PurgeGame is PurgeGameStorage {
         rngRequestTime = 0;
     }
 
-    /// @notice Pay PURGE to nudge the next RNG word by +1; cost scales +10% per queued nudge and resets after fulfillment.
+    /// @notice Pay PURGE to nudge the next RNG word by +1; cost scales +50% per queued nudge and resets after fulfillment.
     /// @dev Only available while RNG is unlocked (before a VRF request is in-flight).
     function reverseFlip() external {
         if (rngLockedFlag) revert RngLocked();
@@ -1553,6 +1566,7 @@ contract PurgeGame is PurgeGameStorage {
         for (uint16 traitId; traitId < 256; ) {
             uint32 incoming = localCounts[traitId];
             if (incoming != 0) {
+                // Assumes the first slice will touch all traits to overwrite stale counts from the previous level.
                 if (startingSlice) {
                     remainingCounts[traitId] = incoming;
                 } else {
@@ -1597,6 +1611,7 @@ contract PurgeGame is PurgeGameStorage {
     }
 
     function _consumeTrait(uint8 traitId, uint32 endLevel) private returns (bool reachedZero) {
+        // Trait counts are expected to be seeded for the current level; hitting zero here should only occur via purge flow.
         uint32 stored = traitRemaining[traitId];
 
         unchecked {
