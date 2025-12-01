@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {IPurgeGame} from "../interfaces/IPurgeGame.sol";
+import {IPurgeAffiliate} from "../interfaces/IPurgeAffiliate.sol";
 import {IPurgeGameTrophies} from "../PurgeGameTrophies.sol";
 import {IPurgeJackpots} from "../interfaces/IPurgeJackpots.sol";
 import {PurgeGameExternalOp} from "../interfaces/IPurgeGameExternal.sol";
@@ -11,11 +12,7 @@ interface IPurgeCoinJackpotView {
     function coinflipTop(uint24 lvl) external view returns (address player, uint96 score);
     function biggestLuckbox() external view returns (address player, uint96 score);
     function playerLuckbox(address player) external view returns (uint256);
-    function bonds() external view returns (address);
-}
-
-interface IPurgeBonds {
-    function sampleBondOwners(uint256 entropy) external view returns (address[8] memory owners);
+    function affiliateProgram() external view returns (address);
 }
 
 /**
@@ -217,13 +214,12 @@ contract PurgeJackpots is IPurgeJackpots {
     )
     {
         uint256 P = poolWei;
-        // Max distinct winners: 1 (top) + 1 (pick) + 4 (bonds) + 3 (retro) + 50 + 50 (scatter buckets) = 109.
+        // Max distinct winners: 1 (top) + 1 (pick) + 4 (affiliate draw) + 3 (retro) + 50 + 50 (scatter buckets) = 109.
         address[] memory tmpW = new address[](112);
         uint256[] memory tmpA = new uint256[](112);
         uint256 n;
         uint256 toReturn;
         bool trophyAwarded;
-        address bondsAddr = coin.bonds();
 
         uint256 entropy = rngWord;
         uint256 salt;
@@ -372,41 +368,141 @@ contract PurgeJackpots is IPurgeJackpots {
         }
 
         {
-            uint256[4] memory bondPrizes = [(P * 35) / 1000, (P * 35) / 1000, (P * 15) / 1000, (P * 15) / 1000];
-            IPurgeBonds bonds = IPurgeBonds(bondsAddr);
+            uint256[4] memory affiliatePrizes = [(P * 5) / 100, (P * 3) / 100, (P * 2) / 100, uint256(0)];
+            uint256 affiliateSlice;
+            unchecked {
+                affiliateSlice = affiliatePrizes[0] + affiliatePrizes[1] + affiliatePrizes[2] + affiliatePrizes[3];
+            }
 
             unchecked {
                 ++salt;
             }
             entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
-            address[8] memory owners = bonds.sampleBondOwners(entropy);
 
-            uint8 idx;
-            for (uint8 prizeIdx; prizeIdx < 4; ) {
-                uint256 prize = bondPrizes[prizeIdx];
-                bool credited;
-                while (idx < 8) {
-                    address candidate = owners[idx];
-                    unchecked {
-                        ++idx;
+            address affiliateAddr = coin.affiliateProgram();
+            if (affiliateAddr == address(0)) {
+                toReturn += affiliateSlice;
+            } else {
+                IPurgeAffiliate affiliate = IPurgeAffiliate(affiliateAddr);
+                address[20] memory candidates;
+                uint256[20] memory candidateScores;
+                uint8 candidateCount;
+
+                // Collect the top affiliate from each of the prior 20 levels (deduped).
+                for (uint8 offset = 1; offset <= 20; ) {
+                    if (lvl <= offset) break;
+                    (address player, ) = affiliate.affiliateTop(uint24(lvl - offset));
+                    if (player != address(0)) {
+                        bool seen;
+                        for (uint8 i; i < candidateCount; ) {
+                            if (candidates[i] == player) {
+                                seen = true;
+                                break;
+                            }
+                            unchecked {
+                                ++i;
+                            }
+                        }
+                        if (!seen) {
+                            candidates[candidateCount] = player;
+                            candidateScores[candidateCount] = _bafScore(player, lvl);
+                            unchecked {
+                                ++candidateCount;
+                            }
+                        }
                     }
-                    if (candidate == address(0)) continue;
-                    uint256 scoreHint = _bafScore(candidate, lvl);
-                    if (_eligible(candidate, scoreHint, true)) {
-                        credited = _creditOrRefund(candidate, prize, tmpW, tmpA, n, scoreHint, true);
-                        if (credited) {
+                    unchecked {
+                        ++offset;
+                    }
+                }
+
+                // Shuffle candidate order to randomize draws.
+                for (uint8 i = candidateCount; i > 1; ) {
+                    unchecked {
+                        ++salt;
+                    }
+                    entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
+                    uint256 j = entropy % i;
+                    uint8 idxA = i - 1;
+                    address addrTmp = candidates[idxA];
+                    candidates[idxA] = candidates[j];
+                    candidates[j] = addrTmp;
+                    uint256 scoreTmp = candidateScores[idxA];
+                    candidateScores[idxA] = candidateScores[j];
+                    candidateScores[j] = scoreTmp;
+                    unchecked {
+                        --i;
+                    }
+                }
+
+                address[4] memory affiliateWinners;
+                uint256[4] memory affiliateScores;
+                uint8 winnerCount;
+
+                for (uint8 i; i < candidateCount && winnerCount < 4; ) {
+                    address cand = candidates[i];
+                    uint256 scoreHint = candidateScores[i];
+                    if (cand != address(0) && _eligible(cand, scoreHint, true)) {
+                        affiliateWinners[winnerCount] = cand;
+                        affiliateScores[winnerCount] = scoreHint;
+                        unchecked {
+                            ++winnerCount;
+                        }
+                    }
+                    unchecked {
+                        ++i;
+                    }
+                }
+
+                if (winnerCount < 3) {
+                    toReturn += affiliateSlice;
+                } else {
+                    // Sort by BAF score so higher scores take the larger cuts (5/3/2/0%).
+                    for (uint8 i; i < winnerCount; ) {
+                        uint8 bestIdx = i;
+                        for (uint8 j = i + 1; j < winnerCount; ) {
+                            if (affiliateScores[j] > affiliateScores[bestIdx]) {
+                                bestIdx = j;
+                            }
+                            unchecked {
+                                ++j;
+                            }
+                        }
+                        if (bestIdx != i) {
+                            address wTmp = affiliateWinners[i];
+                            affiliateWinners[i] = affiliateWinners[bestIdx];
+                            affiliateWinners[bestIdx] = wTmp;
+                            uint256 sTmp = affiliateScores[i];
+                            affiliateScores[i] = affiliateScores[bestIdx];
+                            affiliateScores[bestIdx] = sTmp;
+                        }
+                        unchecked {
+                            ++i;
+                        }
+                    }
+
+                    uint256 paid;
+                    uint8 maxWinners = winnerCount;
+                    if (maxWinners > 4) {
+                        maxWinners = 4;
+                    }
+                    for (uint8 i; i < maxWinners; ) {
+                        uint256 prize = affiliatePrizes[i];
+                        paid += prize;
+                        if (prize != 0) {
+                            tmpW[n] = affiliateWinners[i];
+                            tmpA[n] = prize;
                             unchecked {
                                 ++n;
                             }
                         }
-                        break;
+                        unchecked {
+                            ++i;
+                        }
                     }
-                }
-                if (!credited && prize != 0) {
-                    toReturn += prize;
-                }
-                unchecked {
-                    ++prizeIdx;
+                    if (paid < affiliateSlice) {
+                        toReturn += affiliateSlice - paid;
+                    }
                 }
             }
         }

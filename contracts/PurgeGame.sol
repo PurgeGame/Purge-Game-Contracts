@@ -30,6 +30,8 @@ interface IPurgeBonds {
     ) external payable;
     function resolvePendingBonds(uint256 maxBonds) external;
     function resolvePending() external view returns (bool);
+    function notifyGameOver() external;
+    function finalizeShutdown(uint256 maxIds) external returns (uint256 processedIds, uint256 burned, bool complete);
     function setTransfersLocked(bool locked, uint48 rngDay) external;
     function stakeRateBps() external view returns (uint16);
 }
@@ -1183,6 +1185,9 @@ contract PurgeGame is PurgeGameStorage {
         address bondsAddr = bonds;
         if (bondsAddr == address(0)) return;
 
+        IPurgeBonds bondContract = IPurgeBonds(bondsAddr);
+        bondContract.notifyGameOver();
+
         uint256 stBal = steth.balanceOf(address(this));
         if (stBal != 0) {
             if (!steth.transfer(bondsAddr, stBal)) revert E();
@@ -1190,7 +1195,6 @@ contract PurgeGame is PurgeGameStorage {
         }
 
         uint256 ethBal = address(this).balance;
-        IPurgeBonds bondContract = IPurgeBonds(bondsAddr);
         bondContract.payBonds{value: ethBal}(0, address(steth), day, 0, 0, 0);
     }
 
@@ -1404,6 +1408,19 @@ contract PurgeGame is PurgeGameStorage {
         if (skim != 0 || bondMint != 0 || bondContract.resolvePending()) {
             bondContract.payBonds{value: 0}(bondMint, address(steth), day, rngWord, 0, 50);
         }
+    }
+
+    /// @notice After the liveness drain has notified the bonds contract, permissionlessly burn remaining unmatured bonds.
+    /// @param maxIds Number of token ids to scan in this call (0 = default chunk size in bonds).
+    /// @return processedIds Token ids scanned.
+    /// @return burned Bonds burned.
+    /// @return complete True if shutdown burning is finished.
+    function finalizeBondShutdown(
+        uint256 maxIds
+    ) external returns (uint256 processedIds, uint256 burned, bool complete) {
+        address bondsAddr = bonds;
+        if (bondsAddr == address(0)) revert E();
+        return IPurgeBonds(bondsAddr).finalizeShutdown(maxIds);
     }
 
     function _requestRng(uint8 gameState_, uint8 phase_, uint24 lvl, uint48 day) private {

@@ -57,6 +57,8 @@ contract PurgeBonds {
     error TransferBlocked();
     error InvalidRate();
     error AlreadyConfigured();
+    error GameOver();
+    error ShutdownPendingResolution();
 
     // ---------------------------------------------------------------------
     // Events
@@ -70,6 +72,8 @@ contract PurgeBonds {
     event BondsPaid(uint256 ethAdded, uint256 stEthAdded, uint256 bondPoolAdded);
     event BondResolved(uint256 indexed tokenId, bool win, uint16 chanceBps, uint256 roll);
     event BondBurned(uint256 indexed tokenId);
+    event GameShutdown(uint256 burnCursor);
+    event ShutdownBurned(uint256 processed, uint256 burned, bool complete);
 
     // ---------------------------------------------------------------------
     // State
@@ -101,6 +105,8 @@ contract PurgeBonds {
     uint256 public stEthPool;
     uint256 public bondPool;
     bool public purchasesEnabled = true;
+    bool public gameOver;
+    uint256 public shutdownBurnCursor;
 
     uint256 private nextId = 1;
     uint256 private nextClaimable = 1;
@@ -439,6 +445,27 @@ contract PurgeBonds {
         _setGame(game_);
     }
 
+    /// @notice Permanently enter shutdown mode after the game triggers its liveness drain.
+    function notifyGameOver() external onlyOwnerOrGame {
+        if (!gameOver) {
+            gameOver = true;
+            purchasesEnabled = false;
+            decayPaused = true;
+            transfersLocked = true;
+            transfersLockedAt = uint64(block.timestamp);
+        }
+
+        if (shutdownBurnCursor == 0) {
+            uint256 cursor = lowestUnresolved;
+            if (cursor == 0) {
+                cursor = 1;
+            }
+            shutdownBurnCursor = cursor;
+        }
+
+        emit GameShutdown(shutdownBurnCursor);
+    }
+
     /// @notice Send PURGE held by this contract, excluding the reserved bondCoin balance.
     function sendCoin(address to, uint256 amount) external onlyOwner {
         if (to == address(0)) revert ZeroAddress();
@@ -490,6 +517,7 @@ contract PurgeBonds {
     }
 
     function setPurchasesEnabled(bool enabled) external onlyOwner {
+        if (gameOver && enabled) revert GameOver();
         purchasesEnabled = enabled;
         decayPaused = !enabled;
         if (enabled) {
@@ -512,6 +540,20 @@ contract PurgeBonds {
     function setStakeRateBps(uint16 rateBps) external onlyOwner {
         if (rateBps < 2500 || rateBps > 15_000) revert InvalidRate(); // 25% - 150%
         stakeRateBps = rateBps;
+    }
+
+    /// @notice After shutdown, burn remaining unmatured bonds to release excess ETH/stETH.
+    /// @param maxIds Max token ids to scan in this call (0 = default chunk).
+    /// @return processedIds Count of token ids processed.
+    /// @return burned Count of bonds burned.
+    /// @return complete True if no ids remain to scan.
+    function finalizeShutdown(
+        uint256 maxIds
+    ) external onlyOwnerOrGame returns (uint256 processedIds, uint256 burned, bool complete) {
+        if (!gameOver) revert GameOver();
+        if (resolvePending || pendingRngDay != 0 || pendingRngWord != 0) revert ShutdownPendingResolution();
+        (processedIds, burned, complete) = _burnUnmaturedFromCursor(maxIds);
+        emit ShutdownBurned(processedIds, burned, complete);
     }
 
     /// @notice Hook from the PURGE token to credit freshly minted bond payouts.
@@ -1089,135 +1131,6 @@ contract PurgeBonds {
         win = roll < chanceBps;
     }
 
-    /// @notice Sample 8 bond owners using entropy; weighted by per-bond win chance with fixed-work selection.
-    function sampleBondOwners(uint256 entropy) external view returns (address[8] memory owners) {
-        uint256 maxId = nextId;
-        if (maxId <= 1) {
-            return owners;
-        }
-        unchecked {
-            maxId -= 1;
-        }
-
-        uint256 state = entropy;
-        uint8 filled;
-        uint256 attempts;
-        uint256 attemptCap = 160; // bound gas: ~160 iterations keeps bond sampling well under 1.5M
-        uint256 boostAt = (attemptCap * 3) / 4; // boost weights after ~75% of the roll budget
-
-        while (filled < 8 && attempts < attemptCap) {
-            state = _lcgStep(state);
-            uint256 candidate = (state % maxId) + 1;
-            address bondOwner = _ownerOf[candidate];
-            if (bondOwner == address(0) || _isInactive(candidate) || claimed[candidate]) {
-                unchecked {
-                    ++attempts;
-                }
-                continue;
-            }
-
-            uint256 chance = claimReady[candidate] ? 10_000 : uint256(winChanceBps[candidate]);
-            if (chance == 0) {
-                unchecked {
-                    ++attempts;
-                }
-                continue;
-            }
-
-            bool isStaked = staked[candidate];
-            if (claimReady[candidate] && !isStaked) {
-                chance = (chance * 7) / 10; // matured, unstaked discount
-            } else if (!claimReady[candidate] && isStaked) {
-                chance = (chance * 3) / 2; // boost unstaked-in-progress
-                if (chance > 10_000) chance = 10_000;
-            }
-
-            if (attempts >= boostAt) {
-                chance *= 3;
-                if (chance > 10_000) chance = 10_000;
-            }
-
-            if ((state % 10_000) < chance) {
-                owners[filled] = bondOwner;
-                unchecked {
-                    ++filled;
-                }
-            }
-
-            unchecked {
-                ++attempts;
-            }
-        }
-    }
-
-    /// @notice Sample a random bond owner using entropy; returns zero address when no owner found within attempts.
-    function sampleBondOwner(uint256 entropy) external view returns (uint256 tokenId, address holder) {
-        uint256 maxId = nextId;
-        if (maxId <= 1) {
-            return (0, address(0));
-        }
-        unchecked {
-            maxId -= 1;
-        }
-        return _sampleBondOwnerWithId(entropy, maxId);
-    }
-
-    function _sampleWeightedOwner(uint256 entropy, uint256 maxId) private view returns (address holder) {
-        for (uint8 i; i < 24; ) {
-            entropy = _lcgStep(entropy);
-            uint256 candidate = (entropy % maxId) + 1;
-            address bondOwner = _ownerOf[candidate];
-            if (bondOwner != address(0) && !_isInactive(candidate) && !claimed[candidate]) {
-                uint256 chance = claimReady[candidate] ? 10_000 : uint256(winChanceBps[candidate]);
-                if (chance == 0) {
-                    unchecked {
-                        ++i;
-                    }
-                    continue;
-                }
-                // Discount unstaked bonds by 30% when matured; staked keep full weight.
-                if (claimReady[candidate] && !staked[candidate]) {
-                    chance = (chance * 7) / 10; // 70% weight
-                } else if (!claimReady[candidate] && staked[candidate]) {
-                    chance = (chance * 3) / 2;
-                    if (chance > 10_000) chance = 10_000;
-                }
-                if ((entropy % 10_000) < chance) {
-                    return bondOwner;
-                }
-            }
-            unchecked {
-                ++i;
-            }
-        }
-        return address(0);
-    }
-
-    function _lcgStep(uint256 state) private pure returns (uint256) {
-        unchecked {
-            return (state * 0xDA942042E4DD58B5D5) + 0x9E3779B97F4A7C15;
-        }
-    }
-
-    function _sampleBondOwnerWithId(uint256 entropy, uint256 maxId) private view returns (uint256 tokenId, address holder) {
-        address found = _sampleWeightedOwner(entropy, maxId);
-        if (found == address(0)) {
-            return (0, address(0));
-        }
-        // Best-effort to recover a token id for the chosen owner.
-        for (uint8 i; i < 24; ) {
-            entropy = _lcgStep(entropy);
-            uint256 candidate = (entropy % maxId) + 1;
-            if (_ownerOf[candidate] == found) {
-                return (candidate, found);
-            }
-            unchecked {
-                ++i;
-            }
-        }
-        return (0, address(0));
-    }
-
     function _resolveBond(uint256 tokenId, uint256 rngWord) private returns (bool win) {
         uint256 basePrice = _basePrice(riskOf[tokenId]);
         uint256 weight = _coinWeightMultiplier(tokenId);
@@ -1239,6 +1152,84 @@ contract PurgeBonds {
             // Losing bonds are accounted and burned in batch when the resolve cursor advances.
         }
         emit BondResolved(tokenId, win, chance, roll);
+    }
+
+    function _burnUnmaturedFromCursor(
+        uint256 maxIds
+    ) private returns (uint256 processed, uint256 burned, bool complete) {
+        uint256 tid = shutdownBurnCursor;
+        if (tid == 0) {
+            tid = lowestUnresolved;
+            if (tid == 0) {
+                tid = 1;
+            }
+        }
+
+        uint256 maxId = nextId - 1;
+        if (maxId == 0 || tid > maxId) {
+            shutdownBurnCursor = tid;
+            return (0, 0, true);
+        }
+
+        uint256 limit = maxIds == 0 ? 500 : maxIds;
+        address ownerCursor;
+        uint256 ownerBurns;
+
+        while (processed < limit && tid <= maxId) {
+            if (!claimReady[tid] && !claimed[tid]) {
+                address holder = _ownerOf[tid];
+                if (holder != address(0)) {
+                    uint256 basePrice = _basePrice(riskOf[tid]);
+                    totalEthOwed -= basePrice;
+                    totalCoinOwed -= basePrice * _coinWeightMultiplier(tid);
+
+                    claimed[tid] = true;
+
+                    if (ownerCursor != holder) {
+                        if (ownerCursor != address(0) && ownerBurns != 0) {
+                            _burnedBalance[ownerCursor] += ownerBurns;
+                        }
+                        ownerCursor = holder;
+                        ownerBurns = 1;
+                    } else {
+                        unchecked {
+                            ++ownerBurns;
+                        }
+                    }
+
+                    unchecked {
+                        ++burned;
+                    }
+                }
+            }
+
+            unchecked {
+                ++processed;
+                ++tid;
+            }
+        }
+
+        if (ownerCursor != address(0) && ownerBurns != 0) {
+            _burnedBalance[ownerCursor] += ownerBurns;
+        }
+        if (burned != 0) {
+            burnedCount += burned;
+        }
+
+        shutdownBurnCursor = tid;
+        if (nextClaimable < tid) {
+            nextClaimable = tid;
+        }
+        if (tid > lowestUnresolved) {
+            lowestUnresolved = tid;
+        }
+        complete = tid > maxId;
+        if (complete) {
+            uint256 minted = nextId - 1;
+            if (burnedCount >= minted) {
+                stEthPool = 0;
+            }
+        }
     }
 
     function _burnInactiveUpTo(uint256 targetId) private {
