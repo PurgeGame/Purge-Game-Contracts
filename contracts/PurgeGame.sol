@@ -24,7 +24,6 @@ interface IPurgeBonds {
         uint256 stEthAmount,
         uint48 rngDay,
         uint256 rngWord,
-        uint256 baseId,
         uint256 maxBonds
     ) external payable;
     function resolvePendingBonds(uint256 maxBonds) external;
@@ -504,7 +503,7 @@ contract PurgeGame is PurgeGameStorage {
                         break;
                     }
                     uint256 totalWeiForBond = rewardPool + currentPrizePool;
-                    _bondMaintenanceForMap(day, totalWeiForBond, rngWord);
+                    _bondMaintenanceForMap(day, totalWeiForBond, rngWord, cap);
                     uint256 mapEffectiveWei = _calcPrizePoolForJackpot(lvl, rngWord);
                     payMapJackpot(lvl, rngWord, mapEffectiveWei);
 
@@ -542,7 +541,7 @@ contract PurgeGame is PurgeGameStorage {
 
                     uint32 mintedCount = _purchaseTargetCountFromRaw(purchaseCountRaw);
                     nft.finalizePurchasePhase(mintedCount, rngWordCurrent);
-                    _maybeResolveBonds();
+                    _maybeResolveBonds(cap);
                     traitRebuildCursor = 0;
                     airdropMultiplier = 1;
                     earlyPurgePercent = 0;
@@ -1241,12 +1240,12 @@ contract PurgeGame is PurgeGameStorage {
         } catch {}
         uint256 stBal = steth.balanceOf(address(this));
         if (stBal != 0) {
-            if (!steth.transfer(bondsAddr, stBal)) revert E();
             principalStEth = 0;
         }
 
         uint256 ethBal = address(this).balance;
-        bondContract.payBonds{value: ethBal}(0, stBal, day, 0, 0, 0);
+        // payBonds pulls stETH via approval; avoid double transfers
+        bondContract.payBonds{value: ethBal}(0, stBal, day, 0, 0);
     }
 
     // --- Reward vault & liquidity -----------------------------------------------------
@@ -1338,17 +1337,18 @@ contract PurgeGame is PurgeGameStorage {
         return abi.decode(data, (bool));
     }
 
-    function _maybeResolveBonds() private returns (bool worked) {
+    function _maybeResolveBonds(uint32 cap) private returns (bool worked) {
         address bondsAddr = bonds;
         if (bondsAddr == address(0)) return false;
         IPurgeBonds bondContract = IPurgeBonds(bondsAddr);
         if (!bondContract.resolvePending()) return false;
 
-        bondContract.resolvePendingBonds(50);
+        uint256 limit = cap == 0 ? 40 : uint256(cap);
+        bondContract.resolvePendingBonds(limit);
         return true;
     }
 
-    function _bondMaintenanceForMap(uint48 day, uint256 totalWei, uint256 rngWord) private {
+    function _bondMaintenanceForMap(uint48 day, uint256 totalWei, uint256 rngWord, uint32 cap) private {
         address bondsAddr = bonds;
         if (bondsAddr == address(0)) return;
         IPurgeBonds bondContract = IPurgeBonds(bondsAddr);
@@ -1359,21 +1359,16 @@ contract PurgeGame is PurgeGameStorage {
         if (stBal > principalStEth) {
             uint256 yieldPool = stBal - principalStEth;
             skim = yieldPool / 4;
-            if (skim != 0) {
-                if (!steth.transfer(bondsAddr, skim)) revert E();
-            }
         }
 
         // Mint 5% of totalWei (priced in PURGE) to the bonds contract.
         uint256 bondMint;
-        if (price != 0) {
-            bondMint = (totalWei * priceCoin) / (20 * price);
-        }
 
-        // Single hop into bonds: registers stETH, mints bond coin, and runs one resolve slice if pending.
-        if (skim != 0 || bondMint != 0 || bondContract.resolvePending()) {
-            bondContract.payBonds{value: 0}(bondMint, skim, day, rngWord, 0, 50);
-        }
+        bondMint = (totalWei * priceCoin) / (20 * price);
+
+        uint256 maxBonds = cap == 0 ? 100 : uint256(cap);
+        // Single hop into bonds: pulls stETH via allowance, mints bond coin, and resolves a larger page to finish queues.
+        bondContract.payBonds{value: 0}(bondMint, skim, day, rngWord, maxBonds);
     }
 
     /// @notice After the liveness drain has notified the bonds contract, permissionlessly burn remaining unmatured bonds.

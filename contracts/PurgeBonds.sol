@@ -137,8 +137,8 @@ contract PurgeBonds {
     uint256 private constant COIN_WEIGHT_UNMARKETABLE = 5; // Staked (non-transferable) weight
     uint256 private constant COIN_WEIGHT_MARKETABLE = 1; // Unstaked (transferable) weight
     uint256 private constant MIN_BASE_PRICE = 0.02 ether; // Minimum bond size
-    uint256 private constant AUTO_RESOLVE_BATCH = 50;
-    uint256 private constant GAS_LIMITED_RESOLVE_MAX = 600;
+    uint256 private constant AUTO_RESOLVE_BATCH = 100;
+    uint256 private constant GAS_LIMITED_RESOLVE_MAX = 150;
     uint256 private constant SALES_BUMP_NUMERATOR = 1005; // +0.5% price per threshold
     uint256 private constant SALES_BUMP_DENOMINATOR = 1000;
 
@@ -244,7 +244,6 @@ contract PurgeBonds {
      * @param stEthAmount Amount of stETH being credited by the caller.
      * @param rngDay The game day to fetch RNG for (if not provided via `rngWord`).
      * @param rngWord The random seed for resolution (overrides `rngDay` if non-zero).
-     * @param baseId Explicit start ID for resolution (0 = auto).
      * @param maxBonds Resolution batch size limit.
      */
     function payBonds(
@@ -252,10 +251,10 @@ contract PurgeBonds {
         uint256 stEthAmount,
         uint48 rngDay,
         uint256 rngWord,
-        uint256 baseId,
         uint256 maxBonds
     ) external payable onlyGame {
         // 1. Ingest Coin (PURGE)
+        bool pending = resolvePending;
 
         if (coinAmount != 0) {
             address coin = coinToken;
@@ -271,21 +270,27 @@ contract PurgeBonds {
             IERC20Minimal(stEthToken).transferFrom(msg.sender, address(this), stEthAmount);
             stAdded = stEthAmount;
         }
-        payoutObligation += msg.value + stAdded;
 
-        emit BondsPaid(msg.value, stAdded, coinAmount);
+        uint256 budget = msg.value + stAdded;
+        if (budget != 0) {
+            payoutObligation += budget;
+        }
+
+        if (budget != 0 || coinAmount != 0) {
+            emit BondsPaid(msg.value, stAdded, coinAmount);
+        }
 
         // 3. Schedule Resolution
-        uint256 budget = msg.value + stAdded;
-        if (!resolvePending && budget != 0) {
-            uint256 startId = _resolveStart(baseId);
+        if (!pending && budget != 0) {
+            uint256 startId = _resolveStart();
             if (startId != 0) {
                 _scheduleResolve(startId, rngDay, rngWord, maxBonds, budget);
+                pending = true;
             }
         }
 
         // 5. Execute Resolution Batch (if ready)
-        if (resolvePending) {
+        if (pending) {
             if (pendingRngWord == 0 && pendingRngDay != 0) {
                 uint256 fetched = IPurgeGameLike(game).rngWordForDay(pendingRngDay);
                 if (fetched != 0) {
@@ -293,7 +298,7 @@ contract PurgeBonds {
                 }
             }
             if (pendingRngWord != 0) {
-                _resolvePendingInternal(AUTO_RESOLVE_BATCH, false);
+                _resolvePendingInternal(_resolveLimit(maxBonds), false);
             }
         }
     }
@@ -989,23 +994,18 @@ contract PurgeBonds {
         return _coinWeightMultiplier(packed) * 1 ether;
     }
 
-    function _resolveStart(uint256 baseId) private returns (uint256 startId) {
+    function _resolveStart() private returns (uint256 startId) {
         uint256 floor = lowestUnresolved;
         if (floor == 0) floor = 1;
 
-        if (baseId != 0) {
-            if (baseId < floor) baseId = floor;
-            resolveBaseId = baseId;
-            return baseId;
-        }
         startId = resolveBaseId;
         if (startId == 0 || startId < floor) {
             startId = nextClaimable;
             if (startId == 0 || startId < floor) {
                 startId = floor;
             }
-            resolveBaseId = startId;
         }
+        resolveBaseId = startId;
     }
 
     // The Engine: Resolves a batch of bonds.
