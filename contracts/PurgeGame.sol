@@ -503,7 +503,9 @@ contract PurgeGame is PurgeGameStorage {
                         break;
                     }
                     uint256 totalWeiForBond = rewardPool + currentPrizePool;
-                    _bondMaintenanceForMap(day, totalWeiForBond, rngWord, cap);
+                    if (_bondMaintenanceForMap(day, totalWeiForBond, rngWord, cap)) {
+                        break; // bond batch consumed this tick; rerun advanceGame to continue
+                    }
                     uint256 mapEffectiveWei = _calcPrizePoolForJackpot(lvl, rngWord);
                     payMapJackpot(lvl, rngWord, mapEffectiveWei);
 
@@ -1348,10 +1350,23 @@ contract PurgeGame is PurgeGameStorage {
         return true;
     }
 
-    function _bondMaintenanceForMap(uint48 day, uint256 totalWei, uint256 rngWord, uint32 cap) private {
+    function _bondMaintenanceForMap(uint48 day, uint256 totalWei, uint256 rngWord, uint32 cap) private returns (bool) {
         address bondsAddr = bonds;
-        if (bondsAddr == address(0)) return;
+        if (bondsAddr == address(0)) return false;
         IPurgeBonds bondContract = IPurgeBonds(bondsAddr);
+
+        uint256 maxBonds = cap == 0 ? 100 : uint256(cap);
+        // If a batch is already pending, just resolve more and skip new funding.
+        if (bondContract.resolvePending()) {
+            // Resolve existing batch in one hop (no new funding).
+            bondContract.payBonds{value: 0}(0, 0, day, rngWord, maxBonds);
+            return true;
+        }
+
+        // Only fund once per level; subsequent calls act as resolve-only.
+        if (lastBondFundingLevel == level) {
+            return false;
+        }
 
         // Skim 25% of stETH yield to bonds and register it.
         uint256 stBal = steth.balanceOf(address(this));
@@ -1363,12 +1378,12 @@ contract PurgeGame is PurgeGameStorage {
 
         // Mint 5% of totalWei (priced in PURGE) to the bonds contract.
         uint256 bondMint;
-
         bondMint = (totalWei * priceCoin) / (20 * price);
 
-        uint256 maxBonds = cap == 0 ? 100 : uint256(cap);
         // Single hop into bonds: pulls stETH via allowance, mints bond coin, and resolves a larger page to finish queues.
         bondContract.payBonds{value: 0}(bondMint, skim, day, rngWord, maxBonds);
+        lastBondFundingLevel = level;
+        return (skim != 0 || bondMint != 0);
     }
 
     /// @notice After the liveness drain has notified the bonds contract, permissionlessly burn remaining unmatured bonds.

@@ -82,6 +82,9 @@ abstract contract PurgeGameStorage {
     uint32[256] internal traitRemaining; // remaining supply per trait id
     mapping(address => uint256) internal mintPacked_; // bit-packed mint history (see PurgeGame ETH_* constants for layout)
 
+    // Bond maintenance state
+    uint24 internal lastBondFundingLevel; // tracks the last level where bond funding was performed
+
     // ---------------------------------------------------------------------
     // RNG history
     // ---------------------------------------------------------------------
