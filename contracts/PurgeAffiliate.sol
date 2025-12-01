@@ -186,11 +186,17 @@ contract PurgeAffiliate {
         }
     }
     /// @notice Set the contract permitted to invoke `payAffiliate` directly (alongside the coin and bonds).
+    /// @dev Set-once: subsequent calls must repeat the existing payer address.
     function setPayer(address payer_) external {
         address coinAddr = address(coin);
-        if (msg.sender != bonds) revert OnlyAuthorized();
+        if (msg.sender != bonds && msg.sender != coinAddr) revert OnlyAuthorized();
         if (payer_ == address(0)) revert ZeroAddress();
-        payer = payer_;
+        address current = payer;
+        if (current == address(0)) {
+            payer = payer_;
+        } else if (current != payer_) {
+            revert AlreadyConfigured();
+        }
     }
 
     // ---------------------------------------------------------------------

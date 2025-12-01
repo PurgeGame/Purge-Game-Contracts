@@ -5,7 +5,6 @@ import {PurgeGameNFT} from "./PurgeGameNFT.sol";
 import {IPurgeGameTrophies, PURGE_TROPHY_KIND_STAKE} from "./PurgeGameTrophies.sol";
 import {PurgeAffiliate} from "./PurgeAffiliate.sol";
 import {IPurgeGame} from "./interfaces/IPurgeGame.sol";
-import {IPurgeRenderer} from "./interfaces/IPurgeRenderer.sol";
 import {IPurgeQuestModule, QuestInfo, PlayerQuestView} from "./interfaces/IPurgeQuestModule.sol";
 import {IPurgeJackpots} from "./interfaces/IPurgeJackpots.sol";
 
@@ -97,7 +96,6 @@ contract Purgecoin {
     IPurgeGameTrophies internal purgeGameTrophies;
     IPurgeQuestModule internal questModule;
     PurgeAffiliate public affiliateProgram;
-    bool private affiliateOverride;
     address public jackpots;
 
     uint24 internal stakeLevelComplete;
@@ -132,8 +130,10 @@ contract Purgecoin {
     uint128 public biggestFlipEver = 1_000_000_000;
     address internal bountyOwedTo;
     mapping(uint24 => uint48) internal stakeResolutionDay;
-    mapping(uint24 => bool) internal stakeTrophyAwarded;
+    mapping<uint24 => bool) internal stakeTrophyAwarded;
     address public immutable bonds;
+    address public immutable regularRenderer;
+    address public immutable trophyRenderer;
 
     // ---------------------------------------------------------------------
     // ERC20 state
@@ -219,10 +219,19 @@ contract Purgecoin {
     // ---------------------------------------------------------------------
     // Constructor
     // ---------------------------------------------------------------------
-    constructor(address bonds_) {
+    constructor(address bonds_, address affiliate_, address regularRenderer_, address trophyRenderer_) {
         if (bonds_ == address(0)) revert ZeroAddress();
         bonds = bonds_;
-        affiliateProgram = new PurgeAffiliate(bonds_);
+        regularRenderer = regularRenderer_;
+        trophyRenderer = trophyRenderer_;
+        if (affiliate_ != address(0)) {
+            affiliateProgram = PurgeAffiliate(affiliate_);
+            uint256 presaleTotal = affiliateProgram.presaleClaimableTotal();
+            if (presaleTotal != 0) {
+                presaleClaimableRemaining = presaleTotal;
+                _mint(address(this), presaleTotal);
+            }
+        }
         currentFlipDay = _currentDay();
         uint256 bondSeed = 2_000_000 * MILLION;
         _mint(bonds_, bondSeed);
@@ -265,6 +274,7 @@ contract Purgecoin {
 
     /// @notice Claim presale/early affiliate bonuses that were deferred to the affiliate contract.
     function claimPresaleAffiliateBonus() external {
+        if (address(affiliateProgram) == address(0)) revert ZeroAddress();
         uint256 amount = affiliateProgram.consumePresaleCoin(msg.sender);
         if (amount == 0) return;
         if (amount > presaleClaimableRemaining) revert Insufficient();
@@ -693,18 +703,16 @@ contract Purgecoin {
         emit StakeCreated(sender, targetLevel, risk, burnAmt);
     }
 
-    /// @notice Wire the game, NFT, renderers, and supporting modules using an address array.
-    /// @dev Order: [game, nft, trophies, regular renderer, trophy renderer, quest module, jackpots]; set-once per slot.
+    /// @notice Wire game, NFT, trophies, quest module, and jackpots using an address array.
+    /// @dev Order: [game, nft, trophies, quest module, jackpots]; set-once per slot.
     function wire(address[] calldata addresses) external {
         if (msg.sender != bonds) revert OnlyBonds();
 
         address game_ = addresses.length > 0 ? addresses[0] : address(0);
         address nft_ = addresses.length > 1 ? addresses[1] : address(0);
         address trophies_ = addresses.length > 2 ? addresses[2] : address(0);
-        address regularRenderer_ = addresses.length > 3 ? addresses[3] : address(0);
-        address trophyRenderer_ = addresses.length > 4 ? addresses[4] : address(0);
-        address questModule_ = addresses.length > 5 ? addresses[5] : address(0);
-        address jackpots_ = addresses.length > 6 ? addresses[6] : address(0);
+        address questModule_ = addresses.length > 3 ? addresses[3] : address(0);
+        address jackpots_ = addresses.length > 4 ? addresses[4] : address(0);
 
         if (game_ != address(0)) {
             address currentGame = address(purgeGame);
@@ -751,82 +759,12 @@ contract Purgecoin {
             }
         }
 
-        if (regularRenderer_ != address(0)) {
-            IPurgeRenderer(regularRenderer_).wireContracts(address(purgeGame), address(purgeGameNFT));
-        }
-        if (trophyRenderer_ != address(0)) {
-            IPurgeRenderer(trophyRenderer_).wireContracts(address(purgeGame), address(purgeGameNFT));
-        }
-        if (address(purgeGameNFT) != address(0) && address(purgeGameTrophies) != address(0)) {
-            address[] memory nftWire = new address[](2);
-            nftWire[0] = address(purgeGame);
-            nftWire[1] = address(purgeGameTrophies);
-            purgeGameNFT.wire(nftWire);
-
-            address[] memory trophyWire = new address[](2);
-            trophyWire[0] = address(purgeGame);
-            trophyWire[1] = address(this);
-            purgeGameTrophies.wireAndPrime(trophyWire, 1);
-        }
-        if (address(questModule) != address(0) && address(purgeGame) != address(0)) {
-            questModule.wireGame(address(purgeGame));
-        }
-        if (address(jackpots) != address(0)) {
-            address[] memory jackpotWire = new address[](3);
-            jackpotWire[0] = address(this);
-            jackpotWire[1] = address(purgeGame);
-            jackpotWire[2] = address(purgeGameTrophies);
-            IPurgeJackpots(jackpots).wire(jackpotWire);
-        }
-        _wireAffiliate(address(purgeGame), address(purgeGameTrophies));
-
         if (address(affiliateProgram) != address(0) && presaleClaimableRemaining == 0) {
             uint256 presaleTotal = affiliateProgram.presaleClaimableTotal();
             if (presaleTotal != 0) {
                 presaleClaimableRemaining = presaleTotal;
                 _mint(address(this), presaleTotal);
             }
-        }
-    }
-
-    /// @notice Wire the game, NFT, renderers, and supporting modules required by Purgecoin.
-    /// @dev Creator only; callable once.
-    /// @notice Deprecated overload kept for compatibility; forwards to array-based wiring.
-    function wire(
-        address game_,
-        address nft_,
-        address trophies_,
-        address regularRenderer_,
-        address trophyRenderer_,
-        address questModule_,
-        address jackpots_
-    ) external {
-        address[] memory arr = new address[](7);
-        arr[0] = game_;
-        arr[1] = nft_;
-        arr[2] = trophies_;
-        arr[3] = regularRenderer_;
-        arr[4] = trophyRenderer_;
-        arr[5] = questModule_;
-        arr[6] = jackpots_;
-        wire(arr);
-    }
-
-    function wireAffiliate(address affiliate_) external {
-        if (msg.sender != bonds || affiliateOverride) revert OnlyBonds();
-        if (affiliate_ == address(0)) revert ZeroAddress();
-        affiliateOverride = true;
-        affiliateProgram = PurgeAffiliate(affiliate_);
-        _wireAffiliate(address(purgeGame), address(purgeGameTrophies));
-    }
-
-    function _wireAffiliate(address game_, address trophies_) internal {
-        address affiliateAddr = address(affiliateProgram);
-        if (affiliateAddr == address(0)) return;
-        affiliateProgram.wire(address(this), game_, trophies_);
-        address payer = address(purgeGameNFT);
-        if (payer != address(0)) {
-            affiliateProgram.setPayer(payer);
         }
     }
 

@@ -26,7 +26,7 @@ struct PlayerQuestView {
 }
 
 interface IPurgeQuestModule {
-    function wireGame(address game) external;
+    function wire(address[] calldata addresses) external;
 
     function rollDailyQuest(uint48 day, uint256 entropy)
         external

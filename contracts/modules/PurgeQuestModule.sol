@@ -9,6 +9,7 @@ import "../interfaces/IPurgeGame.sol";
 /// @dev All entry points are coin-gated; randomness is supplied by the coin contract.
 contract PurgeQuestModule is IPurgeQuestModule {
     error OnlyCoin();
+    error AlreadyWired();
     error InvalidQuestDay();
     error InvalidEntropy();
 
@@ -97,16 +98,17 @@ contract PurgeQuestModule is IPurgeQuestModule {
         coin = coin_;
     }
 
-    /// @notice Wire the Purge game contract using an address array ([game]).
+    /// @notice Wire the Purge game contract using an address array ([game]); set-once per slot.
     function wire(address[] calldata addresses) external onlyCoin {
         address gameAddr = addresses.length > 0 ? addresses[0] : address(0);
-        wireGame(gameAddr);
-    }
-
-    /// @notice Wire the Purge game contract after deployment.
-    /// @dev Hard gated by `coin` to avoid griefing.
-    function wireGame(address game_) external onlyCoin {
-        questGame = IPurgeGame(game_);
+        if (gameAddr != address(0)) {
+            address currentGame = address(questGame);
+            if (currentGame == address(0)) {
+                questGame = IPurgeGame(gameAddr);
+            } else if (gameAddr != currentGame) {
+                revert AlreadyWired();
+            }
+        }
     }
 
     modifier onlyCoin() {
