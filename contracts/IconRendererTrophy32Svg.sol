@@ -47,7 +47,7 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg {
         "M511.717 490.424l-85.333-136.533c-1.559-2.495-4.294-4.011-7.236-4.011H94.88c-2.942 0-5.677 1.516-7.236 4.011L2.311 490.424c-3.552 5.684 0.534 13.056 7.236 13.056H504.48c6.703 0 10.789-7.372 7.237-13.056zM24.943 486.414L99.61 366.947h314.807l74.667 119.467H24.943zM188.747 179.214c-2.942 0-5.677 1.516-7.236 4.011L96.177 319.758c-3.552 5.684 0.534 13.056 7.236 13.056h307.2c6.702 0 10.789-7.372 7.236-13.056l-45.173-72.277h73.146c3.789 14.723 17.152 25.6 33.058 25.6 18.853 0 34.133-15.281 34.133-34.133s-15.281-34.133-34.133-34.133c-15.906 0-29.269 10.877-33.058 25.6H362.01l-29.493-47.189c-1.559-2.495-4.294-4.011-7.236-4.011H188.747zM478.88 221.88c9.427 0 17.067 7.64 17.067 17.067 0 9.427-7.64 17.067-17.067 17.067s-17.067-7.64-17.067-17.067c0-9.427 7.64-17.067 17.067-17.067zM395.217 315.747H118.81l74.667-119.467h127.074l74.666 119.467zM94.88 145.08c15.906 0 29.269-10.877 33.058-25.6h74.961l-13.437 30.713c-2.467 5.638 1.664 11.954 7.818 11.954h119.467c6.154 0 10.284-6.316 7.818-11.954L264.832 13.66c-2.983-6.817-12.653-6.817-15.636 0l-38.83 88.754H127.938c-3.789-14.723-17.152-25.6-33.058-25.6-18.853 0-34.133 15.281-34.133 34.133 0 18.852 15.281 34.133 34.133 34.133zM257.014 38.37l46.686 106.71h-93.371l46.685-106.71zM94.88 93.88c9.427 0 17.067 7.64 17.067 17.067 0 9.427-7.64 17.067-17.067 17.067-9.427 0-17.067-7.64-17.067-17.067 0-9.427 7.64-17.067 17.067-17.067z";
     uint16 private constant DECIMATOR_SYMBOL_VB = 512;
     uint16 private constant BAF_FLIP_VB = 130;
-    uint24[8] private constant BASE_COLOR = [
+    uint24[8] private BASE_COLOR = [
         0xf409cd,
         0x7c2bff,
         0x30d100,
@@ -66,7 +66,8 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg {
         "matrix(0.51 0 0 0.51 -6.12 -6.12)";
     string private constant FLAME_CORNER_TRANSFORM =
         "matrix(0.02810 0 0 0.02810 -12.03 -9.082)";
-    int16[8] private constant BASE_VARIANT_BIAS = [
+    uint16 private constant ICON_VB = 512; // normalized icon viewBox (square)
+    int16[8] private BASE_VARIANT_BIAS = [
         int16(-14),
         int16(-6),
         int16(12),
@@ -300,8 +301,8 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg {
                 ? 32
                 : (uint256(dataQ) * 8 + uint256(symIdx));
             iconPath = icons.data(iconIndex);
-            w = icons.vbW(iconIndex);
-            h = icons.vbH(iconIndex);
+            w = ICON_VB;
+            h = ICON_VB;
         }
         uint16 m = w > h ? w : h;
         if (m == 0) m = 1;
@@ -311,7 +312,35 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg {
 
         (int256 txm, int256 tyn) = _symbolTranslate(w, h, sSym1e6, isTopAffiliate);
 
-        bool solidFill = (!isTopAffiliate && dataQ == 0 && (symIdx == 1 || symIdx == 5));
+        // Crypto quadrant symbols (dataQ == 0) should render with their native path colors,
+        // not the ring color. Others stay tinted to the ring.
+        string memory symbolGroup;
+        if (dataQ == 0 && !isTopAffiliate && !isDecAward) {
+            symbolGroup = string(
+                abi.encodePacked(
+                    "<g transform='",
+                    _mat6(sSym1e6, txm, tyn),
+                    "'><g style='vector-effect:non-scaling-stroke'>",
+                    iconPath,
+                    "</g></g>"
+                )
+            );
+        } else {
+            bool solidFill = (!isTopAffiliate && dataQ == 0 && (symIdx == 1 || symIdx == 5));
+            symbolGroup = string(
+                abi.encodePacked(
+                    "<g transform='",
+                    _mat6(sSym1e6, txm, tyn),
+                    "'><g fill='",
+                    ringOuterColor,
+                    "' stroke='",
+                    solidFill ? "none" : ringOuterColor,
+                    "' style='vector-effect:non-scaling-stroke'>",
+                    iconPath,
+                    "</g></g>"
+                )
+            );
+        }
 
         string memory ringsAndSymbol = string(
             abi.encodePacked(
@@ -328,19 +357,9 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg {
                 "<defs><clipPath id='ct2'><circle cx='0' cy='0' r='",
                 uint256(rIn2).toString(),
                 "'/></clipPath></defs>",
-                string(
-                    abi.encodePacked(
-                        "<g clip-path='url(#ct2)'><g transform='",
-                        _mat6(sSym1e6, txm, tyn),
-                        "'><g fill='",
-                        ringOuterColor,
-                        "' stroke='",
-                        solidFill ? "none" : ringOuterColor,
-                        "' style='vector-effect:non-scaling-stroke'>",
-                        iconPath,
-                        "</g></g></g>"
-                    )
-                )
+                "<g clip-path='url(#ct2)'>",
+                symbolGroup,
+                "</g>"
             )
         );
 

@@ -29,6 +29,7 @@ contract PurgeAffiliate {
     error ZeroAddress();
     error PresaleExceedsRemaining();
     error PresalePerTxLimit();
+    error PresaleClosed();
 
     // ---------------------------------------------------------------------
     // Types
@@ -71,8 +72,13 @@ contract PurgeAffiliate {
     mapping(uint24 => mapping(address => uint256)) public affiliateCoinEarned;
     mapping(address => bytes32) private playerReferralCode;
     mapping(address => uint256) public presaleCoinEarned;
+    mapping(address => uint256) public presalePrincipal; // principal bought while coin is unwired
     uint96 public totalPresaleSold;
     mapping(uint24 => PlayerScore) private affiliateTopByLevel;
+    uint256 private presaleInventoryBase = PRESALE_SUPPLY_TOKENS * MILLION; // used before coin is wired
+    bool private preCoinActive = true;
+    uint256 private rewardSeedEth; // holds 80% of presale proceeds before game is wired
+    bool private presaleShutdown; // permanently stops new presale purchases once coin is wired
 
     // ---------------------------------------------------------------------
     // Constructor
@@ -92,16 +98,29 @@ contract PurgeAffiliate {
             if (msg.sender != creator && msg.sender != coin_) revert OnlyCreator();
             coin = IPurgeCoinAffiliate(coin_);
             coinAddr = coin_;
+            presaleShutdown = true; // stop presale once coin is wired
         } else {
             if (msg.sender != creator && msg.sender != coinAddr) revert OnlyCreator();
             if (coin_ != address(0) && coin_ != coinAddr) revert OnlyCreator();
         }
 
+        bool gameWasUnset = address(purgeGame) == address(0);
         if (game_ != address(0)) {
             purgeGame = IPurgeGame(game_);
+            if (gameWasUnset && rewardSeedEth != 0) {
+                uint256 seed = rewardSeedEth;
+                rewardSeedEth = 0;
+                (bool ok, ) = payable(game_).call{value: seed}("");
+                if (!ok) revert Insufficient();
+            }
         }
         if (trophies_ != address(0)) {
             trophies = IPurgeGameTrophies(trophies_);
+        }
+
+        // First-time coin wiring disables pre-coin mode for new purchases.
+        if (address(coin) != address(0)) {
+            preCoinActive = false;
         }
     }
 
@@ -146,16 +165,16 @@ contract PurgeAffiliate {
 
     /// @notice Presale purchase flow (ETH -> PURGE) with linear price ramp and deferred bonuses.
     function presale() external payable returns (uint256 amountBase) {
-        address coinAddr = address(coin);
-        if (coinAddr == address(0)) revert ZeroAddress();
+        if (presaleShutdown) revert PresaleClosed();
         uint256 ethIn = msg.value;
         if (ethIn < 0.001 ether) revert Insufficient();
         if (ethIn > PRESALE_MAX_ETH_PER_TX) revert PresalePerTxLimit();
 
-        uint256 inventoryTokens = coin.balanceOf(coinAddr) / MILLION;
+        if (!preCoinActive) revert PresaleExceedsRemaining();
+        uint256 inventoryTokens = presaleInventoryBase / MILLION;
         if (inventoryTokens == 0) revert PresaleExceedsRemaining();
-
         uint256 tokensSold = PRESALE_SUPPLY_TOKENS - inventoryTokens;
+
         uint256 price = PRESALE_START_PRICE + PRESALE_PRICE_SLOPE * tokensSold;
         if (price > PRESALE_END_PRICE) price = PRESALE_END_PRICE;
         if (price == 0 || price > ethIn) revert Insufficient();
@@ -173,15 +192,12 @@ contract PurgeAffiliate {
         totalPresaleSold = uint96(uint256(totalPresaleSold) + amountBase);
 
         address payable buyer = payable(msg.sender);
-        coin.presaleDistribute(buyer, amountBase);
+        presaleInventoryBase -= amountBase;
+        presalePrincipal[buyer] += amountBase;
+        presaleCoinEarned[buyer] += amountBase;
 
-        address gameAddr = address(purgeGame);
-        uint256 gameCut;
-        if (gameAddr != address(0)) {
-            gameCut = (costWei * 80) / 100;
-            (bool gameOk, ) = gameAddr.call{value: gameCut}("");
-            if (!gameOk) revert Insufficient();
-        }
+        uint256 gameCut = (costWei * 80) / 100;
+        rewardSeedEth += gameCut;
 
         if (refund != 0) {
             (bool refundOk, ) = buyer.call{value: refund}("");
@@ -349,9 +365,10 @@ contract PurgeAffiliate {
     /// @dev Access: coin only.
     function consumePresaleCoin(address player) external returns (uint256 amount) {
         if (msg.sender != address(coin)) revert OnlyAuthorized();
-        amount = presaleCoinEarned[player];
+        amount = presaleCoinEarned[player] + presalePrincipal[player];
         if (amount != 0) {
             presaleCoinEarned[player] = 0;
+            presalePrincipal[player] = 0;
         }
     }
 

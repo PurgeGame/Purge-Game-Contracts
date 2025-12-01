@@ -10,8 +10,6 @@ async function main() {
   const IconsFactory = await hre.ethers.getContractFactory("Icons32Data");
   const icons = await IconsFactory.deploy(
     iconData.paths,
-    iconData.vbW,
-    iconData.vbH,
     iconData.diamond,
     iconData.symQ1,
     iconData.symQ2,

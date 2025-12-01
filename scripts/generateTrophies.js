@@ -162,14 +162,15 @@ function buildBadgeSvg(quadrant, colorIdx, symbolIdx, iconData) {
   const outerColor = BASE_COLORS[colorIdx] || "#888888";
   const midColor = "#111111";
   const innerColor = "#ffffff";
+  const ICON_VB = 512;
   const CENTER = 256;
   const OUTER_RADIUS = CENTER;
   const MID_RADIUS = Math.round(OUTER_RADIUS * RATIO_MID);
   const INNER_RADIUS = Math.round(OUTER_RADIUS * RATIO_IN);
   const iconIndex = quadrant * 8 + symbolIdx;
   const pathMarkup = iconData.paths[iconIndex] || "";
-  const vbW = iconData.vbW[iconIndex] || 1;
-  const vbH = iconData.vbH[iconIndex] || 1;
+  const vbW = ICON_VB;
+  const vbH = ICON_VB;
   const symbolScale = symbolFitScale(quadrant, symbolIdx);
   const maxDim = Math.max(vbW, vbH) || 1;
   const scale = (2 * INNER_RADIUS * symbolScale) / maxDim;
@@ -188,8 +189,8 @@ function buildBadgeSvg(quadrant, colorIdx, symbolIdx, iconData) {
 }
 
 function buildSymbolSvg(iconIndex, iconData) {
-  const vbW = iconData.vbW[iconIndex] || 512;
-  const vbH = iconData.vbH[iconIndex] || 512;
+  const vbW = 512;
+  const vbH = 512;
   const body = iconData.paths[iconIndex] || "";
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${vbW} ${vbH}">${body}</svg>`;
 }
@@ -201,8 +202,6 @@ async function main() {
   const IconsFactory = await hre.ethers.getContractFactory("Icons32Data");
   const icons = await IconsFactory.deploy(
     iconData.paths,
-    iconData.vbW,
-    iconData.vbH,
     iconData.diamond,
     iconData.symQ1,
     iconData.symQ2,

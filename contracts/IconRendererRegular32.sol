@@ -181,9 +181,9 @@ contract IconRendererRegular32 {
     // ---------------------------------------------------------------------
 
     // Canonical palette (indexed 0..7). Stored intentionally (non‑zero) for direct lookup.
-    uint24[8] private constant BASE_COLOR = [0xf409cd, 0x7c2bff, 0x30d100, 0xed0e11, 0x1317f7, 0xf7931a, 0x5e5e5e, 0xab8d3f];
+    uint24[8] private BASE_COLOR = [0xf409cd, 0x7c2bff, 0x30d100, 0xed0e11, 0x1317f7, 0xf7931a, 0x5e5e5e, 0xab8d3f];
 
-    int16[8] private constant BASE_VARIANT_BIAS = [
+    int16[8] private BASE_VARIANT_BIAS = [
         int16(-14),
         int16(-6),
         int16(12),
@@ -199,10 +199,11 @@ contract IconRendererRegular32 {
     uint32 private constant RATIO_IN_1e6 = 620_000;
     uint32 private constant SYM_FIT_BASE_1e6 = 750_000;
     uint32 private constant GLOBAL_BADGE_BOOST_1e6 = 1_010_000;
+    uint16 private constant ICON_VB = 512; // normalized icon viewBox (square)
 
     // Quadrant offsets.
-    int16[4] private constant CX = [int16(-25), int16(25), int16(-25), int16(25)];
-    int16[4] private constant CY = [int16(25), int16(25), int16(-25), int16(-25)];
+    int16[4] private CX = [int16(-25), int16(25), int16(-25), int16(25)];
+    int16[4] private CY = [int16(25), int16(25), int16(-25), int16(-25)];
 
     // Trait‑remaining snapshot (set by game at epoch start).
     uint32[256] private startTR;
@@ -393,20 +394,15 @@ contract IconRendererRegular32 {
         // Symbol path selection (32 icons total: quadId*8 + symbolIndex)
         uint256 iconIndex = quadId * 8 + symbolIndex;
         string memory iconPath = icons.data(iconIndex);
-        uint16 vbW = icons.vbW(iconIndex);
-        uint16 vbH = icons.vbH(iconIndex);
-        uint16 vbMax = vbW > vbH ? vbW : vbH;
-        if (vbMax == 0) vbMax = 1;
-
         // Fit symbol into inner ring, scaled in 1e6 “micro‑units”
         uint32 fit1e6 = _symbolFit1e6(quadId, symbolIndex);
-        uint32 scale1e6 = uint32((uint256(2) * rInner * fit1e6) / vbMax);
+        uint32 scale1e6 = uint32((uint256(2) * rInner * fit1e6) / ICON_VB);
 
         // Place symbol centered at quadrant origin in micro‑space
         int256 cxMicro = int256(int32(CX[quadPos])) * 1_000_000;
         int256 cyMicro = int256(int32(CY[quadPos])) * 1_000_000;
-        int256 txMicro = cxMicro - (int256(uint256(vbW)) * int256(uint256(scale1e6))) / 2;
-        int256 tyMicro = cyMicro - (int256(uint256(vbH)) * int256(uint256(scale1e6))) / 2;
+        int256 txMicro = cxMicro - (int256(uint256(ICON_VB)) * int256(uint256(scale1e6))) / 2;
+        int256 tyMicro = cyMicro - (int256(uint256(ICON_VB)) * int256(uint256(scale1e6))) / 2;
 
         // Color the symbol: Q0 uses source path colors; others use the quadrant color
         string memory symbolSvg = (quadId == 0)

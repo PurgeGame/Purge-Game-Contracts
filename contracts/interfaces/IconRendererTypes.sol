@@ -2,8 +2,6 @@
 pragma solidity ^0.8.26;
 
 interface IIcons32 {
-    function vbW(uint256 i) external view returns (uint16);
-    function vbH(uint256 i) external view returns (uint16);
     function data(uint256 i) external view returns (string memory);
     function diamond() external view returns (string memory);
     function symbol(uint256 quadrant, uint8 idx) external view returns (string memory);

@@ -3,8 +3,6 @@ pragma solidity ^0.8.26;
 
 contract Icons32Data {
     string[33] private _paths;
-    uint16[33] private _vbW;
-    uint16[33] private _vbH;
     string private _diamond;
     string[8] private _symQ1;
     string[8] private _symQ2;
@@ -12,8 +10,6 @@ contract Icons32Data {
 
     constructor(
         string[33] memory paths_,
-        uint16[33] memory vbW_,
-        uint16[33] memory vbH_,
         string memory diamond_,
         string[8] memory symQ1_,
         string[8] memory symQ2_,
@@ -21,8 +17,6 @@ contract Icons32Data {
     ) {
         for (uint256 i; i < 33; ++i) {
             _paths[i] = paths_[i];
-            _vbW[i] = vbW_[i];
-            _vbH[i] = vbH_[i];
         }
 
         _diamond = diamond_;
@@ -32,14 +26,6 @@ contract Icons32Data {
             _symQ2[i] = symQ2_[i];
             _symQ3[i] = symQ3_[i];
         }
-    }
-
-    function vbW(uint256 i) external view returns (uint16) {
-        return _vbW[i];
-    }
-
-    function vbH(uint256 i) external view returns (uint16) {
-        return _vbH[i];
     }
 
     function data(uint256 i) external view returns (string memory) {
