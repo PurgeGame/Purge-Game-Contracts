@@ -43,20 +43,23 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
     ) external {
         uint24 prevLevel = lvl - 1;
         bool traitWin = lastExterminatedTrait != TRAIT_ID_TIMEOUT;
-        if (jackpotsAddr == address(0)) revert E();
         if (traitWin) {
             _primeTraitPayouts(prevLevel, rngWord, trophiesContract);
         }
         uint8 _phase = phase;
         if (_phase > 3) {
-            if (traitWin && currentPrizePool != 0) {
+            uint256 participantPool = traitWin ? currentPrizePool : 0;
+            if (participantPool != 0) {
                 // Finalize the participant slice from `_primeTraitPayouts` in a gas-bounded manner.
-                _payoutParticipants(cap, prevLevel);
+                _payoutParticipants(cap, prevLevel, participantPool);
                 return;
             }
-            if (prevLevel != 0 && (prevLevel % 10) == 0) {
+            uint24 prevMod10 = prevLevel % 10;
+            uint24 prevMod100 = prevLevel % 100;
+
+            if (prevLevel != 0 && prevMod10 == 0) {
                 uint256 bafPoolWei;
-                if ((prevLevel % 100) == 0 && bafHundredPool != 0) {
+                if (prevMod100 == 0 && bafHundredPool != 0) {
                     // Every 100 levels we may have a carry pool; otherwise take a fresh slice from rewardPool.
                     bafPoolWei = bafHundredPool;
                     bafHundredPool = 0;
@@ -65,7 +68,7 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
                 }
                 _rewardJackpot(0, bafPoolWei, prevLevel, rngWord, jackpotsAddr, true);
             }
-            bool decWindow = prevLevel % 10 == 5 && prevLevel >= 15 && prevLevel % 100 != 95;
+            bool decWindow = prevMod10 == 5 && prevLevel >= 15 && prevMod100 != 95;
             if (decWindow) {
                 // Fire decimator jackpots midway through each decile except the 95th to avoid overlap with final bands.
                 uint256 decPoolWei = (rewardPool * 15) / 100;
@@ -108,11 +111,11 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
      * @dev Uses `airdropIndex` to batch work across transactions and coalesces consecutive identical winners.
      * @param capHint Optional per-call cap to keep gas bounded; zero uses DEFAULT_PAYOUTS_PER_TX.
      * @param prevLevel Level that just ended (level indexes are 1-based).
+     * @param participantPool Value of `currentPrizePool` cached by the caller to avoid extra SLOADs.
      */
-    function _payoutParticipants(uint32 capHint, uint24 prevLevel) private {
+    function _payoutParticipants(uint32 capHint, uint24 prevLevel, uint256 participantPool) private {
         address[] storage arr = traitPurgeTicket[prevLevel][uint8(lastExterminatedTrait)];
         uint256 len = arr.length;
-        uint256 participantPool = currentPrizePool;
         uint256 unitPayout = participantPool / len;
 
         uint256 cap = (capHint == 0) ? DEFAULT_PAYOUTS_PER_TX : capHint;
@@ -271,8 +274,6 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
             returnWei = refund;
         } else if (kind == 1) {
             (trophyPoolDelta, returnWei) = IPurgeJackpots(jackpotsAddr).runDecimatorJackpot(poolWei, lvl, rngWord);
-        } else {
-            revert E();
         }
 
         if (trophyPoolDelta != 0) {

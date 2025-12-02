@@ -810,7 +810,6 @@ contract PurgeGame is PurgeGameStorage {
 
     /// @notice Delegatecall into the endgame module to resolve slow settlement paths.
     function _runEndgameModule(uint24 lvl, uint32 cap, uint256 rngWord) internal {
-        if (jackpots == address(0)) revert E();
         // Endgame settlement logic lives in PurgeGameEndgameModule (delegatecall keeps state on this contract).
         (bool ok, ) = endgameModule.delegatecall(
             abi.encodeWithSelector(
