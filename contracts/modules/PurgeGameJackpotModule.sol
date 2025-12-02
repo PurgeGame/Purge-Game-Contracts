@@ -620,18 +620,13 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
             if (needTrophy) {
                 needTrophy = false;
                 trophyGivenOut = true;
-                uint256 half = perWinner / 2;
-                if (half != 0) {
-                    _addClaimableEth(w, half);
-                    ethDelta += half;
-                }
-                uint256 deferred = perWinner - half;
-                if (deferred != 0 && address(trophiesContract) != address(0)) {
-                    trophyPool += deferred;
-                    uint256 trophyData = (uint256(traitId) << 152) | (uint256(lvl) << 128) | TROPHY_FLAG_MAP;
-                    trophiesContract.awardTrophy(w, lvl, PURGE_TROPHY_KIND_MAP, trophyData, deferred);
-                    ethDelta += deferred;
-                }
+                uint256 half = perWinner >> 1;
+                _addClaimableEth(w, half);
+
+                trophyPool += half;
+                uint256 trophyData = (uint256(traitId) << 152) | (uint256(lvl) << 128) | TROPHY_FLAG_MAP;
+                trophiesContract.awardTrophy(w, lvl, PURGE_TROPHY_KIND_MAP, trophyData, half);
+                ethDelta += perWinner;
             } else if (_creditJackpot(coinContract, payCoin, w, perWinner)) {
                 if (payCoin) coinDelta += perWinner;
                 else ethDelta += perWinner;
@@ -761,8 +756,10 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
     /// @param writesBudget Count of SSTORE writes allowed this tx; hard-clamped to stay ≤15M-safe.
     /// @return finished True if all pending map mints have been fully processed.
     function processMapBatch(uint32 writesBudget) external returns (bool finished) {
+        uint256 idx = airdropIndex;
         uint256 total = pendingMapMints.length;
-        if (airdropIndex >= total) return true;
+        if (idx >= total) return true;
+        uint32 processed = airdropMapsProcessedCount;
 
         if (writesBudget == 0) writesBudget = WRITES_BUDGET_SAFE;
         uint24 lvl = level;
@@ -776,7 +773,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
             throttleWrites = true;
             phase = 2;
         } else if (phase == 3) {
-            bool firstAirdropBatch = (airdropIndex == 0 && airdropMapsProcessedCount == 0);
+            bool firstAirdropBatch = (idx == 0 && processed == 0);
             if (firstAirdropBatch) {
                 throttleWrites = true;
             }
@@ -787,21 +784,21 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         uint32 used = 0;
         uint256 entropy = rngWordCurrent;
 
-        while (airdropIndex < total && used < writesBudget) {
-            address player = pendingMapMints[airdropIndex];
+        while (idx < total && used < writesBudget) {
+            address player = pendingMapMints[idx];
             uint32 owed = playerMapMintsOwed[player];
             if (owed == 0) {
                 unchecked {
-                    ++airdropIndex;
+                    ++idx;
                 }
-                airdropMapsProcessedCount = 0;
+                processed = 0;
                 continue;
             }
 
             uint32 room = writesBudget - used;
 
             uint32 baseOv = 2;
-            if (airdropMapsProcessedCount == 0 && owed <= 2) {
+            if (processed == 0 && owed <= 2) {
                 baseOv += 2;
             }
             if (room <= baseOv) break;
@@ -811,8 +808,8 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
             uint32 take = owed > maxT ? maxT : owed;
             if (take == 0) break;
 
-            uint256 baseKey = (uint256(lvl) << 224) | (uint256(airdropIndex) << 192) | (uint256(uint160(player)) << 32);
-            _raritySymbolBatch(player, baseKey, airdropMapsProcessedCount, take, entropy);
+            uint256 baseKey = (uint256(lvl) << 224) | (idx << 192) | (uint256(uint160(player)) << 32);
+            _raritySymbolBatch(player, baseKey, processed, take, entropy);
 
             uint32 writesThis = (take <= 256) ? (take * 2) : (take + 256);
             writesThis += baseOv;
@@ -824,17 +821,19 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
             unchecked {
                 remainingOwed = owed - take;
                 playerMapMintsOwed[player] = remainingOwed;
-                airdropMapsProcessedCount += take;
+                processed += take;
                 used += writesThis;
             }
             if (remainingOwed == 0) {
                 unchecked {
-                    ++airdropIndex;
+                    ++idx;
                 }
-                airdropMapsProcessedCount = 0;
+                processed = 0;
             }
         }
-        return airdropIndex >= total;
+        airdropIndex = uint32(idx);
+        airdropMapsProcessedCount = processed;
+        return idx >= total;
     }
 
     function _raritySymbolBatch(
@@ -848,7 +847,10 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         uint8[256] memory touchedTraits;
         uint16 touchedLen;
 
-        uint32 endIndex = startIndex + count;
+        uint32 endIndex;
+        unchecked {
+            endIndex = startIndex + count;
+        }
         uint32 i = startIndex;
 
         while (i < endIndex) {
@@ -868,8 +870,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
                 unchecked {
                     s = s * MAP_LCG_MULT + 1;
 
-                    uint8 quadrant = uint8(i & 3);
-                    uint8 traitId = PurgeTraitUtils.traitFromWord(s) + (quadrant << 6);
+                    uint8 traitId = PurgeTraitUtils.traitFromWord(s) + (uint8(i & 3) << 6);
 
                     if (counts[traitId]++ == 0) {
                         touchedTraits[touchedLen++] = traitId;
@@ -896,16 +897,19 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
             assembly ("memory-safe") {
                 let elem := add(levelSlot, traitId)
                 let len := sload(elem)
-                sstore(elem, add(len, occurrences))
+                let newLen := add(len, occurrences)
+                sstore(elem, newLen)
 
                 mstore(0x00, elem)
                 let data := keccak256(0x00, 0x20)
+                let dst := add(data, len)
                 for {
                     let k := 0
                 } lt(k, occurrences) {
                     k := add(k, 1)
                 } {
-                    sstore(add(data, add(len, k)), player)
+                    sstore(dst, player)
+                    dst := add(dst, 1)
                 }
             }
             unchecked {

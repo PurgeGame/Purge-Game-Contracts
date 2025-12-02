@@ -241,6 +241,8 @@ contract PurgeBonds {
     /**
      * @notice Main entry point to fund the contract and trigger bond resolution.
      * @dev Callable by the game only. Automatically batches resolution if budgets allow.
+     *      Game profits (or shutdown drain) are expected to flow in here; bond purchases themselves are NOT reserved.
+     *      Only ETH/stETH delivered via this function raises payoutObligation to back matured bonds.
      * @param coinAmount Amount of PURGE tokens being sent/credited.
      * @param stEthAmount Amount of stETH being credited by the caller.
      * @param rngDay The game day to fetch RNG for (if not provided via `rngWord`).
@@ -265,7 +267,7 @@ contract PurgeBonds {
             bondCoin += coinAmount;
         }
 
-        // 2. Ingest stETH (Rebase/Donation check)
+        // 2. Ingest stETH
         uint256 stAdded;
         if (stEthAmount != 0) {
             IERC20Minimal(stEthToken).transferFrom(msg.sender, address(this), stEthAmount);
@@ -385,6 +387,7 @@ contract PurgeBonds {
         // Strict equality check protects against precision gaming
         if (price == 0 || totalPrice / quantity != price || msg.value != totalPrice) revert WrongPrice();
 
+        // Purchases are revenue, not escrow: only `payBonds` funding backs payouts.
         // Route 10% of the purchase to the prize pool (or hold if the game is unwired).
         uint256 prizeCut = msg.value / 10;
         if (prizeCut != 0) {
@@ -578,6 +581,7 @@ contract PurgeBonds {
         address stToken = stEthToken;
         uint256 stBal = stToken == address(0) ? 0 : IERC20Minimal(stToken).balanceOf(address(this));
         uint256 totalBal = address(this).balance + stBal;
+        // Only funds explicitly flowed in via `payBonds` (plus any queued reward seed) are reserved for payouts.
         uint256 reserved = payoutObligation + rewardSeedEth;
         uint256 combinedHeadroom = totalBal > reserved ? totalBal - reserved : 0;
 
@@ -1046,6 +1050,7 @@ contract PurgeBonds {
         uint256 maxId = pendingResolveMax == 0 ? _currentIndex - 1 : pendingResolveMax;
         uint256 limit = maxBonds == 0 ? AUTO_RESOLVE_BATCH : maxBonds;
         uint256 budget = pendingResolveBudget;
+        // budget is set by `payBonds`; we only advance matured bonds when funding has been explicitly supplied.
         if (budget == 0) revert InsufficientEthForResolve();
 
         uint256 processed;
@@ -1130,6 +1135,7 @@ contract PurgeBonds {
     ) private {
         if (resolvePending) revert ResolvePendingAlready();
         if (rngWord == 0 && rngDay == 0) revert InvalidRng();
+        // Resolves run only when the game has injected ETH/stETH via `payBonds`.
         if (budgetWei == 0) revert InsufficientEthForResolve();
 
         uint256 maxId = _currentIndex - 1;
