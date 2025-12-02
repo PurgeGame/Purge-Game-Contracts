@@ -36,17 +36,12 @@ interface IPurgeBonds {
     function setTransfersLocked(bool locked, uint48 rngDay) external;
     function stakeRateBps() external view returns (uint16);
     function purchasesEnabled() external view returns (bool);
-    function purchasePrizePoolBonds(
-        address to,
-        uint256 baseWei,
-        uint256 quantity,
-        bool stake
-    ) external payable returns (uint256 startTokenId);
-    function purchaseJackpotBonds(
+    function purchaseGameBonds(
         address[] calldata recipients,
-        uint256 basePerBond,
+        uint256 quantity,
+        uint256 basePerBondWei,
         bool stake
-    ) external payable returns (uint256 startTokenId);
+    ) external returns (uint256 startTokenId);
 }
 
 /**
@@ -1284,12 +1279,10 @@ contract PurgeGame is PurgeGameStorage {
             return;
         }
 
-        IPurgeBonds(bonds).purchasePrizePoolBonds{value: spend}(
-            address(this),
-            PRIZE_POOL_BOND_BASE * quantity,
-            quantity,
-            true
-        );
+        address[] memory recipients = new address[](1);
+        recipients[0] = address(this);
+
+        IPurgeBonds(bonds).purchaseGameBonds(recipients, quantity, PRIZE_POOL_BOND_BASE, true);
         emit PrizePoolBondBuy(spend, quantity);
     }
 

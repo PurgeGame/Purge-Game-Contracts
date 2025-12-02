@@ -14,11 +14,12 @@ interface IPurgeGameWithBonds {
 }
 
 interface IPurgeBondsJackpot {
-    function purchaseJackpotBonds(
+    function purchaseGameBonds(
         address[] calldata recipients,
-        uint256 basePerBond,
+        uint256 quantity,
+        uint256 basePerBondWei,
         bool stake
-    ) external payable returns (uint256 startTokenId);
+    ) external returns (uint256 startTokenId);
     function purchasesEnabled() external view returns (bool);
 }
 
@@ -734,7 +735,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         uint256 spend
     ) private returns (bool) {
         if (bondsAddr == address(0) || spend == 0) return false;
-        try IPurgeBondsJackpot(bondsAddr).purchaseJackpotBonds{value: spend}(recipients, basePerBond, true) {
+        try IPurgeBondsJackpot(bondsAddr).purchaseGameBonds(recipients, recipients.length, basePerBond, true) {
             return true;
         } catch {
             return false;

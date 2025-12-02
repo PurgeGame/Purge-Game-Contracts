@@ -598,6 +598,11 @@ contract PurgeAffiliate {
         return code;
     }
 
+    /// @notice Return the caller's stored referral code if valid (zero otherwise).
+    function referralCodeOf(address player) external view returns (bytes32 code) {
+        return _referralCode(player);
+    }
+
     function _referrerAddress(address player) private view returns (address) {
         bytes32 code = _referralCode(player);
         if (code == bytes32(0)) return address(0);

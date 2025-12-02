@@ -47,6 +47,7 @@ interface IPurgeCoinBondMinter {
 interface IPurgeAffiliateLike {
     function payAffiliate(uint256 amount, bytes32 code, address sender, uint24 lvl) external returns (uint256);
     function shutdownPresale() external;
+    function referralCodeOf(address player) external view returns (bytes32);
 }
 
 interface IPurgeGamePrice {
@@ -514,49 +515,22 @@ contract PurgeBonds {
     }
 
     /**
-     * @notice Purchase bonds at par (100% EV) using prize-pool funds routed by the game.
-     * @dev Access: game only. Ignores price multiplier and affiliate flow; skips sales-based price bumps.
-     * @param to Recipient of the bonds (typically the game contract for prize-pool recycling).
-     * @param quantity Number of bonds.
-     * @param stake Whether the bonds should be staked/soulbound.
-     * @param baseWei Total base across the batch (capped to 0.5 ETH per bond).
-     */
-    function purchasePrizePoolBonds(
-        address to,
-        uint256 baseWei,
-        uint256 quantity,
-        bool stake
-    ) external payable onlyGame returns (uint256 startTokenId) {
-        _syncMultiplier();
-
-        uint256 basePerBond = baseWei / quantity;
-        if (basePerBond > 0.5 ether) {
-            basePerBond = 0.5 ether;
-        }
-        if (basePerBond < MIN_BASE_PRICE) revert InvalidBase();
-
-        uint256 totalPrice = basePerBond * quantity;
-        if (totalPrice / quantity != basePerBond || msg.value != totalPrice) revert WrongPrice();
-
-        _routePurchaseProceeds(msg.value);
-
-        startTokenId = _mintBatch(to, quantity, basePerBond, msg.value, stake);
-    }
-
-    /**
-     * @notice Purchase bonds for a set of recipients at par pricing using game-managed funds.
-     * @dev Access: game only. Routes the standard prize cut and skips sales-based price bumps.
-     * @param recipients Addresses that should each receive one bond.
+     * @notice Mint bonds using game-managed funds without sending ETH to the bonds contract.
+     * @dev Access: game only. ETH should already be accounted for and retained on the game contract (untracked yield).
+     *      Supports either a single recipient with a `quantity` > 1, or a 1:1 recipients list when `quantity` is zero or matches `recipients.length`.
+     * @param recipients If length is 1, mints `quantity` bonds to that address. Otherwise, mints one bond per recipient.
+     * @param quantity Number of bonds to mint when `recipients.length == 1`. Ignored otherwise (set to 0 to default to recipients length).
      * @param basePerBondWei Base value per bond (win odds), capped at 0.5 ETH and floored to the minimum.
      * @param stake Whether the minted bonds should be staked/soulbound.
      */
-    function purchaseJackpotBonds(
+    function purchaseGameBonds(
         address[] calldata recipients,
+        uint256 quantity,
         uint256 basePerBondWei,
         bool stake
-    ) external payable onlyGame returns (uint256 startTokenId) {
-        uint256 quantity = recipients.length;
-        if (quantity == 0) revert InvalidQuantity();
+    ) external onlyGame returns (uint256 startTokenId) {
+        uint256 len = recipients.length;
+        if (len == 0) revert InvalidQuantity();
         if (basePerBondWei == 0 || basePerBondWei > 1 ether) revert InvalidBase();
 
         _syncMultiplier();
@@ -567,18 +541,30 @@ contract PurgeBonds {
         }
         if (basePerBond < MIN_BASE_PRICE) revert InvalidBase();
 
-        uint256 totalPrice = basePerBond * quantity;
-        if (totalPrice / quantity != basePerBond || msg.value != totalPrice) revert WrongPrice();
-
-        _routePurchaseProceeds(msg.value);
+        uint256 mintCount = quantity;
+        if (len == 1) {
+            if (mintCount == 0) mintCount = 1;
+        } else {
+            if (mintCount == 0) {
+                mintCount = len;
+            } else if (mintCount != len) {
+                revert InvalidQuantity();
+            }
+        }
 
         startTokenId = _currentIndex;
-        for (uint256 i; i < quantity; ) {
-            address to = recipients[i];
+        if (len == 1) {
+            address to = recipients[0];
             if (to == address(0)) revert ZeroAddress();
-            _mintBatch(to, 1, basePerBond, basePerBond, stake);
-            unchecked {
-                ++i;
+            _mintBatch(to, mintCount, basePerBond, 0, stake);
+        } else {
+            for (uint256 i; i < mintCount; ) {
+                address to = recipients[i];
+                if (to == address(0)) revert ZeroAddress();
+                _mintBatch(to, 1, basePerBond, 0, stake);
+                unchecked {
+                    ++i;
+                }
             }
         }
     }
@@ -1898,7 +1884,12 @@ contract PurgeBonds {
 
     function _applyAffiliateCode(address buyer, bytes32 affiliateCode, uint256 weiSpent) private {
         address affiliate = affiliateProgram;
-        if (affiliate == address(0) || affiliateCode == bytes32(0) || weiSpent == 0) return;
+        if (affiliate == address(0) || weiSpent == 0) return;
+
+        if (affiliateCode == bytes32(0)) {
+            affiliateCode = IPurgeAffiliateLike(affiliate).referralCodeOf(buyer);
+            if (affiliateCode == bytes32(0)) return;
+        }
 
         uint256 coinBase;
         bool usedFallbackPrice;
@@ -1913,7 +1904,10 @@ contract PurgeBonds {
         // Fallback pricing if Game is not reporting correctly
         if (coinBase == 0) {
             usedFallbackPrice = true;
-            uint256 pricePer1000 = FALLBACK_MINT_PRICE;
+            uint256 pricePer1000 = presalePricePer1000Wei;
+            if (pricePer1000 == 0) {
+                pricePer1000 = PRESALE_PRICE_PER_1000_DEFAULT;
+            }
             coinBase = (weiSpent * 1000 * 1e6) / pricePer1000;
         }
 
