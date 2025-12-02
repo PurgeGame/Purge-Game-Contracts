@@ -84,9 +84,16 @@ abstract contract PurgeGameStorage {
 
     // Bond maintenance state
     uint24 internal lastBondFundingLevel; // tracks the last level where bond funding was performed
+    uint48 internal lastBondResolutionDay; // last day index that auto bond resolution ran
+    uint256 internal bondCreditEscrow; // ETH escrowed to back bond-credit prize funding
 
     // ---------------------------------------------------------------------
     // RNG history
     // ---------------------------------------------------------------------
     mapping(uint48 => uint256) internal rngWordByDay; // VRF words keyed by dailyIdx; 0 means "not yet recorded"
+
+    // ---------------------------------------------------------------------
+    // Bond credits (non-withdrawable)
+    // ---------------------------------------------------------------------
+    mapping(address => uint256) internal bondCredit; // Credit from bond sales that can be spent on mints
 }

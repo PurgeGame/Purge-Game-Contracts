@@ -8,8 +8,10 @@ import {IPurgeCoin} from "./interfaces/IPurgeCoin.sol";
 import {IPurgeRendererLike} from "./interfaces/IPurgeRendererLike.sol";
 import {IPurgeJackpots} from "./interfaces/IPurgeJackpots.sol";
 import {IPurgeGameEndgameModule, IPurgeGameJackpotModule} from "./interfaces/IPurgeGameModules.sol";
+import {MintPaymentKind} from "./interfaces/IPurgeGame.sol";
 import {PurgeGameExternalOp} from "./interfaces/IPurgeGameExternal.sol";
 import {PurgeGameStorage} from "./storage/PurgeGameStorage.sol";
+import {PurgeGameCredit} from "./utils/PurgeGameCredit.sol";
 
 interface IStETH {
     function submit(address referral) external payable returns (uint256);
@@ -79,6 +81,7 @@ contract PurgeGame is PurgeGameStorage {
     error NotTimeYet(); // Called in a phase where the action is not permitted
     error RngNotReady(); // VRF request still pending
     error RngLocked(); // RNG is already locked; nudge not allowed
+    error BondsNotResolved(); // Pending bond resolution must be completed before requesting new RNG
     error InvalidQuantity(); // Invalid quantity or token count for the action
     error CoinPaused(); // LINK top-ups unavailable while RNG is locked
     error VrfUpdateNotReady(); // VRF swap not allowed yet (not stuck long enough or randomness already received)
@@ -87,6 +90,7 @@ contract PurgeGame is PurgeGameStorage {
     // Events
     // -----------------------
     event PlayerCredited(address indexed player, uint256 amount);
+    event BondCreditAdded(address indexed player, uint256 amount);
     event Jackpot(uint256 traits); // Encodes jackpot metadata
     event Purge(address indexed player, uint256[] tokenIds);
     event Advance(uint8 gameState, uint8 phase);
@@ -128,6 +132,8 @@ contract PurgeGame is PurgeGameStorage {
     uint16 private constant VRF_REQUEST_CONFIRMATIONS = 10;
     uint256 private constant RNG_NUDGE_BASE_COST = 100 * 1e6; // PURGE has 6 decimals
     uint256 private constant REWARD_POOL_MIN_STAKE = 0.5 ether;
+    uint256 private constant BOND_RNG_RESOLVE_LIMIT = 150; // mirrors bonds GAS_LIMITED_RESOLVE_MAX
+    uint8 private constant BOND_RNG_RESOLVE_PASSES = 3; // cap iterations to stay gas-safe
 
     // mintPacked_ layout (LSB ->):
     // [0-23]=last ETH level, [24-47]=total ETH level count, [48-71]=ETH level streak,
@@ -348,36 +354,59 @@ contract PurgeGame is PurgeGameStorage {
         }
     }
 
-    /// @notice Record a mint, funded either by ETH (`msg.value`) or the caller's claimable balance.
-    /// @dev For ETH paths, `msg.value` must equal `costWei`. For claimable paths, `msg.value` must be 0
-    ///      and `costWei` is deducted from `claimableWinnings`, leaving the remainder (plus sentinel).
+    /// @notice Record a mint, funded by ETH (`msg.value`), claimable winnings, or bond credit.
+    /// @dev ETH paths require `msg.value == costWei`. Claimable paths deduct from `claimableWinnings` and fund prize pools.
+    ///      Bond credit uses the same `costWei` accounting but does not increase prize pools and must send zero ETH.
+    ///      Combined allows any mix of ETH, claimable, and bond credit (in that order) to cover `costWei`.
     function recordMint(
         address player,
         uint24 lvl,
         bool coinMint,
         uint256 costWei,
-        uint32 mintUnits
+        uint32 mintUnits,
+        MintPaymentKind payKind
     ) external payable returns (uint256 coinReward) {
         if (msg.sender != address(nft)) revert E();
 
         if (coinMint) {
-            if (msg.value != 0) revert E();
+            if (msg.value != 0 || payKind != MintPaymentKind.DirectEth) revert E();
             return _recordMintData(player, lvl, true, 0);
         }
 
         uint256 amount = costWei;
-        if (msg.value == 0) {
-            uint256 claimable = claimableWinnings[player];
-            if (claimable <= amount) revert E(); // preserves sentinel 1 when amount > 0
-            unchecked {
-                claimableWinnings[player] = claimable - amount;
-            }
-        } else {
-            if (msg.value != amount) revert E();
+        uint256 prizeContribution = _processMintPayment(player, amount, payKind);
+        if (prizeContribution != 0) {
+            nextPrizePool += prizeContribution;
         }
-        nextPrizePool += amount;
 
         coinReward = _recordMintData(player, lvl, false, mintUnits);
+    }
+
+    function _processMintPayment(
+        address player,
+        uint256 amount,
+        MintPaymentKind payKind
+    ) private returns (uint256 prizeContribution) {
+        (bool ok, uint256 prize, uint256 creditUsed) = PurgeGameCredit.processMintPayment(
+            claimableWinnings,
+            bondCredit,
+            player,
+            amount,
+            payKind,
+            msg.value
+        );
+        if (!ok) revert E();
+        if (creditUsed != 0) {
+            uint256 escrow = bondCreditEscrow;
+            if (escrow != 0) {
+                uint256 applied = creditUsed < escrow ? creditUsed : escrow;
+                unchecked {
+                    prize += applied;
+                    bondCreditEscrow = escrow - applied;
+                }
+            }
+        }
+        return prize;
     }
 
     /// @notice Advances the game state machine. Anyone can call, but standard flows
@@ -882,30 +911,19 @@ contract PurgeGame is PurgeGameStorage {
         return stored - 1;
     }
 
+    function bondCreditOf(address player) external view returns (uint256) {
+        return bondCredit[player];
+    }
+
+    /// @notice Credit claimable ETH for a player from bond redemptions (bonds contract only).
+    function creditBondWinnings(address player) external payable {
+        if (msg.sender != bonds || player == address(0) || msg.value == 0) revert E();
+        _addClaimableEth(player, msg.value);
+    }
+
     /// @notice Spend claimable ETH to purchase either NFTs or MAPs using the full available balance.
     /// @param mapPurchase If true, purchase MAPs; otherwise purchase NFTs.
-    function purchaseWithClaimable(bool mapPurchase) external {
-        address buyer = msg.sender;
-        uint256 claimable = claimableWinnings[buyer];
-        if (claimable <= 1) revert E();
-
-        uint256 available;
-        unchecked {
-            available = claimable - 1;
-        }
-
-        uint256 priceWei = price;
-
-        if (!mapPurchase) {
-            uint256 qty = available / priceWei;
-            if (qty == 0) revert E();
-            nft.purchaseWithClaimable(buyer, qty);
-        } else {
-            uint256 qty = (available * 4) / priceWei;
-            if (qty == 0) revert E();
-            nft.mintAndPurgeWithClaimable(buyer, qty);
-        }
-    }
+    // Credit-based purchase entrypoints handled directly on the NFT contract to keep the game slimmer.
 
     /// @notice Sample up to 100 trait purge tickets from a random trait and recent level (last 20 levels).
     /// @param entropy Random seed used to select level, trait, and starting offset.
@@ -941,6 +959,15 @@ contract PurgeGame is PurgeGameStorage {
     }
 
     // --- Credits & jackpot helpers ------------------------------------------------------------------
+
+    /// @notice Credit non-withdrawable bond proceeds to a player; callable only by the bonds contract.
+    function addBondCredit(address player, uint256 amount) external {
+        if (msg.sender != bonds || player == address(0) || amount == 0) revert E();
+        unchecked {
+            bondCredit[player] += amount;
+        }
+        emit BondCreditAdded(player, amount);
+    }
 
     /// @notice Credit ETH winnings to a player’s claimable balance and emit an accounting event.
     /// @param beneficiary Player to credit.
@@ -1266,10 +1293,40 @@ contract PurgeGame is PurgeGameStorage {
         _stakeEth(stakeAmount);
     }
 
+    function _resolveBondsBeforeRng(uint48 day) private {
+        if (lastBondResolutionDay == day) return;
+
+        address bondsAddr = bonds;
+        if (bondsAddr == address(0)) {
+            lastBondResolutionDay = day;
+            return;
+        }
+
+        IPurgeBonds bondContract = IPurgeBonds(bondsAddr);
+        if (!bondContract.resolvePending()) {
+            lastBondResolutionDay = day;
+            return;
+        }
+
+        uint8 passes;
+        do {
+            bondContract.resolvePendingBonds(BOND_RNG_RESOLVE_LIMIT);
+            unchecked {
+                ++passes;
+            }
+        } while (bondContract.resolvePending() && passes < BOND_RNG_RESOLVE_PASSES);
+
+        if (bondContract.resolvePending()) revert BondsNotResolved();
+
+        lastBondResolutionDay = day;
+    }
+
     // --- Flips, VRF, payments, rarity ----------------------------------------------------------------
 
     function rngAndTimeGate(uint48 day, uint24 lvl) internal returns (uint256 word) {
         if (day == dailyIdx) revert NotTimeYet();
+
+        _resolveBondsBeforeRng(day);
 
         uint256 currentWord = rngFulfilled ? rngWordCurrent : 0;
 
@@ -1351,9 +1408,11 @@ contract PurgeGame is PurgeGameStorage {
         // Skim 25% of stETH yield to bonds and register it.
         uint256 stBal = steth.balanceOf(address(this));
         uint256 skim;
+        uint256 rewardTopUp;
         if (stBal > principalStEth) {
             uint256 yieldPool = stBal - principalStEth;
             skim = yieldPool / 4;
+            rewardTopUp = yieldPool / 20; // 5% of the original yield pool
         }
 
         // Mint 5% of totalWei (priced in PURGE) to the bonds contract.
@@ -1362,6 +1421,15 @@ contract PurgeGame is PurgeGameStorage {
 
         // Single hop into bonds: pulls stETH via allowance, mints bond coin, and resolves a larger page to finish queues.
         bondContract.payBonds{value: 0}(bondMint, skim, day, rngWord, maxBonds);
+        if (rewardTopUp != 0) {
+            rewardPool += rewardTopUp;
+            principalStEth -= rewardTopUp;
+            if (skim >= rewardTopUp) {
+                skim -= rewardTopUp;
+            } else {
+                skim = 0;
+            }
+        }
         lastBondFundingLevel = level;
         return (skim != 0 || bondMint != 0);
     }

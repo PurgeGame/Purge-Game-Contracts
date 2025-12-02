@@ -349,7 +349,6 @@ contract PurgeAffiliate {
         uint8 rakebackPct = info.rakeback;
 
         uint256 baseAmount = amount;
-
         mapping(address => uint256) storage earned = affiliateCoinEarned[lvl];
         IPurgeGameTrophies trophies_ = trophies;
 
@@ -358,21 +357,21 @@ contract PurgeAffiliate {
         uint256 cursor;
 
         // Pay direct affiliate
-        uint256 payout = baseAmount;
+        // Direct affiliate: rakeback and score are based on the base amount; stake bonus only boosts the payout.
+        uint256 rakebackShare = (baseAmount * uint256(rakebackPct)) / 100;
+        uint256 affiliateShareBase = baseAmount - rakebackShare;
         uint8 stakeBonus = address(trophies_) != address(0) ? trophies_.affiliateStakeBonus(affiliateAddr) : 0;
+        uint256 affiliatePayout = affiliateShareBase;
         if (stakeBonus != 0) {
-            payout += (payout * stakeBonus) / 100;
+            affiliatePayout += (affiliateShareBase * stakeBonus) / 100;
         }
 
-        uint256 rakebackShare = (payout * uint256(rakebackPct)) / 100;
-        uint256 affiliateShare = payout - rakebackShare;
-
-        uint256 newTotal = earned[affiliateAddr] + affiliateShare;
+        uint256 newTotal = earned[affiliateAddr] + affiliateShareBase; // score ignores stake bonus
         earned[affiliateAddr] = newTotal;
 
-        uint256 questReward = coinActive ? coin.affiliateQuestReward(affiliateAddr, affiliateShare) : 0;
+        uint256 questReward = coinActive ? coin.affiliateQuestReward(affiliateAddr, affiliatePayout) : 0;
 
-        uint256 totalFlipAward = affiliateShare + questReward;
+        uint256 totalFlipAward = affiliatePayout + questReward;
         if (totalFlipAward != 0 && coinActive) {
             players[cursor] = affiliateAddr;
             amounts[cursor] = totalFlipAward;
@@ -388,14 +387,10 @@ contract PurgeAffiliate {
 
         playerRakeback = rakebackShare;
 
-        // Upline bonus (20%)
+        // Upline bonus (20% of base amount); no stake bonus applied to uplines.
         address upline = _referrerAddress(affiliateAddr);
         if (upline != address(0) && upline != sender) {
             uint256 bonus = baseAmount / 5;
-            uint8 stakeBonusUpline = address(trophies_) != address(0) ? trophies_.affiliateStakeBonus(upline) : 0;
-            if (stakeBonusUpline != 0) {
-                bonus += (bonus * stakeBonusUpline) / 100;
-            }
             uint256 questRewardUpline = coinActive ? coin.affiliateQuestReward(upline, bonus) : 0;
             uint256 uplineTotal = earned[upline] + bonus;
             earned[upline] = uplineTotal;
@@ -417,10 +412,6 @@ contract PurgeAffiliate {
             address upline2 = _referrerAddress(upline);
             if (upline2 != address(0)) {
                 uint256 bonus2 = bonus / 5;
-                uint8 stakeBonusUpline2 = address(trophies_) != address(0) ? trophies_.affiliateStakeBonus(upline2) : 0;
-                if (stakeBonusUpline2 != 0) {
-                    bonus2 += (bonus2 * stakeBonusUpline2) / 100;
-                }
                 uint256 questReward2 = coinActive ? coin.affiliateQuestReward(upline2, bonus2) : 0;
                 uint256 upline2Total = earned[upline2] + bonus2;
                 earned[upline2] = upline2Total;

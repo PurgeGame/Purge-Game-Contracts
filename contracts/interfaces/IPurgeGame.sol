@@ -3,6 +3,13 @@ pragma solidity ^0.8.26;
 
 import {IPurgeGameExternal} from "./IPurgeGameExternal.sol";
 
+enum MintPaymentKind {
+    DirectEth,
+    Claimable,
+    BondCredit,
+    Combined
+}
+
 interface IPurgeGame is IPurgeGameExternal {
     function getTraitRemainingQuad(
         uint8[4] calldata traitIds
@@ -46,12 +53,14 @@ interface IPurgeGame is IPurgeGameExternal {
         uint24 lvl,
         bool coinMint,
         uint256 costWei,
-        uint32 mintUnits
+        uint32 mintUnits,
+        MintPaymentKind payKind
     ) external payable returns (uint256 coinReward);
 
     function rngLocked() external view returns (bool);
-
-    function purchaseWithClaimable(bool mapPurchase) external;
+    function bondCreditOf(address player) external view returns (uint256);
+    function addBondCredit(address player, uint256 amount) external payable;
+    function creditBondWinnings(address player) external payable;
 
     /// @notice Sample up to 100 trait purge tickets from a random trait and recent level (last 20).
     function sampleTraitTickets(uint256 entropy) external view returns (uint24 lvl, uint8 trait, address[] memory tickets);

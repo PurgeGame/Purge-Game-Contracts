@@ -3,7 +3,7 @@ pragma solidity ^0.8.26;
 
 import {PurgeTraitUtils} from "./PurgeTraitUtils.sol";
 import {IPurgeGameTrophies} from "./PurgeGameTrophies.sol";
-import {IPurgeGame} from "./interfaces/IPurgeGame.sol";
+import {IPurgeGame, MintPaymentKind} from "./interfaces/IPurgeGame.sol";
 import {IPurgeCoin} from "./interfaces/IPurgeCoin.sol";
 import {IPurgeAffiliate} from "./interfaces/IPurgeAffiliate.sol";
 
@@ -14,6 +14,11 @@ enum TrophyKind {
     Stake,
     Baf,
     Decimator
+}
+
+enum PurchaseKind {
+    Player,
+    Map
 }
 
 interface IERC721Receiver {
@@ -33,6 +38,14 @@ interface ITokenRenderer {
     ) external view returns (string memory);
 }
 
+struct PurchaseParams {
+    uint256 quantity;
+    PurchaseKind kind;
+    MintPaymentKind payKind;
+    bool payInCoin;
+    bytes32 affiliateCode;
+}
+
 interface IPurgeGameNFT {
     function tokenTraitsPacked(uint256 tokenId) external view returns (uint32);
     function purchaseCount() external view returns (uint32);
@@ -43,8 +56,7 @@ interface IPurgeGameNFT {
     function tokensOwed(address player) external view returns (uint32);
     function processDormant(uint32 maxCount) external returns (bool finished, bool worked);
     function clearPlaceholderPadding(uint256 startTokenId, uint256 endTokenId) external;
-    function purchaseWithClaimable(address buyer, uint256 quantity) external;
-    function mintAndPurgeWithClaimable(address buyer, uint256 quantity) external;
+    function purchase(PurchaseParams calldata params) external payable;
 }
 
 /// @title PurgeGameNFT
@@ -328,15 +340,22 @@ contract PurgeGameNFT {
     }
 
     // ---------------------------------------------------------------------
-    // Player entrypoints (proxy to game logic)
+    // Purchase entrypoints (proxy to game logic)
     // ---------------------------------------------------------------------
 
-    function purchase(uint256 quantity, bool payInCoin, bytes32 affiliateCode) external payable {
-        _purchase(msg.sender, quantity, payInCoin, affiliateCode, false);
+    function purchase(PurchaseParams calldata params) external payable {
+        _routePurchase(msg.sender, params);
     }
 
-    function purchaseWithClaimable(address buyer, uint256 quantity) external onlyGame {
-        _purchase(buyer, quantity, false, bytes32(0), true);
+    function _routePurchase(address buyer, PurchaseParams calldata params) private {
+        bytes32 affiliateCode = params.payKind == MintPaymentKind.DirectEth ? params.affiliateCode : bytes32(0);
+        if (params.kind == PurchaseKind.Player) {
+            _purchase(buyer, params.quantity, params.payInCoin, affiliateCode, params.payKind);
+        } else if (params.kind == PurchaseKind.Map) {
+            _mintAndPurge(buyer, params.quantity, params.payInCoin, affiliateCode, params.payKind);
+        } else {
+            revert E();
+        }
     }
 
     function _purchase(
@@ -344,10 +363,11 @@ contract PurgeGameNFT {
         uint256 quantity,
         bool payInCoin,
         bytes32 affiliateCode,
-        bool useClaimable
+        MintPaymentKind payKind
     ) private {
         // Primary entry for player token purchases; pricing and bonuses are sourced from the game contract.
         if (quantity == 0 || quantity > type(uint32).max) revert InvalidQuantity();
+        if (payInCoin && payKind != MintPaymentKind.DirectEth) revert E();
 
         (uint24 targetLevel, uint8 state, uint8 phase, bool rngLocked_, uint256 priceWei, uint256 priceCoinUnit) = game
             .purchaseInfo();
@@ -379,7 +399,7 @@ contract PurgeGameNFT {
                 targetLevel,
                 state,
                 false,
-                useClaimable,
+                payKind,
                 expectedWei,
                 priceCoinUnit
             );
@@ -391,7 +411,7 @@ contract PurgeGameNFT {
             }
         }
 
-        if (useClaimable) {
+        if (payKind != MintPaymentKind.DirectEth) {
             unchecked {
                 bonus += (quantity * priceCoinUnit) / CLAIMABLE_BONUS_DIVISOR;
             }
@@ -410,15 +430,7 @@ contract PurgeGameNFT {
         _recordPurchase(buyer, qty32);
 
         uint256 costAmount = payInCoin ? coinCost : expectedWei;
-        emit TokenPurchase(buyer, qty32, payInCoin, useClaimable, costAmount, bonus);
-    }
-
-    function mintAndPurge(uint256 quantity, bool payInCoin, bytes32 affiliateCode) external payable {
-        _mintAndPurge(msg.sender, quantity, payInCoin, affiliateCode, false);
-    }
-
-    function mintAndPurgeWithClaimable(address buyer, uint256 quantity) external onlyGame {
-        _mintAndPurge(buyer, quantity, false, bytes32(0), true);
+        emit TokenPurchase(buyer, qty32, payInCoin, payKind != MintPaymentKind.DirectEth, costAmount, bonus);
     }
 
     function _mintAndPurge(
@@ -426,7 +438,7 @@ contract PurgeGameNFT {
         uint256 quantity,
         bool payInCoin,
         bytes32 affiliateCode,
-        bool useClaimable
+        MintPaymentKind payKind
     ) private {
         // Map purchase flow: mints 4:1 scaled quantity and immediately queues them for purge draws.
         (uint24 lvl, uint8 state, uint8 phase, bool rngLocked_, uint256 priceWei, uint256 priceUnit) = game
@@ -434,6 +446,7 @@ contract PurgeGameNFT {
         if (state == 3 && payInCoin) revert NotTimeYet();
         if (quantity == 0 || quantity > type(uint32).max) revert InvalidQuantity();
         if (rngLocked_) revert RngNotReady();
+        if (payInCoin && payKind != MintPaymentKind.DirectEth) revert E();
 
         uint256 coinCost = quantity * (priceUnit / 4);
         uint256 scaledQty = quantity * 25;
@@ -462,7 +475,7 @@ contract PurgeGameNFT {
                 lvl,
                 state,
                 true,
-                useClaimable,
+                payKind,
                 expectedWei,
                 priceUnit
             );
@@ -472,7 +485,7 @@ contract PurgeGameNFT {
             if (phase == 3 && (lvl % 100) > 90) {
                 bonus += coinCost / 5;
             }
-            if (useClaimable) {
+            if (payKind != MintPaymentKind.DirectEth) {
                 // Claimable MAP purchases earn the same bonus as the standard map rebate.
                 claimableBonus = mapRebate;
             }
@@ -492,7 +505,7 @@ contract PurgeGameNFT {
         game.enqueueMap(buyer, uint32(quantity));
 
         uint256 costAmount = payInCoin ? coinCost : expectedWei;
-        emit MapPurchase(buyer, uint32(quantity), payInCoin, useClaimable, costAmount, rebateMint);
+        emit MapPurchase(buyer, uint32(quantity), payInCoin, payKind != MintPaymentKind.DirectEth, costAmount, rebateMint);
     }
 
     function _processEthPurchase(
@@ -502,14 +515,18 @@ contract PurgeGameNFT {
         uint24 lvl,
         uint8 gameState,
         bool mapPurchase,
-        bool useClaimable,
+        MintPaymentKind payKind,
         uint256 expectedWei,
         uint256 priceUnit
     ) private returns (uint256 bonusMint) {
-        // ETH purchases optionally bypass payment when claimable credit is used; all flows are forwarded to game logic.
-        if (useClaimable) {
+        // ETH purchases optionally bypass payment when in-game credit is used; all flows are forwarded to game logic.
+        if (payKind == MintPaymentKind.DirectEth) {
+            if (msg.value != expectedWei) revert E();
+        } else if (payKind == MintPaymentKind.Claimable || payKind == MintPaymentKind.BondCredit) {
             if (msg.value != 0) revert E();
-        } else if (msg.value != expectedWei) {
+        } else if (payKind == MintPaymentKind.Combined) {
+            if (msg.value > expectedWei) revert E();
+        } else {
             revert E();
         }
 
@@ -534,10 +551,12 @@ contract PurgeGameNFT {
         }
 
         uint256 streakBonus;
-        if (useClaimable) {
-            streakBonus = game.recordMint(payer, lvl, false, expectedWei, mintUnits);
+        if (payKind == MintPaymentKind.DirectEth) {
+            streakBonus = game.recordMint{value: expectedWei}(payer, lvl, false, expectedWei, mintUnits, payKind);
+        } else if (payKind == MintPaymentKind.Combined) {
+            streakBonus = game.recordMint{value: msg.value}(payer, lvl, false, expectedWei, mintUnits, payKind);
         } else {
-            streakBonus = game.recordMint{value: expectedWei}(payer, lvl, false, expectedWei, mintUnits);
+            streakBonus = game.recordMint(payer, lvl, false, expectedWei, mintUnits, payKind);
         }
 
         if (mintedQuantity != 0) {
@@ -630,7 +649,7 @@ contract PurgeGameNFT {
         else if (stepMod == 18) amount = (amount * 9) / 10;
         if (discount != 0) amount -= discount;
         coin.burnCoin(payer, amount);
-        game.recordMint(payer, lvl, true, 0, 0);
+        game.recordMint(payer, lvl, true, 0, 0, MintPaymentKind.DirectEth);
         uint32 questQuantity = quantity / 4; // coin mints track full-price equivalents for quests
         if (questQuantity != 0) {
             coin.notifyQuestMint(payer, questQuantity, false);
