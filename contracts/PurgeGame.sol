@@ -401,14 +401,14 @@ contract PurgeGame is PurgeGameStorage {
                 return;
             }
         }
+        uint8 _gameState = gameState;
         // Liveness drain
-        if (ts - 365 days > lst) {
+        if (ts - 365 days > lst && _gameState != 0) {
             _drainToBonds(day);
             gameState = 0;
-            return;
         }
         uint24 lvl = level;
-        uint8 _gameState = gameState;
+
         uint8 _phase = phase;
 
         uint48 gateIdx = dailyIdx;
