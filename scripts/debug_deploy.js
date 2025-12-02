@@ -68,7 +68,7 @@ async function main() {
   }
 
   try {
-      const PurgeJackpots = await ethers.getContractFactory("contracts/modules/PurgeJackpots.sol:PurgeJackpots");
+      const PurgeJackpots = await ethers.getContractFactory("contracts/PurgeJackpots.sol:PurgeJackpots");
       const jackpots = await PurgeJackpots.deploy();
       await jackpots.waitForDeployment();
       console.log("   Jackpots module deployed.");

@@ -3,7 +3,7 @@ pragma solidity ^0.8.26;
 
 import {IPurgeGameNFT} from "./PurgeGameNFT.sol";
 import {IPurgeGameTrophies} from "./PurgeGameTrophies.sol";
-import {IPurgeCoinModule, IPurgeGameTrophiesModule} from "./modules/PurgeGameModuleInterfaces.sol";
+import {IPurgeCoinModule, IPurgeGameTrophiesModule} from "./interfaces/PurgeGameModuleInterfaces.sol";
 import {IPurgeCoin} from "./interfaces/IPurgeCoin.sol";
 import {IPurgeRendererLike} from "./interfaces/IPurgeRendererLike.sol";
 import {IPurgeJackpots} from "./interfaces/IPurgeJackpots.sol";

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {IPurgeCoinModule, IPurgeGameTrophiesModule} from "./PurgeGameModuleInterfaces.sol";
+import {IPurgeCoinModule, IPurgeGameTrophiesModule} from "../interfaces/PurgeGameModuleInterfaces.sol";
 import {PurgeGameStorage} from "../storage/PurgeGameStorage.sol";
 import {PurgeTraitUtils} from "../PurgeTraitUtils.sol";
 

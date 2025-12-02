@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {IPurgeGame} from "../interfaces/IPurgeGame.sol";
-import {IPurgeAffiliate} from "../interfaces/IPurgeAffiliate.sol";
-import {IPurgeGameTrophies} from "../PurgeGameTrophies.sol";
-import {IPurgeJackpots} from "../interfaces/IPurgeJackpots.sol";
-import {PurgeGameExternalOp} from "../interfaces/IPurgeGameExternal.sol";
+import {IPurgeGame} from "./interfaces/IPurgeGame.sol";
+import {IPurgeAffiliate} from "./interfaces/IPurgeAffiliate.sol";
+import {IPurgeGameTrophies} from "./PurgeGameTrophies.sol";
+import {IPurgeJackpots} from "./interfaces/IPurgeJackpots.sol";
+import {PurgeGameExternalOp} from "./interfaces/IPurgeGameExternal.sol";
 
 interface IPurgeCoinJackpotView {
     function coinflipAmount(address player) external view returns (uint256);

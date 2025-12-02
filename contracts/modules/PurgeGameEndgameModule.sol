@@ -2,7 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {IPurgeGameTrophies} from "../PurgeGameTrophies.sol";
-import {IPurgeGameTrophiesModule} from "./PurgeGameModuleInterfaces.sol";
+import {IPurgeGameTrophiesModule} from "../interfaces/PurgeGameModuleInterfaces.sol";
 import {IPurgeJackpots} from "../interfaces/IPurgeJackpots.sol";
 import {PurgeGameStorage} from "../storage/PurgeGameStorage.sol";
 
