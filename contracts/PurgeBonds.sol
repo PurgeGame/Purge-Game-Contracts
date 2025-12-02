@@ -171,6 +171,7 @@ contract PurgeBonds {
     // -- Resolution State --
     bool public resolvePending;
     uint256 public pendingRngWord;
+    uint256 public gameOverRngWord;
     uint48 public pendingRngDay;
     uint256 public pendingResolveBase;
     uint256 public pendingResolveMax;
@@ -284,7 +285,16 @@ contract PurgeBonds {
         if (!pending && budget != 0) {
             uint256 startId = _resolveStart();
             if (startId != 0) {
-                _scheduleResolve(startId, rngDay, rngWord, maxBonds, budget);
+                uint256 wordToUse = rngWord;
+                if (gameOver) {
+                    uint256 locked = gameOverRngWord;
+                    if (locked != 0) {
+                        wordToUse = locked;
+                    } else if (wordToUse != 0) {
+                        gameOverRngWord = wordToUse;
+                    }
+                }
+                _scheduleResolve(startId, rngDay, wordToUse, maxBonds, budget);
                 pending = true;
             }
         }
@@ -1016,12 +1026,19 @@ contract PurgeBonds {
         }
         uint256 rngWord = pendingRngWord;
         if (rngWord == 0) {
-            uint48 rngDay = pendingRngDay;
-            if (rngDay == 0) revert InvalidRng();
-            address game_ = game;
-            if (game_ == address(0)) revert ZeroAddress();
-            rngWord = IPurgeGameLike(game_).rngWordForDay(rngDay);
-            if (rngWord == 0) revert InvalidRng();
+            if (gameOver && gameOverRngWord != 0) {
+                rngWord = gameOverRngWord;
+            } else {
+                uint48 rngDay = pendingRngDay;
+                if (rngDay == 0) revert InvalidRng();
+                address game_ = game;
+                if (game_ == address(0)) revert ZeroAddress();
+                rngWord = IPurgeGameLike(game_).rngWordForDay(rngDay);
+                if (rngWord == 0) revert InvalidRng();
+                if (gameOver && gameOverRngWord == 0) {
+                    gameOverRngWord = rngWord;
+                }
+            }
             pendingRngWord = rngWord;
         }
 

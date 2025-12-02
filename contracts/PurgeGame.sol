@@ -822,7 +822,7 @@ contract PurgeGame is PurgeGameStorage {
                 trophies
             )
         );
-        if (!ok) revert E();
+        if (!ok) return;
     }
 
     /// @notice Unified external hook for trusted modules to adjust PurgeGame accounting.
@@ -1174,7 +1174,7 @@ contract PurgeGame is PurgeGameStorage {
                 IPurgeGameTrophiesModule(address(trophies))
             )
         );
-        if (!ok) revert E();
+        if (!ok) return;
     }
 
     function _calcPrizePoolForJackpot(uint24 lvl, uint256 rngWord) internal returns (uint256 effectiveWei) {
@@ -1186,7 +1186,7 @@ contract PurgeGame is PurgeGameStorage {
                 address(steth)
             )
         );
-        if (!ok) revert E();
+        if (!ok || data.length == 0) return 0;
         return abi.decode(data, (uint256));
     }
 
@@ -1203,7 +1203,7 @@ contract PurgeGame is PurgeGameStorage {
                 IPurgeGameTrophiesModule(address(trophies))
             )
         );
-        if (!ok) revert E();
+        if (!ok) return;
     }
 
     function _handleJackpotLevelCap() internal returns (bool) {
@@ -1221,32 +1221,13 @@ contract PurgeGame is PurgeGameStorage {
         IPurgeBonds bondContract = IPurgeBonds(bondsAddr);
         bondContract.notifyGameOver();
 
-        // Best-effort RNG request; ignored if it fails.
-        try
-            vrfCoordinator.requestRandomWords(
-                VRFRandomWordsRequest({
-                    keyHash: vrfKeyHash,
-                    subId: vrfSubscriptionId,
-                    requestConfirmations: VRF_REQUEST_CONFIRMATIONS,
-                    callbackGasLimit: VRF_CALLBACK_GAS_LIMIT,
-                    numWords: 1,
-                    extraArgs: bytes("")
-                })
-            )
-        returns (uint256 id) {
-            vrfRequestId = id;
-            rngFulfilled = false;
-            rngWordCurrent = 0;
-            rngLockedFlag = true;
-            rngRequestTime = uint48(block.timestamp);
-        } catch {}
         uint256 stBal = steth.balanceOf(address(this));
         if (stBal != 0) {
             principalStEth = 0;
         }
 
         uint256 ethBal = address(this).balance;
-        // payBonds pulls stETH via approval; avoid double transfers
+        // Inform bonds of shutdown and transfer pooled assets; bonds will resolve once it has RNG.
         bondContract.payBonds{value: ethBal}(0, stBal, day, 0, 0);
     }
 
