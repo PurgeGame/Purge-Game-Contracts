@@ -9,6 +9,19 @@ interface IStETH {
     function balanceOf(address account) external view returns (uint256);
 }
 
+interface IPurgeGameWithBonds {
+    function bonds() external view returns (address);
+}
+
+interface IPurgeBondsJackpot {
+    function purchaseJackpotBonds(
+        address[] calldata recipients,
+        uint256 basePerBond,
+        bool stake
+    ) external payable returns (uint256 startTokenId);
+    function purchasesEnabled() external view returns (bool);
+}
+
 /**
  * @title PurgeGameJackpotModule
  * @notice Delegate-called module that hosts the jackpot distribution logic for `PurgeGame`.
@@ -45,6 +58,10 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
     uint256 private constant TROPHY_FLAG_MAP = uint256(1) << 200;
     uint32 private constant WRITES_BUDGET_SAFE = 800;
     uint64 private constant MAP_LCG_MULT = 0x5851F42D4C957F2D;
+    uint16 private constant JACKPOT_BOND_BPS = 1000; // 10% of each jackpot routed into bonds
+    uint256 private constant JACKPOT_BOND_MIN_BASE = 0.02 ether;
+    uint256 private constant JACKPOT_BOND_MAX_BASE = 0.5 ether;
+    uint8 private constant JACKPOT_BOND_MAX_MULTIPLIER = 4; // cap total bonds to keep gas bounded
 
     // Packed parameters for a single jackpot run to keep the call surface lean.
     struct JackpotParams {
@@ -434,6 +451,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
     ) private returns (uint256 totalPaidEth) {
         uint8 band = uint8((jp.lvl % 100) / 20) + 1;
         uint16[4] memory bucketCounts = _traitBucketCounts(band, jp.entropy);
+        address bondsAddr = IPurgeGameWithBonds(address(this)).bonds();
         return
             _distributeJackpotEth(
                 jp.mapTrophy,
@@ -444,7 +462,8 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
                 shareBps,
                 bucketCounts,
                 jp.coinContract,
-                jp.trophiesContract
+                jp.trophiesContract,
+                bondsAddr
             );
     }
 
@@ -471,9 +490,10 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         uint16[4] memory shareBps,
         uint16[4] memory bucketCounts,
         IPurgeCoinModule coinContract,
-        IPurgeGameTrophiesModule trophiesContract
+        IPurgeGameTrophiesModule trophiesContract,
+        address bondsAddr
     ) private returns (uint256 totalPaidEth) {
-        // Each trait bucket gets a slice; the last bucket absorbs remainder to avoid dust.
+        // Each trait bucket gets a slice; the last bucket absorbs remainder to avoid dust. totalPaidEth counts ETH plus bond spend.
         uint256 ethDistributed;
         uint256 entropyState = entropy;
         bool trophyGiven;
@@ -502,7 +522,8 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
                 }
             }
             uint256 delta;
-            (entropyState, trophyGiven, delta, ) = _resolveTraitWinners(
+            uint256 bondSpent;
+            (entropyState, trophyGiven, delta, , bondSpent) = _resolveTraitWinners(
                 coinContract,
                 trophiesContract,
                 false,
@@ -513,9 +534,10 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
                 share,
                 entropyState,
                 trophyGiven,
-                bucketCount
+                bucketCount,
+                bondsAddr
             );
-            totalPaidEth += delta;
+            totalPaidEth += delta + bondSpent;
             unchecked {
                 ++traitIdx;
             }
@@ -541,7 +563,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
                     coinDistributed += share;
                 }
             }
-            (entropy, , , ) = _resolveTraitWinners(
+            (entropy, , , , ) = _resolveTraitWinners(
                 coinContract,
                 IPurgeGameTrophiesModule(address(0)),
                 true,
@@ -552,7 +574,8 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
                 share,
                 entropy,
                 false,
-                bucketCount
+                bucketCount,
+                address(0)
             );
             unchecked {
                 ++traitIdx;
@@ -587,34 +610,42 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         uint256 traitShare,
         uint256 entropy,
         bool trophyGiven,
-        uint16 winnerCount
-    ) private returns (uint256 entropyState, bool trophyGivenOut, uint256 ethDelta, uint256 coinDelta) {
+        uint16 winnerCount,
+        address bondsAddr
+    )
+        private
+        returns (uint256 entropyState, bool trophyGivenOut, uint256 ethDelta, uint256 coinDelta, uint256 bondSpent)
+    {
         entropyState = entropy;
         trophyGivenOut = trophyGiven;
 
-        if (traitShare == 0) return (entropyState, trophyGivenOut, 0, 0);
+        if (traitShare == 0) return (entropyState, trophyGivenOut, 0, 0, 0);
 
         uint16 totalCount = winnerCount;
-        if (totalCount == 0) return (entropyState, trophyGivenOut, 0, 0);
+        if (totalCount == 0) return (entropyState, trophyGivenOut, 0, 0, 0);
 
-        uint8 requested = uint8(totalCount);
         entropyState = _entropyStep(entropyState ^ (uint256(traitIdx) << 64) ^ traitShare);
         address[] memory winners = _randTraitTicket(
             traitPurgeTicket[lvl],
             entropyState,
             traitId,
-            requested,
+            uint8(totalCount),
             uint8(200 + traitIdx)
         );
-        uint8 len = uint8(winners.length);
-        if (len == 0) return (entropyState, trophyGivenOut, 0, 0);
+        if (winners.length == 0) return (entropyState, trophyGivenOut, 0, 0, 0);
 
-        uint256 perWinner = traitShare / totalCount;
-        if (perWinner == 0) return (entropyState, trophyGivenOut, 0, 0);
+        uint256 ethPoolForWinners = traitShare;
+        if (!payCoin && bondsAddr != address(0) && IPurgeBondsJackpot(bondsAddr).purchasesEnabled()) {
+            (bondSpent, ethPoolForWinners) = _jackpotBondSpend(bondsAddr, winners, traitShare, entropyState);
+        }
+
+        uint256 perWinner = ethPoolForWinners / totalCount;
+        if (perWinner == 0) return (entropyState, trophyGivenOut, 0, 0, bondSpent);
 
         bool needTrophy = mapTrophy && !trophyGivenOut;
 
-        for (uint8 i; i < len; ) {
+        uint256 len = winners.length;
+        for (uint256 i; i < len; ) {
             address w = winners[i];
 
             if (needTrophy) {
@@ -635,6 +666,78 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
             unchecked {
                 ++i;
             }
+        }
+
+        return (entropyState, trophyGivenOut, ethDelta, coinDelta, bondSpent);
+    }
+
+    function _jackpotBondSpend(
+        address bondsAddr,
+        address[] memory winners,
+        uint256 traitShare,
+        uint256 entropyState
+    ) private returns (uint256 bondSpent, uint256 ethPoolForWinners) {
+        uint256 winnersLen = winners.length;
+        if (bondsAddr == address(0) || winnersLen == 0) return (0, traitShare);
+
+        uint256 bondBudget = (traitShare * JACKPOT_BOND_BPS) / 10_000;
+        if (bondBudget < JACKPOT_BOND_MIN_BASE) return (0, traitShare);
+
+        uint256 basePerBond = bondBudget / winnersLen;
+        if (basePerBond < JACKPOT_BOND_MIN_BASE) {
+            basePerBond = JACKPOT_BOND_MIN_BASE;
+        } else if (basePerBond > JACKPOT_BOND_MAX_BASE) {
+            basePerBond = JACKPOT_BOND_MAX_BASE;
+        }
+
+        uint256 quantity = bondBudget / basePerBond;
+        if (quantity == 0) return (0, traitShare);
+
+        uint256 maxQuantity = winnersLen * JACKPOT_BOND_MAX_MULTIPLIER;
+        if (maxQuantity != 0 && quantity > maxQuantity) {
+            quantity = maxQuantity;
+        }
+
+        uint256 spend = basePerBond * quantity;
+        if (spend == 0) return (0, traitShare);
+
+        address[] memory recipients = _selectBondRecipients(winners, quantity, entropyState);
+        if (_purchaseJackpotBonds(bondsAddr, recipients, basePerBond, spend)) {
+            bondSpent = spend;
+        }
+
+        ethPoolForWinners = traitShare - bondSpent;
+    }
+
+    function _selectBondRecipients(
+        address[] memory winners,
+        uint256 quantity,
+        uint256 entropy
+    ) private pure returns (address[] memory recipients) {
+        recipients = new address[](quantity);
+        uint256 len = winners.length;
+        if (len == 0) return recipients;
+
+        uint256 offset = entropy % len;
+        for (uint256 i; i < quantity; ) {
+            recipients[i] = winners[(offset + i) % len];
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    function _purchaseJackpotBonds(
+        address bondsAddr,
+        address[] memory recipients,
+        uint256 basePerBond,
+        uint256 spend
+    ) private returns (bool) {
+        if (bondsAddr == address(0) || spend == 0) return false;
+        try IPurgeBondsJackpot(bondsAddr).purchaseJackpotBonds{value: spend}(recipients, basePerBond, true) {
+            return true;
+        } catch {
+            return false;
         }
     }
 

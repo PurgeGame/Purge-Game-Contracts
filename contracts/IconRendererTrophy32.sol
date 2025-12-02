@@ -125,7 +125,7 @@ contract IconRendererTrophy32 {
         // `extras` is a small status bundle set by the caller: extras[0] status bits
         // (bit31=bond render, bit0=staked, bit1=matured), extras[1]=bond created distance,
         // extras[2]=bond current distance, extras[3]=chance bps | (bit31=staked).
-        return _tokenURI(tokenId, data, extras);
+        return _tokenURI(tokenId, data, extras, 0);
     }
 
     /// @notice Render PurgeBond NFTs as exterminator trophy placeholders.
@@ -134,7 +134,8 @@ contract IconRendererTrophy32 {
         uint32 createdDistance,
         uint32 currentDistance,
         uint16 chanceBps,
-        bool staked_
+        bool staked_,
+        uint256 sellCoinValue
     ) external view returns (string memory) {
         uint32[4] memory extras;
         // High bit in extras[0] marks bond rendering for attribute injection.
@@ -144,13 +145,14 @@ contract IconRendererTrophy32 {
         extras[3] = uint32(chanceBps) | (staked_ ? (uint32(1) << 31) : 0);
 
         uint256 placeholderData = uint256(0xFFFF) << 152;
-        return _tokenURI(tokenId, placeholderData, extras);
+        return _tokenURI(tokenId, placeholderData, extras, sellCoinValue);
     }
 
     function _tokenURI(
         uint256 tokenId,
         uint256 data,
-        uint32[4] memory extras
+        uint32[4] memory extras,
+        uint256 bondSellCoin
     ) private view returns (string memory) {
         if ((data >> 128) == 0) revert("renderer:notTrophy");
 
@@ -365,7 +367,8 @@ contract IconRendererTrophy32 {
                 bondStaked,
                 bondCreated,
                 bondCurrent,
-                bondChance
+                bondChance,
+                bondSellCoin
             );
             return
                 _packBond(
@@ -528,7 +531,8 @@ contract IconRendererTrophy32 {
         bool staked,
         uint32 created,
         uint32 current,
-        uint16 chanceBps
+        uint16 chanceBps,
+        uint256 sellCoinValue
     ) private pure returns (string memory) {
         return
             string(
@@ -543,6 +547,8 @@ contract IconRendererTrophy32 {
                     uint256(current).toString(),
                     '"},{"trait_type":"Odds","value":"',
                     _formatBpsPercent(chanceBps),
+                    '"},{"trait_type":"Sellback (PURGE)","value":"',
+                    _formatCoinAmount(sellCoinValue),
                     '"}]'
                 )
             );
@@ -580,9 +586,23 @@ contract IconRendererTrophy32 {
             string.concat(
                 whole.toString(),
                 ".",
-                _pad4(uint16(frac)),
-                " ETH"
-            );
+            _pad4(uint16(frac)),
+            " ETH"
+        );
+    }
+
+    function _formatCoinAmount(uint256 amount) private pure returns (string memory) {
+        uint256 whole = amount / 1e6;
+        uint256 frac = amount % 1e6;
+        bytes memory fracStr = new bytes(6);
+        fracStr[0] = bytes1(uint8(48 + (frac / 100000) % 10));
+        fracStr[1] = bytes1(uint8(48 + (frac / 10000) % 10));
+        fracStr[2] = bytes1(uint8(48 + (frac / 1000) % 10));
+        fracStr[3] = bytes1(uint8(48 + (frac / 100) % 10));
+        fracStr[4] = bytes1(uint8(48 + (frac / 10) % 10));
+        fracStr[5] = bytes1(uint8(48 + (frac % 10)));
+
+        return string.concat(whole.toString(), ".", string(fracStr), " PURGE");
     }
 
     function _pad4(uint16 v) private pure returns (string memory) {

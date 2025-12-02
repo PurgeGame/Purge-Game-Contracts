@@ -794,7 +794,7 @@ contract PurgeGameNFT {
     }
 
     function _packOwnershipData(address owner, uint256 flags) private view returns (uint256 result) {
-        assembly {
+        assembly ("memory-safe") {
             owner := and(owner, _BITMASK_ADDRESS)
             result := or(owner, or(shl(_BITPOS_START_TIMESTAMP, timestamp()), flags))
         }
@@ -857,7 +857,7 @@ contract PurgeGameNFT {
         address owner,
         address msgSender
     ) private pure returns (bool result) {
-        assembly {
+        assembly ("memory-safe") {
             owner := and(owner, _BITMASK_ADDRESS)
             msgSender := and(msgSender, _BITMASK_ADDRESS)
             result := or(eq(msgSender, owner), eq(msgSender, approvedAddress))
@@ -911,7 +911,7 @@ contract PurgeGameNFT {
 
         uint256 fromValue = uint256(uint160(from));
         uint256 toValue = uint256(uint160(to));
-        assembly {
+        assembly ("memory-safe") {
             log4(
                 0, // Start of data (0, since no data).
                 0, // End of data (0, since no data).
@@ -949,7 +949,7 @@ contract PurgeGameNFT {
             if (reason.length == 0) {
                 revert TransferToNonERC721ReceiverImplementer();
             }
-            assembly {
+            assembly ("memory-safe") {
                 revert(add(32, reason), mload(reason))
             }
         }
@@ -993,7 +993,7 @@ contract PurgeGameNFT {
             uint256 tokenId = startTokenId;
 
             do {
-                assembly {
+                assembly ("memory-safe") {
                     log4(
                         0, // Start of data (0, since no data).
                         0, // End of data (0, since no data).
@@ -1426,9 +1426,9 @@ contract PurgeGameNFT {
 
         uint256 fromValue = uint256(uint160(from));
         uint256 toValue = uint256(uint160(to));
-        assembly {
-            log4(0, 0, _TRANSFER_EVENT_SIGNATURE, fromValue, toValue, tokenId)
-        }
+            assembly ("memory-safe") {
+                log4(0, 0, _TRANSFER_EVENT_SIGNATURE, fromValue, toValue, tokenId)
+            }
     }
 
     /// @dev Trophy module hook to set flag bits; updates owner trophy balance when active flag changes.

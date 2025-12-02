@@ -17,11 +17,22 @@ interface IPurgeBondsPresale {
     function ingestPresaleEth() external payable;
 }
 
+interface IPurgeBondsAffiliateMint {
+    function mintAffiliateReward(
+        address to,
+        uint256 quantity,
+        uint256 basePerBondWei,
+        bool stake
+    ) external returns (uint256 startTokenId);
+}
+
 contract PurgeAffiliate {
     // ---------------------------------------------------------------------
     // Events
     // ---------------------------------------------------------------------
     event Affiliate(uint256 amount, bytes32 indexed code, address sender);
+    event AffiliateBondClaimed(address indexed player, uint24 indexed lvl, uint8 indexed tier, uint8 bondsMinted);
+    event AffiliateBondRewardsUpdated(uint256 count);
 
     // ---------------------------------------------------------------------
     // Errors
@@ -36,6 +47,11 @@ contract PurgeAffiliate {
     error PresaleExceedsRemaining();
     error PresalePerTxLimit();
     error PresaleClosed();
+    error ClaimTierInvalid();
+    error ClaimAlreadyClaimed();
+    error ClaimScoreTooLow();
+    error ClaimConfigTooLarge();
+    error InvalidClaimConfig();
 
     // ---------------------------------------------------------------------
     // Types
@@ -48,6 +64,13 @@ contract PurgeAffiliate {
     struct AffiliateCodeInfo {
         address owner;
         uint8 rakeback;
+    }
+
+    struct AffiliateBondReward {
+        uint96 scoreRequired; // affiliate score needed (base units, 6 decimals)
+        uint96 baseWeiPerBond; // base value per bond for win odds (>= min base, capped to 0.5 ETH when minting)
+        uint8 bonds; // number of bonds minted for this tier
+        bool stake; // whether the reward bonds are staked (soulbound)
     }
 
     // ---------------------------------------------------------------------
@@ -63,6 +86,9 @@ contract PurgeAffiliate {
     uint256 private constant PRESALE_PRICE_DIVISOR = 1000; // pricePer1000 / 1000 = price per token
     uint256 private constant PRESALE_PRICE_FLOOR_1000 = 0.0075 ether; // minimum price per 1,000 tokens
     uint256 private constant PRESALE_MAX_ETH_PER_TX = 1 ether;
+    uint256 private constant AFFILIATE_BOND_MIN_BASE = 0.02 ether;
+    uint256 private constant AFFILIATE_BOND_MAX_BASE = 0.5 ether;
+    uint256 private constant AFFILIATE_BOND_MAX_TIERS = 256;
 
     // ---------------------------------------------------------------------
     // Immutable / wiring
@@ -92,6 +118,8 @@ contract PurgeAffiliate {
     uint48 private presaleLastDay;
     bool private presaleIncreasedToday;
     bool private referralLocksActive;
+    AffiliateBondReward[] private affiliateBondRewards;
+    mapping(uint24 => mapping(address => uint256)) public affiliateBondClaimed; // bitmask of claimed tiers per level
 
     function _applyPresaleDecay() private returns (uint256 pricePer1000) {
         uint48 day = uint48(block.timestamp / 1 days);
@@ -437,6 +465,97 @@ contract PurgeAffiliate {
 
         emit Affiliate(amount, storedCode, sender);
         return playerRakeback;
+    }
+
+    // ---------------------------------------------------------------------
+    // Affiliate bond claims (reward mints)
+    // ---------------------------------------------------------------------
+    /// @notice Configure claim tiers that award free bonds to affiliates once they reach a score threshold for a level.
+    /// @dev Access: bonds only. Up to 256 tiers supported (bit-packed claimed flags).
+    function setAffiliateBondRewards(AffiliateBondReward[] calldata rewards) external {
+        if (msg.sender != bonds) revert OnlyBonds();
+        uint256 len = rewards.length;
+        if (len > AFFILIATE_BOND_MAX_TIERS) revert ClaimConfigTooLarge();
+        delete affiliateBondRewards;
+        for (uint256 i; i < len; ) {
+            AffiliateBondReward calldata reward = rewards[i];
+            if (
+                reward.scoreRequired == 0 ||
+                reward.bonds == 0 ||
+                reward.baseWeiPerBond < AFFILIATE_BOND_MIN_BASE ||
+                reward.baseWeiPerBond > AFFILIATE_BOND_MAX_BASE
+            ) {
+                revert InvalidClaimConfig();
+            }
+            affiliateBondRewards.push(reward);
+            unchecked {
+                ++i;
+            }
+        }
+        emit AffiliateBondRewardsUpdated(len);
+    }
+
+    /// @notice Claim a bond reward tier for the caller for a given level.
+    /// @param lvl Level whose affiliate score is evaluated.
+    /// @param tierIdx Reward tier index (0-based).
+    function claimAffiliateBond(uint24 lvl, uint8 tierIdx) external {
+        AffiliateBondReward memory reward = _affiliateBondReward(tierIdx);
+
+        uint256 claimedMask = affiliateBondClaimed[lvl][msg.sender];
+        uint256 mask = uint256(1) << tierIdx;
+        if ((claimedMask & mask) != 0) revert ClaimAlreadyClaimed();
+
+        uint256 score = affiliateCoinEarned[lvl][msg.sender];
+        if (score < reward.scoreRequired) revert ClaimScoreTooLow();
+
+        affiliateBondClaimed[lvl][msg.sender] = claimedMask | mask;
+
+        IPurgeBondsAffiliateMint(bonds).mintAffiliateReward(
+            msg.sender,
+            reward.bonds,
+            reward.baseWeiPerBond,
+            reward.stake
+        );
+
+        emit AffiliateBondClaimed(msg.sender, lvl, tierIdx, reward.bonds);
+    }
+
+    /// @notice Return the number of claimable tiers and the claimed bitmask for a player/level pair.
+    function claimableAffiliateBondTiers(
+        address player,
+        uint24 lvl
+    ) external view returns (uint16 claimable, uint256 claimedMask) {
+        claimedMask = affiliateBondClaimed[lvl][player];
+        uint256 len = affiliateBondRewards.length;
+        if (len == 0) return (0, claimedMask);
+
+        uint256 score = affiliateCoinEarned[lvl][player];
+        for (uint256 i; i < len; ) {
+            AffiliateBondReward memory reward = affiliateBondRewards[i];
+            if ((claimedMask & (uint256(1) << i)) == 0 && score >= reward.scoreRequired) {
+                unchecked {
+                    ++claimable;
+                }
+            }
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    /// @notice Number of configured affiliate bond reward tiers.
+    function affiliateBondRewardsLength() external view returns (uint256) {
+        return affiliateBondRewards.length;
+    }
+
+    /// @notice Return a configured affiliate bond reward tier.
+    function affiliateBondReward(uint256 idx) external view returns (AffiliateBondReward memory) {
+        return affiliateBondRewards[idx];
+    }
+
+    function _affiliateBondReward(uint8 idx) private view returns (AffiliateBondReward memory reward) {
+        if (idx >= affiliateBondRewards.length) revert ClaimTierInvalid();
+        reward = affiliateBondRewards[idx];
     }
 
     /// @notice Consume and return the caller’s accrued presale/early affiliate coin for minting.

@@ -18,6 +18,7 @@ interface IStETH {
     function balanceOf(address account) external view returns (uint256);
     function transfer(address to, uint256 amount) external returns (bool);
     function approve(address spender, uint256 amount) external returns (bool);
+    function transferFrom(address from, address to, uint256 amount) external returns (bool);
 }
 
 interface IPurgeBonds {
@@ -34,6 +35,18 @@ interface IPurgeBonds {
     function finalizeShutdown(uint256 maxIds) external returns (uint256 processedIds, uint256 burned, bool complete);
     function setTransfersLocked(bool locked, uint48 rngDay) external;
     function stakeRateBps() external view returns (uint16);
+    function purchasesEnabled() external view returns (bool);
+    function purchasePrizePoolBonds(
+        address to,
+        uint256 baseWei,
+        uint256 quantity,
+        bool stake
+    ) external payable returns (uint256 startTokenId);
+    function purchaseJackpotBonds(
+        address[] calldata recipients,
+        uint256 basePerBond,
+        bool stake
+    ) external payable returns (uint256 startTokenId);
 }
 
 /**
@@ -96,6 +109,7 @@ contract PurgeGame is PurgeGameStorage {
     event Advance(uint8 gameState, uint8 phase);
     event ReverseFlip(address indexed caller, uint256 totalQueued, uint256 cost);
     event VrfCoordinatorUpdated(address indexed previous, address indexed current);
+    event PrizePoolBondBuy(uint256 spendWei, uint256 quantity);
 
     // -----------------------
     // Immutable Addresses
@@ -134,6 +148,8 @@ contract PurgeGame is PurgeGameStorage {
     uint256 private constant REWARD_POOL_MIN_STAKE = 0.5 ether;
     uint256 private constant BOND_RNG_RESOLVE_LIMIT = 150; // mirrors bonds GAS_LIMITED_RESOLVE_MAX
     uint8 private constant BOND_RNG_RESOLVE_PASSES = 3; // cap iterations to stay gas-safe
+    uint16 private constant PRIZE_POOL_BOND_BPS_PER_DAILY = 20; // 0.2% per daily (~2% total across 10) = 10% of the ~20% daily float
+    uint256 private constant PRIZE_POOL_BOND_BASE = 0.02 ether;
 
     // mintPacked_ layout (LSB ->):
     // [0-23]=last ETH level, [24-47]=total ETH level count, [48-71]=ETH level streak,
@@ -892,17 +908,7 @@ contract PurgeGame is PurgeGameStorage {
             claimableWinnings[player] = 1;
             payout = amount - 1;
         }
-        uint256 bal = address(this).balance;
-        uint256 ethToSend = bal >= payout ? payout : bal;
-        uint256 stShortfall = payout > ethToSend ? (payout - ethToSend) : 0;
-        if (ethToSend != 0) {
-            (bool okEth, ) = payable(player).call{value: ethToSend}("");
-            if (!okEth) revert E();
-        }
-        if (stShortfall != 0) {
-            if (!steth.transfer(player, stShortfall)) revert E();
-            principalStEth -= stShortfall;
-        }
+        _payoutWithStethFallback(player, payout);
     }
 
     function getWinnings() external view returns (uint256) {
@@ -918,7 +924,23 @@ contract PurgeGame is PurgeGameStorage {
     /// @notice Credit claimable ETH for a player from bond redemptions (bonds contract only).
     function creditBondWinnings(address player) external payable {
         if (msg.sender != bonds || player == address(0) || msg.value == 0) revert E();
+        if (player == address(this)) {
+            currentPrizePool += msg.value;
+            return;
+        }
         _addClaimableEth(player, msg.value);
+    }
+
+    /// @notice Deposit bond purchase reward share into the tracked reward pool (bonds only).
+    function bondRewardDeposit() external payable {
+        if (msg.sender != bonds || msg.value == 0) revert E();
+        rewardPool += msg.value;
+    }
+
+    /// @notice Deposit bond purchase yield share without touching tracked pools (bonds only).
+    function bondYieldDeposit() external payable {
+        if (msg.sender != bonds || msg.value == 0) revert E();
+        // Intentionally left untracked; balance stays on contract.
     }
 
     /// @notice Spend claimable ETH to purchase either NFTs or MAPs using the full available balance.
@@ -1240,6 +1262,37 @@ contract PurgeGame is PurgeGameStorage {
         return true;
     }
 
+    function _purchasePrizePoolBondSlice() private {
+        uint256 base = dailyJackpotBase;
+        if (base == 0) return;
+
+        uint256 budget = (base * PRIZE_POOL_BOND_BPS_PER_DAILY) / 10_000; // small skim per daily jackpot
+        uint256 available = currentPrizePool;
+        if (budget == 0 || available < budget) {
+            budget = available;
+        }
+        if (budget < PRIZE_POOL_BOND_BASE) return;
+
+        uint256 quantity = budget / PRIZE_POOL_BOND_BASE;
+        uint256 spend = quantity * PRIZE_POOL_BOND_BASE;
+        if (spend == 0) return;
+
+        currentPrizePool = available - spend;
+
+        if (!IPurgeBonds(bonds).purchasesEnabled()) {
+            currentPrizePool += spend; // revert the deduction so funds remain in prize pool
+            return;
+        }
+
+        IPurgeBonds(bonds).purchasePrizePoolBonds{value: spend}(
+            address(this),
+            PRIZE_POOL_BOND_BASE * quantity,
+            quantity,
+            true
+        );
+        emit PrizePoolBondBuy(spend, quantity);
+    }
+
     function _drainToBonds(uint48 day) private {
         address bondsAddr = bonds;
         if (bondsAddr == address(0)) return;
@@ -1265,6 +1318,39 @@ contract PurgeGame is PurgeGameStorage {
             principalStEth += minted;
         } catch {
             return;
+        }
+    }
+
+    /// @notice Swap ETH <-> stETH with the bonds contract to rebalance liquidity.
+    /// @dev Access: bonds only. stEthForEth=true pulls stETH from bonds and sends back ETH; false stakes incoming ETH and forwards minted stETH.
+    function swapWithBonds(bool stEthForEth, uint256 amount) external payable {
+        if (msg.sender != bonds || amount == 0) revert E();
+
+        if (stEthForEth) {
+            if (msg.value != 0) revert E();
+            if (!steth.transferFrom(msg.sender, address(this), amount)) revert E();
+            principalStEth += amount;
+
+            if (address(this).balance < amount) revert E();
+            if (rewardPool >= amount) {
+                rewardPool -= amount;
+            } else {
+                rewardPool = 0;
+            }
+
+            (bool ok, ) = payable(msg.sender).call{value: amount}("");
+            if (!ok) revert E();
+        } else {
+            if (msg.value != amount) revert E();
+            uint256 minted;
+            try steth.submit{value: amount}(address(0)) returns (uint256 m) {
+                minted = m;
+            } catch {
+                revert E();
+            }
+            if (minted != 0) {
+                _sendStethOrEth(msg.sender, minted);
+            }
         }
     }
 
@@ -1532,6 +1618,62 @@ contract PurgeGame is PurgeGameStorage {
             unchecked {
                 --reversals;
             }
+        }
+    }
+
+    function _sendStethOrEth(address to, uint256 amount) private {
+        if (amount == 0 || to == address(0)) revert E();
+
+        uint256 stBal = steth.balanceOf(address(this));
+        uint256 stSend = amount <= stBal ? amount : stBal;
+        if (stSend != 0) {
+            if (!steth.transfer(to, stSend)) revert E();
+            if (principalStEth >= stSend) {
+                principalStEth -= stSend;
+            } else {
+                principalStEth = 0;
+            }
+        }
+
+        uint256 remaining = amount - stSend;
+        if (remaining != 0) {
+            uint256 ethBal = address(this).balance;
+            if (ethBal < remaining) revert E();
+            (bool ok, ) = payable(to).call{value: remaining}("");
+            if (!ok) revert E();
+        }
+    }
+
+    function _payoutWithStethFallback(address to, uint256 amount) private {
+        if (amount == 0) return;
+
+        uint256 ethBal = address(this).balance;
+        uint256 ethSend = amount <= ethBal ? amount : ethBal;
+        if (ethSend != 0) {
+            (bool okEth, ) = payable(to).call{value: ethSend}("");
+            if (!okEth) revert E();
+        }
+        uint256 remaining = amount - ethSend;
+        if (remaining == 0) return;
+
+        uint256 stBal = steth.balanceOf(address(this));
+        uint256 stSend = remaining <= stBal ? remaining : stBal;
+        if (stSend != 0) {
+            if (!steth.transfer(to, stSend)) revert E();
+            if (principalStEth >= stSend) {
+                principalStEth -= stSend;
+            } else {
+                principalStEth = 0;
+            }
+        }
+
+        uint256 leftover = remaining - stSend;
+        if (leftover != 0) {
+            // Retry with any refreshed ETH (e.g., if stETH was short but ETH arrived).
+            uint256 ethRetry = address(this).balance;
+            if (ethRetry < leftover) revert E();
+            (bool ok, ) = payable(to).call{value: leftover}("");
+            if (!ok) revert E();
         }
     }
 

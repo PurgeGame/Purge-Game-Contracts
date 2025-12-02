@@ -11,6 +11,10 @@ interface IERC20Minimal {
     function transferFrom(address from, address to, uint256 amount) external returns (bool);
 }
 
+interface IERC20Approve is IERC20Minimal {
+    function approve(address spender, uint256 amount) external returns (bool);
+}
+
 interface IERC721Receiver {
     function onERC721Received(
         address operator,
@@ -26,7 +30,8 @@ interface IPurgeBondRenderer {
         uint32 createdDistance,
         uint32 currentDistance,
         uint16 chanceBps,
-        bool staked
+        bool staked,
+        uint256 sellCoinValue
     ) external view returns (string memory);
 }
 
@@ -49,8 +54,25 @@ interface IPurgeGamePrice {
     function coinPriceUnit() external view returns (uint256);
 }
 
+interface IStEthWithdrawalQueue {
+    function requestWithdrawals(
+        uint256[] calldata amounts,
+        address owner
+    ) external returns (uint256[] memory requestIds);
+
+    function claimWithdrawals(
+        uint256[] calldata requestIds,
+        uint256[] calldata hints
+    ) external returns (uint256[] memory amounts);
+}
+
 interface IPurgeGameBondWinnings {
     function creditBondWinnings(address player) external payable;
+}
+
+interface IPurgeGameBondSinks {
+    function bondRewardDeposit() external payable;
+    function bondYieldDeposit() external payable;
 }
 
 /**
@@ -63,7 +85,7 @@ interface IPurgeGameBondWinnings {
  * 3. Payouts:
  *    - Winners get topped up to 1 ETH (or 1 stETH).
  *    - Winners get a share of the PURGE token pool.
- *    - Staked bonds (non-transferable) get 5x the PURGE token weight.
+ *    - Staked bonds are non-transferable; all bonds share the same PURGE token weight.
  * 4. Accounting:
  *    - `totalCoinOwed` tracks the SUM of all potential liabilities (Weighted).
  *    - This ensures the contract is always solvent for the winning scenario.
@@ -97,6 +119,7 @@ contract PurgeBonds {
     error ExpiredSweepLocked(); // 0x44132333
     error InsufficientPayout(); // 0x8024d516
     error NotSellable(); // 0x762107fd
+    error InvalidPrice(); // 0x3c7fd3c2
 
     // ===========================================================================
     // Events
@@ -141,12 +164,14 @@ contract PurgeBonds {
     uint256 private constant BPS_DENOM = 10_000;
     uint64 private constant DECAY_DELAY_DAYS = 7; // Bumps delay decay for 7 days
     uint256 private constant COIN_WEIGHT_UNMARKETABLE = 5; // Staked (non-transferable) weight
-    uint256 private constant COIN_WEIGHT_MARKETABLE = 1; // Unstaked (transferable) weight
+    uint256 private constant COIN_WEIGHT_MARKETABLE = 5; // Unstaked (transferable) weight (no penalty)
     uint256 private constant MIN_BASE_PRICE = 0.02 ether; // Minimum bond size
     uint256 private constant AUTO_RESOLVE_BATCH = 100;
     uint256 private constant GAS_LIMITED_RESOLVE_MAX = 150;
     uint256 private constant SALES_BUMP_NUMERATOR = 1005; // +0.5% price per threshold
     uint256 private constant SALES_BUMP_DENOMINATOR = 1000;
+    uint256 private constant PRESALE_PRICE_PER_1000_DEFAULT = 0.01 ether;
+    uint256 private constant FALLBACK_MINT_PRICE = 0.025 ether;
 
     bytes32 private constant _TRANSFER_EVENT_SIGNATURE =
         0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef;
@@ -164,6 +189,7 @@ contract PurgeBonds {
     address public renderer;
     address public game; // The main PurgeGame contract
     address public affiliateProgram;
+    address public stEthWithdrawalQueue;
 
     // -- Financial Accounting --
     // `pool` variables track actual assets held.
@@ -174,6 +200,9 @@ contract PurgeBonds {
     uint256 public totalCoinOwed; // Aggregate weighted PURGE liability
     uint256 public rewardSeedEth; // Accumulator for game rewards from unwired state
     uint256 public gameRefundDeficit; // ETH earmarked to offset coin minted for bond sellbacks (can be settled later)
+    uint256 public gameRefundDeficitCoin; // PURGE minted via bond sellbacks (tracks coin amount tied to gameRefundDeficit)
+    uint256 public presalePricePer1000Wei = PRESALE_PRICE_PER_1000_DEFAULT; // fallback coin pricing before the game is wired
+    bool public prizePoolFunded; // flips after the first prize-pool transfer to the game (controls auto-staking on purchases)
 
     // -- Resolution State --
     bool public resolvePending;
@@ -333,11 +362,8 @@ contract PurgeBonds {
         uint256 amount = msg.value;
         if (amount == 0) return;
 
-        uint256 prizeCut = (amount * 90) / 100;
-        if (prizeCut != 0) {
-            _routePrizePool(prizeCut);
-        }
-        // Remaining 10% stays in the contract and is withdrawable via owner `sendAsset`.
+        _routePurchaseProceeds(amount);
+        // Remaining stays in the contract and is withdrawable via owner `sendAsset`.
     }
 
     /**
@@ -347,7 +373,7 @@ contract PurgeBonds {
         _resolvePendingInternal(_resolveLimit(maxBonds), true);
         // Auto-claim winners in live mode so players get swept to game credit without manual claims.
         if (!gameOver) {
-            autoClaimWinners(maxBonds);
+            _autoClaimWinners(maxBonds);
         }
     }
 
@@ -375,19 +401,46 @@ contract PurgeBonds {
     // Minting (Buying)
     // ===========================================================================
 
+    function _purchaseStakeFlag() private view returns (bool) {
+        return prizePoolFunded;
+    }
+
+    function _routePurchaseProceeds(uint256 amount) private {
+        if (amount == 0) return;
+        address game_ = game;
+        // Presale / unwired: park 20% for the game and keep the rest on the bond contract.
+        if (game_ == address(0)) {
+            uint256 toFund = amount / 5; // 20%
+            if (toFund != 0) {
+                rewardSeedEth += toFund;
+            }
+            return;
+        }
+
+        // Wired: send 50% to the game (20% reward pool + 30% yield pool), retain 50% locally.
+        uint256 rewardCut = amount / 5; // 20%
+        uint256 yieldCut = (amount * 3) / 10; // 30%
+        if (rewardCut != 0) {
+            _markPrizePoolFunded();
+            IPurgeGameBondSinks(game_).bondRewardDeposit{value: rewardCut}();
+        }
+        if (yieldCut != 0) {
+            IPurgeGameBondSinks(game_).bondYieldDeposit{value: yieldCut}();
+        }
+    }
+
     /**
      * @notice Purchase bonds.
      * @param baseWei The 'Principal' amount (affects win chance and payout).
      * @param quantity Number of bonds.
-     * @param stake If true, bonds are Soulbound but get 5x weight in coin payouts.
+     * @param stake Deprecated stake toggle (auto-managed; kept for ABI compatibility).
      * @param affiliateCode Referral code.
      */
-    function buy(uint256 baseWei, uint256 quantity, bool stake, bytes32 affiliateCode) external payable {
+    function buy(uint256 baseWei, uint256 quantity, bool /*stake*/, bytes32 affiliateCode) external payable {
         if (!purchasesEnabled) revert PurchasesClosed();
         if (transfersLocked) revert TransferBlocked();
         if (quantity == 0) revert InvalidQuantity();
         if (baseWei == 0 || baseWei > 1 ether) revert InvalidBase();
-        if (stake && msg.sender.code.length != 0) revert Unauthorized();
 
         _syncMultiplier();
 
@@ -408,15 +461,182 @@ contract PurgeBonds {
         if (price == 0 || totalPrice / quantity != price || msg.value != totalPrice) revert WrongPrice();
 
         // Purchases are revenue, not escrow: only `payBonds` funding backs payouts.
-        // Route 10% of the purchase to the prize pool (or hold if the game is unwired).
-        uint256 prizeCut = msg.value / 10;
-        if (prizeCut != 0) {
-            _routePrizePool(prizeCut);
-        }
+        _routePurchaseProceeds(msg.value);
 
-        _mintBatch(msg.sender, quantity, basePerBond, price, stake);
+        bool stakeFlag = _purchaseStakeFlag();
+        if (stakeFlag && msg.sender.code.length != 0) revert Unauthorized();
+
+        _mintBatch(msg.sender, quantity, basePerBond, price, stakeFlag);
 
         _bumpOnSales(msg.value);
+    }
+
+    /**
+     * @notice Purchase bonds using PURGE at 2x the ETH price (converted using the current mint price oracle).
+     * @dev Price source falls back to presale pricing before the game is wired. Prize pool routing is skipped.
+     * @param stake Deprecated stake toggle (auto-managed; kept for ABI compatibility).
+     */
+    function buyWithCoin(uint256 baseWei, uint256 quantity, bool /*stake*/) external {
+        if (!purchasesEnabled) revert PurchasesClosed();
+        if (transfersLocked) revert TransferBlocked();
+        if (quantity == 0) revert InvalidQuantity();
+        if (baseWei == 0 || baseWei > 1 ether) revert InvalidBase();
+
+        address coin = coinToken;
+        if (coin == address(0)) revert ZeroAddress();
+
+        _syncMultiplier();
+
+        uint256 basePerBond = baseWei / quantity;
+        if (basePerBond > 0.5 ether) {
+            basePerBond = 0.5 ether;
+        }
+        if (basePerBond < MIN_BASE_PRICE) revert InvalidBase();
+
+        uint256 priceWei = (basePerBond * priceMultiplier) / MULT_SCALE;
+        uint256 totalWei = priceWei * quantity;
+        if (priceWei == 0 || totalWei / quantity != priceWei) revert WrongPrice();
+
+        (uint256 mintPriceWei, uint256 priceCoinUnit) = _currentMintPricing();
+        if (mintPriceWei == 0 || priceCoinUnit == 0) revert WrongPrice();
+
+        uint256 coinCost = (totalWei * priceCoinUnit * 2) / mintPriceWei;
+        if (coinCost == 0) revert WrongPrice();
+
+        IERC20Minimal(coin).transferFrom(msg.sender, address(this), coinCost);
+
+        bool stakeFlag = _purchaseStakeFlag();
+        if (stakeFlag && msg.sender.code.length != 0) revert Unauthorized();
+
+        _mintBatch(msg.sender, quantity, basePerBond, 0, stakeFlag);
+
+        _bumpOnSales(totalWei);
+    }
+
+    /**
+     * @notice Purchase bonds at par (100% EV) using prize-pool funds routed by the game.
+     * @dev Access: game only. Ignores price multiplier and affiliate flow; skips sales-based price bumps.
+     * @param to Recipient of the bonds (typically the game contract for prize-pool recycling).
+     * @param quantity Number of bonds.
+     * @param stake Whether the bonds should be staked/soulbound.
+     * @param baseWei Total base across the batch (capped to 0.5 ETH per bond).
+     */
+    function purchasePrizePoolBonds(
+        address to,
+        uint256 baseWei,
+        uint256 quantity,
+        bool stake
+    ) external payable onlyGame returns (uint256 startTokenId) {
+        _syncMultiplier();
+
+        uint256 basePerBond = baseWei / quantity;
+        if (basePerBond > 0.5 ether) {
+            basePerBond = 0.5 ether;
+        }
+        if (basePerBond < MIN_BASE_PRICE) revert InvalidBase();
+
+        uint256 totalPrice = basePerBond * quantity;
+        if (totalPrice / quantity != basePerBond || msg.value != totalPrice) revert WrongPrice();
+
+        _routePurchaseProceeds(msg.value);
+
+        startTokenId = _mintBatch(to, quantity, basePerBond, msg.value, stake);
+    }
+
+    /**
+     * @notice Purchase bonds for a set of recipients at par pricing using game-managed funds.
+     * @dev Access: game only. Routes the standard prize cut and skips sales-based price bumps.
+     * @param recipients Addresses that should each receive one bond.
+     * @param basePerBondWei Base value per bond (win odds), capped at 0.5 ETH and floored to the minimum.
+     * @param stake Whether the minted bonds should be staked/soulbound.
+     */
+    function purchaseJackpotBonds(
+        address[] calldata recipients,
+        uint256 basePerBondWei,
+        bool stake
+    ) external payable onlyGame returns (uint256 startTokenId) {
+        uint256 quantity = recipients.length;
+        if (quantity == 0) revert InvalidQuantity();
+        if (basePerBondWei == 0 || basePerBondWei > 1 ether) revert InvalidBase();
+
+        _syncMultiplier();
+
+        uint256 basePerBond = basePerBondWei;
+        if (basePerBond > 0.5 ether) {
+            basePerBond = 0.5 ether;
+        }
+        if (basePerBond < MIN_BASE_PRICE) revert InvalidBase();
+
+        uint256 totalPrice = basePerBond * quantity;
+        if (totalPrice / quantity != basePerBond || msg.value != totalPrice) revert WrongPrice();
+
+        _routePurchaseProceeds(msg.value);
+
+        startTokenId = _currentIndex;
+        for (uint256 i; i < quantity; ) {
+            address to = recipients[i];
+            if (to == address(0)) revert ZeroAddress();
+            _mintBatch(to, 1, basePerBond, basePerBond, stake);
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    /**
+     * @notice Mint free bonds for affiliates who earned reward tiers (no ETH required).
+     * @dev Access: affiliate contract only.
+     * @param to Recipient of the reward bonds.
+     * @param quantity Number of bonds to mint.
+     * @param basePerBondWei Base value per bond (win odds). Capped to 0.5 ETH.
+     * @param stake Whether the bonds should be staked/soulbound.
+     */
+    function mintAffiliateReward(
+        address to,
+        uint256 quantity,
+        uint256 basePerBondWei,
+        bool stake
+    ) external returns (uint256 startTokenId) {
+        if (msg.sender != affiliateProgram) revert Unauthorized();
+
+        uint256 basePerBond = basePerBondWei;
+        if (basePerBond > 0.5 ether) {
+            basePerBond = 0.5 ether;
+        }
+        if (basePerBond < MIN_BASE_PRICE) revert InvalidBase();
+
+        startTokenId = _mintBatch(to, quantity, basePerBond, 0, stake);
+    }
+
+    /**
+     * @notice Mint one bond per recipient using provided base values; callable only by the game.
+     * @dev Base per bond is capped at 0.5 ETH; emits normal Purchase/Transfer events. No ETH is required.
+     *      Stakes every other bond (starting staked) to target a 50/50 staked split.
+     * @param recipients Addresses to receive bonds.
+     * @param baseWei Base value per recipient (win chance), uncapped input (capped internally to 0.5 ETH).
+     */
+    function mintBondsForRecipients(address[] calldata recipients, uint256[] calldata baseWei) external onlyGame {
+        uint256 len = recipients.length;
+        if (len == 0 || len != baseWei.length) revert InvalidQuantity();
+
+        for (uint256 i; i < len; ) {
+            address to = recipients[i];
+            if (to == address(0)) revert ZeroAddress();
+
+            uint256 base = baseWei[i];
+            if (base == 0 || base > 1 ether) revert InvalidBase();
+            if (base > 0.5 ether) {
+                base = 0.5 ether;
+            }
+            if (base < MIN_BASE_PRICE) revert InvalidBase();
+
+            bool stake = (i & 1) == 0; // alternate staking to target ~50% staked
+            _mintBatch(to, 1, base, 0, stake);
+
+            unchecked {
+                ++i;
+            }
+        }
     }
 
     function _mintBatch(
@@ -452,7 +672,7 @@ contract PurgeBonds {
             (minted << _BITPOS_NUMBER_MINTED);
 
         // **CRITICAL ACCOUNTING**: Add weighted obligation to the global counter.
-        // Staked bonds = 5x weight. Unstaked = 1x weight.
+        // Staked/unstaked share the same coin weight; staking only affects transferability.
         uint256 weight = stake ? COIN_WEIGHT_UNMARKETABLE : COIN_WEIGHT_MARKETABLE;
         totalEthOwed += basePrice * quantity;
         totalCoinOwed += basePrice * weight * quantity;
@@ -472,7 +692,7 @@ contract PurgeBonds {
 
             emit Purchased(to, tokenId, basePrice, paidWei);
 
-            assembly {
+            assembly ("memory-safe") {
                 log4(0, 0, _TRANSFER_EVENT_SIGNATURE, 0, toMasked, tokenId)
             }
             if (to.code.length != 0) {
@@ -560,15 +780,12 @@ contract PurgeBonds {
     }
 
     /**
-    /**
      * @notice Auto-claim matured winners in batches, paying coin directly and reporting winners for off-chain/game-side ETH credit.
      * @param maxClaims Max winners to process (0 => default batch size).
      * @return winners Addresses credited this batch.
      * @return morePending True if additional claim-ready winners remain for follow-up calls.
      */
-    function autoClaimWinners(
-        uint256 maxClaims
-    ) external returns (address[] memory winners, bool morePending) {
+    function _autoClaimWinners(uint256 maxClaims) private returns (address[] memory winners, bool morePending) {
         if (gameOver) revert GameOver(); // After GG, claims must be handled directly on the bond contract.
 
         uint256 cursor = claimSweepCursor;
@@ -635,10 +852,14 @@ contract PurgeBonds {
         morePending = (cursor <= maxId);
 
         if (claimed != limit) {
-            assembly {
+            assembly ("memory-safe") {
                 mstore(winners, claimed)
             }
         }
+    }
+
+    function autoClaimWinners(uint256 maxClaims) external returns (address[] memory winners, bool morePending) {
+        return _autoClaimWinners(maxClaims);
     }
 
     // ===========================================================================
@@ -674,11 +895,6 @@ contract PurgeBonds {
         uint256 payout = _bondSalePayout(basePrice, distance, refDistance);
         if (payout == 0) revert NotSellable();
 
-        packed = _packedOwnershipOf(tokenId);
-        if ((packed & _BITMASK_STAKED) != 0) {
-            payout = (payout * 80) / 100; // 20% penalty on staked bond sellbacks
-            if (payout == 0) revert NotSellable();
-        }
         _transferToVault(holder, tokenId, packed);
 
         address game_ = game;
@@ -694,6 +910,7 @@ contract PurgeBonds {
         // Track ETH that should eventually be forwarded to the game to mirror the minted coin value.
         unchecked {
             gameRefundDeficit += payout;
+            gameRefundDeficitCoin += coinOut;
         }
 
         address coin = coinToken;
@@ -737,14 +954,25 @@ contract PurgeBonds {
         emit BondSold(holder, tokenId, amount);
     }
 
-    function _bondSalePayout(uint256 basePrice, uint256 distance, uint256 refDistance) private pure returns (uint256) {
+    function _bondSalePayout(uint256 basePrice, uint256 distance, uint256 refDistance) private view returns (uint256) {
         if (refDistance == 0) return 0;
         if (distance > refDistance) distance = refDistance;
-        // Start at 20% of base price and linearly scale toward 90% as the bond approaches the front of the queue.
+        // Start at 20% and scale linearly with progress, clamped to [20%, 90%].
         uint256 progress = refDistance - distance; // 0 when newest; increases as it matures
-        uint256 scaleBps = 2000 + (progress * 7000) / refDistance; // 20% + up to 70%
-        if (scaleBps > 9000) scaleBps = 9000; // Cap at 90%
-        return (basePrice * scaleBps) / 10_000;
+        uint256 scaleBps = (progress * 10_000) / refDistance;
+        if (scaleBps < 2000) scaleBps = 2000;
+        if (scaleBps > 9000) scaleBps = 9000;
+
+        uint256 basePayout = (basePrice * scaleBps) / 10_000;
+        uint256 mult = _saleMultiplier();
+        return (basePayout * mult) / MULT_SCALE;
+    }
+
+    function _saleMultiplier() private view returns (uint256) {
+        uint256 mult = _multiplierWithDecay();
+        uint256 cap = 8e17; // 80%
+        if (mult > cap) mult = cap;
+        return mult;
     }
 
     // ===========================================================================
@@ -754,6 +982,59 @@ contract PurgeBonds {
     function setOwner(address newOwner) external onlyOwner {
         if (newOwner == address(0)) revert ZeroAddress();
         owner = newOwner;
+    }
+
+    function setStEthWithdrawalQueue(address queue) external onlyOwner {
+        if (queue == address(0)) revert ZeroAddress();
+        stEthWithdrawalQueue = queue;
+        IERC20Approve(stEthToken).approve(queue, type(uint256).max);
+    }
+
+    /**
+     * @notice Request withdrawal of stETH to receive ETH via the Lido withdrawal queue.
+     * @dev Access: owner only. Amounts are burned in the queue and ETH becomes claimable there.
+     * @param amounts stETH amounts per requestId to create.
+     * @return requestIds IDs created in the queue.
+     */
+    function requestStEthWithdrawals(
+        uint256[] calldata amounts
+    ) external onlyOwner returns (uint256[] memory requestIds) {
+        address queue = stEthWithdrawalQueue;
+        if (queue == address(0)) revert ZeroAddress();
+        uint256 len = amounts.length;
+        if (len == 0) revert InvalidQuantity();
+        uint256 total;
+        for (uint256 i; i < len; ) {
+            uint256 amt = amounts[i];
+            if (amt == 0) revert InvalidQuantity();
+            total += amt;
+            unchecked {
+                ++i;
+            }
+        }
+        IERC20Minimal st = IERC20Minimal(stEthToken);
+        if (st.balanceOf(address(this)) < total) revert InsufficientPayout();
+
+        requestIds = IStEthWithdrawalQueue(queue).requestWithdrawals(amounts, address(this));
+    }
+
+    /**
+     * @notice Claim ETH from previously requested stETH withdrawals.
+     * @dev Access: owner only. Hints are queue-specific positioning helpers (pass empty if not needed).
+     */
+    function claimStEthWithdrawals(
+        uint256[] calldata requestIds,
+        uint256[] calldata hints
+    ) external onlyOwner returns (uint256[] memory amounts) {
+        address queue = stEthWithdrawalQueue;
+        if (queue == address(0)) revert ZeroAddress();
+        if (requestIds.length == 0) revert InvalidQuantity();
+        amounts = IStEthWithdrawalQueue(queue).claimWithdrawals(requestIds, hints);
+    }
+
+    function setPresalePricePer1000(uint256 priceWeiPer1000) external onlyOwner {
+        if (priceWeiPer1000 == 0) revert InvalidPrice();
+        presalePricePer1000Wei = priceWeiPer1000;
     }
 
     function wire(address[] calldata addresses) external onlyOwner {
@@ -985,9 +1266,10 @@ contract PurgeBonds {
         uint32 created = createdDistance[tokenId];
         uint32 current = uint32(_currentDistance(tokenId));
         uint16 chance = getWinChance(tokenId);
+        uint256 sellCoin = _bondCoinSaleQuote(tokenId);
 
         bool isStaked = (_packedOwnershipOf(tokenId) & _BITMASK_STAKED) != 0;
-        return IPurgeBondRenderer(renderer).bondTokenURI(tokenId, created, current, chance, isStaked);
+        return IPurgeBondRenderer(renderer).bondTokenURI(tokenId, created, current, chance, isStaked, sellCoin);
     }
 
     function getWinChance(uint256 tokenId) public view returns (uint16) {
@@ -998,6 +1280,11 @@ contract PurgeBonds {
         if (c == 0) return 1;
         if (c > 1000) return 1000;
         return uint16(c);
+    }
+
+    function bondSellCoinQuote(uint256 tokenId) external view returns (uint256) {
+        _requireActiveToken(tokenId);
+        return _bondCoinSaleQuote(tokenId);
     }
 
     function currentPrice(uint256 baseWei) external view returns (uint256) {
@@ -1115,7 +1402,7 @@ contract PurgeBonds {
     }
 
     function _packOwnershipData(address owner_, uint256 flags) private view returns (uint256 result) {
-        assembly {
+        assembly ("memory-safe") {
             owner_ := and(owner_, _BITMASK_ADDRESS)
             result := or(owner_, or(shl(_BITPOS_START_TIMESTAMP, timestamp()), flags))
         }
@@ -1266,30 +1553,110 @@ contract PurgeBonds {
         // budget is set by `payBonds`; we only advance matured bonds when funding has been explicitly supplied.
         if (budget == 0) revert InsufficientEthForResolve();
 
+        if (tid == 0) tid = 1;
+
+        uint256 rangeEnd = tid + limit - 1;
+        if (rangeEnd > maxId) rangeEnd = maxId;
+        if (tid > rangeEnd) {
+            resolvePending = false;
+            pendingRngWord = 0;
+            pendingResolveBase = 0;
+            pendingResolveMax = 0;
+            pendingResolveBudget = 0;
+            pendingRngDay = 0;
+            transfersLocked = false;
+            return;
+        }
+
+        uint256 totalSlots = rangeEnd - tid + 1;
+        uint256 randomCount = (totalSlots * 20) / 100;
+        if (randomCount == 0 && totalSlots != 0) {
+            randomCount = 1;
+        }
+        if (randomCount > totalSlots) {
+            randomCount = totalSlots;
+        }
+
+        uint256[] memory randomIds = new uint256[](randomCount);
+        uint256 randomFilled;
+        uint256 seed = rngWord;
+        while (randomFilled < randomCount) {
+            uint256 candidate = tid + (seed % totalSlots);
+            bool dup = false;
+            unchecked {
+                for (uint256 j; j < randomFilled; ++j) {
+                    if (randomIds[j] == candidate) {
+                        dup = true;
+                        break;
+                    }
+                }
+            }
+            if (!dup) {
+                randomIds[randomFilled] = candidate;
+                unchecked {
+                    ++randomFilled;
+                }
+            }
+            seed = uint256(keccak256(abi.encode(seed, randomFilled, tid)));
+        }
+
+        bool halted;
+        uint256 heldCoinTotal;
+        uint256 heldEthTotal;
+        for (uint256 i; i < randomFilled; ) {
+            (budget, halted, heldCoinTotal, heldEthTotal) = _resolveSingle(
+                randomIds[i],
+                rngWord,
+                budget,
+                heldCoinTotal,
+                heldEthTotal
+            );
+            if (halted) {
+                break;
+            }
+            unchecked {
+                ++i;
+            }
+        }
+
         uint256 processed;
-        while (processed < limit && tid <= maxId) {
-            uint256 packed = _packedOwnershipAt(tid);
-            if (packed != 0 && (packed & _BITMASK_BURNED) == 0) {
-                uint256 basePrice = basePriceOf[tid];
-                uint256 delta = basePrice >= 1 ether ? 0 : (1 ether - basePrice);
-
-                // Budget check: Do we have funds to pay if this bond wins?
-                if (budget < delta) break;
-
-                uint8 outcome = _resolveBond(tid, rngWord);
-                if (outcome == 1) {
-                    if (delta != 0) budget -= delta;
-                    _markClaimable(tid, basePrice);
-                } else if (outcome == 2) {
-                    if (delta != 0) budget -= delta;
-                } else {
-                    budget += basePrice; // Losers return funds to the budget
+        uint256 cursor = tid;
+        while (!halted && processed < totalSlots && cursor <= maxId) {
+            bool skip;
+            unchecked {
+                for (uint256 k; k < randomFilled; ++k) {
+                    if (randomIds[k] == cursor) {
+                        skip = true;
+                        break;
+                    }
+                }
+            }
+            if (!skip) {
+                (budget, halted, heldCoinTotal, heldEthTotal) = _resolveSingle(
+                    cursor,
+                    rngWord,
+                    budget,
+                    heldCoinTotal,
+                    heldEthTotal
+                );
+                if (halted) {
+                    tid = cursor;
+                    break;
                 }
             }
             unchecked {
-                ++tid;
+                ++cursor;
                 ++processed;
             }
+        }
+        if (processed == totalSlots) {
+            tid = rangeEnd + 1;
+        } else if (cursor > tid) {
+            tid = cursor;
+        }
+
+        if (heldEthTotal != 0 || heldCoinTotal != 0) {
+            _distributeHeldWins(heldEthTotal, heldCoinTotal);
         }
 
         resolveBaseId = tid;
@@ -1444,6 +1811,58 @@ contract PurgeBonds {
         lastDecayDay = day;
     }
 
+    function _currentMintPricing() private view returns (uint256 priceWei, uint256 priceCoinUnit) {
+        address game_ = game;
+        if (game_ != address(0)) {
+            priceWei = IPurgeGamePrice(game_).mintPrice();
+            priceCoinUnit = IPurgeGamePrice(game_).coinPriceUnit();
+            if (priceWei != 0 && priceCoinUnit != 0) {
+                return (priceWei, priceCoinUnit);
+            }
+        }
+
+        priceWei = _fallbackMintPrice();
+        priceCoinUnit = _presaleCoinPriceUnit(priceWei);
+    }
+
+    function _presaleCoinPriceUnit(uint256 mintPriceWei) private view returns (uint256) {
+        uint256 pricePer1000 = presalePricePer1000Wei;
+        if (pricePer1000 == 0) {
+            pricePer1000 = PRESALE_PRICE_PER_1000_DEFAULT;
+        }
+        // coinPriceUnit = (mintPrice / pricePerCoin) scaled by coin decimals (1e6).
+        return (mintPriceWei * 1e9) / pricePer1000;
+    }
+
+    function _fallbackMintPrice() private pure returns (uint256) {
+        return FALLBACK_MINT_PRICE;
+    }
+
+    function _bondCoinSaleQuote(uint256 tokenId) private view returns (uint256 coinOut) {
+        uint256 packed = _packedOwnershipAt(tokenId);
+        if (packed == 0 || (packed & _BITMASK_BURNED) != 0) return 0;
+
+        uint256 basePrice = basePriceOf[tokenId];
+        uint256 distance = _currentDistance(tokenId);
+        if (distance == 0) return 0;
+
+        uint256 refDistance = lastPurchaseDistance;
+        if (refDistance < distance) {
+            refDistance = distance;
+        }
+
+        uint256 payoutWei = _bondSalePayout(basePrice, distance, refDistance);
+        if (payoutWei == 0) return 0;
+
+        address game_ = game;
+        if (game_ == address(0)) return 0;
+        uint256 priceWei = IPurgeGamePrice(game_).mintPrice();
+        uint256 priceCoinUnit = IPurgeGamePrice(game_).coinPriceUnit();
+        if (priceWei == 0 || priceCoinUnit == 0) return 0;
+
+        coinOut = (payoutWei * priceCoinUnit) / priceWei;
+    }
+
     function _decreaseTotalCoinOwed(uint256 amount) private {
         if (amount == 0) return;
         uint256 owed = totalCoinOwed;
@@ -1494,7 +1913,7 @@ contract PurgeBonds {
         // Fallback pricing if Game is not reporting correctly
         if (coinBase == 0) {
             usedFallbackPrice = true;
-            uint256 pricePer1000 = 0.025 ether;
+            uint256 pricePer1000 = FALLBACK_MINT_PRICE;
             coinBase = (weiSpent * 1000 * 1e6) / pricePer1000;
         }
 
@@ -1515,15 +1934,10 @@ contract PurgeBonds {
         coinToken = token;
     }
 
-    function _routePrizePool(uint256 amount) private {
-        if (amount == 0) return;
-        address game_ = game;
-        if (game_ == address(0)) {
-            rewardSeedEth += amount;
-            return;
+    function _markPrizePoolFunded() private {
+        if (!prizePoolFunded) {
+            prizePoolFunded = true;
         }
-        (bool ok, ) = payable(game_).call{value: amount}("");
-        if (!ok) revert CallFailed();
     }
 
     function _setGame(address game_) private {
@@ -1537,6 +1951,7 @@ contract PurgeBonds {
         uint256 seed = rewardSeedEth;
         if (seed != 0) {
             rewardSeedEth = 0;
+            _markPrizePoolFunded();
             (bool ok, ) = payable(game_).call{value: seed}("");
             if (!ok) revert CallFailed();
         }
@@ -1633,7 +2048,7 @@ contract PurgeBonds {
         win = roll < chanceBps;
     }
 
-    function _resolveBond(uint256 tokenId, uint256 rngWord) private returns (uint8 outcome) {
+    function _resolveBond(uint256 tokenId, uint256 rngWord) private returns (uint8 outcome, uint256 heldCoin, uint256 heldEth) {
         uint256 basePrice = basePriceOf[tokenId];
         uint256 packed = _packedOwnershipOf(tokenId);
         uint256 weight = _coinWeightMultiplier(packed);
@@ -1644,7 +2059,20 @@ contract PurgeBonds {
         bool win;
         (win, chance, roll) = bondOutcome(tokenId, rngWord);
         if (win) {
-            if (gameOver) {
+            if (owner_ == address(this)) {
+                uint256 coinShare;
+                uint256 coinOwed = totalCoinOwed;
+                if (coinOwed != 0 && bondCoin != 0) {
+                    coinShare = (bondCoin * weight) / coinOwed;
+                }
+                _burnToken(tokenId, owner_);
+                payoutObligation = payoutObligation <= 1 ether ? 0 : payoutObligation - 1 ether;
+                totalEthOwed -= 1 ether;
+                _decreaseTotalCoinOwed(weight);
+                heldCoin = coinShare;
+                heldEth = 1 ether;
+                outcome = 2;
+            } else if (gameOver) {
                 // Game over: keep claimable flow.
                 if ((packed & _BITMASK_CLAIM_READY) == 0) {
                     packed = packed | _BITMASK_CLAIM_READY;
@@ -1658,17 +2086,133 @@ contract PurgeBonds {
                         totalCoinOwed += delta * weight;
                     }
                 }
-                if (owner_ == address(this)) {
-                    _claimHeldBond(tokenId);
-                }
                 outcome = 1; // claimable (GG)
             } else {
-                _payoutLiveWinner(tokenId, packed, owner_, basePrice, weight);
+                _payoutLiveWinner(tokenId, packed, owner_);
                 outcome = 2; // paid directly to game credit
             }
         }
         // Losing bonds are handled in _burnInactiveUpTo
         emit BondResolved(tokenId, win, chance, roll);
+    }
+
+    function _distributeHeldWins(uint256 ethAmount, uint256 coinAmount) private {
+        address game_ = game;
+        if (game_ == address(0)) return;
+
+        // Handle ETH portion
+        if (ethAmount != 0) {
+            uint256 payDeficit = ethAmount;
+            uint256 deficit = gameRefundDeficit;
+            if (deficit < payDeficit) payDeficit = deficit;
+
+            uint256 remaining = ethAmount;
+            if (payDeficit != 0) {
+                gameRefundDeficit = deficit - payDeficit;
+                remaining -= payDeficit;
+                (bool ok, ) = payable(game_).call{value: payDeficit}("");
+                if (!ok) revert CallFailed();
+            }
+
+            if (remaining != 0) {
+                uint256 toGame = (remaining * 40) / 100;
+                uint256 toFund = (remaining * 40) / 100;
+                uint256 toSlush = remaining - toGame - toFund;
+
+                if (toGame != 0) {
+                    (bool okGame, ) = payable(game_).call{value: toGame}("");
+                    if (!okGame) revert CallFailed();
+                }
+                if (toFund != 0) {
+                    payoutObligation += toFund;
+                }
+                // toSlush is intentionally left in contract balance
+                toSlush;
+            }
+        }
+
+        // Handle coin portion
+        if (coinAmount != 0) {
+            uint256 available = bondCoin < coinAmount ? bondCoin : coinAmount;
+            if (available != 0) {
+                bondCoin -= available;
+                uint256 toFund = available / 2;
+                uint256 toSlush = available - toFund;
+                if (toFund != 0) {
+                    bondCoin += toFund;
+                }
+                // toSlush remains as surplus coin balance on the contract
+                toSlush;
+            }
+        }
+    }
+
+    function _resolveSingle(
+        uint256 tokenId,
+        uint256 rngWord,
+        uint256 budget,
+        uint256 heldCoinAcc,
+        uint256 heldEthAcc
+    ) private returns (uint256 newBudget, bool stop, uint256 heldCoin, uint256 heldEth) {
+        newBudget = budget;
+        heldCoin = heldCoinAcc;
+        heldEth = heldEthAcc;
+        uint256 packed = _packedOwnershipAt(tokenId);
+        if (packed == 0 || (packed & _BITMASK_BURNED) != 0) {
+            return (newBudget, false, heldCoin, heldEth);
+        }
+
+        uint256 basePrice = basePriceOf[tokenId];
+        uint256 delta = basePrice >= 1 ether ? 0 : (1 ether - basePrice);
+        if (newBudget < delta) return (newBudget, true, heldCoin, heldEth);
+
+        (uint8 outcome, uint256 heldCoinWin, uint256 heldEthWin) = _resolveBond(tokenId, rngWord);
+        if (outcome == 1) {
+            if (delta != 0) newBudget -= delta;
+            _markClaimable(tokenId, basePrice);
+        } else if (outcome == 2) {
+            if (delta != 0) newBudget -= delta;
+        } else {
+            newBudget += basePrice;
+        }
+        if (heldCoinWin != 0) heldCoin += heldCoinWin;
+        if (heldEthWin != 0) heldEth += heldEthWin;
+        return (newBudget, false, heldCoin, heldEth);
+    }
+
+    function _payoutLiveWinner(uint256 tokenId, uint256 packed, address owner_) private {
+        if (owner_ == address(0)) return;
+
+        uint256 coinWeight = _coinClaimWeight(packed);
+        uint256 bondShare;
+        uint256 coinOwed = totalCoinOwed;
+        if (coinOwed != 0 && bondCoin != 0) {
+            bondShare = (bondCoin * coinWeight) / coinOwed;
+            if (bondShare != 0) {
+                if (bondCoin <= bondShare) {
+                    bondCoin = 0;
+                } else {
+                    bondCoin -= bondShare;
+                }
+                IERC20Minimal(coinToken).transfer(owner_, bondShare);
+            }
+        }
+
+        _burnToken(tokenId, owner_);
+
+        uint256 amount = 1 ether;
+        if (address(this).balance < amount) revert InsufficientPayout();
+
+        address game_ = game;
+        if (game_ == address(0)) revert ZeroAddress();
+
+        payoutObligation = payoutObligation <= amount ? 0 : payoutObligation - amount;
+        totalEthOwed -= 1 ether;
+        _decreaseTotalCoinOwed(coinWeight);
+
+        IPurgeGameBondWinnings(game_).creditBondWinnings{value: amount}(owner_);
+
+        emit Claimed(owner_, tokenId, amount, 0, bondShare);
     }
 
     function _burnUnmaturedFromCursor(
