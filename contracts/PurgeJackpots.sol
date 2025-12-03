@@ -214,9 +214,9 @@ contract PurgeJackpots is IPurgeJackpots {
     /**
      * @notice Resolve the BAF jackpot for a level.
      * @dev Pool split (percent of `poolWei`): 20% top bettor (absorbing the former trophy slice),
-     *      10% random pick between 3rd/4th leaderboard slots, 10% affiliate draw (top referrers from
-     *      prior 20 levels), 10% retro tops (recent levels), 7%/3% scatter buckets from trait tickets,
-     *      with the old stake slice (10%) refunded. Any unfilled shares are refunded to the caller via
+     *      10% random pick between 3rd/4th leaderboard slots, 10% exterminator draw (prior 20 levels),
+     *      10% affiliate draw (top referrers from prior 20 levels), 10% retro tops (recent levels),
+     *      20%/20% scatter buckets from trait tickets (first scatter bucket pays out in bonds). Any unfilled shares are refunded to the caller via
      *      `returnAmountWei`.
      */
     function runBafJackpot(
@@ -227,18 +227,15 @@ contract PurgeJackpots is IPurgeJackpots {
         external
         override
         onlyGame
-        returns (
-            address[] memory winners,
-            uint256[] memory amounts,
-            uint256 returnAmountWei
-    )
+        returns (address[] memory winners, uint256[] memory amounts, uint256 bondMask, uint256 returnAmountWei)
     {
         uint256 P = poolWei;
-        // Max distinct winners: 1 (top) + 1 (pick) + 4 (affiliate draw) + 3 (retro) + 50 + 50 (scatter buckets) = 109.
-        address[] memory tmpW = new address[](112);
-        uint256[] memory tmpA = new uint256[](112);
+        // Max distinct winners: 1 (top) + 1 (pick) + 4 (exterminator draw) + 4 (affiliate draw) + 3 (retro) + 50 + 50 (scatter buckets) = 113.
+        address[] memory tmpW = new address[](120);
+        uint256[] memory tmpA = new uint256[](120);
         uint256 n;
         uint256 toReturn;
+        uint256 mask;
 
         uint256 entropy = rngWord;
         uint256 salt;
@@ -284,8 +281,138 @@ contract PurgeJackpots is IPurgeJackpots {
         }
 
         {
-            // Former stake slice (10%) is refunded while the feature is disabled.
-            toReturn += (P * 10) / 100;
+            // Slice B2: exterminator achievers (past 20 levels) share 10% across four descending prizes (5/3/2/0%).
+            uint256[4] memory exPrizes = [(P * 5) / 100, (P * 3) / 100, (P * 2) / 100, uint256(0)];
+            uint256 exterminatorSlice;
+            unchecked {
+                exterminatorSlice = exPrizes[0] + exPrizes[1] + exPrizes[2];
+            }
+
+            unchecked {
+                ++salt;
+            }
+            entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
+
+            address[20] memory exCandidates;
+            uint256[20] memory exScores;
+            uint8 exCount;
+
+            // Collect exterminators from each of the prior 20 levels (deduped).
+            for (uint8 offset = 1; offset <= 20; ) {
+                if (lvl <= offset) break;
+                address ex = purgeGame.levelExterminator(uint24(lvl - offset));
+                if (ex != address(0)) {
+                    bool seen;
+                    for (uint8 i; i < exCount; ) {
+                        if (exCandidates[i] == ex) {
+                            seen = true;
+                            break;
+                        }
+                        unchecked {
+                            ++i;
+                        }
+                    }
+                    if (!seen) {
+                        exCandidates[exCount] = ex;
+                        exScores[exCount] = _bafScore(ex, lvl);
+                        unchecked {
+                            ++exCount;
+                        }
+                    }
+                }
+                unchecked {
+                    ++offset;
+                }
+            }
+
+            // Shuffle candidate order to randomize draws.
+            for (uint8 i = exCount; i > 1; ) {
+                unchecked {
+                    ++salt;
+                }
+                entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
+                uint256 j = entropy % i;
+                uint8 idxA = i - 1;
+                address addrTmp = exCandidates[idxA];
+                exCandidates[idxA] = exCandidates[j];
+                exCandidates[j] = addrTmp;
+                uint256 scoreTmp = exScores[idxA];
+                exScores[idxA] = exScores[j];
+                exScores[j] = scoreTmp;
+                unchecked {
+                    --i;
+                }
+            }
+
+            address[4] memory exWinners;
+            uint256[4] memory exWinnerScores;
+            uint8 exWinCount;
+
+            for (uint8 i; i < exCount && exWinCount < 4; ) {
+                address cand = exCandidates[i];
+                uint256 scoreHint = exScores[i];
+                if (cand != address(0) && _eligible(cand, scoreHint, true)) {
+                    exWinners[exWinCount] = cand;
+                    exWinnerScores[exWinCount] = scoreHint;
+                    unchecked {
+                        ++exWinCount;
+                    }
+                }
+                unchecked {
+                    ++i;
+                }
+            }
+
+            if (exWinCount < 3) {
+                toReturn += exterminatorSlice;
+            } else {
+                // Sort by BAF score so higher scores take the larger cuts (5/3/2/0%).
+                for (uint8 i; i < exWinCount; ) {
+                    uint8 bestIdx = i;
+                    for (uint8 j = i + 1; j < exWinCount; ) {
+                        if (exWinnerScores[j] > exWinnerScores[bestIdx]) {
+                            bestIdx = j;
+                        }
+                        unchecked {
+                            ++j;
+                        }
+                    }
+                    if (bestIdx != i) {
+                        address wTmp = exWinners[i];
+                        exWinners[i] = exWinners[bestIdx];
+                        exWinners[bestIdx] = wTmp;
+                        uint256 sTmp = exWinnerScores[i];
+                        exWinnerScores[i] = exWinnerScores[bestIdx];
+                        exWinnerScores[bestIdx] = sTmp;
+                    }
+                    unchecked {
+                        ++i;
+                    }
+                }
+
+                uint256 paidEx;
+                uint8 maxExWinners = exWinCount;
+                if (maxExWinners > 4) {
+                    maxExWinners = 4;
+                }
+                for (uint8 i; i < maxExWinners; ) {
+                    uint256 prize = exPrizes[i];
+                    paidEx += prize;
+                    if (prize != 0) {
+                        tmpW[n] = exWinners[i];
+                        tmpA[n] = prize;
+                        unchecked {
+                            ++n;
+                        }
+                    }
+                    unchecked {
+                        ++i;
+                    }
+                }
+                if (paidEx < exterminatorSlice) {
+                    toReturn += exterminatorSlice - paidEx;
+                }
+            }
         }
 
         {
@@ -489,11 +616,11 @@ contract PurgeJackpots is IPurgeJackpots {
         }
 
         // Scatter slice: 200 total draws (4 tickets * 50 rounds). Per round, take top-2 by BAF score.
-        // First bucket splits 7% evenly (max 50 winners); second bucket splits 3% evenly (max 50 winners).
+        // First bucket splits 20% evenly (max 50 winners) in bonds; second bucket splits 20% evenly (max 50 winners) in ETH.
         {
             // Slice E: scatter tickets from trait sampler so casual participants can land smaller cuts.
-            uint256 scatterTop = (P * 7) / 100;
-            uint256 scatterSecond = (P * 3) / 100;
+            uint256 scatterTop = (P * 20) / 100;
+            uint256 scatterSecond = (P * 20) / 100;
             address[50] memory firstWinners;
             address[50] memory secondWinners;
             uint256 firstCount;
@@ -563,6 +690,7 @@ contract PurgeJackpots is IPurgeJackpots {
                 for (uint256 i; i < firstCount; ) {
                     uint256 scoreHint = _bafScore(firstWinners[i], lvl);
                     if (per != 0 && _creditOrRefund(firstWinners[i], per, tmpW, tmpA, n, scoreHint, true)) {
+                        mask |= (uint256(1) << n); // mark scatter bonds bucket for bond payout
                         unchecked {
                             ++n;
                         }
@@ -607,8 +735,10 @@ contract PurgeJackpots is IPurgeJackpots {
             }
         }
 
+        bondMask = mask;
+
         _clearBafTop(lvl);
-        return (winners, amounts, toReturn);
+        return (winners, amounts, bondMask, toReturn);
     }
 
     function runDecimatorJackpot(

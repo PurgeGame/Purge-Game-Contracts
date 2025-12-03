@@ -390,15 +390,20 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         address jackpotsAddr
     ) private returns (uint256 netSpend) {
         address trophyAddr = trophies;
-        (address[] memory winnersArr, uint256[] memory amountsArr, uint256 refund) = IPurgeJackpots(jackpotsAddr)
-            .runBafJackpot(poolWei, lvl, rngWord);
+        (address[] memory winnersArr, uint256[] memory amountsArr, uint256 bondMask, uint256 refund) = IPurgeJackpots(
+            jackpotsAddr
+        ).runBafJackpot(poolWei, lvl, rngWord);
         address[] memory single = new address[](1);
         for (uint256 i; i < winnersArr.length; ) {
             uint256 amount = amountsArr[i];
             if (amount != 0) {
                 uint256 ethPortion = amount;
-                // Top slices (first two entries) get half paid in bonds.
-                if (i < 2) {
+                bool forceBond = (bondMask & (uint256(1) << i)) != 0;
+                if (forceBond) {
+                    single[0] = winnersArr[i];
+                    // Force full bond payout for tagged winners (with ETH fallback if bonds cannot be minted).
+                    ethPortion = _splitEthWithBonds(single, amount, 10_000, rngWord ^ (uint256(i) << 1));
+                } else if (i < 2) {
                     single[0] = winnersArr[i];
                     ethPortion = _splitEthWithBonds(single, amount, BOND_BPS_HALF, rngWord ^ i);
                 }

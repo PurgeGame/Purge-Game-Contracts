@@ -6,7 +6,9 @@ interface IPurgeJackpots {
         uint256 poolWei,
         uint24 lvl,
         uint256 rngWord
-    ) external returns (address[] memory winners, uint256[] memory amounts, uint256 returnAmountWei);
+    )
+        external
+        returns (address[] memory winners, uint256[] memory amounts, uint256 bondMask, uint256 returnAmountWei);
 
     function runDecimatorJackpot(
         uint256 poolWei,

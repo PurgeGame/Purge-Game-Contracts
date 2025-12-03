@@ -1941,6 +1941,13 @@ contract PurgeGame is PurgeGameStorage {
         }
     }
 
+    function levelExterminator(uint24 lvl) external view returns (address) {
+        if (lvl == 0) return address(0);
+        address[] storage arr = levelExterminators;
+        if (arr.length < lvl) return address(0);
+        return arr[uint256(lvl) - 1];
+    }
+
     function getLastExterminatedTrait() external view returns (uint16) {
         return lastExterminatedTrait;
     }
