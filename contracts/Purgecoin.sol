@@ -6,7 +6,7 @@ pragma solidity ^0.8.26;
 /// @dev Acts as the hub for gameplay modules (game, NFTs, trophies, quests, jackpots). Mint/burn only occurs
 ///      through explicit gameplay flows; there is intentionally no public mint.
 import {PurgeGameNFT} from "./PurgeGameNFT.sol";
-import {IPurgeGameTrophies, PURGE_TROPHY_KIND_STAKE} from "./PurgeGameTrophies.sol";
+import {IPurgeGameTrophies} from "./PurgeGameTrophies.sol";
 import {PurgeAffiliate} from "./PurgeAffiliate.sol";
 import {IPurgeGame} from "./interfaces/IPurgeGame.sol";
 import {IPurgeQuestModule, QuestInfo, PlayerQuestView} from "./interfaces/IPurgeQuestModule.sol";
@@ -214,8 +214,6 @@ contract Purgecoin {
     uint16 private constant COINFLIP_EXTRA_RANGE = 38; // roll range (add to min) => [78..115]
     uint16 private constant BPS_DENOMINATOR = 10_000; // basis point math helper
     uint256 private constant STAKE_PRINCIPAL_FACTOR = MILLION; // round stake weights to whole coins
-    uint256 private constant TROPHY_BASE_LEVEL_SHIFT = 128; // bit position used for stake trophies
-    uint256 private constant TROPHY_FLAG_STAKE = uint256(1) << 202; // marks stake trophy data words
     uint24 private constant DECIMATOR_SPECIAL_LEVEL = 100; // special bucket rules every 100 levels
     uint48 private constant JACKPOT_RESET_TIME = 82620; // anchor timestamp for day indexing
     uint8 private constant COIN_CLAIM_DAYS = 30; // claim window for flips/stakes
@@ -358,11 +356,7 @@ contract Purgecoin {
         if (stakeTrophyAwarded[level]) return;
         if (res.winningRiskLevels == 0) return;
         if (res.topStakeWinner == address(0) || res.topStakeAmount == 0) return;
-        // Mark before external call to avoid reentrancy double-award.
         stakeTrophyAwarded[level] = true;
-
-        uint256 dataWord = (uint256(0xFFFF) << 152) | (uint256(level) << TROPHY_BASE_LEVEL_SHIFT) | TROPHY_FLAG_STAKE;
-        purgeGameTrophies.awardTrophy(res.topStakeWinner, level, PURGE_TROPHY_KIND_STAKE, dataWord, 0);
     }
 
     function _stakeFreeMoneyView() private view returns (uint256) {

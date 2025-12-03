@@ -2,19 +2,9 @@
 pragma solidity ^0.8.26;
 
 import {PurgeTraitUtils} from "./PurgeTraitUtils.sol";
-import {IPurgeGameTrophies} from "./PurgeGameTrophies.sol";
 import {IPurgeGame, MintPaymentKind} from "./interfaces/IPurgeGame.sol";
 import {IPurgeCoin} from "./interfaces/IPurgeCoin.sol";
 import {IPurgeAffiliate} from "./interfaces/IPurgeAffiliate.sol";
-
-enum TrophyKind {
-    Map,
-    Level,
-    Affiliate,
-    Stake,
-    Baf,
-    Decimator
-}
 
 enum PurchaseKind {
     Player,
@@ -50,6 +40,8 @@ interface IPurgeGameNFT {
     function tokenTraitsPacked(uint256 tokenId) external view returns (uint32);
     function purchaseCount() external view returns (uint32);
     function finalizePurchasePhase(uint32 minted, uint256 rngWord) external;
+    function advanceBase(uint256 newBaseTokenId) external;
+    function nextTokenId() external view returns (uint256);
     function purge(address owner, uint256[] calldata tokenIds) external;
     function currentBaseTokenId() external view returns (uint256);
     function processPendingMints(uint32 playersToProcess, uint32 multiplier) external returns (bool finished);
@@ -60,10 +52,9 @@ interface IPurgeGameNFT {
 }
 
 /// @title PurgeGameNFT
-/// @notice ERC721 surface for Purge player tokens and trophy placeholders. The contract is intentionally
-///         minimalistic and delegates gameplay rules to the game and trophy modules.
+/// @notice ERC721 surface for Purge player tokens.
 /// @dev Uses a packed ownership layout inspired by ERC721A; relies on external wiring from the coin contract
-///      to set the trusted game and trophy module addresses.
+///      to set the trusted game address.
 contract PurgeGameNFT {
     // ---------------------------------------------------------------------
     // Errors
@@ -77,7 +68,6 @@ contract PurgeGameNFT {
 
     error OnlyCoin();
     error InvalidToken();
-    error TrophyStakeViolation(uint8 reason);
     error NotTimeYet();
     error RngNotReady();
     error InvalidQuantity();
@@ -108,9 +98,8 @@ contract PurgeGameNFT {
     // ---------------------------------------------------------------------
     // ERC721 storage
     // ---------------------------------------------------------------------
-    // Packed address/ownership layout mirrors ERC721A style: balance/numberMinted/numberBurned are 64-bit fields,
-    // followed by startTimestamp and trophy metadata bits. The extra trophy flags keep trophy state in the same slot
-    // as ownership to avoid additional mappings.
+    // Packed address/ownership layout mirrors ERC721A style: balance/numberMinted/numberBurned are 64-bit fields
+    // followed by startTimestamp.
     uint256 private constant _BITMASK_ADDRESS_DATA_ENTRY = (1 << 64) - 1;
     uint256 private constant _BITPOS_NUMBER_MINTED = 64;
     uint256 private constant _BITPOS_NUMBER_BURNED = 128;
@@ -118,22 +107,17 @@ contract PurgeGameNFT {
     uint256 private constant _BITMASK_BURNED = 1 << 224;
     uint256 private constant _BITMASK_NEXT_INITIALIZED = 1 << 225;
     uint256 private constant _BITMASK_ADDRESS = (1 << 160) - 1;
-    uint256 private constant _BITPOS_TROPHY_KIND = 232;
-    uint256 private constant _BITMASK_TROPHY_KIND = uint256(0xFF) << _BITPOS_TROPHY_KIND;
-    uint256 private constant _BITPOS_TROPHY_STAKED = 240;
-    uint256 private constant _BITMASK_TROPHY_STAKED = uint256(1) << _BITPOS_TROPHY_STAKED;
-    uint256 private constant _BITPOS_TROPHY_ACTIVE = 241;
-    uint256 private constant _BITMASK_TROPHY_ACTIVE = uint256(1) << _BITPOS_TROPHY_ACTIVE;
-    uint256 private constant _BITPOS_TROPHY_BALANCE = 192;
-    uint256 private constant _BITMASK_TROPHY_BALANCE = ((uint256(1) << 32) - 1) << _BITPOS_TROPHY_BALANCE;
-    uint256 private constant _BITPOS_BALANCE_LEVEL = 224;
-    uint256 private constant _BITMASK_BALANCE_LEVEL = ((uint256(1) << 24) - 1) << _BITPOS_BALANCE_LEVEL;
     uint256 private constant _BURN_COUNT_INCREMENT_UNIT = (uint256(1) << _BITPOS_NUMBER_BURNED);
+    uint256 private constant SPECIAL_TOKEN_ID = 0;
+    uint256 private constant BASE_TOKEN_START = 1;
 
     bytes32 private constant _TRANSFER_EVENT_SIGNATURE =
         0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef;
 
     uint256 private _currentIndex;
+    uint256 private _burnCounter;
+    uint256 private _virtualBurnCount;
+    uint256 private _baseTokenId = BASE_TOKEN_START;
 
     string private _name = "Purge Game";
     string private _symbol = "PG";
@@ -148,22 +132,10 @@ contract PurgeGameNFT {
     // ---------------------------------------------------------------------
     IPurgeGame private game;
     ITokenRenderer private immutable regularRenderer;
-    ITokenRenderer private immutable trophyRenderer;
     IPurgeCoin private immutable coin;
     address private immutable affiliateProgram;
-    IPurgeGameTrophies private trophyModule;
 
-    // Token id progression is segmented by "base" pointers: currentBaseTokenId marks the first active player token
-    // for the current season, and previousBaseTokenId (stored in the high 128 bits) allows the trophy module to
-    // reason about historical placeholders.
-    uint256 private basePointers; // high 128 bits = previous base token id, low 128 bits = current base token id
-
-    uint256 private totalTrophySupply;
-
-    uint256 private seasonMintedSnapshot;
-    uint256 private seasonPurgedCount;
     uint32 private _purchaseCount;
-    uint256 private _nextBaseTokenIdHint;
     // Pending mint queue holds players that bought tokens before the RNG roll; tokens are minted in batches later.
     address[] private _pendingMintQueue;
     mapping(address => uint32) private _tokensOwed;
@@ -173,121 +145,42 @@ contract PurgeGameNFT {
     // Tracks how many level-100 mints (tokens + maps) a player has purchased with ETH for price scaling.
     mapping(address => uint32) private _levelHundredMintCount;
 
-    uint256[] private _dormantCursor; // processing cursor for each dormant range
-    uint256[] private _dormantEnd; // exclusive end token id per dormant range
-    uint256 private _dormantHead;
-
     uint32 private constant MINT_AIRDROP_PLAYER_BATCH_SIZE = 210; // Max unique recipients per airdrop batch
     uint32 private constant MINT_AIRDROP_TOKEN_CAP = 3_000; // Max tokens distributed per airdrop batch
 
     uint256 private constant CLAIMABLE_BONUS_DIVISOR = 10; // 10% of token coin cost
     uint256 private constant CLAIMABLE_MAP_BONUS_DIVISOR = 40; // 10% of per-map coin cost (priceUnit/4)
-    uint256 private constant TROPHY_FLAG_MAP = uint256(1) << 200;
-    uint256 private constant TROPHY_FLAG_AFFILIATE = uint256(1) << 201;
-    uint256 private constant TROPHY_FLAG_STAKE = uint256(1) << 202;
-    uint256 private constant TROPHY_FLAG_BAF = uint256(1) << 203;
-    uint256 private constant TROPHY_FLAG_DECIMATOR = uint256(1) << 204;
-    uint256 private constant TROPHY_OWED_MASK = (uint256(1) << 128) - 1;
-    uint256 private constant TROPHY_BASE_LEVEL_SHIFT = 128;
-    uint256 private constant TROPHY_LAST_CLAIM_SHIFT = 168;
 
-    uint8 private constant _STAKE_ERR_TRANSFER_BLOCKED = 1;
     uint32 private constant DORMANT_EMIT_BATCH = 3500;
 
     function _currentBaseTokenId() private view returns (uint256) {
-        return uint256(uint128(basePointers));
+        return _baseTokenId;
     }
 
-    /// @dev Store historical/current base token ids in a single slot to minimize writes.
-    function _setBasePointers(uint256 previousBase, uint256 currentBase) private {
-        basePointers = (uint256(uint128(previousBase)) << 128) | uint128(currentBase);
-    }
-
-    function _packedTrophyBalance(uint256 packed) private pure returns (uint32) {
-        return uint32((packed & _BITMASK_TROPHY_BALANCE) >> _BITPOS_TROPHY_BALANCE);
-    }
-
-    function _packedBalanceLevel(uint256 packed) private pure returns (uint24) {
-        return uint24((packed & _BITMASK_BALANCE_LEVEL) >> _BITPOS_BALANCE_LEVEL);
-    }
-
-    /// @dev Updates address data for trophy balance + balance-level watermark. Trophy deltas are bounded to 32 bits.
-    function _updateTrophyBalance(address owner, int32 delta, uint24 lvl, bool setLevel) private {
-        if (owner == address(0)) return;
-        if (delta == 0 && !setLevel) return;
-
-        uint256 packedData = _packedAddressData[owner];
-
-        // Safely update trophyBalance (32-bit field)
-        uint32 currentTrophyBalance = uint32((packedData & _BITMASK_TROPHY_BALANCE) >> _BITPOS_TROPHY_BALANCE);
-        uint32 newTrophyBalance = currentTrophyBalance;
-
-        if (delta > 0) {
-            // Check for overflow before addition
-            if (currentTrophyBalance > type(uint32).max - uint32(delta)) revert E(); // More specific error can be used
-            newTrophyBalance = currentTrophyBalance + uint32(delta);
-        } else if (delta < 0) {
-            uint32 absDelta = uint32(-delta);
-            // Check for underflow
-            if (currentTrophyBalance < absDelta) revert E(); // More specific error can be used
-            newTrophyBalance = currentTrophyBalance - absDelta;
-        }
-
-        // Safely update balanceLevel (24-bit field)
-        uint24 newBalanceLevel = setLevel
-            ? lvl
-            : uint24((packedData & _BITMASK_BALANCE_LEVEL) >> _BITPOS_BALANCE_LEVEL);
-
-        // Clear old fields and set new ones
-        packedData &= ~(_BITMASK_TROPHY_BALANCE | _BITMASK_BALANCE_LEVEL);
-        packedData |= (uint256(newTrophyBalance) << _BITPOS_TROPHY_BALANCE);
-        packedData |= (uint256(newBalanceLevel) << _BITPOS_BALANCE_LEVEL);
-
-        _packedAddressData[owner] = packedData;
+    function nextTokenId() external view returns (uint256) {
+        return _currentIndex;
     }
 
     constructor(address regularRenderer_, address trophyRenderer_, address coin_) {
         regularRenderer = ITokenRenderer(regularRenderer_);
-        trophyRenderer = ITokenRenderer(trophyRenderer_);
+        trophyRenderer_;
         coin = IPurgeCoin(coin_);
         affiliateProgram = IPurgeCoin(coin_).affiliateProgram();
-        _currentIndex = 97;
+        _mint(msg.sender, 1); // Mint the eternal token #0 to deployer
     }
 
-    /// @notice Total supply counts active trophies plus active player tokens during a purchase phase.
-    /// @dev During purchase phase (gameState == 3) supply is derived from the snapshot and purge count;
-    ///      otherwise we only surface trophy supply so indexers avoid stale player token ids.
+    /// @notice Total supply = minted tokens (including the eternal token #0) minus burned tokens
+    ///         and tokens retired via base advancement.
     function totalSupply() external view returns (uint256) {
-        uint256 trophyCount = totalTrophySupply;
-
-        if (game.gameState() == 3) {
-            uint256 minted = seasonMintedSnapshot;
-            uint256 purged = seasonPurgedCount;
-            uint256 active = minted > purged ? minted - purged : 0;
-            return trophyCount + active;
-        }
-
-        return trophyCount;
+        uint256 minted = _currentIndex;
+        uint256 burned = _burnCounter + _virtualBurnCount;
+        return minted > burned ? minted - burned : 0;
     }
 
-    /// @notice Returns balance, resetting to trophy count when the game advances a level.
-    /// @dev Address data stores a balance-level watermark so historic balances do not leak into new levels.
+    /// @notice Returns balance for standard ERC721 semantics.
     function balanceOf(address owner) external view returns (uint256) {
         if (owner == address(0)) revert Zero();
-        uint256 packed = _packedAddressData[owner];
-        uint256 balance = packed & _BITMASK_ADDRESS_DATA_ENTRY;
-        if (balance == 0) {
-            return 0;
-        }
-
-        uint24 lastLevel = _packedBalanceLevel(packed);
-
-        uint24 currentLevel = game.level();
-        if (currentLevel > lastLevel) {
-            return _packedTrophyBalance(packed);
-        }
-
-        return balance;
+        return _packedAddressData[owner] & _BITMASK_ADDRESS_DATA_ENTRY;
     }
 
     function supportsInterface(bytes4 interfaceId) external pure returns (bool) {
@@ -305,27 +198,13 @@ contract PurgeGameNFT {
         return _symbol;
     }
 
-    /// @notice Renders metadata via the trophy or regular renderer; reverts for nonexistent/burned tokens.
-    /// @dev Trophy renderer receives staking/claim flags; regular tokens are validated against the base token window.
+    /// @notice Renders metadata via the regular renderer; reverts for nonexistent/burned tokens.
+    /// @dev Uses the regular renderer for all tokens.
     function tokenURI(uint256 tokenId) external view returns (string memory) {
         // Revert for nonexistent or burned tokens (keeps ERC721-consistent surface for indexers).
         _packedOwnershipOf(tokenId);
 
-        uint256 info = trophyModule.trophyData(tokenId);
-        if (info != 0) {
-            uint32[4] memory extras;
-            uint32 flags;
-            if (trophyModule.isTrophyStaked(tokenId)) {
-                flags |= 1;
-            }
-            if ((info & TROPHY_OWED_MASK) != 0) {
-                flags |= 2;
-            }
-            extras[0] = flags;
-            return trophyRenderer.tokenURI(tokenId, info, extras);
-        } else if (tokenId < _currentBaseTokenId()) {
-            revert InvalidToken();
-        }
+        if (tokenId != SPECIAL_TOKEN_ID && tokenId < _currentBaseTokenId()) revert InvalidToken();
 
         uint32 traitsPacked = PurgeTraitUtils.packedTraitsForToken(tokenId);
         uint8 t0 = uint8(traitsPacked);
@@ -566,22 +445,6 @@ contract PurgeGameNFT {
         uint32 mintedQuantity = uint32(scaledQty / 100);
         uint32 mintUnits = mapPurchase ? mintedQuantity : 4;
 
-        if (mapPurchase) {
-            uint8 mapBonusPct = trophyModule.mapStakeDiscount(payer);
-            if (mapBonusPct != 0) {
-                uint256 coinCost = (scaledQty * priceUnit) / 100; // quantity * (priceUnit/4)
-                uint256 mapStakeMint = (coinCost * uint256(mapBonusPct)) / 100;
-                if (gameState != 3) {
-                    mapStakeMint <<= 1;
-                }
-                if (mapStakeMint != 0) {
-                    unchecked {
-                        bonusMint += mapStakeMint;
-                    }
-                }
-            }
-        }
-
         uint256 streakBonus;
         if (payKind == MintPaymentKind.DirectEth) {
             streakBonus = game.recordMint{value: expectedWei}(payer, lvl, false, expectedWei, mintUnits, payKind);
@@ -716,7 +579,6 @@ contract PurgeGameNFT {
             }
 
             uint32 minted;
-            uint24 currentLevel = game.level();
             if (multiplier == 0) multiplier = 1;
             while (index < end) {
                 uint256 rawIdx = (index + _mintQueueStartOffset) % total;
@@ -742,7 +604,6 @@ contract PurgeGameNFT {
                 }
 
                 _mint(player, mintAmount);
-                _updateTrophyBalance(player, 0, currentLevel, true);
 
                 minted += mintAmount;
 
@@ -793,10 +654,8 @@ contract PurgeGameNFT {
             }
         }
 
-        // Tokens below the current base token id are considered retired unless flagged as trophies.
-        if (tokenId < _currentBaseTokenId() && !trophyModule.isTrophy(tokenId)) {
-            revert InvalidToken();
-        }
+        // Token 0 is always valid; all other tokens must be >= current base pointer.
+        if (tokenId != SPECIAL_TOKEN_ID && tokenId < _currentBaseTokenId()) revert InvalidToken();
 
         if (packed & _BITMASK_BURNED != 0 || (packed & _BITMASK_ADDRESS) == 0) {
             revert InvalidToken();
@@ -850,21 +709,8 @@ contract PurgeGameNFT {
 
     /// @dev Lightweight existence check used by approval getters; trophies and game-owned placeholders are handled.
     function _exists(uint256 tokenId) internal view returns (bool) {
-        if (tokenId < _currentBaseTokenId()) {
-            if (trophyModule.isTrophy(tokenId)) return true;
-            uint256 packed = _packedOwnerships[tokenId];
-            if (packed == 0) {
-                unchecked {
-                    uint256 curr = tokenId;
-                    while (curr != 0) {
-                        packed = _packedOwnerships[--curr];
-                        if (packed != 0) break;
-                    }
-                }
-            }
-            if (packed == 0) return false;
-            return (packed & _BITMASK_BURNED) == 0 && address(uint160(packed)) == address(game);
-        }
+        if (tokenId == SPECIAL_TOKEN_ID) return true;
+        if (tokenId < _currentBaseTokenId()) return false;
 
         if (tokenId < _currentIndex) {
             uint256 packed;
@@ -896,13 +742,11 @@ contract PurgeGameNFT {
         }
     }
 
-    /// @notice Transfer respecting trophy staking locks; clears per-token approvals.
+    /// @notice Transfer; clears per-token approvals.
     function transferFrom(address from, address to, uint256 tokenId) public payable {
         uint256 prevOwnershipPacked = _packedOwnershipOf(tokenId);
-        bool isTrophy = (prevOwnershipPacked & _BITMASK_TROPHY_ACTIVE) != 0;
 
         if (address(uint160(prevOwnershipPacked)) != from) revert TransferFromIncorrectOwner();
-        if (_isTrophyStaked(tokenId)) revert TrophyStakeViolation(_STAKE_ERR_TRANSFER_BLOCKED);
         if (to == address(0)) revert Zero();
 
         address approvedAddress = _tokenApprovals[tokenId];
@@ -919,9 +763,7 @@ contract PurgeGameNFT {
             --_packedAddressData[from]; // Updates: `balance -= 1`.
             ++_packedAddressData[to]; // Updates: `balance += 1`.
 
-            uint256 preserved = prevOwnershipPacked &
-                (_BITMASK_TROPHY_KIND | _BITMASK_TROPHY_STAKED | _BITMASK_TROPHY_ACTIVE);
-            _packedOwnerships[tokenId] = _packOwnershipData(to, preserved | _BITMASK_NEXT_INITIALIZED);
+            _packedOwnerships[tokenId] = _packOwnershipData(to, _BITMASK_NEXT_INITIALIZED);
 
             if (prevOwnershipPacked & _BITMASK_NEXT_INITIALIZED == 0) {
                 uint256 nextId = tokenId + 1;
@@ -931,14 +773,6 @@ contract PurgeGameNFT {
                     }
                 }
             }
-        }
-
-        uint24 currentLevel = game.level();
-        if (isTrophy && from != to) {
-            _updateTrophyBalance(from, -1, currentLevel, true);
-            _updateTrophyBalance(to, 1, currentLevel, true);
-        } else {
-            _updateTrophyBalance(to, 0, currentLevel, true);
         }
 
         uint256 fromValue = uint256(uint160(from));
@@ -1047,7 +881,6 @@ contract PurgeGameNFT {
         if (msg.sender != owner && !isApprovedForAll(owner, msg.sender)) {
             revert ApprovalCallerNotOwnerNorApproved();
         }
-        if (_isTrophyStaked(tokenId)) revert TrophyStakeViolation(_STAKE_ERR_TRANSFER_BLOCKED);
 
         _tokenApprovals[tokenId] = to;
         emit Approval(owner, to, tokenId);
@@ -1066,15 +899,9 @@ contract PurgeGameNFT {
         _;
     }
 
-    modifier onlyTrophyModule() {
-        if (msg.sender != address(trophyModule)) revert E();
-        _;
-    }
-
-    /// @notice Wire game and trophy modules using an address array ([game, trophies]); set-once per slot.
+    /// @notice Wire the game module using an address array ([game]); set-once per slot.
     function wire(address[] calldata addresses) external onlyCoinContract {
         _setGame(addresses.length > 0 ? addresses[0] : address(0));
-        _setTrophyModule(addresses.length > 1 ? addresses[1] : address(0));
     }
 
     function _setGame(address gameAddr) private {
@@ -1086,155 +913,17 @@ contract PurgeGameNFT {
             revert E();
         }
     }
-
-    function _setTrophyModule(address trophiesAddr) private {
-        if (trophiesAddr == address(0)) return;
-        address current = address(trophyModule);
-        if (current == address(0)) {
-            trophyModule = IPurgeGameTrophies(trophiesAddr);
-        } else if (trophiesAddr != current) {
-            revert E();
-        }
-    }
-
-    // ---------------------------------------------------------------------
-    // Trophy module hooks
-    // ---------------------------------------------------------------------
-
-    /// @notice Returns the next token id to be minted; callable by the trophy module only.
-    function nextTokenId() external view onlyTrophyModule returns (uint256) {
-        return _currentIndex;
-    }
-
-    /// @notice Mint placeholder trophies to the game contract; level provided by trophy module to avoid extra calls.
-    function mintPlaceholders(
-        uint256 quantity,
-        uint24 level
-    ) external onlyTrophyModule returns (uint256 startTokenId) {
-        if (quantity == 0) revert E();
-        startTokenId = _currentIndex;
-        address gameAddr = address(game);
-        _mint(gameAddr, quantity);
-        unchecked {
-            totalTrophySupply += quantity;
-        }
-
-        _updateTrophyBalance(gameAddr, 0, level, true);
-
-        return startTokenId;
-    }
-
-    /// @notice Declare a dormant burn range; used later to emit Transfer events for historical burns.
-    function scheduleDormantRange(uint256 startTokenId, uint256 endTokenId) external onlyTrophyModule {
-        if (startTokenId >= endTokenId) return;
-        _dormantCursor.push(startTokenId);
-        _dormantEnd.push(endTokenId);
-    }
-
-    /// @notice Burn placeholder padding after level processing; must not target active trophy ids.
-    function clearPlaceholderPadding(uint256 startTokenId, uint256 endTokenId) external onlyTrophyModule {
-        if (startTokenId >= endTokenId) return;
-
-        uint256 count = endTokenId - startTokenId;
-        uint256 tokenId = startTokenId;
-        address currentOwner;
-        uint256 burnDelta;
-
-        while (tokenId < endTokenId) {
-            uint256 packed = _packedOwnershipOfUnchecked(tokenId);
-            address owner = address(uint160(packed));
-            bool isTrophy = _burnPacked(tokenId, packed);
-            if (isTrophy) revert E();
-
-            if (owner != currentOwner) {
-                if (currentOwner != address(0) && burnDelta != 0) {
-                    _applyPurgeAccounting(currentOwner, burnDelta, 0);
-                }
-                currentOwner = owner;
-                burnDelta = 0;
-            }
-
-            unchecked {
-                burnDelta += _BURN_COUNT_INCREMENT_UNIT;
-                ++tokenId;
-            }
-        }
-
-        if (currentOwner != address(0) && burnDelta != 0) {
-            _applyPurgeAccounting(currentOwner, burnDelta, 0);
-        }
-
-        if (totalTrophySupply < count) revert E();
-        unchecked {
-            totalTrophySupply -= count;
-        }
-    }
-
-    /// @notice Expose previous/current base token ids to the trophy module.
-    function getBasePointers() external view onlyTrophyModule returns (uint256 previousBase, uint256 currentBase) {
-        previousBase = basePointers >> 128;
-        currentBase = _currentBaseTokenId();
-    }
-
-    function setBasePointers(uint256 previousBase, uint256 currentBase) external onlyTrophyModule {
-        _setBasePointers(previousBase, currentBase);
-    }
-
-    /// @notice Trophy module helper to read packed ownership (reverts for invalid tokens).
-    function packedOwnershipOf(uint256 tokenId) external view onlyTrophyModule returns (uint256 packed) {
-        return _packedOwnershipOf(tokenId);
-    }
-
-    /// @notice Trophy module transfer that bypasses user approvals but still emits Transfer.
-    function transferTrophy(address from, address to, uint256 tokenId) external onlyTrophyModule {
-        _moduleTransfer(from, to, tokenId);
-    }
-
-    /// @notice Trophy module hook to set packed info bits for staking/activation and trophy kind.
-    function setTrophyPackedInfo(uint256 tokenId, uint8 kind, bool staked) external onlyTrophyModule {
-        _setTrophyPackedInfo(tokenId, kind, staked);
-    }
-
-    /// @notice Trophy module helper to clear per-token approvals (used before burns/transfers).
-    function clearApproval(uint256 tokenId) external onlyTrophyModule {
-        if (_tokenApprovals[tokenId] != address(0)) {
-            delete _tokenApprovals[tokenId];
-        }
-    }
-
-    function incrementTrophySupply(uint256 amount) external onlyTrophyModule {
-        unchecked {
-            totalTrophySupply += amount;
-        }
-    }
-
-    function decrementTrophySupply(uint256 amount) external onlyTrophyModule {
-        unchecked {
-            totalTrophySupply -= amount;
-        }
-    }
-
-    function sendEth(address to, uint256 amount) external onlyTrophyModule {
-        (bool ok, ) = payable(to).call{value: amount}("");
-        if (!ok) revert E();
-    }
-
     // ---------------------------------------------------------------------
     // VRF / RNG
     // ---------------------------------------------------------------------
 
-    function _setSeasonMintedSnapshot(uint256 minted) private {
-        seasonMintedSnapshot = minted;
-        seasonPurgedCount = 0;
+    function _setSeasonMintedSnapshot(uint256 minted) private pure {
+        minted;
     }
 
     /// @notice Called by game when a purchase phase ends; snapshots minted count and shuffles pending mint order.
     function finalizePurchasePhase(uint32 minted, uint256 rngWord) external onlyGame {
         _setSeasonMintedSnapshot(minted);
-        uint256 baseTokenId = _currentBaseTokenId();
-
-        uint256 startId = baseTokenId + uint256(minted);
-        _nextBaseTokenIdHint = ((startId + 99) / 100) * 100 + 1;
         _purchaseCount = 0;
         _mintQueueIndex = 0;
         uint256 queueLength = _pendingMintQueue.length;
@@ -1245,45 +934,47 @@ contract PurgeGameNFT {
         }
     }
 
+    /// @notice Retire all tokens below `newBaseTokenId` (except token 0) at level transition.
+    function advanceBase(uint256 newBaseTokenId) external onlyGame {
+        uint256 currentBase = _baseTokenId;
+        if (newBaseTokenId <= currentBase || newBaseTokenId > _currentIndex) revert E();
+        uint256 delta = newBaseTokenId - currentBase;
+        unchecked {
+            _virtualBurnCount += delta;
+        }
+        _baseTokenId = newBaseTokenId;
+    }
+
     /// @notice Burn a batch of player tokens (never trophies) owned by `owner`; trophies burned are tallied separately.
     function purge(address owner, uint256[] calldata tokenIds) external onlyGame {
-        uint256 purged;
         uint256 burnDelta;
-        uint32 trophiesBurned;
         uint256 len = tokenIds.length;
         uint256 baseLimit = _currentBaseTokenId();
         for (uint256 i; i < len; ) {
             uint256 tokenId = tokenIds[i];
             if (tokenId < baseLimit) revert InvalidToken();
-            bool isTrophy = _purgeToken(owner, tokenId);
+            if (tokenId == SPECIAL_TOKEN_ID) revert InvalidToken();
+            _purgeToken(owner, tokenId);
             unchecked {
                 burnDelta += _BURN_COUNT_INCREMENT_UNIT;
-                if (isTrophy) {
-                    ++trophiesBurned;
-                }
-                ++purged;
                 ++i;
             }
         }
 
         if (burnDelta != 0) {
-            _applyPurgeAccounting(owner, burnDelta, trophiesBurned);
+            _applyPurgeAccounting(owner, burnDelta);
         }
-
-        seasonPurgedCount += purged;
     }
 
-    function _purgeToken(address owner, uint256 tokenId) private returns (bool isTrophy) {
+    function _purgeToken(address owner, uint256 tokenId) private {
         uint256 packed = _packedOwnershipOf(tokenId);
         if (address(uint160(packed)) != owner) revert TransferFromIncorrectOwner();
-        return _burnPacked(tokenId, packed);
+        _burnPacked(tokenId, packed);
     }
 
     /// @dev Marks a token as burned and backfills ownership to keep scans efficient; approvals are cleared.
-    function _burnPacked(uint256 tokenId, uint256 prevOwnershipPacked) private returns (bool isTrophy) {
+    function _burnPacked(uint256 tokenId, uint256 prevOwnershipPacked) private {
         address from = address(uint160(prevOwnershipPacked));
-        isTrophy = (prevOwnershipPacked & _BITMASK_TROPHY_ACTIVE) != 0;
-
         if (_tokenApprovals[tokenId] != address(0)) {
             delete _tokenApprovals[tokenId];
         }
@@ -1296,11 +987,14 @@ contract PurgeGameNFT {
             }
         }
 
+        unchecked {
+            ++_burnCounter;
+        }
         emit Transfer(from, address(0), tokenId);
     }
 
-    /// @dev Applies burn deltas to address data and trophy balance; also refreshes level watermark.
-    function _applyPurgeAccounting(address owner, uint256 burnDelta, uint32 trophiesBurned) private {
+    /// @dev Applies burn deltas to address data.
+    function _applyPurgeAccounting(address owner, uint256 burnDelta) private {
         uint256 currentPackedData = _packedAddressData[owner];
         uint256 currentNumberBurned = (currentPackedData >> _BITPOS_NUMBER_BURNED) & _BITMASK_ADDRESS_DATA_ENTRY;
         uint256 incrementAmount = burnDelta >> _BITPOS_NUMBER_BURNED;
@@ -1320,189 +1014,19 @@ contract PurgeGameNFT {
             newBalance |
             (newNumberBurned << _BITPOS_NUMBER_BURNED);
 
-        uint24 currentLevel = game.level();
-
-        if (trophiesBurned != 0) {
-            uint256 current = (currentPackedData & _BITMASK_TROPHY_BALANCE) >> _BITPOS_TROPHY_BALANCE;
-            uint256 updated = current > trophiesBurned ? current - trophiesBurned : 0;
-            currentPackedData = (currentPackedData & ~_BITMASK_TROPHY_BALANCE) | (updated << _BITPOS_TROPHY_BALANCE);
-        }
-
-        currentPackedData =
-            (currentPackedData & ~_BITMASK_BALANCE_LEVEL) |
-            (uint256(currentLevel) << _BITPOS_BALANCE_LEVEL);
         _packedAddressData[owner] = currentPackedData;
     }
 
     /// @notice Emits Transfer events for already-burned dormant ranges to help indexers catch up.
-    /// @dev This is intentionally out-of-spec (events without state changes) and should only be called by automation.
-    function processDormant(uint32 limit) external returns (bool finished, bool worked) {
-        uint256 head = _dormantHead;
-        uint256 len = _dormantCursor.length;
-        if (head >= len) {
-            return (true, false);
-        }
-
-        uint256 tokensRemaining = limit == 0 ? uint256(DORMANT_EMIT_BATCH) : uint256(limit);
-        if (tokensRemaining == 0) tokensRemaining = uint256(DORMANT_EMIT_BATCH);
-
-        while (tokensRemaining != 0 && head < len) {
-            uint256 endTokenId = _dormantEnd[head];
-            uint256 cursor = _dormantCursor[head];
-
-            if (cursor >= endTokenId) {
-                unchecked {
-                    ++head;
-                }
-                continue;
-            }
-
-            uint256 currentIndex = _currentIndex;
-            if (cursor >= currentIndex) {
-                cursor = endTokenId;
-            } else {
-                uint256 available = endTokenId - cursor;
-                uint256 batch = tokensRemaining;
-                if (batch > available) {
-                    batch = available;
-                }
-
-                uint256 limitToken = cursor + batch;
-                if (limitToken > endTokenId) {
-                    limitToken = endTokenId;
-                }
-                if (limitToken > currentIndex) {
-                    limitToken = currentIndex;
-                }
-
-                uint256 startCursor = cursor;
-
-                while (cursor < limitToken) {
-                    uint256 packed = _packedOwnerships[cursor];
-                    if (packed == 0) {
-                        uint256 seek = cursor;
-                        unchecked {
-                            while (seek != 0) {
-                                packed = _packedOwnerships[--seek];
-                                if (packed != 0) break;
-                            }
-                        }
-                    }
-                    if (packed != 0 && (packed & _BITMASK_BURNED) == 0) {
-                        address from = address(uint160(packed));
-                        if (from != address(0)) {
-                            emit Transfer(from, address(0), cursor);
-                        }
-                    }
-                    unchecked {
-                        ++cursor;
-                    }
-                }
-
-                uint256 advanced = cursor - startCursor;
-                if (advanced == 0) {
-                    break;
-                }
-                tokensRemaining -= advanced;
-                worked = true;
-            }
-
-            if (cursor >= endTokenId) {
-                unchecked {
-                    ++head;
-                }
-            } else {
-                _dormantCursor[head] = cursor;
-            }
-        }
-
-        _dormantHead = head;
-        if (head >= len) {
-            if (len != 0) {
-                delete _dormantCursor;
-                delete _dormantEnd;
-            }
-            _dormantHead = 0;
-            return (true, worked);
-        }
-
-        return (false, worked);
+    /// @dev No-op now that trophy placeholders are removed.
+    function processDormant(uint32 limit) external pure returns (bool finished, bool worked) {
+        limit;
+        return (true, false);
     }
 
-    /// @dev Trophy-module transfer hook; clears stale approvals and preserves trophy metadata bits.
-    function _moduleTransfer(address from, address to, uint256 tokenId) private {
-        uint256 prevOwnershipPacked = _packedOwnershipOf(tokenId);
-        if (to == address(0)) revert Zero();
-        address approved = _tokenApprovals[tokenId];
-        if (approved != address(0)) {
-            delete _tokenApprovals[tokenId];
-        }
-        unchecked {
-            --_packedAddressData[from];
-            ++_packedAddressData[to];
-        }
-        uint256 preserved = prevOwnershipPacked &
-            (_BITMASK_TROPHY_KIND | _BITMASK_TROPHY_STAKED | _BITMASK_TROPHY_ACTIVE);
-        _packedOwnerships[tokenId] = _packOwnershipData(to, preserved | _BITMASK_NEXT_INITIALIZED);
-
-        if (prevOwnershipPacked & _BITMASK_NEXT_INITIALIZED == 0) {
-            uint256 nextId = tokenId + 1;
-            if (_packedOwnerships[nextId] == 0 && nextId != _currentIndex) {
-                _packedOwnerships[nextId] = prevOwnershipPacked;
-            }
-        }
-
-        uint24 currentLevel = game.level();
-        _updateTrophyBalance(from, -1, currentLevel, true);
-        _updateTrophyBalance(to, 1, currentLevel, true);
-
-        uint256 fromValue = uint256(uint160(from));
-        uint256 toValue = uint256(uint160(to));
-            assembly ("memory-safe") {
-                log4(0, 0, _TRANSFER_EVENT_SIGNATURE, fromValue, toValue, tokenId)
-            }
-    }
-
-    /// @dev Trophy module hook to set flag bits; updates owner trophy balance when active flag changes.
-    function _setTrophyPackedInfo(uint256 tokenId, uint8 kind, bool staked) private {
-        uint256 packed = _packedOwnerships[tokenId];
-        if (packed == 0) {
-            packed = _packedOwnershipOf(tokenId);
-        }
-        address owner = address(uint160(packed));
-        bool wasActive = (packed & _BITMASK_TROPHY_ACTIVE) != 0;
-        bool isActive;
-        IPurgeGameTrophies module = trophyModule;
-
-        isActive = module.isTrophy(tokenId);
-
-        uint256 cleared = packed & ~(_BITMASK_TROPHY_KIND | _BITMASK_TROPHY_STAKED | _BITMASK_TROPHY_ACTIVE);
-        uint256 updated = cleared | (uint256(kind) << _BITPOS_TROPHY_KIND);
-        if (staked) {
-            updated |= _BITMASK_TROPHY_STAKED;
-        }
-        if (isActive) {
-            updated |= _BITMASK_TROPHY_ACTIVE;
-        }
-        _packedOwnerships[tokenId] = updated;
-
-        if (owner != address(0)) {
-            if (wasActive != isActive) {
-                _updateTrophyBalance(owner, isActive ? int32(1) : int32(-1), game.level(), true);
-            }
-            if (wasActive && !isActive) {
-                emit Transfer(owner, address(0), tokenId);
-            }
-        }
-    }
-
-    /// @dev Helper to check the staked flag without exposing full ownership; used to gate transfers/approvals.
-    function _isTrophyStaked(uint256 tokenId) private view returns (bool) {
-        uint256 packed = _packedOwnerships[tokenId];
-        if (packed == 0) {
-            packed = _packedOwnershipOf(tokenId);
-        }
-        return (packed & _BITMASK_TROPHY_STAKED) != 0;
+    function clearPlaceholderPadding(uint256 startTokenId, uint256 endTokenId) external pure {
+        startTokenId;
+        endTokenId;
     }
 
     // ---------------------------------------------------------------------
@@ -1526,26 +1050,4 @@ contract PurgeGameNFT {
         return _tokensOwed[player];
     }
 
-    /// @notice Expose decoded trophy bookkeeping fields (owed rewards, base/last claim level, trait/kind flags).
-    function getTrophyData(
-        uint256 tokenId
-    )
-        external
-        view
-        returns (uint256 owedWei, uint24 baseLevel, uint24 lastClaimLevel, uint16 traitId, uint8 trophyKind)
-    {
-        uint256 raw = trophyModule.trophyData(tokenId);
-        owedWei = raw & TROPHY_OWED_MASK;
-        uint256 shiftedBase = raw >> TROPHY_BASE_LEVEL_SHIFT;
-        baseLevel = uint24(shiftedBase);
-        lastClaimLevel = uint24((raw >> TROPHY_LAST_CLAIM_SHIFT));
-        traitId = uint16(raw >> 152);
-
-        if (raw & TROPHY_FLAG_MAP != 0) trophyKind = uint8(TrophyKind.Map);
-        else if (raw & TROPHY_FLAG_AFFILIATE != 0) trophyKind = uint8(TrophyKind.Affiliate);
-        else if (raw & TROPHY_FLAG_STAKE != 0) trophyKind = uint8(TrophyKind.Stake);
-        else if (raw & TROPHY_FLAG_BAF != 0) trophyKind = uint8(TrophyKind.Baf);
-        else if (raw & TROPHY_FLAG_DECIMATOR != 0) trophyKind = uint8(TrophyKind.Decimator);
-        else trophyKind = uint8(TrophyKind.Level);
-    }
 }

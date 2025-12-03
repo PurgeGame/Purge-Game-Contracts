@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {IPurgeGameTrophies} from "../PurgeGameTrophies.sol";
 import {IPurgeGameTrophiesModule} from "../interfaces/PurgeGameModuleInterfaces.sol";
 import {IPurgeJackpots} from "../interfaces/IPurgeJackpots.sol";
 import {PurgeGameStorage} from "../storage/PurgeGameStorage.sol";
@@ -36,7 +35,7 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
      * @param cap Optional cap for batched payouts; zero falls back to DEFAULT_PAYOUTS_PER_TX.
      * @param rngWord Randomness used for jackpot and ticket selection.
      * @param jackpotsAddr Address of the jackpots contract to invoke.
-     * @param trophiesContract Delegate that handles trophy minting and reward distribution.
+     * @param trophiesContract Unused (kept for interface compatibility while trophies are removed).
      */
     function finalizeEndgame(
         uint24 lvl,
@@ -45,10 +44,11 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         address jackpotsAddr,
         IPurgeGameTrophiesModule trophiesContract
     ) external {
+        trophiesContract;
         uint24 prevLevel = lvl - 1;
         bool traitWin = lastExterminatedTrait != TRAIT_ID_TIMEOUT;
         if (traitWin) {
-            _primeTraitPayouts(prevLevel, rngWord, trophiesContract);
+            _primeTraitPayouts(prevLevel, rngWord);
         }
         uint8 _phase = phase;
         if (_phase > 3) {
@@ -89,24 +89,7 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         }
 
         if (!traitWin) {
-            IPurgeGameTrophies.EndLevelRequest memory req = IPurgeGameTrophies.EndLevelRequest({
-                exterminator: address(0),
-                traitId: lastExterminatedTrait,
-                level: prevLevel,
-                rngWord: rngWord,
-                deferredWei: 0,
-                invertTrophy: false
-            });
-
-            uint256 scale = _rewardBonusScaleBps(prevLevel);
-            uint256 scaledPool = (rewardPool * scale) / 10_000;
-
-            uint256 rewardsTotal = trophiesContract.processEndLevel(req, scaledPool);
-
-            if (rewardsTotal != 0) {
-                rewardPool -= rewardsTotal;
-                trophyPool += rewardsTotal;
-            }
+            return;
         }
     }
 
@@ -151,9 +134,9 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
 
     /**
      * @notice Splits the current prize pool into exterminator, ticket, and participant slices for a trait win.
-     * @dev Also triggers trophy processing for the exterminator and updates rewardPool/trophyPool balances.
+     * @dev Handles exterminator and participant splits without any trophy accounting.
      */
-    function _primeTraitPayouts(uint24 prevLevel, uint256 rngWord, IPurgeGameTrophiesModule trophiesContract) private {
+    function _primeTraitPayouts(uint24 prevLevel, uint256 rngWord) private {
         address ex = exterminator;
         if (ex == address(0)) return;
 
@@ -162,14 +145,11 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
             ? (poolValue * 40) / 100
             : (poolValue * 30) / 100;
 
-        // Pay half immediately; defer the rest through trophy processing.
-        uint256 immediate = exterminatorShare >> 1;
-        uint256 deferredWei = exterminatorShare - immediate;
-        _addClaimableEth(ex, immediate);
-        trophyPool += deferredWei;
+        // Pay the full exterminator share immediately now that trophies are removed.
+        _addClaimableEth(ex, exterminatorShare);
 
-        // Reassign the trophy slice from the prize pool to players: 10% split across three tickets
-        // using their ETH mint streaks as weights (even split if all streaks are zero).
+        // Bonus slice: 10% split across three tickets using their ETH mint streaks as weights
+        // (even split if all streaks are zero).
         uint256 ticketBonus = (poolValue * 10) / 100;
         address[] storage arr = traitPurgeTicket[prevLevel][uint8(lastExterminatedTrait)];
         uint256 arrLen = arr.length;
@@ -213,25 +193,6 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         currentPrizePool = participantShare;
         airdropIndex = 0;
 
-        IPurgeGameTrophies.EndLevelRequest memory req = IPurgeGameTrophies.EndLevelRequest({
-            exterminator: ex,
-            traitId: lastExterminatedTrait,
-            level: prevLevel,
-            rngWord: rngWord,
-            deferredWei: deferredWei,
-            invertTrophy: exterminationInvertFlag
-        });
-
-        uint256 scale = _rewardBonusScaleBps(prevLevel);
-        uint256 scaledPool = (rewardPool * scale) / 10_000;
-
-        uint256 rewardsTotal = trophiesContract.processEndLevel(req, scaledPool);
-
-        if (rewardsTotal != 0) {
-            rewardPool -= rewardsTotal;
-            trophyPool += rewardsTotal;
-        }
-
         // Clear exterminator so a second call cannot double-claim the share.
         exterminator = address(0);
     }
@@ -262,11 +223,10 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         address jackpotsAddr,
         bool consumeCarry
     ) private {
-        uint256 trophyPoolDelta;
         uint256 returnWei;
 
         if (kind == 0) {
-            (address[] memory winnersArr, uint256[] memory amountsArr, uint256 delta, uint256 refund) = IPurgeJackpots(
+            (address[] memory winnersArr, uint256[] memory amountsArr, , uint256 refund) = IPurgeJackpots(
                 jackpotsAddr
             ).runBafJackpot(poolWei, lvl, rngWord);
             for (uint256 i; i < winnersArr.length; ) {
@@ -275,14 +235,9 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
                     ++i;
                 }
             }
-            trophyPoolDelta = delta;
             returnWei = refund;
         } else if (kind == 1) {
-            (trophyPoolDelta, returnWei) = IPurgeJackpots(jackpotsAddr).runDecimatorJackpot(poolWei, lvl, rngWord);
-        }
-
-        if (trophyPoolDelta != 0) {
-            trophyPool += trophyPoolDelta;
+            (, returnWei) = IPurgeJackpots(jackpotsAddr).runDecimatorJackpot(poolWei, lvl, rngWord);
         }
         if (consumeCarry) {
             rewardPool -= (poolWei - returnWei);

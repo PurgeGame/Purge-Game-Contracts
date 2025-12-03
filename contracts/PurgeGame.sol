@@ -2,7 +2,6 @@
 pragma solidity ^0.8.26;
 
 import {IPurgeGameNFT} from "./PurgeGameNFT.sol";
-import {IPurgeGameTrophies} from "./PurgeGameTrophies.sol";
 import {IPurgeCoinModule, IPurgeGameTrophiesModule} from "./interfaces/PurgeGameModuleInterfaces.sol";
 import {IPurgeCoin} from "./interfaces/IPurgeCoin.sol";
 import {IPurgeAffiliate} from "./interfaces/IPurgeAffiliate.sol";
@@ -106,7 +105,6 @@ contract PurgeGame is PurgeGameStorage {
     event ReverseFlip(address indexed caller, uint256 totalQueued, uint256 cost);
     event VrfCoordinatorUpdated(address indexed previous, address indexed current);
     event PrizePoolBondBuy(uint256 spendWei, uint256 quantity);
-    event TrophyBondsMinted(address indexed player, uint256 amountWei, uint256 quantity, uint256 basePerBondWei);
 
     // -----------------------
     // Immutable Addresses
@@ -114,7 +112,6 @@ contract PurgeGame is PurgeGameStorage {
     IPurgeRendererLike private immutable renderer; // Trusted renderer; used for tokenURI composition
     IPurgeCoin private immutable coin; // Trusted coin/game-side coordinator (PURGE ERC20)
     IPurgeGameNFT private immutable nft; // ERC721 interface for mint/burn/metadata surface
-    IPurgeGameTrophies private immutable trophies; // Dedicated trophy module
     address public immutable bonds; // Bond contract for resolution and metadata
     address private immutable affiliateProgram; // Cached affiliate program for payout routing
     IStETH private immutable steth; // stETH token held by the game
@@ -125,7 +122,7 @@ contract PurgeGame is PurgeGameStorage {
     bytes32 private immutable vrfKeyHash; // VRF key hash
     uint256 private immutable vrfSubscriptionId; // VRF subscription identifier
     address private immutable linkToken; // LINK token contract for top-ups
-    // Trusted collaborators: coin/nft/trophies/jackpots/modules are expected to be non-reentrant and non-malicious.
+    // Trusted collaborators: coin/nft/jackpots/modules are expected to be non-reentrant and non-malicious.
 
     uint256 private constant DEPLOY_IDLE_TIMEOUT = (365 days * 5) / 2; // 2.5 years
     uint48 private constant LEVEL_START_SENTINEL = type(uint48).max;
@@ -148,7 +145,6 @@ contract PurgeGame is PurgeGameStorage {
     uint8 private constant BOND_RNG_RESOLVE_PASSES = 3; // cap iterations to stay gas-safe
     uint16 private constant PRIZE_POOL_BOND_BPS_PER_DAILY = 20; // 0.2% per daily (~2% total across 10) = 10% of the ~20% daily float
     uint256 private constant PRIZE_POOL_BOND_BASE = 0.02 ether;
-    uint256 private constant TROPHY_BOND_MAX_BASE = 0.5 ether;
 
     // mintPacked_ layout (LSB ->):
     // [0-23]=last ETH level, [24-47]=total ETH level count, [48-71]=ETH level streak,
@@ -179,7 +175,6 @@ contract PurgeGame is PurgeGameStorage {
      * @param purgeCoinContract Trusted PURGE ERC20 / game coordinator address
      * @param renderer_         Trusted on-chain renderer
      * @param nftContract       ERC721 game contract
-     * @param trophiesContract  Trophy manager contract
      * @param endgameModule_    Delegate module handling endgame settlement
      * @param jackpotModule_    Delegate module handling jackpot distribution
      * @param vrfCoordinator_   Chainlink VRF coordinator
@@ -189,14 +184,11 @@ contract PurgeGame is PurgeGameStorage {
      * @param stEthToken_       stETH token address
      * @param jackpots_         PurgeJackpots contract address (wires Decimator/BAF jackpots)
      * @param bonds_            Bonds contract address
-     *
-     * @dev ERC721 sentinel trophy token is minted lazily during the first transition to state 2.
      */
     constructor(
         address purgeCoinContract,
         address renderer_,
         address nftContract,
-        address trophiesContract,
         address endgameModule_,
         address jackpotModule_,
         address vrfCoordinator_,
@@ -210,7 +202,6 @@ contract PurgeGame is PurgeGameStorage {
         coin = IPurgeCoin(purgeCoinContract);
         renderer = IPurgeRendererLike(renderer_);
         nft = IPurgeGameNFT(nftContract);
-        trophies = IPurgeGameTrophies(trophiesContract);
         endgameModule = endgameModule_;
         jackpotModule = jackpotModule_;
         vrfCoordinator = IVRFCoordinator(vrfCoordinator_);
@@ -673,8 +664,6 @@ contract PurgeGame is PurgeGameStorage {
         uint256 stakeBonusCoin;
 
         address[][256] storage tickets = traitPurgeTicket[lvl];
-        IPurgeGameTrophies trophiesContract = trophies;
-        bool hasExterminatorStake = trophiesContract.hasExterminatorStake(caller);
 
         uint16 winningTrait = TRAIT_ID_TIMEOUT;
         for (uint256 i; i < count; ) {
@@ -705,34 +694,6 @@ contract PurgeGame is PurgeGameStorage {
             if ((tokenHasPrevExterminated && !levelNinety) || (levelNinety && !tokenHasPrevExterminated)) {
                 unchecked {
                     bonusTenths += 4;
-                }
-            }
-
-            if (hasExterminatorStake) {
-                uint8[4] memory traitList = [trait0, trait1, trait2, trait3];
-                for (uint256 j; j < 4; ) {
-                    uint8 traitVal = traitList[j];
-                    bool seen;
-                    for (uint256 k; k < j; ) {
-                        if (traitList[k] == traitVal) {
-                            seen = true;
-                            break;
-                        }
-                        unchecked {
-                            ++k;
-                        }
-                    }
-                    if (!seen) {
-                        uint8 levelPercent = trophiesContract.handleExterminatorTraitPurge(caller, uint16(traitVal));
-                        if (levelPercent != 0) {
-                            unchecked {
-                                stakeBonusCoin += (priceCoinLocal * uint256(levelPercent)) / 100;
-                            }
-                        }
-                    }
-                    unchecked {
-                        ++j;
-                    }
                 }
             }
 
@@ -782,21 +743,16 @@ contract PurgeGame is PurgeGameStorage {
     /// When a trait is exterminated (<256):
     /// - Lock the exterminated trait in the current level’s storage.
     /// - Split prize pool: 90% to participants (including the exterminator slice below) and 10% as a bonus
-    ///   split across three winning tickets weighted by ETH mint streaks (even split if all streaks are zero);
-    ///   affiliate/stake trophy rewards are now funded from the reward pool.
+    ///   split across three winning tickets weighted by ETH mint streaks (even split if all streaks are zero).
     ///   From within the 90%, the “exterminator” gets 30% (or 40% on levels where `prevLevel % 10 == 4` and `prevLevel > 4`),
     ///   and the rest is divided evenly per ticket for the exterminated trait.
-    /// - Mint the level trophy (transfers the placeholder token owned by the contract).
     ///
     /// When a non-trait end occurs (>=256, e.g. daily jackpots path):
-    /// - Allocate 10% of the remaining `currentPrizePool` to the current MAP trophy holder and 5% each to three
-    ///   random MAP trophies still receiving drip payouts (with replacement).
     /// - Carry the remainder forward and reset leaderboards.
     /// - On L%100==0: adjust price and `lastPrizePool`.
     ///
     /// After either path:
-    /// - Reset per-level state, mint the next level’s trophy placeholder,
-    ///   set default exterminated sentinel to TRAIT_ID_TIMEOUT, and request fresh VRF.
+    /// - Reset per-level state, set default exterminated sentinel to TRAIT_ID_TIMEOUT, and request fresh VRF.
     function _endLevel(uint16 exterminated) private {
         address callerExterminator = msg.sender;
         uint24 levelSnapshot = level;
@@ -837,8 +793,6 @@ contract PurgeGame is PurgeGameStorage {
             levelSnapshot++;
             level++;
         }
-        trophies.prepareNextLevel(levelSnapshot);
-
         traitRebuildCursor = 0;
         jackpotCounter = 0;
         // Reset daily purge counters so the next level's jackpots start fresh.
@@ -861,6 +815,12 @@ contract PurgeGame is PurgeGameStorage {
         if (traitExterminated) {
             coin.normalizeActivePurgeQuests();
         }
+
+        uint256 nextId = nft.nextTokenId();
+        uint256 base = nft.currentBaseTokenId();
+        if (nextId > base) {
+            nft.advanceBase(nextId);
+        }
     }
 
     /// @notice Delegatecall into the endgame module to resolve slow settlement paths.
@@ -873,33 +833,10 @@ contract PurgeGame is PurgeGameStorage {
                 cap,
                 rngWord,
                 jackpots,
-                trophies
+                IPurgeGameTrophiesModule(address(0))
             )
         );
         if (!ok) return;
-    }
-
-    function _mintTrophyBonds(address to, uint256 amountWei) private returns (uint256 spentWei) {
-        if (to == address(0) || amountWei == 0) revert E();
-        address bondsAddr = bonds;
-        if (bondsAddr == address(0)) revert E();
-        if (amountWei < PRIZE_POOL_BOND_BASE) revert E();
-
-        uint256 quantity = (amountWei + TROPHY_BOND_MAX_BASE - 1) / TROPHY_BOND_MAX_BASE; // ceil division
-        uint256 basePerBond = amountWei / quantity;
-        if (basePerBond < PRIZE_POOL_BOND_BASE) {
-            basePerBond = PRIZE_POOL_BOND_BASE;
-            quantity = amountWei / basePerBond;
-            if (quantity == 0) quantity = 1;
-        }
-
-        spentWei = basePerBond * quantity;
-
-        address[] memory recipients = new address[](1);
-        recipients[0] = to;
-
-        IPurgeBonds(bondsAddr).purchaseGameBonds(recipients, quantity, basePerBond, true);
-        emit TrophyBondsMinted(to, spentWei, quantity, basePerBond);
     }
 
     /// @notice Unified external hook for trusted modules to adjust PurgeGame accounting.
@@ -909,15 +846,7 @@ contract PurgeGame is PurgeGameStorage {
     /// @param lvl     Level context for the operation (unused by the game, used by callers).
     function applyExternalOp(PurgeGameExternalOp op, address account, uint256 amount, uint24 lvl) external {
         lvl;
-        if (op == PurgeGameExternalOp.TrophyPayout) {
-            if (msg.sender != address(trophies)) revert E();
-            uint256 spent = _mintTrophyBonds(account, amount);
-            trophyPool -= spent;
-        } else if (op == PurgeGameExternalOp.TrophyRecycle) {
-            if (msg.sender != address(trophies)) revert E();
-            trophyPool -= amount;
-            rewardPool += amount;
-        } else if (op == PurgeGameExternalOp.DecJackpotClaim) {
+        if (op == PurgeGameExternalOp.DecJackpotClaim) {
             address jackpotsAddr = jackpots;
             if (jackpotsAddr == address(0) || msg.sender != jackpotsAddr) revert E();
             _addClaimableEth(account, amount);
@@ -1225,15 +1154,7 @@ contract PurgeGame is PurgeGameStorage {
 
         address jackpotsAddr = jackpots;
         if (jackpotsAddr == address(0)) revert E();
-        (uint256 trophyPoolDelta, uint256 returnWei) = IPurgeJackpots(jackpotsAddr).runDecimatorJackpot(
-            pool,
-            lvl,
-            rngWord
-        );
-
-        if (trophyPoolDelta != 0) {
-            trophyPool += trophyPoolDelta;
-        }
+        (, uint256 returnWei) = IPurgeJackpots(jackpotsAddr).runDecimatorJackpot(pool, lvl, rngWord);
 
         if (returnWei != 0) {
             rewardPool += returnWei;
@@ -1253,7 +1174,7 @@ contract PurgeGame is PurgeGameStorage {
                 rngWord,
                 effectiveWei,
                 IPurgeCoinModule(address(coin)),
-                IPurgeGameTrophiesModule(address(trophies))
+                IPurgeGameTrophiesModule(address(0))
             )
         );
         if (!ok) return;
@@ -1282,7 +1203,7 @@ contract PurgeGame is PurgeGameStorage {
                 lvl,
                 randWord,
                 IPurgeCoinModule(address(coin)),
-                IPurgeGameTrophiesModule(address(trophies))
+                IPurgeGameTrophiesModule(address(0))
             )
         );
         if (!ok) return;
@@ -1391,7 +1312,7 @@ contract PurgeGame is PurgeGameStorage {
         uint24 cycle = lvl % 100;
         if (cycle == 99 || cycle == 0) return;
 
-        uint256 pool = rewardPool + trophyPool;
+        uint256 pool = rewardPool;
         if (pool == 0) return;
 
         uint256 rateBps = 10_000;
@@ -1401,7 +1322,7 @@ contract PurgeGame is PurgeGameStorage {
         }
         if (rateBps == 0) return;
 
-        uint256 targetSt = (pool * rateBps) / 10_000; // stake against configured share of reward + trophy pool
+        uint256 targetSt = (pool * rateBps) / 10_000; // stake against configured share of reward pool
         uint256 stBal = principalStEth;
         if (stBal >= targetSt) return;
 

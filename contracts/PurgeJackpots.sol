@@ -3,7 +3,6 @@ pragma solidity ^0.8.26;
 
 import {IPurgeGame} from "./interfaces/IPurgeGame.sol";
 import {IPurgeAffiliate} from "./interfaces/IPurgeAffiliate.sol";
-import {IPurgeGameTrophies} from "./PurgeGameTrophies.sol";
 import {IPurgeJackpots} from "./interfaces/IPurgeJackpots.sol";
 import {PurgeGameExternalOp} from "./interfaces/IPurgeGameExternal.sol";
 
@@ -79,20 +78,11 @@ contract PurgeJackpots is IPurgeJackpots {
     // ---------------------------------------------------------------------
     IPurgeCoinJackpotView public coin;
     IPurgeGame public purgeGame;
-    IPurgeGameTrophies public purgeGameTrophies;
 
     // ---------------------------------------------------------------------
     // Constants
     // ---------------------------------------------------------------------
     uint256 private constant MILLION = 1e6;
-    uint8 private constant PURGE_TROPHY_KIND_BAF = 4;
-    uint8 private constant PURGE_TROPHY_KIND_DECIMATOR = 5;
-    uint16 private constant BAF_TRAIT_SENTINEL = 0xFFFA;
-    uint16 private constant DECIMATOR_TRAIT_SENTINEL = 0xFFFB;
-    uint256 private constant TROPHY_FLAG_BAF = uint256(1) << 203;
-    uint256 private constant TROPHY_FLAG_DECIMATOR = uint256(1) << 204;
-    uint256 private constant TROPHY_BASE_LEVEL_SHIFT = 128;
-    uint24 private constant DECIMATOR_SPECIAL_LEVEL = 100;
 
     // ---------------------------------------------------------------------
     // BAF / Decimator state (lives here; Purgecoin storage is unaffected)
@@ -138,13 +128,12 @@ contract PurgeJackpots is IPurgeJackpots {
         bonds = bonds_;
     }
 
-    /// @notice One-time wiring using address array ([coin, game, trophies]); callable only by bonds.
+    /// @notice One-time wiring using address array ([coin, game]); callable only by bonds.
     function wire(address[] calldata addresses) external override {
         if (msg.sender != bonds) revert OnlyBonds();
 
         _setCoin(addresses.length > 0 ? addresses[0] : address(0));
         _setGame(addresses.length > 1 ? addresses[1] : address(0));
-        _setTrophies(addresses.length > 2 ? addresses[2] : address(0));
     }
 
     function _setCoin(address coinAddr) private {
@@ -163,16 +152,6 @@ contract PurgeJackpots is IPurgeJackpots {
         if (current == address(0)) {
             purgeGame = IPurgeGame(gameAddr);
         } else if (gameAddr != current) {
-            revert AlreadyWired();
-        }
-    }
-
-    function _setTrophies(address trophiesAddr) private {
-        if (trophiesAddr == address(0)) return;
-        address current = address(purgeGameTrophies);
-        if (current == address(0)) {
-            purgeGameTrophies = IPurgeGameTrophies(trophiesAddr);
-        } else if (trophiesAddr != current) {
             revert AlreadyWired();
         }
     }
@@ -260,36 +239,21 @@ contract PurgeJackpots is IPurgeJackpots {
         uint256[] memory tmpA = new uint256[](112);
         uint256 n;
         uint256 toReturn;
-        bool trophyAwarded;
 
         uint256 entropy = rngWord;
         uint256 salt;
 
         {
-            // Slice A: top bettor (10%) and BAF trophy (10%) follow the level's leading flip volume.
-            uint256 prize = P / 10;
-
+            // Slice A: top bettor now receives the combined share that previously funded the trophy (20% total).
+            uint256 topPrize = (P * 2) / 10;
             (address w, ) = _bafTop(lvl, 0);
-            // 10% to the top coinflip bettor (if eligible).
             uint256 s0 = _bafScore(w, lvl);
-            if (_creditOrRefund(w, prize, tmpW, tmpA, n, s0, true)) {
+            if (_creditOrRefund(w, topPrize, tmpW, tmpA, n, s0, true)) {
                 unchecked {
                     ++n;
                 }
             } else {
-                toReturn += prize;
-            }
-
-            uint256 trophyPrize = P / 10;
-            if (w != address(0) && _eligible(w, s0, true)) {
-                // Award BAF trophy + prize to the top bettor if they remain eligible.
-                uint256 trophyData = (uint256(BAF_TRAIT_SENTINEL) << 152) |
-                    (uint256(lvl) << TROPHY_BASE_LEVEL_SHIFT) |
-                    TROPHY_FLAG_BAF;
-                purgeGameTrophies.awardTrophy(w, lvl, PURGE_TROPHY_KIND_BAF, trophyData, trophyPrize);
-                trophyAwarded = true;
-            } else {
-                toReturn += trophyPrize;
+                toReturn += topPrize;
             }
         }
 
@@ -320,93 +284,8 @@ contract PurgeJackpots is IPurgeJackpots {
         }
 
         {
-            // Staked trophy rewards: sample tickets twice per slot, pick the lower id, then sort
-            // the candidates by coinflip size to prefer higher current bettors.
-            uint256 trophyDelta;
-            uint256[4] memory trophyPrizes = [(P * 5) / 100, (P * 3) / 100, (P * 2) / 100, uint256(0)];
-            address[4] memory trophyOwners;
-            uint256[4] memory trophyIds;
-
-            for (uint8 s; s < 4; ) {
-                unchecked {
-                    ++salt;
-                }
-                entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
-                (uint256 idA, address ownerA) = purgeGameTrophies.stakedTrophySampleWithId(entropy);
-
-                unchecked {
-                    ++salt;
-                }
-                entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
-                (uint256 idB, address ownerB) = purgeGameTrophies.stakedTrophySampleWithId(entropy);
-
-                bool validA = idA != 0 && ownerA != address(0);
-                bool validB = idB != 0 && ownerB != address(0);
-
-                if (validA && validB) {
-                    if (idA <= idB) {
-                        trophyIds[s] = idA;
-                        trophyOwners[s] = ownerA;
-                    } else {
-                        trophyIds[s] = idB;
-                        trophyOwners[s] = ownerB;
-                    }
-                } else if (validA) {
-                    trophyIds[s] = idA;
-                    trophyOwners[s] = ownerA;
-                } else if (validB) {
-                    trophyIds[s] = idB;
-                    trophyOwners[s] = ownerB;
-                }
-                unchecked {
-                    ++s;
-                }
-            }
-
-            // Sort trophies by owner BAF score
-            for (uint8 i; i < 4; ) {
-                uint8 bestIdx = i;
-                uint256 best = _bafScore(trophyOwners[i], lvl);
-                for (uint8 j = i + 1; j < 4; ) {
-                    uint256 val = _bafScore(trophyOwners[j], lvl);
-                    if (val > best) {
-                        best = val;
-                        bestIdx = j;
-                    }
-                    unchecked {
-                        ++j;
-                    }
-                }
-                if (bestIdx != i) {
-                    address ownerTmp = trophyOwners[i];
-                    trophyOwners[i] = trophyOwners[bestIdx];
-                    trophyOwners[bestIdx] = ownerTmp;
-
-                    uint256 tokenTmp = trophyIds[i];
-                    trophyIds[i] = trophyIds[bestIdx];
-                    trophyIds[bestIdx] = tokenTmp;
-                }
-                unchecked {
-                    ++i;
-                }
-            }
-
-            for (uint8 i; i < 4; ) {
-                uint256 prize = trophyPrizes[i];
-                uint256 tokenId = trophyIds[i];
-                address owner = trophyOwners[i];
-                bool eligibleOwner = tokenId != 0 && owner != address(0) && _eligible(owner, 0, false);
-                if (eligibleOwner && prize != 0) {
-                    purgeGameTrophies.rewardTrophyByToken(tokenId, prize, lvl);
-                    trophyDelta += prize;
-                } else if (prize != 0) {
-                    toReturn += prize;
-                }
-                unchecked {
-                    ++i;
-                }
-            }
-            trophyPoolDelta = trophyDelta;
+            // Former stake-trophy slice (10%) is refunded now that trophies are removed.
+            toReturn += (P * 10) / 100;
         }
 
         {
@@ -718,11 +597,6 @@ contract PurgeJackpots is IPurgeJackpots {
             }
         }
 
-        if (!trophyAwarded) {
-            // Clear placeholder if no BAF trophy was minted.
-            purgeGameTrophies.burnBafPlaceholder(lvl);
-        }
-
         winners = new address[](n);
         amounts = new uint256[](n);
         for (uint256 i; i < n; ) {
@@ -734,7 +608,7 @@ contract PurgeJackpots is IPurgeJackpots {
         }
 
         _clearBafTop(lvl);
-        return (winners, amounts, trophyPoolDelta, toReturn);
+        return (winners, amounts, 0, toReturn);
     }
 
     function runDecimatorJackpot(
@@ -749,10 +623,6 @@ contract PurgeJackpots is IPurgeJackpots {
     {
         // Decimator jackpots defer ETH distribution to per-player claims; this call snapshots winners.
         uint256 totalBurn;
-        // Track provisional trophy winner among winning subbuckets across all denominators.
-        address decTopWinner;
-        uint192 decTopBurn;
-        bool hasPlaceholder = _hasDecPlaceholder(lvl);
 
         uint256 decSeed = rngWord;
         for (uint8 denom = 2; denom <= 20; ) {
@@ -763,12 +633,6 @@ contract PurgeJackpots is IPurgeJackpots {
             uint256 subTotal = decBucketBurnTotal[lvl][denom][winningSub];
             if (subTotal != 0) {
                 totalBurn += subTotal;
-
-                DecSubbucketTop storage top = decBucketTop[lvl][denom][winningSub];
-                if (top.burn > decTopBurn) {
-                    decTopBurn = top.burn;
-                    decTopWinner = top.player;
-                }
             }
 
             unchecked {
@@ -777,39 +641,15 @@ contract PurgeJackpots is IPurgeJackpots {
         }
 
         if (totalBurn == 0) {
-            uint256 refund = poolWei;
-            // No eligible burns: clear any placeholder and refund the whole pool.
-            if (_hasDecPlaceholder(lvl)) {
-                purgeGameTrophies.burnDecPlaceholder(lvl);
-            }
-            return (0, refund);
-        }
-
-        uint256 claimPool = poolWei;
-        uint256 trophyPrize;
-        if (hasPlaceholder && decTopWinner != address(0)) {
-            trophyPrize = poolWei / 20; // 5% of Decimator pool reserved for the trophy owner
-            claimPool = poolWei - trophyPrize;
+            return (0, poolWei);
         }
 
         DecClaimRound storage round = decClaimRound[lvl];
-        round.poolWei = claimPool;
+        round.poolWei = poolWei;
         round.totalBurn = totalBurn;
         round.level = lvl;
         round.active = true;
 
-        if (hasPlaceholder) {
-            if (decTopWinner != address(0)) {
-                // Trophy follows the largest burn within the winning subbuckets.
-                uint256 trophyData = (uint256(DECIMATOR_TRAIT_SENTINEL) << 152) |
-                    (uint256(lvl) << TROPHY_BASE_LEVEL_SHIFT) |
-                    TROPHY_FLAG_DECIMATOR;
-                purgeGameTrophies.awardTrophy(decTopWinner, lvl, PURGE_TROPHY_KIND_DECIMATOR, trophyData, trophyPrize);
-                trophyPoolDelta = trophyPrize;
-            } else {
-                purgeGameTrophies.burnDecPlaceholder(lvl);
-            }
-        }
         return (trophyPoolDelta, 0);
     }
 
@@ -875,14 +715,6 @@ contract PurgeJackpots is IPurgeJackpots {
     function _decWinningSubbucket(uint256 entropy, uint8 denom) private pure returns (uint8) {
         if (denom == 0) return 0;
         return uint8(uint256(keccak256(abi.encode(entropy, denom))) % denom);
-    }
-
-    function _hasDecPlaceholder(uint24 lvl) internal pure returns (bool) {
-        if (lvl != 0 && (lvl % DECIMATOR_SPECIAL_LEVEL) == 0) return true;
-        if (lvl < 25) return false;
-        if ((lvl % 10) != 5) return false;
-        if ((lvl % 100) == 95) return false;
-        return true;
     }
 
     function _decClaimable(
