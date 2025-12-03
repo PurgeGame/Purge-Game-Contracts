@@ -33,6 +33,7 @@ contract PurgeAffiliate {
     event Affiliate(uint256 amount, bytes32 indexed code, address sender);
     event AffiliateBondClaimed(address indexed player, uint24 indexed lvl, uint8 indexed tier, uint8 bondsMinted);
     event AffiliateBondRewardsUpdated(uint256 count);
+    event SyntheticMapPlayerCreated(address indexed synthetic, address indexed affiliate, bytes32 code);
 
     // ---------------------------------------------------------------------
     // Errors
@@ -105,6 +106,8 @@ contract PurgeAffiliate {
     mapping(bytes32 => AffiliateCodeInfo) public affiliateCode;
     mapping(uint24 => mapping(address => uint256)) public affiliateCoinEarned;
     mapping(address => bytes32) private playerReferralCode;
+    mapping(address => address) public syntheticMapOwner; // synthetic player -> affiliate owner
+    mapping(address => bytes32) private syntheticMapCode; // synthetic player -> locked affiliate code
     mapping(address => uint256) public presaleCoinEarned;
     uint256 public presaleClaimableTotal;
     mapping(address => uint256) public presalePrincipal; // principal bought while coin is unwired
@@ -251,6 +254,20 @@ contract PurgeAffiliate {
         if (existing != bytes32(0)) revert Insufficient();
         playerReferralCode[msg.sender] = code_;
         emit Affiliate(0, code_, msg.sender); // 0 = player referred
+    }
+
+    /// @notice Create a synthetic MAP-only player controlled by the caller (affiliate).
+    /// @dev Locks referral code to caller-owned `code_` and tags the synthetic address as map-only.
+    function createSyntheticMapPlayer(address synthetic, bytes32 code_) external {
+        if (synthetic == address(0)) revert ZeroAddress();
+        AffiliateCodeInfo storage info = affiliateCode[code_];
+        if (info.owner != msg.sender) revert OnlyAuthorized();
+        if (syntheticMapOwner[synthetic] != address(0)) revert Insufficient();
+        if (playerReferralCode[synthetic] != bytes32(0)) revert Insufficient();
+        syntheticMapOwner[synthetic] = msg.sender;
+        syntheticMapCode[synthetic] = code_;
+        playerReferralCode[synthetic] = code_;
+        emit SyntheticMapPlayerCreated(synthetic, msg.sender, code_);
     }
 
     /// @notice Return the recorded referrer for `player` (zero address if none).
@@ -586,6 +603,12 @@ contract PurgeAffiliate {
     function affiliateTop(uint24 lvl) public view returns (address player, uint96 score) {
         PlayerScore memory stored = affiliateTopByLevel[lvl];
         return (stored.player, stored.score);
+    }
+
+    /// @notice Return synthetic map info (affiliate owner and locked code) for a synthetic player.
+    function syntheticMapInfo(address synthetic) external view returns (address owner, bytes32 code) {
+        owner = syntheticMapOwner[synthetic];
+        code = syntheticMapCode[synthetic];
     }
 
     // ---------------------------------------------------------------------

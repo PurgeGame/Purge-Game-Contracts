@@ -150,6 +150,7 @@ contract PurgeGameNFT {
     ITokenRenderer private immutable regularRenderer;
     ITokenRenderer private immutable trophyRenderer;
     IPurgeCoin private immutable coin;
+    address private immutable affiliateProgram;
     IPurgeGameTrophies private trophyModule;
 
     // Token id progression is segmented by "base" pointers: currentBaseTokenId marks the first active player token
@@ -249,6 +250,7 @@ contract PurgeGameNFT {
         regularRenderer = ITokenRenderer(regularRenderer_);
         trophyRenderer = ITokenRenderer(trophyRenderer_);
         coin = IPurgeCoin(coin_);
+        affiliateProgram = IPurgeCoin(coin_).affiliateProgram();
         _currentIndex = 97;
     }
 
@@ -343,11 +345,41 @@ contract PurgeGameNFT {
     // Purchase entrypoints (proxy to game logic)
     // ---------------------------------------------------------------------
 
+    function _syntheticMapInfo(address player) private view returns (address owner, bytes32 code) {
+        address affiliateAddr = affiliateProgram;
+        if (affiliateAddr == address(0)) {
+            return (address(0), bytes32(0));
+        }
+        return IPurgeAffiliate(affiliateAddr).syntheticMapInfo(player);
+    }
+
+    function _payoutAddress(address player) private view returns (address) {
+        (address owner, ) = _syntheticMapInfo(player);
+        return owner == address(0) ? player : owner;
+    }
+
     function purchase(PurchaseParams calldata params) external payable {
+        (address synOwner, ) = _syntheticMapInfo(msg.sender);
+        if (synOwner != address(0)) revert E();
         _routePurchase(msg.sender, params);
     }
 
-    function _routePurchase(address buyer, PurchaseParams calldata params) private {
+    /// @notice Affiliate-only entry to purchase MAPs for a registered synthetic player.
+    /// @dev Payment is always direct ETH from the affiliate; synthetic player is map-only.
+    function purchaseMapForSynthetic(address synthetic, uint256 quantity) external payable {
+        (address synOwner, bytes32 code) = _syntheticMapInfo(synthetic);
+        if (synOwner == address(0) || synOwner != msg.sender) revert E();
+        PurchaseParams memory params = PurchaseParams({
+            quantity: quantity,
+            kind: PurchaseKind.Map,
+            payKind: MintPaymentKind.DirectEth,
+            payInCoin: false,
+            affiliateCode: code
+        });
+        _routePurchase(synthetic, params);
+    }
+
+    function _routePurchase(address buyer, PurchaseParams memory params) private {
         bytes32 affiliateCode = params.payKind == MintPaymentKind.DirectEth ? params.affiliateCode : bytes32(0);
         if (params.kind == PurchaseKind.Player) {
             _purchase(buyer, params.quantity, params.payInCoin, affiliateCode, params.payKind);
@@ -499,7 +531,7 @@ contract PurgeGameNFT {
             rebateMint += claimableBonus;
         }
         if (rebateMint != 0) {
-            coin.creditFlip(buyer, rebateMint);
+            coin.creditFlip(_payoutAddress(buyer), rebateMint);
         }
 
         game.enqueueMap(buyer, uint32(quantity));
@@ -577,7 +609,7 @@ contract PurgeGameNFT {
         }
 
         uint256 rakebackMint;
-        address affiliateAddr = coin.affiliateProgram();
+        address affiliateAddr = affiliateProgram;
         if (affiliateAddr != address(0)) {
             rakebackMint = IPurgeAffiliate(affiliateAddr).payAffiliate(affiliateAmount, affiliateCode, payer, lvl);
         }

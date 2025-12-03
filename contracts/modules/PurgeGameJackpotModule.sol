@@ -5,6 +5,10 @@ import {IPurgeCoinModule, IPurgeGameTrophiesModule} from "../interfaces/PurgeGam
 import {PurgeGameStorage} from "../storage/PurgeGameStorage.sol";
 import {PurgeTraitUtils} from "../PurgeTraitUtils.sol";
 
+interface IPurgeGameAffiliatePayout {
+    function affiliatePayoutAddress(address player) external view returns (address recipient, address affiliateOwner);
+}
+
 interface IStETH {
     function balanceOf(address account) external view returns (uint256);
 }
@@ -31,7 +35,7 @@ interface IPurgeBondsJackpot {
  *         routing, and trophy credit flow all originate here so auditors can focus on one surface.
  */
 contract PurgeGameJackpotModule is PurgeGameStorage {
-    event PlayerCredited(address indexed player, uint256 amount);
+    event PlayerCredited(address indexed player, address indexed recipient, uint256 amount);
 
     uint48 private constant JACKPOT_RESET_TIME = 82620;
     uint8 private constant JACKPOT_LEVEL_CAP = 10;
@@ -292,8 +296,9 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
     }
 
     function _addClaimableEth(address beneficiary, uint256 weiAmount) private {
-        claimableWinnings[beneficiary] += weiAmount;
-        emit PlayerCredited(beneficiary, weiAmount);
+        address recipient = _payoutRecipient(beneficiary);
+        claimableWinnings[recipient] += weiAmount;
+        emit PlayerCredited(beneficiary, recipient, weiAmount);
     }
 
     function _traitBucketCounts(uint8 band, uint256 entropy) private pure returns (uint16[4] memory counts) {
@@ -771,12 +776,17 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         uint256 amount
     ) private returns (bool) {
         if (beneficiary == address(0) || amount == 0) return false;
+        address recipient = _payoutRecipient(beneficiary);
         if (payInCoin) {
-            coinContract.creditFlip(beneficiary, amount);
+            coinContract.creditFlip(recipient, amount);
         } else {
             _addClaimableEth(beneficiary, amount);
         }
         return true;
+    }
+
+    function _payoutRecipient(address player) private view returns (address recipient) {
+        (recipient, ) = IPurgeGameAffiliatePayout(address(this)).affiliatePayoutAddress(player);
     }
 
     function _packWinningTraits(uint8[4] memory traits) private pure returns (uint32 packed) {

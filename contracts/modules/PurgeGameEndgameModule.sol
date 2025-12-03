@@ -6,6 +6,10 @@ import {IPurgeGameTrophiesModule} from "../interfaces/PurgeGameModuleInterfaces.
 import {IPurgeJackpots} from "../interfaces/IPurgeJackpots.sol";
 import {PurgeGameStorage} from "../storage/PurgeGameStorage.sol";
 
+interface IPurgeGameAffiliatePayout {
+    function affiliatePayoutAddress(address player) external view returns (address recipient, address affiliateOwner);
+}
+
 /**
  * @title PurgeGameEndgameModule
  * @notice Delegate-called module that hosts the slow-path endgame settlement logic for `PurgeGame`.
@@ -17,7 +21,7 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
     // -----------------------
     error E();
 
-    event PlayerCredited(address indexed player, uint256 amount);
+    event PlayerCredited(address indexed player, address indexed recipient, uint256 amount);
 
     uint32 private constant DEFAULT_PAYOUTS_PER_TX = 420;
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
@@ -234,10 +238,11 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
 
     /// @notice Adds ETH winnings to a player, emitting the credit event.
     function _addClaimableEth(address beneficiary, uint256 weiAmount) private {
+        address recipient = _payoutRecipient(beneficiary);
         unchecked {
-            claimableWinnings[beneficiary] += weiAmount;
+            claimableWinnings[recipient] += weiAmount;
         }
-        emit PlayerCredited(beneficiary, weiAmount);
+        emit PlayerCredited(beneficiary, recipient, weiAmount);
     }
 
     /**
@@ -282,6 +287,10 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         if (consumeCarry) {
             rewardPool -= (poolWei - returnWei);
         }
+    }
+
+    function _payoutRecipient(address player) private view returns (address recipient) {
+        (recipient, ) = IPurgeGameAffiliatePayout(address(this)).affiliatePayoutAddress(player);
     }
 
     /// @notice Computes the rewardPool scaling factor (in bps) based on the level's position in its 100-level band.

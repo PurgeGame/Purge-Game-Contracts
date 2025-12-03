@@ -76,6 +76,10 @@ interface IPurgeGameBondSinks {
     function bondYieldDeposit() external payable;
 }
 
+interface IPurgeStonkReceiver {
+    function deposit(uint256 coinAmount, uint256 stEthAmount) external payable;
+}
+
 /**
  * @title PurgeBonds
  * @notice A lightweight ERC721 implementation for gamified "bonds".
@@ -191,6 +195,7 @@ contract PurgeBonds {
     address public game; // The main PurgeGame contract
     address public affiliateProgram;
     address public stEthWithdrawalQueue;
+    address public stonk; // STONK share contract to receive stray funds
 
     // -- Financial Accounting --
     // `pool` variables track actual assets held.
@@ -271,6 +276,16 @@ contract PurgeBonds {
         owner = msg.sender;
         stEthToken = stEthToken_;
         lastDecayDay = uint64(block.timestamp / 1 days);
+    }
+
+    receive() external payable {
+        _forwardToStonk(msg.value);
+    }
+
+    fallback() external payable {
+        if (msg.value != 0) {
+            _forwardToStonk(msg.value);
+        }
     }
 
     // ===========================================================================
@@ -1023,10 +1038,17 @@ contract PurgeBonds {
         presalePricePer1000Wei = priceWeiPer1000;
     }
 
+    function setStonk(address stonk_) external onlyOwner {
+        _setStonk(stonk_);
+    }
+
     function wire(address[] calldata addresses) external onlyOwner {
         _setCoinToken(addresses.length > 0 ? addresses[0] : address(0));
         _setGame(addresses.length > 1 ? addresses[1] : address(0));
         _setAffiliate(addresses.length > 2 ? addresses[2] : address(0));
+        if (addresses.length > 3 && addresses[3] != address(0)) {
+            _setStonk(addresses[3]);
+        }
     }
 
     /**
@@ -1926,6 +1948,7 @@ contract PurgeBonds {
             return;
         }
         coinToken = token;
+        _approveStonkAllowances();
     }
 
     function _markPrizePoolFunded() private {
@@ -1959,6 +1982,38 @@ contract PurgeBonds {
             return;
         }
         affiliateProgram = affiliate_;
+    }
+
+    function _approveStonkAllowances() private {
+        address stonk_ = stonk;
+        if (stonk_ == address(0)) return;
+
+        address coin_ = coinToken;
+        if (coin_ != address(0)) {
+            if (!IERC20Approve(coin_).approve(stonk_, type(uint256).max)) revert CallFailed();
+        }
+        address st = stEthToken;
+        if (st != address(0)) {
+            if (!IERC20Approve(st).approve(stonk_, type(uint256).max)) revert CallFailed();
+        }
+    }
+
+    function _setStonk(address stonk_) private {
+        if (stonk_ == address(0)) revert ZeroAddress();
+        address current = stonk;
+        if (current != address(0) && current != stonk_) revert AlreadyConfigured();
+        stonk = stonk_;
+        _approveStonkAllowances();
+    }
+
+    function _forwardToStonk(uint256 amount) private {
+        if (amount == 0) return;
+        address stonkAddr = stonk;
+        if (stonkAddr == address(0)) revert ZeroAddress();
+        (bool ok, ) = stonkAddr.call{value: amount}(
+            abi.encodeWithSelector(IPurgeStonkReceiver.deposit.selector, 0, 0)
+        );
+        if (!ok) revert CallFailed();
     }
 
     function _advanceClaimableCursor() private {

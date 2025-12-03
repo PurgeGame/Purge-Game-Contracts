@@ -5,6 +5,7 @@ import {IPurgeGameNFT} from "./PurgeGameNFT.sol";
 import {IPurgeGameTrophies} from "./PurgeGameTrophies.sol";
 import {IPurgeCoinModule, IPurgeGameTrophiesModule} from "./interfaces/PurgeGameModuleInterfaces.sol";
 import {IPurgeCoin} from "./interfaces/IPurgeCoin.sol";
+import {IPurgeAffiliate} from "./interfaces/IPurgeAffiliate.sol";
 import {IPurgeRendererLike} from "./interfaces/IPurgeRendererLike.sol";
 import {IPurgeJackpots} from "./interfaces/IPurgeJackpots.sol";
 import {IPurgeGameEndgameModule, IPurgeGameJackpotModule} from "./interfaces/IPurgeGameModules.sol";
@@ -97,7 +98,7 @@ contract PurgeGame is PurgeGameStorage {
     // -----------------------
     // Events
     // -----------------------
-    event PlayerCredited(address indexed player, uint256 amount);
+    event PlayerCredited(address indexed player, address indexed recipient, uint256 amount);
     event BondCreditAdded(address indexed player, uint256 amount);
     event Jackpot(uint256 traits); // Encodes jackpot metadata
     event Purge(address indexed player, uint256[] tokenIds);
@@ -114,6 +115,7 @@ contract PurgeGame is PurgeGameStorage {
     IPurgeGameNFT private immutable nft; // ERC721 interface for mint/burn/metadata surface
     IPurgeGameTrophies private immutable trophies; // Dedicated trophy module
     address public immutable bonds; // Bond contract for resolution and metadata
+    address private immutable affiliateProgram; // Cached affiliate program for payout routing
     IStETH private immutable steth; // stETH token held by the game
     address private immutable jackpots; // PurgeJackpots contract
     address private immutable endgameModule; // Delegate module for endgame settlement
@@ -210,6 +212,7 @@ contract PurgeGame is PurgeGameStorage {
         endgameModule = endgameModule_;
         jackpotModule = jackpotModule_;
         vrfCoordinator = IVRFCoordinator(vrfCoordinator_);
+        affiliateProgram = coin.affiliateProgram();
         vrfKeyHash = vrfKeyHash_;
         vrfSubscriptionId = vrfSubscriptionId_;
         linkToken = linkToken_;
@@ -241,6 +244,16 @@ contract PurgeGame is PurgeGameStorage {
 
     function nextPrizePoolView() external view returns (uint256) {
         return nextPrizePool;
+    }
+
+    /// @notice Resolve the payout recipient for a player, routing synthetic MAP-only players to their affiliate owner.
+    function affiliatePayoutAddress(address player) public view returns (address recipient, address affiliateOwner) {
+        address affiliateAddr = affiliateProgram;
+        if (affiliateAddr == address(0)) {
+            return (player, address(0));
+        }
+        (affiliateOwner, ) = IPurgeAffiliate(affiliateAddr).syntheticMapInfo(player);
+        recipient = affiliateOwner == address(0) ? player : affiliateOwner;
     }
 
     // --- State machine: advance one tick ------------------------------------------------
@@ -990,10 +1003,11 @@ contract PurgeGame is PurgeGameStorage {
     /// @param beneficiary Player to credit.
     /// @param weiAmount   Amount in wei to add.
     function _addClaimableEth(address beneficiary, uint256 weiAmount) internal {
+        (address recipient, ) = affiliatePayoutAddress(beneficiary);
         unchecked {
-            claimableWinnings[beneficiary] += weiAmount;
+            claimableWinnings[recipient] += weiAmount;
         }
-        emit PlayerCredited(beneficiary, weiAmount);
+        emit PlayerCredited(beneficiary, recipient, weiAmount);
     }
 
     function _recordMintData(
