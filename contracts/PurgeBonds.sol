@@ -178,6 +178,11 @@ contract PurgeBonds {
     uint256 private constant SALES_BUMP_DENOMINATOR = 1000;
     uint256 private constant PRESALE_PRICE_PER_1000_DEFAULT = 0.01 ether;
     uint256 private constant FALLBACK_MINT_PRICE = 0.025 ether;
+    uint256 private constant DEFAULT_BASE_PER_BOND = 0.5 ether;
+    uint256 private constant BOND_BASE_TICK_WEI = 0.01 ether;
+    uint256 private constant BOND_BASE_TICK_BITS = 10;
+    uint256 private constant BOND_BASE_TICK_MASK = (1 << BOND_BASE_TICK_BITS) - 1; // 0..1023
+    uint256 private constant BOND_DISTANCE_MASK = (1 << 24) - 1; // supports multi-million distances
 
     bytes32 private constant _TRANSFER_EVENT_SIGNATURE =
         0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef;
@@ -249,8 +254,9 @@ contract PurgeBonds {
     mapping(address => mapping(address => bool)) private _operatorApprovals;
 
     // Bond Specific Data
-    mapping(uint256 => uint256) public basePriceOf; // The "Principal" paid
-    mapping(uint256 => uint32) public createdDistance; // Snapshot of queue depth at mint
+    mapping(uint256 => uint256) public basePriceOf; // legacy principal (kept for compatibility; new mints use bondMeta)
+    mapping(uint256 => uint32) public createdDistance; // legacy distance (kept for compatibility; new mints use bondMeta)
+    mapping(uint256 => uint64) internal bondMeta; // packed base/distance anchor per mint run
     uint32 public lastPurchaseDistance; // Distance snapshot of the most recent purchase
     mapping(uint256 => bool) private soldBackDiscount; // true when bond was sold; coin weight is quartered
 
@@ -699,14 +705,12 @@ contract PurgeBonds {
         uint256 tokenId = startTokenId;
         uint256 end = startTokenId + quantity;
         uint256 toMasked = uint256(uint160(to)) & _BITMASK_ADDRESS;
-        uint32 lastDistance;
+        uint32 runDistance = uint32(_currentDistance(tokenId));
+        uint32 lastDistance = runDistance;
+        bondMeta[startTokenId] = _packBondMeta(basePrice, runDistance);
 
-        // Loop for per-token metadata setup (cannot be packed efficiently due to distinct Base Prices)
+        // Loop for per-token metadata setup (emit events / ERC721 receiver checks)
         do {
-            basePriceOf[tokenId] = basePrice;
-            uint32 distance = uint32(_currentDistance(tokenId));
-            createdDistance[tokenId] = distance;
-            lastDistance = distance;
             // Note: WinChance is no longer stored; derived from basePrice.
 
             emit Purchased(to, tokenId, basePrice, paidWei);
@@ -910,7 +914,7 @@ contract PurgeBonds {
         if (refDistance < distance) {
             refDistance = distance;
         }
-        uint256 basePrice = basePriceOf[tokenId];
+        (uint256 basePrice, ) = _bondMetaFor(tokenId);
         uint256 payout = _bondSalePayout(basePrice, distance, refDistance);
         if (payout == 0) revert NotSellable();
 
@@ -925,6 +929,17 @@ contract PurgeBonds {
         }
         uint256 coinOut = (bondShare * 75) / 100;
         if (coinOut != 0) {
+            address game_ = game;
+            if (game_ != address(0)) {
+                uint256 priceWei = IPurgeGamePrice(game_).mintPrice();
+                uint256 priceCoinUnit = IPurgeGamePrice(game_).coinPriceUnit();
+                if (priceWei != 0 && priceCoinUnit != 0) {
+                    uint256 cap = (basePrice * priceCoinUnit) / priceWei;
+                    if (cap != 0 && coinOut > cap) {
+                        coinOut = cap;
+                    }
+                }
+            }
             if (bondCoin <= coinOut) {
                 bondCoin = 0;
             } else {
@@ -1291,13 +1306,63 @@ contract PurgeBonds {
             interfaceId == 0x01ffc9a7; // ERC165
     }
 
+    function _packBondMeta(uint256 baseWei, uint32 distance) private pure returns (uint64 packed) {
+        uint256 ticks = baseWei == DEFAULT_BASE_PER_BOND ? 0 : (baseWei / BOND_BASE_TICK_WEI);
+        if (ticks > BOND_BASE_TICK_MASK) {
+            ticks = BOND_BASE_TICK_MASK;
+        }
+        if (distance > BOND_DISTANCE_MASK) {
+            distance = uint32(BOND_DISTANCE_MASK);
+        }
+        packed = (uint64(distance) << uint64(BOND_BASE_TICK_BITS)) | uint64(ticks);
+    }
+
+    function _unpackBondMeta(uint64 packed) private pure returns (uint256 baseWei, uint32 distance) {
+        uint256 ticks = uint256(packed & uint64(BOND_BASE_TICK_MASK));
+        baseWei = ticks == 0 ? DEFAULT_BASE_PER_BOND : ticks * BOND_BASE_TICK_WEI;
+        distance = uint32(packed >> BOND_BASE_TICK_BITS);
+    }
+
+    function _bondMetaFor(uint256 tokenId) private view returns (uint256 baseWei, uint32 distance) {
+        uint256 cursor = tokenId;
+        while (true) {
+            uint64 packed = bondMeta[cursor];
+            if (packed != 0) {
+                return _unpackBondMeta(packed);
+            }
+            if (cursor == 0) break;
+            unchecked {
+                --cursor;
+            }
+        }
+
+        // Legacy fallback for pre-migration tokens or if no run anchor was set.
+        uint256 legacyBase = basePriceOf[tokenId];
+        if (legacyBase == 0) {
+            legacyBase = DEFAULT_BASE_PER_BOND;
+        }
+        uint32 legacyDist = createdDistance[tokenId];
+        if (legacyDist == 0) {
+            legacyDist = uint32(_currentDistance(tokenId));
+        }
+        return (legacyBase, legacyDist);
+    }
+
+    function _winChanceFromBase(uint256 base) private pure returns (uint16) {
+        if (base == 0) return 0;
+        uint256 c = (base * 1000) / 1 ether;
+        if (c == 0) return 1;
+        if (c > 1000) return 1000;
+        return uint16(c);
+    }
+
     function tokenURI(uint256 tokenId) external view returns (string memory) {
         _requireActiveToken(tokenId);
         if (renderer == address(0)) revert ZeroAddress();
 
-        uint32 created = createdDistance[tokenId];
+        (uint256 base, uint32 created) = _bondMetaFor(tokenId);
         uint32 current = uint32(_currentDistance(tokenId));
-        uint16 chance = getWinChance(tokenId);
+        uint16 chance = _winChanceFromBase(base);
         uint256 sellCoin = _bondCoinSaleQuote(tokenId);
 
         bool isStaked = (_packedOwnershipOf(tokenId) & _BITMASK_STAKED) != 0;
@@ -1305,13 +1370,8 @@ contract PurgeBonds {
     }
 
     function getWinChance(uint256 tokenId) public view returns (uint16) {
-        uint256 base = basePriceOf[tokenId];
-        if (base == 0) return 0;
-
-        uint256 c = (base * 1000) / 1 ether;
-        if (c == 0) return 1;
-        if (c > 1000) return 1000;
-        return uint16(c);
+        (uint256 base, ) = _bondMetaFor(tokenId);
+        return _winChanceFromBase(base);
     }
 
     function bondSellCoinQuote(uint256 tokenId) external view returns (uint256) {
@@ -1882,7 +1942,7 @@ contract PurgeBonds {
         uint256 packed = _packedOwnershipAt(tokenId);
         if (packed == 0 || (packed & _BITMASK_BURNED) != 0) return 0;
 
-        uint256 basePrice = basePriceOf[tokenId];
+        (uint256 basePrice, ) = _bondMetaFor(tokenId);
         uint256 distance = _currentDistance(tokenId);
         if (distance == 0) return 0;
 
@@ -1901,6 +1961,10 @@ contract PurgeBonds {
         if (priceWei == 0 || priceCoinUnit == 0) return 0;
 
         coinOut = (payoutWei * priceCoinUnit) / priceWei;
+        uint256 cap = (basePrice * priceCoinUnit) / priceWei;
+        if (cap != 0 && coinOut > cap) {
+            coinOut = cap;
+        }
     }
 
     function _decreaseTotalCoinOwed(uint256 amount) private {
@@ -1965,7 +2029,7 @@ contract PurgeBonds {
             coinBase = (weiSpent * 1000 * 1e6) / pricePer1000;
         }
 
-        uint256 pct = usedFallbackPrice ? 10 : 3;
+        uint256 pct = usedFallbackPrice ? 10 : 0;
         uint256 affiliateAmount = (coinBase * pct) / 100;
         if (affiliateAmount == 0) return;
 
@@ -2135,7 +2199,7 @@ contract PurgeBonds {
     }
 
     function _resolveBond(uint256 tokenId, uint256 rngWord) private returns (uint8 outcome, uint256 heldCoin, uint256 heldEth) {
-        uint256 basePrice = basePriceOf[tokenId];
+        (uint256 basePrice, ) = _bondMetaFor(tokenId);
         uint256 packed = _packedOwnershipOf(tokenId);
         uint256 weight = _coinWeightMultiplier(packed);
         address owner_ = address(uint160(packed));
@@ -2248,7 +2312,7 @@ contract PurgeBonds {
             return (newBudget, false, heldCoin, heldEth);
         }
 
-        uint256 basePrice = basePriceOf[tokenId];
+        (uint256 basePrice, ) = _bondMetaFor(tokenId);
         uint256 delta = basePrice >= 1 ether ? 0 : (1 ether - basePrice);
         if (newBudget < delta) return (newBudget, true, heldCoin, heldEth);
 
@@ -2332,7 +2396,7 @@ contract PurgeBonds {
                 address holder = address(uint160(prevOwnershipPacked));
                 if (holder != address(0)) {
                     // Decrement Liabilities
-                    uint256 basePrice = basePriceOf[tid];
+                    (uint256 basePrice, ) = _bondMetaFor(tid);
                     totalEthOwed -= basePrice;
                     _decreaseTotalCoinOwed(basePrice * _coinWeightMultiplier(prevOwnershipPacked));
 
@@ -2411,7 +2475,7 @@ contract PurgeBonds {
 
             address holder = address(uint160(prevOwnershipPacked));
             if (holder != address(0)) {
-                uint256 basePrice = basePriceOf[tid];
+                (uint256 basePrice, ) = _bondMetaFor(tid);
                 totalEthOwed -= basePrice;
                 _decreaseTotalCoinOwed(basePrice * _coinWeightMultiplier(prevOwnershipPacked));
 

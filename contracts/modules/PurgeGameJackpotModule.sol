@@ -2,7 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {IPurgeCoinModule} from "../interfaces/PurgeGameModuleInterfaces.sol";
-import {PurgeGameStorage, PendingJackpotBondMint} from "../storage/PurgeGameStorage.sol";
+import {PurgeGameStorage, PendingJackpotBondMint, ClaimableBondInfo} from "../storage/PurgeGameStorage.sol";
 import {PurgeTraitUtils} from "../PurgeTraitUtils.sol";
 
 interface IPurgeGameAffiliatePayout {
@@ -665,26 +665,46 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         }
         if (basePerBond < JACKPOT_BOND_MIN_BASE) {
             basePerBond = JACKPOT_BOND_MIN_BASE;
-        } else if (basePerBond > JACKPOT_BOND_MAX_BASE) {
-            basePerBond = JACKPOT_BOND_MAX_BASE;
         }
 
         uint256 quantity = bondBudget / basePerBond;
         if (quantity == 0) return (0, traitShare);
 
         uint256 maxQuantity = winnersLen * JACKPOT_BOND_MAX_MULTIPLIER;
-        if (maxQuantity != 0 && quantity > maxQuantity) {
+        if (quantity > maxQuantity) {
             quantity = maxQuantity;
         }
 
+        basePerBond = (bondBudget + quantity - 1) / quantity; // ceil to fully spend bond budget
+        if (basePerBond < JACKPOT_BOND_MIN_BASE) {
+            basePerBond = JACKPOT_BOND_MIN_BASE;
+        }
+
         uint256 spend = basePerBond * quantity;
-        if (spend == 0) return (0, traitShare);
+        if (spend == 0 || spend > traitShare) return (0, traitShare);
 
         uint16 offset = uint16(entropyState % winnersLen);
-        // Queue bond mints to be processed out-of-band so jackpots stay lightweight. Split 90/10 locked/marketable.
-        if (_enqueueJackpotBondMintsMixed(winners, uint16(quantity), basePerBond, offset)) {
-            bondSpent = spend;
+        // Split 90/10 locked/marketable while preserving deterministic rotation.
+        uint16 marketable = uint16(quantity / 10);
+        if (marketable == 0 && quantity != 0) {
+            marketable = 1; // ceil to guarantee ~10% marketable when small
         }
+        if (marketable > quantity) {
+            marketable = uint16(quantity);
+        }
+        uint16 locked = uint16(quantity - marketable);
+        if (locked != 0) {
+            _creditClaimableBonds(winners, locked, uint96(basePerBond), offset, true);
+        }
+        if (marketable != 0) {
+            uint256 off2 = uint256(offset) + uint256(locked);
+            if (off2 >= winnersLen) {
+                off2 = off2 % winnersLen;
+            }
+            _creditClaimableBonds(winners, marketable, uint96(basePerBond), uint16(off2), false);
+        }
+        bondSpent = spend;
+        _fundBonds(spend);
 
         ethPoolForWinners = traitShare - bondSpent;
     }
@@ -774,58 +794,6 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         }
     }
 
-    function _enqueueJackpotBondMint(
-        address[] memory winners,
-        uint16 quantity,
-        uint256 basePerBond,
-        uint16 offset,
-        bool stake
-    ) private returns (bool) {
-        if (quantity == 0 || winners.length == 0) return false;
-        if (basePerBond > type(uint96).max) return false;
-
-        PendingJackpotBondMint storage batch = pendingJackpotBondMints.push();
-        batch.basePerBondWei = uint96(basePerBond);
-        batch.quantity = quantity;
-        batch.offset = offset;
-        batch.stake = stake;
-        batch.winners = winners;
-        return true;
-    }
-
-    function _enqueueJackpotBondMintsMixed(
-        address[] memory winners,
-        uint16 quantity,
-        uint256 basePerBond,
-        uint16 offset
-    ) private returns (bool) {
-        if (quantity == 0) return false;
-        uint256 winnersLen = winners.length;
-        if (winnersLen == 0) return false;
-        uint16 marketable = quantity / 10;
-        if (marketable == 0 && quantity != 0) {
-            marketable = 1; // ceil to guarantee ~10% marketable when small
-        }
-        if (marketable > quantity) {
-            marketable = quantity;
-        }
-        uint16 locked = quantity - marketable;
-        bool ok;
-        if (locked != 0) {
-            ok = _enqueueJackpotBondMint(winners, locked, basePerBond, offset, true);
-        }
-        if (marketable != 0) {
-            uint256 off2 = uint256(offset) + uint256(locked);
-            if (off2 >= winnersLen) {
-                off2 = off2 % winnersLen;
-            }
-            if (_enqueueJackpotBondMint(winners, marketable, basePerBond, uint16(off2), false)) {
-                ok = true;
-            }
-        }
-        return ok;
-    }
-
     function _entropyStep(uint256 state) private pure returns (uint256) {
         unchecked {
             state ^= state << 7;
@@ -866,6 +834,53 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
 
     function _payoutRecipient(address player) private view returns (address recipient) {
         (recipient, ) = IPurgeGameAffiliatePayout(address(this)).affiliatePayoutAddress(player);
+    }
+
+    function _creditClaimableBonds(
+        address[] memory winners,
+        uint16 quantity,
+        uint96 basePerBond,
+        uint16 offset,
+        bool stake
+    ) private {
+        if (quantity == 0 || winners.length == 0 || basePerBond == 0) return;
+        uint256 len = winners.length;
+        uint256 per = quantity / len;
+        uint256 rem = quantity % len;
+        for (uint256 i; i < len; ) {
+            uint256 share = per;
+            if (i < rem) {
+                unchecked {
+                    ++share;
+                }
+            }
+            if (share != 0) {
+                address recipient = winners[(uint256(offset) + i) % len];
+                _addClaimableBond(recipient, uint256(share) * uint256(basePerBond), basePerBond, stake);
+            }
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    function _addClaimableBond(address player, uint256 weiAmount, uint96 basePerBond, bool stake) private {
+        if (player == address(0) || weiAmount == 0 || basePerBond == 0) return;
+        ClaimableBondInfo storage info = claimableBondInfo[player];
+        if (info.basePerBondWei == 0) {
+            info.basePerBondWei = basePerBond;
+            info.stake = stake;
+        }
+        unchecked {
+            info.weiAmount += weiAmount;
+        }
+    }
+
+    function _fundBonds(uint256 amount) private {
+        if (amount == 0) return;
+        unchecked {
+            bondCreditEscrow += amount;
+        }
     }
 
     function _packWinningTraits(uint8[4] memory traits) private pure returns (uint32 packed) {

@@ -4,10 +4,14 @@ pragma solidity ^0.8.26;
 import {IPurgeJackpots} from "../interfaces/IPurgeJackpots.sol";
 import {IPurgeTrophies} from "../interfaces/IPurgeTrophies.sol";
 import {IPurgeAffiliate} from "../interfaces/IPurgeAffiliate.sol";
-import {PurgeGameStorage, PendingJackpotBondMint} from "../storage/PurgeGameStorage.sol";
+import {PurgeGameStorage, PendingJackpotBondMint, ClaimableBondInfo} from "../storage/PurgeGameStorage.sol";
 
 interface IPurgeGameAffiliatePayout {
     function affiliatePayoutAddress(address player) external view returns (address recipient, address affiliateOwner);
+}
+
+interface IPurgeGameWithBonds {
+    function bonds() external view returns (address);
 }
 
 /**
@@ -19,6 +23,8 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
     // -----------------------
     // Custom Errors / Events
     // -----------------------
+    error MissingExterminator();
+
     event PlayerCredited(address indexed player, address indexed recipient, uint256 amount);
 
     uint32 private constant DEFAULT_PAYOUTS_PER_TX = 420;
@@ -39,46 +45,23 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
      * @param rngWord Randomness used for jackpot and ticket selection.
      * @param jackpotsAddr Address of the jackpots contract to invoke.
      */
-    function finalizeEndgame(
-        uint24 lvl,
-        uint32 cap,
-        uint256 rngWord,
-        address jackpotsAddr
-    ) external {
+    function finalizeEndgame(uint24 lvl, uint32 cap, uint256 rngWord, address jackpotsAddr) external {
         uint24 prevLevel = lvl - 1;
-        bool traitWin = lastExterminatedTrait != TRAIT_ID_TIMEOUT;
-        if (traitWin) {
-            _primeTraitPayouts(prevLevel, rngWord);
+        uint16 traitRaw = lastExterminatedTrait;
+        if (traitRaw != TRAIT_ID_TIMEOUT && !levelExterminatorPaid[prevLevel]) {
+            _primeTraitPayouts(prevLevel, uint8(traitRaw), rngWord);
         }
         uint8 _phase = phase;
         if (_phase > 3) {
-            uint256 participantPool = traitWin ? currentPrizePool : 0;
-            if (participantPool != 0) {
-                // Finalize the participant slice from `_primeTraitPayouts` in a gas-bounded manner.
-                _payoutParticipants(cap, prevLevel, participantPool);
-                return;
-            }
-            uint24 prevMod10 = prevLevel % 10;
-            uint24 prevMod100 = prevLevel % 100;
-
-            if (prevLevel != 0 && prevMod10 == 0) {
-                uint256 bafPoolWei;
-                if (prevMod100 == 0 && bafHundredPool != 0) {
-                    // Every 100 levels we may have a carry pool; otherwise take a fresh slice from rewardPool.
-                    bafPoolWei = bafHundredPool;
-                    bafHundredPool = 0;
-                } else {
-                    bafPoolWei = (rewardPool * (prevLevel == 50 ? 25 : 10)) / 100;
+            if (traitRaw != TRAIT_ID_TIMEOUT) {
+                uint256 participantPool = currentPrizePool;
+                if (participantPool != 0) {
+                    // Finalize the participant slice from `_primeTraitPayouts` in a gas-bounded manner.
+                    _payoutParticipants(cap, prevLevel, participantPool, uint8(traitRaw));
+                    return;
                 }
-                _rewardJackpot(0, bafPoolWei, prevLevel, rngWord, jackpotsAddr, true);
             }
-            bool decWindow = prevMod10 == 5 && prevLevel >= 15 && prevMod100 != 95;
-            if (decWindow) {
-                // Fire decimator jackpots midway through each decile except the 95th to avoid overlap with final bands.
-                uint256 decPoolWei = (rewardPool * 15) / 100;
-                _rewardJackpot(1, decPoolWei, prevLevel, rngWord, jackpotsAddr, true);
-            }
-
+            _runJackpots(prevLevel, rngWord, jackpotsAddr);
             phase = 0;
             return;
         }
@@ -88,7 +71,7 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
             return;
         }
 
-        if (!traitWin) {
+        if (traitRaw == TRAIT_ID_TIMEOUT) {
             return;
         }
     }
@@ -100,8 +83,8 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
      * @param prevLevel Level that just ended (level indexes are 1-based).
      * @param participantPool Value of `currentPrizePool` cached by the caller to avoid extra SLOADs.
      */
-    function _payoutParticipants(uint32 capHint, uint24 prevLevel, uint256 participantPool) private {
-        address[] storage arr = traitPurgeTicket[prevLevel][uint8(lastExterminatedTrait)];
+    function _payoutParticipants(uint32 capHint, uint24 prevLevel, uint256 participantPool, uint8 traitId) private {
+        address[] storage arr = traitPurgeTicket[prevLevel][traitId];
         uint256 len = arr.length;
         uint256 unitPayout = participantPool / len;
 
@@ -126,10 +109,8 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
             currentPrizePool = 0;
         }
 
-        airdropIndex = uint32(i);
-        if (i == len) {
-            airdropIndex = 0;
-        }
+        uint32 nextIdx = i == len ? 0 : uint32(i);
+        airdropIndex = nextIdx;
     }
 
     function _exterminatorForLevel(uint24 lvl) private view returns (address ex) {
@@ -139,61 +120,85 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         return arr[uint256(lvl) - 1];
     }
 
-    function _clearExterminatorForLevel(uint24 lvl) private {
-        if (lvl == 0) return;
-        address[] storage arr = levelExterminators;
-        if (arr.length < lvl) return;
-        arr[uint256(lvl) - 1] = address(0);
+    function _runJackpots(uint24 prevLevel, uint256 rngWord, address jackpotsAddr) private {
+        uint256 rewardPoolLocal = rewardPool;
+        uint24 prevMod10 = prevLevel % 10;
+        uint24 prevMod100 = prevLevel % 100;
+
+        if (prevLevel != 0 && prevMod10 == 0) {
+            uint256 bafPoolWei;
+            if (prevMod100 == 0 && bafHundredPool != 0) {
+                // Every 100 levels we may have a carry pool; otherwise take a fresh slice from rewardPool.
+                bafPoolWei = bafHundredPool;
+                bafHundredPool = 0;
+            } else {
+                bafPoolWei = (rewardPoolLocal * (prevLevel == 50 ? 25 : 10)) / 100;
+            }
+            if (bafPoolWei != 0) {
+                rewardPoolLocal -= _rewardJackpot(0, bafPoolWei, prevLevel, rngWord, jackpotsAddr);
+            }
+        }
+        if (prevMod10 == 5 && prevLevel >= 15 && prevMod100 != 95) {
+            // Fire decimator jackpots midway through each decile except the 95th to avoid overlap with final bands.
+            uint256 decPoolWei = (rewardPoolLocal * 15) / 100;
+            if (decPoolWei != 0) {
+                rewardPoolLocal -= _rewardJackpot(1, decPoolWei, prevLevel, rngWord, jackpotsAddr);
+            }
+        }
+
+        rewardPool = rewardPoolLocal;
     }
 
     /**
      * @notice Splits the current prize pool into exterminator, ticket, and participant slices for a trait win.
      * @dev Handles exterminator and participant splits without any trophy accounting.
      */
-    function _primeTraitPayouts(uint24 prevLevel, uint256 rngWord) private {
+    function _primeTraitPayouts(uint24 prevLevel, uint8 traitId, uint256 rngWord) private {
         address ex = _exterminatorForLevel(prevLevel);
-        if (ex == address(0)) return;
 
-        uint16 exTrait = lastExterminatedTrait;
-        address trophyAddr = trophies;
-        if (trophyAddr != address(0)) {
-            if (exTrait < 256) {
-                try IPurgeTrophies(trophyAddr).mintExterminator(
-                    ex,
-                    prevLevel,
-                    uint8(exTrait),
-                    exterminationInvertFlag
-                ) {} catch {}
-            }
-
-            address affiliateAddr = affiliateProgramAddr;
-            if (affiliateAddr != address(0)) {
-                (address top, ) = IPurgeAffiliate(affiliateAddr).affiliateTop(prevLevel);
-                if (top != address(0)) {
-                    try IPurgeTrophies(trophyAddr).mintAffiliate(top, prevLevel) {} catch {}
-                }
-            }
-        }
+        levelExterminatorPaid[prevLevel] = true;
+        _maybeMintAffiliateTop(prevLevel);
 
         uint256 poolValue = currentPrizePool;
         uint256 exterminatorShare = (prevLevel % 10 == 4 && prevLevel != 4)
             ? (poolValue * 40) / 100
             : (poolValue * 30) / 100;
 
-        // Pay half of the exterminator share in bonds to keep gas bounded and align incentives.
-        {
-            address[] memory exArr = new address[](1);
-            exArr[0] = ex;
-            uint256 ethPortion = _splitEthWithBonds(exArr, exterminatorShare, BOND_BPS_HALF, rngWord);
-            if (ethPortion != 0) {
-                _addClaimableEth(ex, ethPortion);
-            }
-        }
+        _payExterminatorShare(ex, exterminatorShare, rngWord);
 
         // Bonus slice: 10% split across three tickets using their ETH mint streaks as weights
         // (even split if all streaks are zero).
         uint256 ticketBonus = (poolValue * 10) / 100;
-        address[] storage arr = traitPurgeTicket[prevLevel][uint8(lastExterminatedTrait)];
+        _distributeTicketBonus(prevLevel, traitId, ticketBonus, rngWord);
+
+        uint256 participantShare = ((poolValue * 90) / 100) - exterminatorShare;
+        currentPrizePool = participantShare;
+        airdropIndex = 0;
+    }
+
+    function _maybeMintAffiliateTop(uint24 prevLevel) private {
+        address affiliateAddr = affiliateProgramAddr;
+        if (affiliateAddr == address(0)) return;
+        (address top, ) = IPurgeAffiliate(affiliateAddr).affiliateTop(prevLevel);
+        if (top == address(0)) return;
+        address trophyAddr = trophies;
+        try IPurgeTrophies(trophyAddr).mintAffiliate(top, prevLevel) {} catch {}
+    }
+
+    function _payExterminatorShare(address ex, uint256 exterminatorShare, uint256 rngWord) private {
+        address[] memory exArr = new address[](1);
+        exArr[0] = ex;
+        uint256 ethPortion = _splitEthWithBonds(exArr, exterminatorShare, BOND_BPS_HALF, rngWord);
+        _addClaimableEth(ex, ethPortion);
+    }
+
+    function _distributeTicketBonus(
+        uint24 prevLevel,
+        uint8 traitId,
+        uint256 ticketBonus,
+        uint256 rngWord
+    ) private {
+        address[] storage arr = traitPurgeTicket[prevLevel][traitId];
         uint256 arrLen = arr.length;
         address[3] memory winners;
         uint256[3] memory streaks;
@@ -208,35 +213,32 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         }
 
         uint256 totalWeight = streaks[0] + streaks[1] + streaks[2];
-        uint256 remaining = ticketBonus;
-        for (uint8 i; i < 3; ) {
-            uint256 share;
-            if (totalWeight == 0) {
-                share = ticketBonus / 3;
-            } else {
-                share = (ticketBonus * streaks[i]) / totalWeight;
-            }
-            if (share != 0) {
-                _addClaimableEth(winners[i], share);
-                remaining -= share;
-            }
-            unchecked {
-                ++i;
-            }
-        }
-        if (remaining != 0) {
-            _addClaimableEth(winners[0], remaining);
+        uint256 share0 = totalWeight == 0 ? ticketBonus / 3 : (ticketBonus * streaks[0]) / totalWeight;
+        uint256 share1 = totalWeight == 0 ? ticketBonus / 3 : (ticketBonus * streaks[1]) / totalWeight;
+        uint256 share2 = totalWeight == 0 ? ticketBonus / 3 : (ticketBonus * streaks[2]) / totalWeight;
+        uint256 paid = share0 + share1 + share2;
+        if (paid < ticketBonus) {
+            share0 += (ticketBonus - paid);
         }
 
-        uint256 participantShare = ((poolValue * 90) / 100) - exterminatorShare;
-        // Preserve the entire prize pool by rolling any rounding dust into the participant slice.
-        uint256 poolDust = poolValue - (ticketBonus + exterminatorShare + participantShare);
-        participantShare += poolDust;
-        currentPrizePool = participantShare;
-        airdropIndex = 0;
+        uint256 amt0 = share0;
+        uint256 amt1 = share1;
+        uint256 amt2 = share2;
+        if (winners[1] == winners[0]) {
+            amt0 += amt1;
+            amt1 = 0;
+        }
+        if (winners[2] == winners[0]) {
+            amt0 += amt2;
+            amt2 = 0;
+        } else if (winners[2] == winners[1]) {
+            amt1 += amt2;
+            amt2 = 0;
+        }
 
-        // Clear exterminator so a second call cannot double-claim the share.
-        _clearExterminatorForLevel(prevLevel);
+        if (amt0 != 0) _addClaimableEth(winners[0], amt0);
+        if (amt1 != 0) _addClaimableEth(winners[1], amt1);
+        if (amt2 != 0) _addClaimableEth(winners[2], amt2);
     }
 
     function _splitEthWithBonds(
@@ -258,52 +260,74 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         uint256 basePerBond = bondBudget / winnersLen;
         if (basePerBond < JACKPOT_BOND_MIN_BASE) {
             basePerBond = JACKPOT_BOND_MIN_BASE;
-        } else if (basePerBond > JACKPOT_BOND_MAX_BASE) {
-            basePerBond = JACKPOT_BOND_MAX_BASE;
         }
 
         uint256 quantity = bondBudget / basePerBond;
         if (quantity == 0) return amount;
 
         uint256 maxQuantity = winnersLen * JACKPOT_BOND_MAX_MULTIPLIER;
-        if (maxQuantity != 0 && quantity > maxQuantity) {
+        if (quantity > maxQuantity) {
             quantity = maxQuantity;
         }
         if (quantity > type(uint16).max) {
             quantity = type(uint16).max;
         }
 
+        basePerBond = (bondBudget + quantity - 1) / quantity; // ceil to fully use bond budget
+        if (basePerBond < JACKPOT_BOND_MIN_BASE) {
+            basePerBond = JACKPOT_BOND_MIN_BASE;
+        }
+
         uint256 spend = basePerBond * quantity;
+        if (spend > amount) {
+            basePerBond = amount / quantity;
+            if (basePerBond < JACKPOT_BOND_MIN_BASE) {
+                return amount;
+            }
+            spend = basePerBond * quantity;
+        }
         if (spend == 0 || spend > amount) {
             return amount;
         }
 
         uint16 offset = uint16(entropy % winnersLen);
-        if (!_enqueueBondBatch(winners, uint16(quantity), uint96(basePerBond), offset)) {
-            return amount;
-        }
+        uint96 base96 = uint96(basePerBond);
+        _creditClaimableBonds(winners, uint16(quantity), base96, offset);
+        _fundBonds(spend);
 
         return amount - spend;
     }
 
-    function _enqueueBondBatch(
+    function _creditClaimableBonds(
         address[] memory winners,
         uint16 quantity,
         uint96 basePerBond,
         uint16 offset
-    ) private returns (bool) {
-        if (quantity == 0 || winners.length == 0 || basePerBond == 0) return false;
-        PendingJackpotBondMint storage batch = pendingJackpotBondMints.push();
-        batch.basePerBondWei = basePerBond;
-        batch.quantity = quantity;
-        batch.offset = offset;
-        batch.stake = true;
-        batch.winners = winners;
-        return true;
+    ) private {
+        if (quantity == 0 || winners.length == 0 || basePerBond == 0) return;
+        uint256 len = winners.length;
+        uint256 per = quantity / len;
+        uint256 rem = quantity % len;
+        for (uint256 i; i < len; ) {
+            uint256 share = per;
+            if (i < rem) {
+                unchecked {
+                    ++share;
+                }
+            }
+            if (share != 0) {
+                address recipient = winners[(uint256(offset) + i) % len];
+                _addClaimableBond(recipient, uint256(share) * uint256(basePerBond), basePerBond, true);
+            }
+            unchecked {
+                ++i;
+            }
+        }
     }
 
     /// @notice Adds ETH winnings to a player, emitting the credit event.
     function _addClaimableEth(address beneficiary, uint256 weiAmount) private {
+        if (weiAmount == 0) return;
         address recipient = _payoutRecipient(beneficiary);
         unchecked {
             claimableWinnings[recipient] += weiAmount;
@@ -312,72 +336,94 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
     }
 
     /**
-     * @notice Routes a jackpot slice to the jackpots contract and optionally burns from rewardPool.
+     * @notice Routes a jackpot slice to the jackpots contract and returns the net ETH consumed.
      * @param kind 0 = BAF jackpot, 1 = Decimator jackpot.
-     * @param poolWei Amount forwarded; if `consumeCarry` is true, rewardPool is debited by poolWei - returnWei.
+     * @param poolWei Amount forwarded to the jackpots contract.
      * @param lvl Level tied to the jackpot.
      * @param rngWord Randomness used by the jackpot contract.
      * @param jackpotsAddr Jackpots contract to call.
-     * @param consumeCarry Whether to deduct the net spend from rewardPool.
+     * @return netSpend Amount of rewardPool consumed (poolWei minus any refund).
      */
     function _rewardJackpot(
         uint8 kind,
         uint256 poolWei,
         uint24 lvl,
         uint256 rngWord,
-        address jackpotsAddr,
-        bool consumeCarry
-    ) private {
-        uint256 returnWei;
-        address trophyAddr = trophies;
-
+        address jackpotsAddr
+    ) private returns (uint256 netSpend) {
         if (kind == 0) {
-            (address[] memory winnersArr, uint256[] memory amountsArr, uint256 refund) = IPurgeJackpots(
-                jackpotsAddr
-            ).runBafJackpot(poolWei, lvl, rngWord);
-            for (uint256 i; i < winnersArr.length; ) {
-                uint256 amount = amountsArr[i];
-                if (amount != 0) {
-                    uint256 ethPortion = amount;
-                    // Top slices (first two entries) get half paid in bonds.
-                    if (i < 2) {
-                        address[] memory single = new address[](1);
-                        single[0] = winnersArr[i];
-                        ethPortion = _splitEthWithBonds(single, amount, BOND_BPS_HALF, rngWord ^ i);
-                    }
-                    if (ethPortion != 0) {
-                        _addClaimableEth(winnersArr[i], ethPortion);
-                    }
-                }
-                unchecked {
-                    ++i;
-                }
-            }
-            if (trophyAddr != address(0) && winnersArr.length != 0) {
-                // Top BAF winner gets the cosmetic trophy to keep gas bounded.
-                try IPurgeTrophies(trophyAddr).mintBaf(winnersArr[0], lvl) {} catch {}
-            }
-            returnWei = refund;
-        } else if (kind == 1) {
-            returnWei = IPurgeJackpots(jackpotsAddr).runDecimatorJackpot(poolWei, lvl, rngWord);
+            return _runBafJackpot(poolWei, lvl, rngWord, jackpotsAddr);
         }
-        if (consumeCarry) {
-            rewardPool -= (poolWei - returnWei);
+        if (kind == 1) {
+            return _runDecJackpot(poolWei, lvl, rngWord, jackpotsAddr);
         }
+        return 0;
     }
 
     function _payoutRecipient(address player) private view returns (address recipient) {
         (recipient, ) = IPurgeGameAffiliatePayout(address(this)).affiliatePayoutAddress(player);
     }
 
-    /// @notice Computes the rewardPool scaling factor (in bps) based on the level's position in its 100-level band.
-    function _rewardBonusScaleBps(uint24 lvl) private pure returns (uint16) {
-        // Linearly scale reward pool-funded slices from 100% at the start of a 100-level band
-        // down to 50% on the last level of the band, then reset on the next band.
-        uint256 cycle = ((uint256(lvl) - 1) % 100); // 0..99
-        uint256 discount = (cycle * 5000) / 99; // up to 50% at cycle==99
-        uint256 scale = 10_000 - discount;
-        if (scale < 5000) scale = 5000;
-        return uint16(scale);
+    function _fundBonds(uint256 amount) private {
+        if (amount == 0) return;
+        unchecked {
+            bondCreditEscrow += amount;
+        }
+    }
+
+    function _addClaimableBond(address player, uint256 weiAmount, uint96 basePerBond, bool stake) private {
+        if (player == address(0) || weiAmount == 0 || basePerBond == 0) return;
+        ClaimableBondInfo storage info = claimableBondInfo[player];
+        if (info.basePerBondWei == 0) {
+            info.basePerBondWei = basePerBond;
+            info.stake = stake;
+        }
+        unchecked {
+            info.weiAmount += weiAmount;
+        }
+    }
+
+    function _runBafJackpot(
+        uint256 poolWei,
+        uint24 lvl,
+        uint256 rngWord,
+        address jackpotsAddr
+    ) private returns (uint256 netSpend) {
+        address trophyAddr = trophies;
+        (address[] memory winnersArr, uint256[] memory amountsArr, uint256 refund) = IPurgeJackpots(jackpotsAddr)
+            .runBafJackpot(poolWei, lvl, rngWord);
+        address[] memory single = new address[](1);
+        for (uint256 i; i < winnersArr.length; ) {
+            uint256 amount = amountsArr[i];
+            if (amount != 0) {
+                uint256 ethPortion = amount;
+                // Top slices (first two entries) get half paid in bonds.
+                if (i < 2) {
+                    single[0] = winnersArr[i];
+                    ethPortion = _splitEthWithBonds(single, amount, BOND_BPS_HALF, rngWord ^ i);
+                }
+                if (ethPortion != 0) {
+                    _addClaimableEth(winnersArr[i], ethPortion);
+                }
+            }
+            unchecked {
+                ++i;
+            }
+        }
+        if (trophyAddr != address(0) && winnersArr.length != 0) {
+            // Top BAF winner gets the cosmetic trophy to keep gas bounded.
+            try IPurgeTrophies(trophyAddr).mintBaf(winnersArr[0], lvl) {} catch {}
+        }
+        netSpend = poolWei - refund;
+    }
+
+    function _runDecJackpot(
+        uint256 poolWei,
+        uint24 lvl,
+        uint256 rngWord,
+        address jackpotsAddr
+    ) private returns (uint256 netSpend) {
+        uint256 returnWei = IPurgeJackpots(jackpotsAddr).runDecimatorJackpot(poolWei, lvl, rngWord);
+        netSpend = poolWei - returnWei;
     }
 }

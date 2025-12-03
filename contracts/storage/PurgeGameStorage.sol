@@ -10,6 +10,12 @@ struct PendingJackpotBondMint {
     address[] winners; // jackpot winners used to derive bond recipients (keeps ordering deterministic)
 }
 
+struct ClaimableBondInfo {
+    uint256 weiAmount; // ETH value earmarked for bonds
+    uint96 basePerBondWei; // preferred base per bond (0 defaults to 0.5 ether)
+    bool stake; // whether bonds should be staked/soulbound
+}
+
 /**
  * @title PurgeGameStorage
  * @notice Shared storage layout between the core game contract and its delegatecall modules.
@@ -80,6 +86,7 @@ abstract contract PurgeGameStorage {
     address[] internal pendingMapMints; // queue of players awaiting map mints
     mapping(address => uint32) internal playerMapMintsOwed; // map NFT count owed per player (consumed during batching)
     address[] internal levelExterminators; // per-level exterminator (index = level-1)
+    mapping(uint24 => bool) internal levelExterminatorPaid; // tracks whether exterminator payout was already processed
 
     // ---------------------------------------------------------------------
     // Token / trait state
@@ -110,6 +117,7 @@ abstract contract PurgeGameStorage {
     // ---------------------------------------------------------------------
     PendingJackpotBondMint[] internal pendingJackpotBondMints; // queued bond batches funded by jackpots
     uint256 internal pendingJackpotBondCursor; // cursor into pendingJackpotBondMints for incremental processing
+    mapping(address => ClaimableBondInfo) internal claimableBondInfo; // per-player bond credits (only spendable on bonds)
 
     // ---------------------------------------------------------------------
     // Cosmetic trophies

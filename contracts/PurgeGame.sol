@@ -11,7 +11,7 @@ import {IPurgeTrophies} from "./interfaces/IPurgeTrophies.sol";
 import {IPurgeGameEndgameModule, IPurgeGameJackpotModule} from "./interfaces/IPurgeGameModules.sol";
 import {MintPaymentKind} from "./interfaces/IPurgeGame.sol";
 import {PurgeGameExternalOp} from "./interfaces/IPurgeGameExternal.sol";
-import {PurgeGameStorage} from "./storage/PurgeGameStorage.sol";
+import {PurgeGameStorage, ClaimableBondInfo} from "./storage/PurgeGameStorage.sol";
 import {PurgeGameCredit} from "./utils/PurgeGameCredit.sol";
 
 interface IStETH {
@@ -127,6 +127,7 @@ contract PurgeGame is PurgeGameStorage {
 
     uint256 private constant DEPLOY_IDLE_TIMEOUT = (365 days * 5) / 2; // 2.5 years
     uint48 private constant LEVEL_START_SENTINEL = type(uint48).max;
+    uint16 private constant BOND_LIQUIDATION_DISCOUNT_BPS = 6500; // 65% of face value when liquidating bond credit to coin
 
     // -----------------------
     // Game Constants
@@ -792,6 +793,16 @@ contract PurgeGame is PurgeGameStorage {
             currentPrizePool = pool;
             _setExterminatorForLevel(levelSnapshot, callerExterminator);
 
+            address trophyAddr = trophies;
+            if (trophyAddr != address(0)) {
+                try IPurgeTrophies(trophyAddr).mintExterminator(
+                    callerExterminator,
+                    levelSnapshot,
+                    exTrait,
+                    exterminationInvertFlag
+                ) {} catch {}
+            }
+
             lastExterminatedTrait = exTrait;
         } else {
             exterminationInvertFlag = false;
@@ -882,6 +893,7 @@ contract PurgeGame is PurgeGameStorage {
         uint256 amount = claimableWinnings[player];
         if (amount <= 1) revert E();
         coin.burnCoin(player, priceCoin / 10); // Burn cost = 10% of current coin unit price
+        _mintClaimableBonds(player, 0);
         uint256 payout;
         unchecked {
             claimableWinnings[player] = 1;
@@ -896,8 +908,73 @@ contract PurgeGame is PurgeGameStorage {
         return stored - 1;
     }
 
+    /// @notice Mint any claimable bond credits without claiming ETH winnings.
+    /// @param maxBatches Optional cap on batches processed this call (0 = all).
+    function claimBondCredits(uint32 maxBatches) external {
+        _mintClaimableBonds(msg.sender, maxBatches);
+    }
+
     function bondCreditOf(address player) external view returns (uint256) {
         return bondCredit[player];
+    }
+
+    /// @notice Convert bond credit (earmarked for bonds) into PURGE at a discounted rate.
+    /// @param minCoinOut Slippage guard on credited coin.
+    function liquidateBondCreditForCoin(uint256 minCoinOut) external {
+        ClaimableBondInfo storage info = claimableBondInfo[msg.sender];
+        uint256 creditWei = info.weiAmount;
+        if (creditWei == 0) revert E();
+        uint256 escrow = bondCreditEscrow;
+        if (escrow < creditWei) revert E();
+        uint256 priceWei = price;
+        if (priceWei == 0) revert E();
+
+        uint256 coinOut = (creditWei * priceCoin) / priceWei;
+        coinOut = (coinOut * BOND_LIQUIDATION_DISCOUNT_BPS) / 10_000; // apply poor rate
+        if (coinOut == 0 || coinOut < minCoinOut) revert E();
+
+        uint256 paidValueWei = (coinOut * priceWei) / priceCoin;
+        uint256 profitWei = creditWei > paidValueWei ? (creditWei - paidValueWei) : 0;
+
+        info.weiAmount = 0;
+        bondCreditEscrow = escrow - creditWei;
+        if (profitWei != 0) {
+            uint256 toReward = profitWei / 2;
+            rewardPool += toReward;
+            unchecked {
+                bondCreditEscrow += profitWei - toReward; // bondholder share stays in escrow
+            }
+        }
+        coin.creditFlip(msg.sender, coinOut);
+    }
+
+    /// @notice Mint any claimable bonds owed to `player` before paying ETH winnings.
+    /// @param maxBatches Ignored (kept for interface parity; single bucket model).
+    function _mintClaimableBonds(address player, uint32 maxBatches) private {
+        maxBatches; // unused
+        ClaimableBondInfo storage info = claimableBondInfo[player];
+        uint256 creditWei = info.weiAmount;
+        if (creditWei == 0) return;
+        address bondsAddr = bonds;
+        if (bondsAddr == address(0)) return;
+        if (!IPurgeBonds(bondsAddr).purchasesEnabled()) return;
+
+        uint256 base = info.basePerBondWei == 0 ? 0.5 ether : info.basePerBondWei;
+        uint256 maxQuantity = creditWei / base;
+        uint256 escrow = bondCreditEscrow;
+        if (maxQuantity == 0 || escrow < base) return;
+        uint256 maxEscrowQty = escrow / base;
+        uint256 quantity = maxQuantity < maxEscrowQty ? maxQuantity : maxEscrowQty;
+        if (quantity == 0) return;
+
+        address[] memory recipients = new address[](1);
+        recipients[0] = player;
+        uint256 spend = quantity * base;
+        bool stake = info.stake || info.basePerBondWei == 0; // default to staked when unset
+        info.weiAmount = creditWei - spend;
+        bondCreditEscrow = escrow - spend;
+        IPurgeBonds(bondsAddr).payBonds{value: spend}(0, 0, 0, 0, 0);
+        IPurgeBonds(bondsAddr).purchaseGameBonds(recipients, quantity, base, stake);
     }
 
     /// @notice Credit claimable ETH for a player from bond redemptions (bonds contract only).
@@ -1473,33 +1550,35 @@ contract PurgeGame is PurgeGameStorage {
             return false;
         }
 
-        // Skim 25% of stETH yield to bonds and register it.
         uint256 stBal = steth.balanceOf(address(this));
-        uint256 skim;
-        uint256 rewardTopUp;
-        if (stBal > principalStEth) {
-            uint256 yieldPool = stBal - principalStEth;
-            skim = yieldPool / 4;
-            rewardTopUp = yieldPool / 20; // 5% of the original yield pool
-        }
+        uint256 stYield = stBal > principalStEth ? (stBal - principalStEth) : 0;
+        uint256 ethBal = address(this).balance;
+        uint256 tracked = currentPrizePool + nextPrizePool + rewardPool + bondCreditEscrow;
+        uint256 ethYield = ethBal > tracked ? ethBal - tracked : 0;
+        uint256 yieldPool = stYield + ethYield;
 
         // Mint 5% of totalWei (priced in PURGE) to the bonds contract.
-        uint256 bondMint;
-        bondMint = (totalWei * priceCoin) / (20 * price);
+        uint256 bondMint = (totalWei * priceCoin) / (20 * price);
 
-        // Single hop into bonds: pulls stETH via allowance, mints bond coin, and resolves a larger page to finish queues.
-        bondContract.payBonds{value: 0}(bondMint, skim, day, rngWord, maxBonds);
-        if (rewardTopUp != 0) {
-            rewardPool += rewardTopUp;
-            principalStEth -= rewardTopUp;
-            if (skim >= rewardTopUp) {
-                skim -= rewardTopUp;
-            } else {
-                skim = 0;
-            }
+        uint256 bondSkim = yieldPool / 4; // 25% to bonds
+        uint256 rewardTopUp = yieldPool / 20; // 5% to reward pool
+
+        uint256 ethForBonds = ethYield >= bondSkim ? bondSkim : ethYield;
+        uint256 stForBonds = bondSkim > ethForBonds ? bondSkim - ethForBonds : 0;
+        if (stForBonds > stYield) {
+            stForBonds = stYield;
+            bondSkim = ethForBonds + stForBonds;
         }
+
+        uint256 availableEthAfterBond = ethYield > ethForBonds ? ethYield - ethForBonds : 0;
+        uint256 rewardFromEth = availableEthAfterBond >= rewardTopUp ? rewardTopUp : availableEthAfterBond;
+        if (rewardFromEth != 0) {
+            rewardPool += rewardFromEth;
+        }
+
+        bondContract.payBonds{value: ethForBonds}(bondMint, stForBonds, day, rngWord, maxBonds);
         lastBondFundingLevel = level;
-        return (skim != 0 || bondMint != 0);
+        return (bondSkim != 0 || bondMint != 0 || rewardFromEth != 0);
     }
 
     /// @notice After the liveness drain has notified the bonds contract, permissionlessly burn remaining unmatured bonds.
