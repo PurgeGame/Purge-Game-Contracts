@@ -106,6 +106,7 @@ contract PurgeGame is PurgeGameStorage {
     event ReverseFlip(address indexed caller, uint256 totalQueued, uint256 cost);
     event VrfCoordinatorUpdated(address indexed previous, address indexed current);
     event PrizePoolBondBuy(uint256 spendWei, uint256 quantity);
+    event BondCreditLiquidated(address indexed player, uint256 amount);
 
     // -----------------------
     // Immutable Addresses
@@ -908,6 +909,32 @@ contract PurgeGame is PurgeGameStorage {
         return stored - 1;
     }
 
+    /// @notice Toggle auto-liquidation of bond credits into claimable winnings (tax applies on withdrawal).
+    /// @dev When enabled, any existing bond credit is immediately converted if escrowed funds are available.
+    function setAutoBondLiquidate(bool enabled) external {
+        autoBondLiquidate[msg.sender] = enabled;
+        if (enabled) {
+            _autoLiquidateBondCredit(msg.sender);
+        }
+    }
+
+    function _autoLiquidateBondCredit(address player) private returns (bool converted) {
+        if (!autoBondLiquidate[player]) return false;
+        ClaimableBondInfo storage info = claimableBondInfo[player];
+        uint256 creditWei = info.weiAmount;
+        if (creditWei == 0) return false;
+        uint256 escrow = bondCreditEscrow;
+        if (escrow < creditWei) return false;
+
+        info.weiAmount = 0;
+        info.basePerBondWei = 0;
+        info.stake = false;
+        bondCreditEscrow = escrow - creditWei;
+        _addClaimableEth(player, creditWei);
+        emit BondCreditLiquidated(player, creditWei);
+        return true;
+    }
+
     /// @notice Mint any claimable bond credits without claiming ETH winnings.
     /// @param maxBatches Optional cap on batches processed this call (0 = all).
     function claimBondCredits(uint32 maxBatches) external {
@@ -952,6 +979,7 @@ contract PurgeGame is PurgeGameStorage {
     /// @param maxBatches Ignored (kept for interface parity; single bucket model).
     function _mintClaimableBonds(address player, uint32 maxBatches) private {
         maxBatches; // unused
+        if (_autoLiquidateBondCredit(player)) return;
         ClaimableBondInfo storage info = claimableBondInfo[player];
         uint256 creditWei = info.weiAmount;
         if (creditWei == 0) return;
@@ -1825,7 +1853,6 @@ contract PurgeGame is PurgeGameStorage {
         }
 
         renderer.setStartingTraitRemaining(snapshot);
-        traitCountsShouldOverwrite = true;
     }
 
     /// @notice Rebuild `traitRemaining` by scanning scheduled token traits in capped slices.
@@ -1883,12 +1910,7 @@ contract PurgeGame is PurgeGameStorage {
 
         traitRebuildCursor = cursor + batch;
         finished = (traitRebuildCursor == target);
-        if (finished) {
-            traitCountsShouldOverwrite = false;
-        } else if (startingSlice) {
-            // After the first slice we always accumulate, leveraging that all traits were hit once.
-            traitCountsShouldOverwrite = false;
-        }
+        // The first slice overwrites stale counts; subsequent slices accumulate until finished.
     }
 
     function _calculateAirdropMultiplier(uint32 purchaseCount, uint24 lvl) private pure returns (uint32) {

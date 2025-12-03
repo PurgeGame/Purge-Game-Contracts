@@ -23,8 +23,11 @@ describe("PurgeBonds gas", function () {
         const batchQty = 10;
         const batches = 10;
         const baseWeiTotal = ethers.parseEther("1"); // total principal per batch
+        const basePerBond = baseWeiTotal / BigInt(batchQty);
+        const MULT_SCALE = 10n ** 18n;
         for (let i = 0; i < batches; i++) {
-            const pricePerBond = await bonds.currentPrice(baseWeiTotal / BigInt(batchQty));
+            const priceMult = await bonds.priceMultiplier();
+            const pricePerBond = (basePerBond * priceMult) / MULT_SCALE;
             const totalPrice = pricePerBond * BigInt(batchQty);
             await bonds.buy(baseWeiTotal, batchQty, false, ethers.ZeroHash, { value: totalPrice });
         }

@@ -55,7 +55,6 @@ abstract contract PurgeGameStorage {
     bool internal rngLockedFlag; // true while waiting for VRF fulfillment
     bool internal rngFulfilled = true; // tracks VRF lifecycle; default true pre-first request
     bool internal traitCountsSeedQueued; // true if initial trait counts were staged and await overwrite flag
-    bool internal traitCountsShouldOverwrite; // true to overwrite existing trait counts during rebuild
     bool internal decimatorHundredReady; // true when level % 100 decimator special is primed
     bool internal exterminationInvertFlag; // toggles inversion of exterminator bonus on certain levels
 
@@ -101,6 +100,7 @@ abstract contract PurgeGameStorage {
     uint24 internal lastBondFundingLevel; // tracks the last level where bond funding was performed
     uint48 internal lastBondResolutionDay; // last day index that auto bond resolution ran
     uint256 internal bondCreditEscrow; // ETH escrowed to back bond-credit prize funding
+    mapping(address => bool) internal autoBondLiquidate; // opt-in flag to auto-liquidate bond credits into winnings
 
     // ---------------------------------------------------------------------
     // RNG history

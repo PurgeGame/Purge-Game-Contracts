@@ -381,6 +381,23 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         unchecked {
             info.weiAmount = uint128(uint256(info.weiAmount) + weiAmount);
         }
+        _autoLiquidateBondCredit(player);
+    }
+
+    function _autoLiquidateBondCredit(address player) private returns (bool converted) {
+        if (!autoBondLiquidate[player]) return false;
+        ClaimableBondInfo storage info = claimableBondInfo[player];
+        uint256 creditWei = info.weiAmount;
+        if (creditWei == 0) return false;
+        uint256 escrow = bondCreditEscrow;
+        if (escrow < creditWei) return false;
+
+        info.weiAmount = 0;
+        info.basePerBondWei = 0;
+        info.stake = false;
+        bondCreditEscrow = escrow - creditWei;
+        _addClaimableEth(player, creditWei);
+        return true;
     }
 
     function _runBafJackpot(
