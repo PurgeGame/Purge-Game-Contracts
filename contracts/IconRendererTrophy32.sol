@@ -77,6 +77,7 @@ contract IconRendererTrophy32 {
         return
             registry.setCustomColorsForMany(
                 msg.sender,
+                address(nft),
                 tokenIds,
                 outlineHex,
                 flameHex,
@@ -90,7 +91,7 @@ contract IconRendererTrophy32 {
         uint256 tokenId,
         string calldata trophyHex
     ) external returns (bool) {
-        return registry.setTopAffiliateColor(msg.sender, tokenId, trophyHex);
+        return registry.setTopAffiliateColor(msg.sender, address(nft), tokenId, trophyHex);
     }
 
     modifier onlyBonds() {

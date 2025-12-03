@@ -2,7 +2,9 @@
 pragma solidity ^0.8.26;
 
 import {IPurgeJackpots} from "../interfaces/IPurgeJackpots.sol";
-import {PurgeGameStorage} from "../storage/PurgeGameStorage.sol";
+import {IPurgeTrophies} from "../interfaces/IPurgeTrophies.sol";
+import {IPurgeAffiliate} from "../interfaces/IPurgeAffiliate.sol";
+import {PurgeGameStorage, PendingJackpotBondMint} from "../storage/PurgeGameStorage.sol";
 
 interface IPurgeGameAffiliatePayout {
     function affiliatePayoutAddress(address player) external view returns (address recipient, address affiliateOwner);
@@ -17,14 +19,16 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
     // -----------------------
     // Custom Errors / Events
     // -----------------------
-    error E();
-
     event PlayerCredited(address indexed player, address indexed recipient, uint256 amount);
 
     uint32 private constant DEFAULT_PAYOUTS_PER_TX = 420;
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
     uint256 private constant MINT_MASK_24 = (uint256(1) << 24) - 1;
     uint256 private constant ETH_LEVEL_STREAK_SHIFT = 48;
+    uint256 private constant JACKPOT_BOND_MIN_BASE = 0.02 ether;
+    uint256 private constant JACKPOT_BOND_MAX_BASE = 0.5 ether;
+    uint8 private constant JACKPOT_BOND_MAX_MULTIPLIER = 4;
+    uint16 private constant BOND_BPS_HALF = 5000;
 
     /**
      * @notice Settles a completed level by paying trait-related slices, jackpots, and participant airdrops.
@@ -128,21 +132,63 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         }
     }
 
+    function _exterminatorForLevel(uint24 lvl) private view returns (address ex) {
+        if (lvl == 0) return address(0);
+        address[] storage arr = levelExterminators;
+        if (arr.length < lvl) return address(0);
+        return arr[uint256(lvl) - 1];
+    }
+
+    function _clearExterminatorForLevel(uint24 lvl) private {
+        if (lvl == 0) return;
+        address[] storage arr = levelExterminators;
+        if (arr.length < lvl) return;
+        arr[uint256(lvl) - 1] = address(0);
+    }
+
     /**
      * @notice Splits the current prize pool into exterminator, ticket, and participant slices for a trait win.
      * @dev Handles exterminator and participant splits without any trophy accounting.
      */
     function _primeTraitPayouts(uint24 prevLevel, uint256 rngWord) private {
-        address ex = exterminator;
+        address ex = _exterminatorForLevel(prevLevel);
         if (ex == address(0)) return;
+
+        uint16 exTrait = lastExterminatedTrait;
+        address trophyAddr = trophies;
+        if (trophyAddr != address(0)) {
+            if (exTrait < 256) {
+                try IPurgeTrophies(trophyAddr).mintExterminator(
+                    ex,
+                    prevLevel,
+                    uint8(exTrait),
+                    exterminationInvertFlag
+                ) {} catch {}
+            }
+
+            address affiliateAddr = affiliateProgramAddr;
+            if (affiliateAddr != address(0)) {
+                (address top, ) = IPurgeAffiliate(affiliateAddr).affiliateTop(prevLevel);
+                if (top != address(0)) {
+                    try IPurgeTrophies(trophyAddr).mintAffiliate(top, prevLevel) {} catch {}
+                }
+            }
+        }
 
         uint256 poolValue = currentPrizePool;
         uint256 exterminatorShare = (prevLevel % 10 == 4 && prevLevel != 4)
             ? (poolValue * 40) / 100
             : (poolValue * 30) / 100;
 
-        // Pay the full exterminator share immediately now that trophies are removed.
-        _addClaimableEth(ex, exterminatorShare);
+        // Pay half of the exterminator share in bonds to keep gas bounded and align incentives.
+        {
+            address[] memory exArr = new address[](1);
+            exArr[0] = ex;
+            uint256 ethPortion = _splitEthWithBonds(exArr, exterminatorShare, BOND_BPS_HALF, rngWord);
+            if (ethPortion != 0) {
+                _addClaimableEth(ex, ethPortion);
+            }
+        }
 
         // Bonus slice: 10% split across three tickets using their ETH mint streaks as weights
         // (even split if all streaks are zero).
@@ -190,7 +236,70 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         airdropIndex = 0;
 
         // Clear exterminator so a second call cannot double-claim the share.
-        exterminator = address(0);
+        _clearExterminatorForLevel(prevLevel);
+    }
+
+    function _splitEthWithBonds(
+        address[] memory winners,
+        uint256 amount,
+        uint16 bondBps,
+        uint256 entropy
+    ) private returns (uint256 ethPortion) {
+        uint256 winnersLen = winners.length;
+        if (bondBps == 0 || amount == 0 || winnersLen == 0) {
+            return amount;
+        }
+
+        uint256 bondBudget = (amount * bondBps) / 10_000;
+        if (bondBudget < JACKPOT_BOND_MIN_BASE) {
+            return amount;
+        }
+
+        uint256 basePerBond = bondBudget / winnersLen;
+        if (basePerBond < JACKPOT_BOND_MIN_BASE) {
+            basePerBond = JACKPOT_BOND_MIN_BASE;
+        } else if (basePerBond > JACKPOT_BOND_MAX_BASE) {
+            basePerBond = JACKPOT_BOND_MAX_BASE;
+        }
+
+        uint256 quantity = bondBudget / basePerBond;
+        if (quantity == 0) return amount;
+
+        uint256 maxQuantity = winnersLen * JACKPOT_BOND_MAX_MULTIPLIER;
+        if (maxQuantity != 0 && quantity > maxQuantity) {
+            quantity = maxQuantity;
+        }
+        if (quantity > type(uint16).max) {
+            quantity = type(uint16).max;
+        }
+
+        uint256 spend = basePerBond * quantity;
+        if (spend == 0 || spend > amount) {
+            return amount;
+        }
+
+        uint16 offset = uint16(entropy % winnersLen);
+        if (!_enqueueBondBatch(winners, uint16(quantity), uint96(basePerBond), offset)) {
+            return amount;
+        }
+
+        return amount - spend;
+    }
+
+    function _enqueueBondBatch(
+        address[] memory winners,
+        uint16 quantity,
+        uint96 basePerBond,
+        uint16 offset
+    ) private returns (bool) {
+        if (quantity == 0 || winners.length == 0 || basePerBond == 0) return false;
+        PendingJackpotBondMint storage batch = pendingJackpotBondMints.push();
+        batch.basePerBondWei = basePerBond;
+        batch.quantity = quantity;
+        batch.offset = offset;
+        batch.stake = true;
+        batch.winners = winners;
+        return true;
     }
 
     /// @notice Adds ETH winnings to a player, emitting the credit event.
@@ -220,16 +329,33 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         bool consumeCarry
     ) private {
         uint256 returnWei;
+        address trophyAddr = trophies;
 
         if (kind == 0) {
             (address[] memory winnersArr, uint256[] memory amountsArr, uint256 refund) = IPurgeJackpots(
                 jackpotsAddr
             ).runBafJackpot(poolWei, lvl, rngWord);
             for (uint256 i; i < winnersArr.length; ) {
-                _addClaimableEth(winnersArr[i], amountsArr[i]);
+                uint256 amount = amountsArr[i];
+                if (amount != 0) {
+                    uint256 ethPortion = amount;
+                    // Top slices (first two entries) get half paid in bonds.
+                    if (i < 2) {
+                        address[] memory single = new address[](1);
+                        single[0] = winnersArr[i];
+                        ethPortion = _splitEthWithBonds(single, amount, BOND_BPS_HALF, rngWord ^ i);
+                    }
+                    if (ethPortion != 0) {
+                        _addClaimableEth(winnersArr[i], ethPortion);
+                    }
+                }
                 unchecked {
                     ++i;
                 }
+            }
+            if (trophyAddr != address(0) && winnersArr.length != 0) {
+                // Top BAF winner gets the cosmetic trophy to keep gas bounded.
+                try IPurgeTrophies(trophyAddr).mintBaf(winnersArr[0], lvl) {} catch {}
             }
             returnWei = refund;
         } else if (kind == 1) {

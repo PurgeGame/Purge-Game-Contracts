@@ -42,6 +42,7 @@ interface IPurgeGameLike {
 
 interface IPurgeCoinBondMinter {
     function bondPayment(uint256 amount) external;
+    function notifyQuestBond(address player, uint256 basePerBondWei) external;
 }
 
 interface IPurgeAffiliateLike {
@@ -251,6 +252,7 @@ contract PurgeBonds {
     mapping(uint256 => uint256) public basePriceOf; // The "Principal" paid
     mapping(uint256 => uint32) public createdDistance; // Snapshot of queue depth at mint
     uint32 public lastPurchaseDistance; // Distance snapshot of the most recent purchase
+    mapping(uint256 => bool) private soldBackDiscount; // true when bond was sold; coin weight is quartered
 
     // -- Configuration --
     bool public transfersLocked;
@@ -454,6 +456,13 @@ contract PurgeBonds {
         }
     }
 
+    function _notifyQuestBond(address buyer, uint256 basePerBond) private {
+        address coin = coinToken;
+        if (coin == address(0) || buyer == address(0) || basePerBond == 0) return;
+        if (coin.code.length == 0) return;
+        IPurgeCoinBondMinter(coin).notifyQuestBond(buyer, basePerBond);
+    }
+
     /**
      * @notice Purchase bonds.
      * @param baseWei The 'Principal' amount (affects win chance and payout).
@@ -492,6 +501,7 @@ contract PurgeBonds {
 
         _mintBatch(msg.sender, quantity, basePerBond, price, stakeFlag);
 
+        _notifyQuestBond(msg.sender, basePerBond);
         _bumpOnSales(msg.value);
     }
 
@@ -533,6 +543,7 @@ contract PurgeBonds {
 
         _mintBatch(msg.sender, quantity, basePerBond, 0, stakeFlag);
 
+        _notifyQuestBond(msg.sender, basePerBond);
         _bumpOnSales(totalWei);
     }
 
@@ -737,7 +748,7 @@ contract PurgeBonds {
         // 2. Calculate Coin Share
         uint256 bondShare;
         // **CRITICAL**: Weighting determines share of the pot.
-        uint256 coinWeight = _coinClaimWeight(packed);
+        uint256 coinWeight = _coinClaimWeightFor(tokenId, packed);
         uint256 coinOwed = totalCoinOwed;
         if (coinOwed != 0 && bondCoin != 0) {
             // Formula: (TotalPot * MyWeightedShare) / TotalWeightedShares
@@ -816,7 +827,7 @@ contract PurgeBonds {
             if (packed != 0 && (packed & (_BITMASK_CLAIM_READY | _BITMASK_BURNED)) == _BITMASK_CLAIM_READY) {
                 address holder = address(uint160(packed));
                 if (holder != address(0)) {
-                    uint256 coinWeight = _coinClaimWeight(packed);
+                    uint256 coinWeight = _coinClaimWeightFor(cursor, packed);
                     uint256 bondShare;
                     uint256 coinOwed = totalCoinOwed;
                     if (coinOwed != 0 && coinPool != 0) {
@@ -905,25 +916,31 @@ contract PurgeBonds {
 
         _transferToVault(holder, tokenId, packed);
 
-        address game_ = game;
-        if (game_ == address(0)) revert ZeroAddress();
-        uint256 priceWei = IPurgeGamePrice(game_).mintPrice();
-        uint256 priceCoinUnit = IPurgeGamePrice(game_).coinPriceUnit();
-        if (priceWei == 0 || priceCoinUnit == 0) revert NotSellable();
-
-        // Convert the ETH-equivalent payout to PURGE using the live mint price ratio.
-        uint256 coinOut = (payout * priceCoinUnit) / priceWei;
-        if (coinOut == 0) revert NotSellable();
-
-        // Track ETH that should eventually be forwarded to the game to mirror the minted coin value.
-        unchecked {
-            gameRefundDeficit += payout;
-            gameRefundDeficitCoin += coinOut;
+        // Pay 75% of the current coin share from the existing bond pool; keep 25% on the bond for the contract.
+        uint256 coinWeight = _coinClaimWeight(packed);
+        uint256 coinOwed = totalCoinOwed;
+        uint256 bondShare;
+        if (coinOwed != 0 && bondCoin != 0) {
+            bondShare = (bondCoin * coinWeight) / coinOwed;
+        }
+        uint256 coinOut = (bondShare * 75) / 100;
+        if (coinOut != 0) {
+            if (bondCoin <= coinOut) {
+                bondCoin = 0;
+            } else {
+                bondCoin -= coinOut;
+            }
+            IERC20Minimal(coinToken).transfer(holder, coinOut);
         }
 
-        address coin = coinToken;
-        IPurgeCoinBondMinter(coin).bondPayment(coinOut);
-        IERC20Minimal(coin).transfer(holder, coinOut);
+        // Reduce obligations by the full weight, then re-add a 25% weight for the contract-held bond.
+        _decreaseTotalCoinOwed(coinWeight);
+        uint256 discounted = coinWeight / 4;
+        if (discounted != 0) {
+            totalCoinOwed += discounted;
+            soldBackDiscount[tokenId] = true;
+        }
+
         emit BondSold(holder, tokenId, payout);
     }
 
@@ -931,7 +948,7 @@ contract PurgeBonds {
         // Claim-ready winner: send full ETH to game as claimable winnings, pay coin share to holder.
         if (holder == address(0)) revert ZeroAddress();
 
-        uint256 coinWeight = _coinClaimWeight(packed);
+        uint256 coinWeight = _coinClaimWeightFor(tokenId, packed);
         uint256 bondShare;
         uint256 coinOwed = totalCoinOwed;
         if (coinOwed != 0 && bondCoin != 0) {
@@ -1521,6 +1538,14 @@ contract PurgeBonds {
 
     function _coinClaimWeight(uint256 packed) private pure returns (uint256) {
         return _coinWeightMultiplier(packed) * 1 ether;
+    }
+
+    function _coinClaimWeightFor(uint256 tokenId, uint256 packed) private view returns (uint256) {
+        uint256 weight = _coinClaimWeight(packed);
+        if (soldBackDiscount[tokenId]) {
+            weight = weight / 4;
+        }
+        return weight;
     }
 
     function _resolveStart() private returns (uint256 startId) {
@@ -2244,7 +2269,7 @@ contract PurgeBonds {
     function _payoutLiveWinner(uint256 tokenId, uint256 packed, address owner_) private {
         if (owner_ == address(0)) return;
 
-        uint256 coinWeight = _coinClaimWeight(packed);
+        uint256 coinWeight = _coinClaimWeightFor(tokenId, packed);
         uint256 bondShare;
         uint256 coinOwed = totalCoinOwed;
         if (coinOwed != 0 && bondCoin != 0) {
@@ -2456,7 +2481,7 @@ contract PurgeBonds {
         _burnToken(tokenId, address(this));
 
         uint256 bondShare;
-        uint256 coinWeight = _coinClaimWeight(packed);
+        uint256 coinWeight = _coinClaimWeightFor(tokenId, packed);
         uint256 coinOwed = totalCoinOwed;
         if (coinOwed != 0 && bondCoin != 0) {
             bondShare = (bondCoin * coinWeight) / coinOwed;
@@ -2487,7 +2512,6 @@ contract PurgeBonds {
 
         uint256 toGame = amount / 5; // 20%
         uint256 toPayout = (amount * 7) / 10; // 70%
-        uint256 retained = amount - toGame - toPayout; // 10%
 
         address game_ = game;
         if (game_ == address(0)) revert ZeroAddress();

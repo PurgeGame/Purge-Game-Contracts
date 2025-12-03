@@ -150,7 +150,7 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg {
                 rMid = uint32((uint256(rOut) * RATIO_MID_1e6) / 1_000_000);
                 rIn = uint32((uint256(rOut) * RATIO_IN_1e6) / 1_000_000);
             } else {
-                uint32 pct = registry.trophyOuter(tokenId);
+                uint32 pct = registry.trophyOuter(address(nft), tokenId);
                 uint32 diameter = (pct <= 1)
                     ? 88
                     : uint32((uint256(innerSide) * pct) / 1_000_000);
@@ -233,7 +233,7 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg {
         {
             string memory defaultColor = _paletteColor(colIdx, lvl);
             if (isTopAffiliate) {
-                string memory custom = registry.topAffiliateColor(tokenId);
+                string memory custom = registry.topAffiliateColor(address(nft), tokenId);
                 hasCustomAffiliateColor = bytes(custom).length != 0;
                 ringOuterColor = hasCustomAffiliateColor ? custom : defaultColor;
             } else {
@@ -254,7 +254,7 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg {
 
         string memory flameColor = _resolve(tokenId, 1, "#111");
 
-        uint32 pct2 = registry.trophyOuter(tokenId);
+        uint32 pct2 = registry.trophyOuter(address(nft), tokenId);
         uint32 rOut2 = (pct2 <= 1)
             ? 44
             : uint32((uint256(innerSide) * pct2) / 2_000_000);
@@ -386,7 +386,7 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg {
         // Resolution order: per-token override → owner default (non-reverting lookup) →
         // referrer/upline defaults → provided fallback. The try/catch shields metadata
         // reads when `ownerOf` reverts for burned/unminted ids.
-        string memory s = registry.tokenColor(tokenId, k);
+        string memory s = registry.tokenColor(address(nft), tokenId, k);
         if (bytes(s).length != 0) return s;
 
         address owner_;

@@ -84,7 +84,15 @@ contract IconRendererRegular32 {
         string calldata squareHex // "" to clear
     ) external returns (bool) {
         // Delegate to overload with no trophy size change.
-        return setCustomColorsForMany(tokenIds, outlineHex, flameHex, diamondHex, squareHex, /*trophyOuterPct1e6=*/ 0);
+        return
+            setCustomColorsForMany(
+                tokenIds,
+                outlineHex,
+                flameHex,
+                diamondHex,
+                squareHex,
+                /*trophyOuterPct1e6=*/ 0
+            );
     }
 
     /// @notice Batch set per‑token color overrides AND trophy badge size.
@@ -102,6 +110,7 @@ contract IconRendererRegular32 {
         return
             registry.setCustomColorsForMany(
                 msg.sender,
+                address(nft),
                 tokenIds,
                 outlineHex,
                 flameHex,
@@ -126,6 +135,7 @@ contract IconRendererRegular32 {
         ids[0] = tokenId;
         bool ok = registry.setCustomColorsForMany(
             msg.sender,
+            address(nft),
             ids,
             outlineHex,
             flameHex,
@@ -133,7 +143,7 @@ contract IconRendererRegular32 {
             squareHex,
             trophyOuterPct1e6
         );
-        bool ok2 = registry.setTopAffiliateColor(msg.sender, tokenId, trophyHex);
+        bool ok2 = registry.setTopAffiliateColor(msg.sender, address(nft), tokenId, trophyHex);
         return ok && ok2;
     }
 
@@ -148,7 +158,7 @@ contract IconRendererRegular32 {
     function _resolve(uint256 tokenId, uint8 k, string memory defColor) private view returns (string memory) {
         // Assumes the NFT exists; `ownerOf` is allowed to revert here because renderer
         // is only called after the game has minted.
-        string memory s = registry.tokenColor(tokenId, k);
+        string memory s = registry.tokenColor(address(nft), tokenId, k);
         if (bytes(s).length != 0) return s;
 
         address owner_ = nft.ownerOf(tokenId);
@@ -239,10 +249,17 @@ contract IconRendererRegular32 {
     }
 
     /// @notice Wire both the game controller and ERC721 contract in a single call.
-    /// @dev Callable only by bonds; set-once semantics.
+    /// @dev Callable only by bonds; set-once semantics. Optional extra addresses are registered as allowed
+    ///      token contracts in the color registry (e.g., trophies, bonds).
     function wire(address[] calldata addresses) external onlyBonds {
         _setGame(addresses.length > 0 ? addresses[0] : address(0));
         _setNft(addresses.length > 1 ? addresses[1] : address(0));
+        if (addresses.length > 2 && addresses[2] != address(0)) {
+            registry.addAllowedToken(addresses[2]);
+        }
+        if (addresses.length > 3 && addresses[3] != address(0)) {
+            registry.addAllowedToken(addresses[3]);
+        }
     }
 
     function _setGame(address gameAddr) private {

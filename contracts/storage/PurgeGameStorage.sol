@@ -1,6 +1,15 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+struct PendingJackpotBondMint {
+    uint96 basePerBondWei; // win-odds base per bond (capped at 0.5 ETH)
+    uint16 cursor; // how many recipients have been minted from this batch
+    uint16 quantity; // total bonds to mint for this batch
+    uint16 offset; // rotation offset into winners when deriving recipients
+    bool stake; // whether bonds should be staked/soulbound
+    address[] winners; // jackpot winners used to derive bond recipients (keeps ordering deterministic)
+}
+
 /**
  * @title PurgeGameStorage
  * @notice Shared storage layout between the core game contract and its delegatecall modules.
@@ -8,7 +17,7 @@ pragma solidity ^0.8.26;
  *
  * Storage layout summary (slots 0-3):
  * - Slot 0: level timers + airdrop cursors + FSM (level / gameState)
- * - Slot 1: exterminator pointer + rebuild cursor + jackpot counters + decimator latch
+ * - Slot 1: rebuild cursor + jackpot counters + decimator latch
  * - Slot 2: RNG / trait flags (pricing and other scalars pack after the flag block)
  * Everything else starts at slot 4+ (full-width balances, arrays, mappings).
  */
@@ -28,7 +37,6 @@ abstract contract PurgeGameStorage {
     uint8 public gameState = 1; // FSM: 0=idle,1=pregame,2=airdrop/mint,3=purge window
 
     // Slot 1: actor pointers and sub-state cursors.
-    address internal exterminator; // player selected for the trait win at the end of a level
     uint32 internal traitRebuildCursor; // progress cursor when reseeding trait counts
     uint32 internal airdropMultiplier = 1; // airdrop bonus multiplier (scaled integer)
     uint8 internal jackpotCounter; // jackpots processed within the current level
@@ -71,6 +79,7 @@ abstract contract PurgeGameStorage {
     // ---------------------------------------------------------------------
     address[] internal pendingMapMints; // queue of players awaiting map mints
     mapping(address => uint32) internal playerMapMintsOwed; // map NFT count owed per player (consumed during batching)
+    address[] internal levelExterminators; // per-level exterminator (index = level-1)
 
     // ---------------------------------------------------------------------
     // Token / trait state
@@ -95,4 +104,16 @@ abstract contract PurgeGameStorage {
     // Bond credits (non-withdrawable)
     // ---------------------------------------------------------------------
     mapping(address => uint256) internal bondCredit; // Credit from bond sales that can be spent on mints
+
+    // ---------------------------------------------------------------------
+    // Jackpot bond batching (deferred minting for gas safety)
+    // ---------------------------------------------------------------------
+    PendingJackpotBondMint[] internal pendingJackpotBondMints; // queued bond batches funded by jackpots
+    uint256 internal pendingJackpotBondCursor; // cursor into pendingJackpotBondMints for incremental processing
+
+    // ---------------------------------------------------------------------
+    // Cosmetic trophies
+    // ---------------------------------------------------------------------
+    address internal trophies; // standalone trophy contract (purely cosmetic)
+    address internal affiliateProgramAddr; // cached affiliate program (for trophies)
 }

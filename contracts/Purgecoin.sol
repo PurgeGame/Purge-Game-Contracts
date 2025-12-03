@@ -879,6 +879,20 @@ contract Purgecoin {
         }
     }
 
+    function notifyQuestBond(address player, uint256 basePerBondWei) external {
+        if (msg.sender != bonds) revert OnlyBonds();
+        IPurgeQuestModule module = questModule;
+        if (address(module) == address(0) || player == address(0) || basePerBondWei == 0) return;
+        (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleBondPurchase(
+            player,
+            basePerBondWei
+        );
+        uint256 questReward = _questApplyReward(player, reward, hardMode, questType, streak, completed);
+        if (questReward != 0) {
+            addFlip(player, questReward, false, false);
+        }
+    }
+
     function notifyQuestPurge(address player, uint32 quantity) external onlyGameplayContracts {
         IPurgeQuestModule module = questModule;
         (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handlePurge(
@@ -925,14 +939,15 @@ contract Purgecoin {
 
     /// @notice Record the stake resolution day for a level (invoked by PurgeGame at end of state 1).
     /// @dev The first call at the start of level 2 is considered the level-1 resolution.
-    function recordStakeResolution(uint24 level, uint48 day) external onlyPurgeGameContract {
-        if (level == 0) return;
+    function recordStakeResolution(uint24 level, uint48 day) external onlyPurgeGameContract returns (address topStakeWinner) {
+        if (level == 0) return address(0);
         uint48 setDay = day == 0 ? _currentDay() : day;
-        if (setDay == 0) return;
+        if (setDay == 0) return address(0);
         // Cache the day used for this level's resolution and compute winning risk ranges.
         stakeResolutionDay[level] = setDay;
         stakeLevelComplete = level;
-        _finalizeStakeResolution(level);
+        StakeResolution memory res = _finalizeStakeResolution(level);
+        return res.topStakeWinner;
     }
 
     function _claimCoinflipsInternal(address player) internal returns (uint256 claimed) {

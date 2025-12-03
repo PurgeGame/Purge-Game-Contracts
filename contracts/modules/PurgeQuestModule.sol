@@ -23,7 +23,8 @@ contract PurgeQuestModule is IPurgeQuestModule {
     uint8 private constant QUEST_TYPE_AFFILIATE = 4;
     uint8 private constant QUEST_TYPE_PURGE = 5;
     uint8 private constant QUEST_TYPE_DECIMATOR = 6;
-    uint8 private constant QUEST_TYPE_COUNT = 7;
+    uint8 private constant QUEST_TYPE_BOND = 7;
+    uint8 private constant QUEST_TYPE_COUNT = 8;
 
     // Quest flags for difficulty and forced behavior
     uint8 private constant QUEST_FLAG_HIGH_DIFFICULTY = 1 << 0;
@@ -47,6 +48,8 @@ contract PurgeQuestModule is IPurgeQuestModule {
     uint16 private constant QUEST_MIN_FLIP_STAKE_TOKEN = 1_000;
     uint16 private constant QUEST_MIN_MINT = 1;
     uint24 private constant DECIMATOR_SPECIAL_LEVEL = 100;
+    uint256 private constant QUEST_BOND_MIN_WEI = 25e15; // 0.025 ETH
+    uint256 private constant QUEST_BOND_MAX_WEI = 0.5 ether;
 
     address public immutable coin;
     IPurgeGame private questGame;
@@ -340,6 +343,44 @@ contract PurgeQuestModule is IPurgeQuestModule {
         return (0, false, quest.questType, state.streak, false);
     }
 
+    /// @notice Handle bond purchases tracked by the base-per-bond size (wei).
+    function handleBondPurchase(
+        address player,
+        uint256 basePerBondWei
+    ) external onlyCoin returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) {
+        DailyQuest[QUEST_SLOT_COUNT] memory quests = activeQuests;
+        uint48 currentDay = _currentQuestDay(quests);
+        PlayerQuestState storage state = questPlayerState[player];
+        if (player == address(0) || basePerBondWei == 0 || currentDay == 0) {
+            return (0, false, quests[0].questType, state.streak, false);
+        }
+        _questSyncState(state, currentDay);
+        if (!_ethMintReady(state, player)) {
+            return (0, false, QUEST_TYPE_MINT_ETH, state.streak, false);
+        }
+
+        (DailyQuest memory quest, uint8 slotIndex) = _currentDayQuestOfType(quests, currentDay, QUEST_TYPE_BOND);
+        if (slotIndex == type(uint8).max) {
+            return (0, false, QUEST_TYPE_BOND, state.streak, false);
+        }
+
+        _questSyncProgress(state, slotIndex, currentDay, quest.version);
+        uint8 tier = _questTier(state.baseStreak);
+        uint128 progressAfter = state.progress[slotIndex];
+        uint128 baseSize = uint128(basePerBondWei);
+        if (baseSize > progressAfter) {
+            progressAfter = baseSize;
+            state.progress[slotIndex] = progressAfter;
+        }
+        uint256 target = _questBondTargetWei(tier, quest.entropy);
+        if (progressAfter < target) {
+            return (0, false, quest.questType, state.streak, false);
+        }
+
+        uint256 priceUnit = questGame.coinPriceUnit();
+        return _questComplete(state, slotIndex, quest, priceUnit);
+    }
+
     /// @notice Handle a staking action (principal, distance, risk) against stake quests.
     function handleStake(
         address player,
@@ -600,6 +641,8 @@ contract PurgeQuestModule is IPurgeQuestModule {
             req.tokenAmount = uint256(_questDecimatorTargetTokens(tier, quest.entropy)) * MILLION;
         } else if (qType == QUEST_TYPE_AFFILIATE) {
             req.tokenAmount = uint256(_questAffiliateTargetTokens(tier, quest.entropy)) * MILLION;
+        } else if (qType == QUEST_TYPE_BOND) {
+            req.tokenAmount = _questBondTargetWei(tier, quest.entropy);
         } else if (qType == QUEST_TYPE_STAKE) {
             if ((quest.stakeMask & QUEST_STAKE_REQUIRE_PRINCIPAL) != 0) {
                 req.tokenAmount = uint256(_questStakePrincipalTarget(tier, quest.entropy)) * MILLION;
@@ -680,10 +723,6 @@ contract PurgeQuestModule is IPurgeQuestModule {
             }
             return uint128(sum);
         }
-    }
-
-    function _clampToUint128(uint256 value) private pure returns (uint128) {
-        return value > type(uint128).max ? type(uint128).max : uint128(value);
     }
 
     function _nextQuestVersion() private returns (uint32 newVersion) {
@@ -847,6 +886,21 @@ contract PurgeQuestModule is IPurgeQuestModule {
         uint16 maxVal = _questPackedValue(QUEST_AFFILIATE_PACKED, tier);
         uint16 difficulty = uint16(entropy & 0x3FF);
         return _questLinearTarget(QUEST_MIN_TOKEN, uint32(maxVal), difficulty);
+    }
+
+    function _questBondTargetWei(uint8 tier, uint256 entropy) private pure returns (uint256) {
+        uint256 step = (QUEST_BOND_MAX_WEI - QUEST_BOND_MIN_WEI) / QUEST_TIER_MAX_INDEX;
+        uint256 tierMin = QUEST_BOND_MIN_WEI + (step * tier);
+        uint256 tierMax = tier == QUEST_TIER_MAX_INDEX ? QUEST_BOND_MAX_WEI : (tierMin + step);
+        if (tierMax <= tierMin) {
+            return tierMin;
+        }
+        uint16 difficulty = uint16(entropy & 0x3FF);
+        uint256 target = tierMin + (uint256(difficulty) * (tierMax - tierMin)) / 1024;
+        if (target > tierMax) {
+            target = tierMax;
+        }
+        return target;
     }
 
     /// @dev Enforces game-state constraints on a freshly seeded quest type.

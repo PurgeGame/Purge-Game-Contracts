@@ -22,7 +22,7 @@ interface IPurgeCoin {
         uint256 priceCoinUnit
     ) external returns (bool);
 
-    function recordStakeResolution(uint24 level, uint48 day) external;
+    function recordStakeResolution(uint24 level, uint48 day) external returns (address topStakeWinner);
 
     function addToBounty(uint256 amount) external;
 
@@ -35,6 +35,8 @@ interface IPurgeCoin {
     function rollDailyQuestWithOverrides(uint48 day, uint256 entropy, bool forceMintEth, bool forcePurge) external;
 
     function notifyQuestMint(address player, uint32 quantity, bool paidWithEth) external;
+
+    function notifyQuestBond(address player, uint256 basePerBondWei) external;
 
     function notifyQuestPurge(address player, uint32 quantity) external;
 

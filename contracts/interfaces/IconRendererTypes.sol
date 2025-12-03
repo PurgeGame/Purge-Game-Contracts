@@ -18,6 +18,7 @@ interface IColorRegistry {
 
     function setCustomColorsForMany(
         address user,
+        address tokenContract,
         uint256[] calldata tokenIds,
         string calldata outlineHex,
         string calldata flameHex,
@@ -28,14 +29,17 @@ interface IColorRegistry {
 
     function setTopAffiliateColor(
         address user,
+        address tokenContract,
         uint256 tokenId,
         string calldata trophyHex
     ) external returns (bool);
 
-    function tokenColor(uint256 tokenId, uint8 channel) external view returns (string memory);
+    function addAllowedToken(address tokenContract) external;
+
+    function tokenColor(address tokenContract, uint256 tokenId, uint8 channel) external view returns (string memory);
     function addressColor(address user, uint8 channel) external view returns (string memory);
-    function trophyOuter(uint256 tokenId) external view returns (uint32);
-    function topAffiliateColor(uint256 tokenId) external view returns (string memory);
+    function trophyOuter(address tokenContract, uint256 tokenId) external view returns (uint32);
+    function topAffiliateColor(address tokenContract, uint256 tokenId) external view returns (string memory);
 }
 
 interface IERC721Lite {

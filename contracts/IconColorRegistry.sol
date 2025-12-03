@@ -19,22 +19,29 @@ contract IconColorRegistry {
 
     address private immutable _owner;
     IERC721Lite private immutable _nft;
+    mapping(address => bool) private _allowedToken;
     address private _renderer;
 
     mapping(address => Colors) private _addr;
-    mapping(uint256 => Colors) private _custom;
-    mapping(uint256 => string) private _topAffiliate;
-    mapping(uint256 => uint32) private _trophyOuterPct1e6;
+    mapping(address => mapping(uint256 => Colors)) private _custom;
+    mapping(address => mapping(uint256 => string)) private _topAffiliate;
+    mapping(address => mapping(uint256 => uint32)) private _trophyOuterPct1e6;
 
     constructor(address nft_) {
         _owner = msg.sender;
         _nft = IERC721Lite(nft_);
+        _allowedToken[nft_] = true;
     }
 
     function setRenderer(address renderer_) external {
         if (msg.sender != _owner) revert NotOwner();
         if (_renderer != address(0)) revert RendererSet();
         _renderer = renderer_;
+    }
+
+    function addAllowedToken(address token) external {
+        if (msg.sender != _owner && msg.sender != _renderer) revert NotOwner();
+        _allowedToken[token] = true;
     }
 
     modifier onlyRenderer() {
@@ -68,6 +75,7 @@ contract IconColorRegistry {
 
     function setCustomColorsForMany(
         address user,
+        address tokenContract,
         uint256[] calldata tokenIds,
         string calldata outlineHex,
         string calldata flameHex,
@@ -75,6 +83,7 @@ contract IconColorRegistry {
         string calldata squareHex,
         uint32 trophyOuterPct1e6
     ) external onlyRenderer returns (bool) {
+        if (!_allowedToken[tokenContract]) revert NotRenderer();
         bool clearOutline = (bytes(outlineHex).length == 0);
         bool clearFlame = (bytes(flameHex).length == 0);
         bool clearDiamond = (bytes(diamondHex).length == 0);
@@ -91,13 +100,13 @@ contract IconColorRegistry {
             (trophyOuterPct1e6 < 50_000 || trophyOuterPct1e6 > 1_000_000)
         ) revert InvalidTrophyOuterPercentage(); // reuse error for slight savings
 
-        IERC721Lite nftRef = _nft;
+        IERC721Lite nftRef = IERC721Lite(tokenContract);
         uint256 count = tokenIds.length;
         for (uint256 i; i < count; ) {
             uint256 tokenId = tokenIds[i];
             if (nftRef.ownerOf(tokenId) != user) revert NotRenderer();
 
-            Colors storage c = _custom[tokenId];
+            Colors storage c = _custom[tokenContract][tokenId];
             if (clearOutline) delete c.outline;
             else c.outline = outlineVal;
             if (clearFlame) delete c.flame;
@@ -110,9 +119,9 @@ contract IconColorRegistry {
             if (trophyOuterPct1e6 == 0) {
                 // no change
             } else if (trophyOuterPct1e6 == 1) {
-                delete _trophyOuterPct1e6[tokenId];
+                delete _trophyOuterPct1e6[tokenContract][tokenId];
             } else {
-                _trophyOuterPct1e6[tokenId] = trophyOuterPct1e6;
+                _trophyOuterPct1e6[tokenContract][tokenId] = trophyOuterPct1e6;
             }
 
             unchecked {
@@ -124,22 +133,25 @@ contract IconColorRegistry {
 
     function setTopAffiliateColor(
         address user,
+        address tokenContract,
         uint256 tokenId,
         string calldata trophyHex
     ) external onlyRenderer returns (bool) {
-        if (_nft.ownerOf(tokenId) != user) revert NotRenderer();
+        if (!_allowedToken[tokenContract]) revert NotRenderer();
+        if (IERC721Lite(tokenContract).ownerOf(tokenId) != user) revert NotRenderer();
 
         if (bytes(trophyHex).length == 0) {
-            delete _topAffiliate[tokenId];
+            delete _topAffiliate[tokenContract][tokenId];
             return true;
         }
 
-        _topAffiliate[tokenId] = _requireHex7(trophyHex);
+        _topAffiliate[tokenContract][tokenId] = _requireHex7(trophyHex);
         return true;
     }
 
-    function tokenColor(uint256 tokenId, uint8 channel) external view returns (string memory) {
-        Colors storage c = _custom[tokenId];
+    function tokenColor(address tokenContract, uint256 tokenId, uint8 channel) external view returns (string memory) {
+        if (!_allowedToken[tokenContract]) return "";
+        Colors storage c = _custom[tokenContract][tokenId];
         if (channel == 0) return c.outline;
         if (channel == 1) return c.flame;
         if (channel == 2) return c.diamond;
@@ -154,12 +166,12 @@ contract IconColorRegistry {
         return c.square;
     }
 
-    function topAffiliateColor(uint256 tokenId) external view returns (string memory) {
-        return _topAffiliate[tokenId];
+    function topAffiliateColor(address tokenContract, uint256 tokenId) external view returns (string memory) {
+        return _topAffiliate[tokenContract][tokenId];
     }
 
-    function trophyOuter(uint256 tokenId) external view returns (uint32) {
-        return _trophyOuterPct1e6[tokenId];
+    function trophyOuter(address tokenContract, uint256 tokenId) external view returns (uint32) {
+        return _trophyOuterPct1e6[tokenContract][tokenId];
     }
 
     function _requireHex7(string memory s) private pure returns (string memory) {

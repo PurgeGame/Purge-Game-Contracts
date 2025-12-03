@@ -2,7 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {IPurgeCoinModule} from "../interfaces/PurgeGameModuleInterfaces.sol";
-import {PurgeGameStorage} from "../storage/PurgeGameStorage.sol";
+import {PurgeGameStorage, PendingJackpotBondMint} from "../storage/PurgeGameStorage.sol";
 import {PurgeTraitUtils} from "../PurgeTraitUtils.sol";
 
 interface IPurgeGameAffiliatePayout {
@@ -61,10 +61,14 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
     uint16 private constant DAILY_JACKPOT_BPS_9 = 1225;
     uint32 private constant WRITES_BUDGET_SAFE = 800;
     uint64 private constant MAP_LCG_MULT = 0x5851F42D4C957F2D;
-    uint16 private constant JACKPOT_BOND_BPS = 1000; // 10% of each jackpot routed into bonds
+    uint16 private constant JACKPOT_BOND_BPS = 1000; // default bond skim bps (overridable per jackpot)
+    uint16 private constant JACKPOT_BOND_BPS_GRAND = 5000; // 50% skim for the top bucket
+    uint16 private constant JACKPOT_BOND_BPS_OTHER = 1000; // 10% skim for other buckets
     uint256 private constant JACKPOT_BOND_MIN_BASE = 0.02 ether;
     uint256 private constant JACKPOT_BOND_MAX_BASE = 0.5 ether;
     uint8 private constant JACKPOT_BOND_MAX_MULTIPLIER = 4; // cap total bonds to keep gas bounded
+    uint16 private constant BOND_BPS_MAP = 5000; // 50% of MAP jackpots routed into bonds
+    uint16 private constant BOND_BPS_DAILY = 2000; // 20% of daily/early-purge jackpots routed into bonds
 
     // Packed parameters for a single jackpot run to keep the call surface lean.
     struct JackpotParams {
@@ -133,7 +137,8 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
                     coinContract: coinContract
                 }),
                 false,
-                false
+                false,
+                BOND_BPS_DAILY
             );
 
             // Only the reward pool-funded slice should reduce reward pool accounting.
@@ -154,7 +159,8 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
                     coinContract: coinContract
                 }),
                 true,
-                false
+                false,
+                BOND_BPS_DAILY
             );
 
             uint24 nextLevel = lvl + 1;
@@ -189,7 +195,8 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
                     coinContract: coinContract
                 }),
                 false,
-                !lastDaily // lastDaily reward slice already debited; carryover is prize pool
+                !lastDaily, // lastDaily reward slice already debited; carryover is prize pool
+                BOND_BPS_DAILY
             );
 
             unchecked {
@@ -224,7 +231,8 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
                     coinContract: coinContract
                 }),
                 false,
-                false
+                false,
+                BOND_BPS_MAP
             ));
 
         uint48 questDay = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
@@ -414,14 +422,15 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
     function _executeJackpot(
         JackpotParams memory jp,
         bool fromPrizePool,
-        bool fromRewardPool
+        bool fromRewardPool,
+        uint16 bondBps
     ) private returns (uint256 paidEth) {
         // Runs jackpot and debits caller-selected pools; returns ETH paid for accounting.
         uint8[4] memory traitIds = _unpackWinningTraits(jp.winningTraitsPacked);
         uint16[4] memory shareBps = _shareBpsByBucket(jp.traitShareBpsPacked, uint8(jp.entropy & 3));
 
         if (jp.ethPool != 0) {
-            paidEth = _runJackpotEthFlow(jp, traitIds, shareBps);
+            paidEth = _runJackpotEthFlow(jp, traitIds, shareBps, bondBps);
         }
 
         if (jp.coinPool != 0) {
@@ -439,7 +448,8 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
     function _runJackpotEthFlow(
         JackpotParams memory jp,
         uint8[4] memory traitIds,
-        uint16[4] memory shareBps
+        uint16[4] memory shareBps,
+        uint16 bondBps
     ) private returns (uint256 totalPaidEth) {
         uint8 band = uint8((jp.lvl % 100) / 20) + 1;
         uint16[4] memory bucketCounts = _traitBucketCounts(band, jp.entropy);
@@ -453,7 +463,8 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
                 shareBps,
                 bucketCounts,
                 jp.coinContract,
-                bondsAddr
+                bondsAddr,
+                bondBps
             );
     }
 
@@ -479,7 +490,8 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         uint16[4] memory shareBps,
         uint16[4] memory bucketCounts,
         IPurgeCoinModule coinContract,
-        address bondsAddr
+        address bondsAddr,
+        uint16 bondBps
     ) private returns (uint256 totalPaidEth) {
         // Each trait bucket gets a slice; the last bucket absorbs remainder to avoid dust. totalPaidEth counts ETH plus bond spend.
         uint256 ethDistributed;
@@ -505,7 +517,9 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
                 share,
                 entropyState,
                 bucketCount,
-                bondsAddr
+                bondsAddr,
+                traitIdx == 0 ? JACKPOT_BOND_BPS_GRAND : (bondBps == 0 ? 0 : JACKPOT_BOND_BPS_OTHER),
+                traitIdx == 0
             );
             totalPaidEth += delta + bondSpent;
             unchecked {
@@ -542,7 +556,9 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
                 share,
                 entropy,
                 bucketCount,
-                address(0)
+                address(0),
+                0,
+                false
             );
             unchecked {
                 ++traitIdx;
@@ -575,7 +591,9 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         uint256 traitShare,
         uint256 entropy,
         uint16 winnerCount,
-        address bondsAddr
+        address bondsAddr,
+        uint16 bondBps,
+        bool isGrandBucket
     ) private returns (uint256 entropyState, uint256 ethDelta, uint256 coinDelta, uint256 bondSpent) {
         entropyState = entropy;
 
@@ -595,8 +613,15 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         if (winners.length == 0) return (entropyState, 0, 0, 0);
 
         uint256 ethPoolForWinners = traitShare;
-        if (!payCoin && bondsAddr != address(0) && IPurgeBondsJackpot(bondsAddr).purchasesEnabled()) {
-            (bondSpent, ethPoolForWinners) = _jackpotBondSpend(bondsAddr, winners, traitShare, entropyState);
+        if (!payCoin && bondBps != 0 && bondsAddr != address(0) && IPurgeBondsJackpot(bondsAddr).purchasesEnabled()) {
+            (bondSpent, ethPoolForWinners) = _jackpotBondSpend(
+                bondsAddr,
+                winners,
+                traitShare,
+                entropyState,
+                bondBps,
+                isGrandBucket
+            );
         }
 
         uint256 perWinner = ethPoolForWinners / totalCount;
@@ -622,15 +647,22 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         address bondsAddr,
         address[] memory winners,
         uint256 traitShare,
-        uint256 entropyState
+        uint256 entropyState,
+        uint16 bondBps,
+        bool isGrandBucket
     ) private returns (uint256 bondSpent, uint256 ethPoolForWinners) {
         uint256 winnersLen = winners.length;
         if (bondsAddr == address(0) || winnersLen == 0) return (0, traitShare);
 
-        uint256 bondBudget = (traitShare * JACKPOT_BOND_BPS) / 10_000;
+        if (bondBps == 0) return (0, traitShare);
+
+        uint256 bondBudget = (traitShare * bondBps) / 10_000;
         if (bondBudget < JACKPOT_BOND_MIN_BASE) return (0, traitShare);
 
         uint256 basePerBond = bondBudget / winnersLen;
+        if (!isGrandBucket && basePerBond > JACKPOT_BOND_MIN_BASE) {
+            basePerBond = JACKPOT_BOND_MIN_BASE; // spread non-grand buckets across more bonds when budget allows
+        }
         if (basePerBond < JACKPOT_BOND_MIN_BASE) {
             basePerBond = JACKPOT_BOND_MIN_BASE;
         } else if (basePerBond > JACKPOT_BOND_MAX_BASE) {
@@ -648,44 +680,150 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         uint256 spend = basePerBond * quantity;
         if (spend == 0) return (0, traitShare);
 
-        address[] memory recipients = _selectBondRecipients(winners, quantity, entropyState);
-        if (_purchaseJackpotBonds(bondsAddr, recipients, basePerBond, spend)) {
+        uint16 offset = uint16(entropyState % winnersLen);
+        // Queue bond mints to be processed out-of-band so jackpots stay lightweight. Split 90/10 locked/marketable.
+        if (_enqueueJackpotBondMintsMixed(winners, uint16(quantity), basePerBond, offset)) {
             bondSpent = spend;
         }
 
         ethPoolForWinners = traitShare - bondSpent;
     }
 
-    function _selectBondRecipients(
-        address[] memory winners,
-        uint256 quantity,
-        uint256 entropy
-    ) private pure returns (address[] memory recipients) {
-        recipients = new address[](quantity);
-        uint256 len = winners.length;
-        if (len == 0) return recipients;
-
-        uint256 offset = entropy % len;
-        for (uint256 i; i < quantity; ) {
-            recipients[i] = winners[(offset + i) % len];
-            unchecked {
-                ++i;
+    /// @notice Process queued jackpot bond mints outside the main game loop.
+    /// @param maxMints Max bonds to mint this call (0 = default safety cap).
+    /// @return finished True if all pending batches are fully processed.
+    /// @return processed Number of bonds minted this call.
+    function processPendingJackpotBonds(uint256 maxMints) external returns (bool finished, uint256 processed) {
+        uint256 cursor = pendingJackpotBondCursor;
+        uint256 total = pendingJackpotBondMints.length;
+        if (cursor >= total) {
+            if (cursor != 0) {
+                delete pendingJackpotBondMints;
+                pendingJackpotBondCursor = 0;
             }
+            return (true, 0);
+        }
+
+        if (maxMints == 0 || maxMints > 512) {
+            maxMints = 512; // stay well under block gas even for large batches
+        }
+
+        address bondsAddr = IPurgeGameWithBonds(address(this)).bonds();
+        if (bondsAddr == address(0) || !IPurgeBondsJackpot(bondsAddr).purchasesEnabled()) {
+            return (false, 0);
+        }
+
+        while (cursor < total && processed < maxMints) {
+            PendingJackpotBondMint storage batch = pendingJackpotBondMints[cursor];
+            uint256 winnersLen = batch.winners.length;
+            if (winnersLen == 0 || batch.quantity == 0) {
+                delete pendingJackpotBondMints[cursor];
+                unchecked {
+                    ++cursor;
+                }
+                continue;
+            }
+
+            if (batch.cursor >= batch.quantity) {
+                delete pendingJackpotBondMints[cursor];
+                unchecked {
+                    ++cursor;
+                }
+                continue;
+            }
+
+            uint256 remaining = uint256(batch.quantity) - uint256(batch.cursor);
+
+            uint256 budget = maxMints - processed;
+            uint256 take = remaining > budget ? budget : remaining;
+
+            address[] memory recipients = new address[](take);
+            uint256 base = uint256(batch.offset) + uint256(batch.cursor);
+            for (uint256 i; i < take; ) {
+                recipients[i] = batch.winners[(base + i) % winnersLen];
+                unchecked {
+                    ++i;
+                }
+            }
+
+            try IPurgeBondsJackpot(bondsAddr).purchaseGameBonds(
+                recipients,
+                take,
+                batch.basePerBondWei,
+                batch.stake
+            ) {
+                processed += take;
+                uint256 newCursor = uint256(batch.cursor) + take;
+                batch.cursor = uint16(newCursor);
+                if (newCursor >= batch.quantity) {
+                    delete pendingJackpotBondMints[cursor];
+                    unchecked {
+                        ++cursor;
+                    }
+                }
+            } catch {
+                break; // bonds contract rejected the batch; allow retry in a later call
+            }
+        }
+
+        pendingJackpotBondCursor = cursor;
+        finished = (cursor >= total);
+        if (finished && cursor != 0) {
+            delete pendingJackpotBondMints;
+            pendingJackpotBondCursor = 0;
         }
     }
 
-    function _purchaseJackpotBonds(
-        address bondsAddr,
-        address[] memory recipients,
+    function _enqueueJackpotBondMint(
+        address[] memory winners,
+        uint16 quantity,
         uint256 basePerBond,
-        uint256 spend
+        uint16 offset,
+        bool stake
     ) private returns (bool) {
-        if (bondsAddr == address(0) || spend == 0) return false;
-        try IPurgeBondsJackpot(bondsAddr).purchaseGameBonds(recipients, recipients.length, basePerBond, true) {
-            return true;
-        } catch {
-            return false;
+        if (quantity == 0 || winners.length == 0) return false;
+        if (basePerBond > type(uint96).max) return false;
+
+        PendingJackpotBondMint storage batch = pendingJackpotBondMints.push();
+        batch.basePerBondWei = uint96(basePerBond);
+        batch.quantity = quantity;
+        batch.offset = offset;
+        batch.stake = stake;
+        batch.winners = winners;
+        return true;
+    }
+
+    function _enqueueJackpotBondMintsMixed(
+        address[] memory winners,
+        uint16 quantity,
+        uint256 basePerBond,
+        uint16 offset
+    ) private returns (bool) {
+        if (quantity == 0) return false;
+        uint256 winnersLen = winners.length;
+        if (winnersLen == 0) return false;
+        uint16 marketable = quantity / 10;
+        if (marketable == 0 && quantity != 0) {
+            marketable = 1; // ceil to guarantee ~10% marketable when small
         }
+        if (marketable > quantity) {
+            marketable = quantity;
+        }
+        uint16 locked = quantity - marketable;
+        bool ok;
+        if (locked != 0) {
+            ok = _enqueueJackpotBondMint(winners, locked, basePerBond, offset, true);
+        }
+        if (marketable != 0) {
+            uint256 off2 = uint256(offset) + uint256(locked);
+            if (off2 >= winnersLen) {
+                off2 = off2 % winnersLen;
+            }
+            if (_enqueueJackpotBondMint(winners, marketable, basePerBond, uint16(off2), false)) {
+                ok = true;
+            }
+        }
+        return ok;
     }
 
     function _entropyStep(uint256 state) private pure returns (uint256) {

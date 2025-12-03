@@ -48,7 +48,13 @@ async function main() {
   await purgeNFT.waitForDeployment();
   console.log("   PurgeGameNFT deployed at:", await purgeNFT.getAddress());
 
-  console.log("8. Deploying Modules...");
+  console.log("8. Deploying PurgeTrophies...");
+  const PurgeTrophies = await ethers.getContractFactory("PurgeTrophies");
+  const trophies = await PurgeTrophies.deploy(await renderer.getAddress());
+  await trophies.waitForDeployment();
+  console.log("   PurgeTrophies deployed at:", await trophies.getAddress());
+
+  console.log("9. Deploying Modules...");
   const PurgeGameEndgameModule = await ethers.getContractFactory("PurgeGameEndgameModule");
   const endgameModule = await PurgeGameEndgameModule.deploy();
   await endgameModule.waitForDeployment();
@@ -80,7 +86,7 @@ async function main() {
       console.log("   Jackpots module deployment failed.", e.message);
   }
 
-  console.log("9. Deploying PurgeGame...");
+  console.log("10. Deploying PurgeGame...");
   const PurgeGame = await ethers.getContractFactory("PurgeGame");
   const purgeGame = await PurgeGame.deploy(
     await purgecoin.getAddress(),
@@ -94,10 +100,15 @@ async function main() {
     await link.getAddress(),
     await steth.getAddress(),
     jackpotsAddr,
-    bondsAddr
+    bondsAddr,
+    await trophies.getAddress()
   );
   await purgeGame.waitForDeployment();
   console.log("   PurgeGame deployed at:", await purgeGame.getAddress());
+
+  const setGameTx = await trophies.setGame(await purgeGame.getAddress());
+  await setGameTx.wait();
+  console.log("   Trophies wired to game.");
 }
 
 main()

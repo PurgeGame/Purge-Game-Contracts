@@ -7,6 +7,7 @@ import {IPurgeCoin} from "./interfaces/IPurgeCoin.sol";
 import {IPurgeAffiliate} from "./interfaces/IPurgeAffiliate.sol";
 import {IPurgeRendererLike} from "./interfaces/IPurgeRendererLike.sol";
 import {IPurgeJackpots} from "./interfaces/IPurgeJackpots.sol";
+import {IPurgeTrophies} from "./interfaces/IPurgeTrophies.sol";
 import {IPurgeGameEndgameModule, IPurgeGameJackpotModule} from "./interfaces/IPurgeGameModules.sol";
 import {MintPaymentKind} from "./interfaces/IPurgeGame.sol";
 import {PurgeGameExternalOp} from "./interfaces/IPurgeGameExternal.sol";
@@ -184,6 +185,7 @@ contract PurgeGame is PurgeGameStorage {
      * @param stEthToken_       stETH token address
      * @param jackpots_         PurgeJackpots contract address (wires Decimator/BAF jackpots)
      * @param bonds_            Bonds contract address
+     * @param trophies_         Standalone trophy ERC721 contract (cosmetic only)
      */
     constructor(
         address purgeCoinContract,
@@ -197,7 +199,8 @@ contract PurgeGame is PurgeGameStorage {
         address linkToken_,
         address stEthToken_,
         address jackpots_,
-        address bonds_
+        address bonds_,
+        address trophies_
     ) {
         coin = IPurgeCoin(purgeCoinContract);
         renderer = IPurgeRendererLike(renderer_);
@@ -206,13 +209,16 @@ contract PurgeGame is PurgeGameStorage {
         jackpotModule = jackpotModule_;
         vrfCoordinator = IVRFCoordinator(vrfCoordinator_);
         affiliateProgram = coin.affiliateProgram();
+        affiliateProgramAddr = affiliateProgram;
         vrfKeyHash = vrfKeyHash_;
         vrfSubscriptionId = vrfSubscriptionId_;
         linkToken = linkToken_;
         steth = IStETH(stEthToken_);
-        if (stEthToken_ == address(0) || jackpots_ == address(0) || bonds_ == address(0)) revert E();
+        if (stEthToken_ == address(0) || jackpots_ == address(0) || bonds_ == address(0) || trophies_ == address(0))
+            revert E();
         jackpots = jackpots_;
         bonds = bonds_;
+        trophies = trophies_;
         if (!steth.approve(bonds_, type(uint256).max)) revert E();
         deployTimestamp = uint48(block.timestamp);
     }
@@ -237,6 +243,14 @@ contract PurgeGame is PurgeGameStorage {
 
     function nextPrizePoolView() external view returns (uint256) {
         return nextPrizePool;
+    }
+
+    function trophiesAddress() external view returns (address) {
+        return trophies;
+    }
+
+    function affiliateProgramAddress() external view returns (address) {
+        return affiliateProgramAddr;
     }
 
     /// @notice Resolve the payout recipient for a player, routing synthetic MAP-only players to their affiliate owner.
@@ -487,7 +501,11 @@ contract PurgeGame is PurgeGameStorage {
                 _runEndgameModule(lvl, cap, rngWord); // handles payouts, wipes, endgame dist, and jackpots
                 if (gameState == 2) {
                     if (lvl != 0) {
-                        coinContract.recordStakeResolution(lvl, day);
+                        address topStake = coinContract.recordStakeResolution(lvl, day);
+                        address trophyAddr = trophies;
+                        if (trophyAddr != address(0) && topStake != address(0)) {
+                            try IPurgeTrophies(trophyAddr).mintStake(topStake, lvl) {} catch {}
+                        }
                     }
                     if (lastExterminatedTrait != TRAIT_ID_TIMEOUT) {
                         payDailyJackpot(false, level, rngWord);
@@ -772,12 +790,12 @@ contract PurgeGame is PurgeGameStorage {
             }
 
             currentPrizePool = pool;
-            exterminator = callerExterminator;
+            _setExterminatorForLevel(levelSnapshot, callerExterminator);
 
             lastExterminatedTrait = exTrait;
         } else {
             exterminationInvertFlag = false;
-            exterminator = address(0);
+            _setExterminatorForLevel(levelSnapshot, address(0));
 
             currentPrizePool = 0;
             lastExterminatedTrait = TRAIT_ID_TIMEOUT;
@@ -1412,6 +1430,20 @@ contract PurgeGame is PurgeGameStorage {
         return abi.decode(data, (bool));
     }
 
+    /// @notice Process pending jackpot bond mints outside the main game tick.
+    /// @param maxMints Max bonds to mint this call (0 = default chunk size).
+    function workJackpotBondMints(uint256 maxMints) external {
+        (bool ok, bytes memory data) = jackpotModule.delegatecall(
+            abi.encodeWithSelector(IPurgeGameJackpotModule.processPendingJackpotBonds.selector, maxMints)
+        );
+        if (!ok || data.length == 0) return;
+
+        (, uint256 processed) = abi.decode(data, (bool, uint256));
+        if (processed != 0 && maxMints == 0 && gameState != 0) {
+            coin.creditFlip(msg.sender, priceCoin >> 1);
+        }
+    }
+
     function _maybeResolveBonds(uint32 cap) private returns (bool worked) {
         address bondsAddr = bonds;
         if (bondsAddr == address(0)) return false;
@@ -1811,6 +1843,23 @@ contract PurgeGame is PurgeGameStorage {
         }
         traitRemaining[traitId] = stored;
         return stored == endLevel;
+    }
+
+    function _setExterminatorForLevel(uint24 lvl, address ex) private {
+        if (lvl == 0) return;
+        address[] storage arr = levelExterminators;
+        uint256 idx = uint256(lvl) - 1;
+        uint256 len = arr.length;
+        if (len == idx) {
+            arr.push(ex);
+        } else if (len > idx) {
+            arr[idx] = ex;
+        } else {
+            while (arr.length < idx) {
+                arr.push();
+            }
+            arr.push(ex);
+        }
     }
 
     function getLastExterminatedTrait() external view returns (uint16) {
