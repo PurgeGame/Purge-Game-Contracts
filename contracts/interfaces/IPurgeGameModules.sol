@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {IPurgeCoinModule, IPurgeGameTrophiesModule} from "./PurgeGameModuleInterfaces.sol";
+import {IPurgeCoinModule} from "./PurgeGameModuleInterfaces.sol";
 
 interface IPurgeGameEndgameModule {
     function finalizeEndgame(
         uint24 lvl,
         uint32 cap,
         uint256 rngWord,
-        address jackpots,
-        IPurgeGameTrophiesModule trophiesContract
+        address jackpots
     ) external;
 }
 
@@ -18,16 +17,14 @@ interface IPurgeGameJackpotModule {
         bool isDaily,
         uint24 lvl,
         uint256 randWord,
-        IPurgeCoinModule coinContract,
-        IPurgeGameTrophiesModule trophiesContract
+        IPurgeCoinModule coinContract
     ) external;
 
     function payMapJackpot(
         uint24 lvl,
         uint256 rngWord,
         uint256 effectiveWei,
-        IPurgeCoinModule coinContract,
-        IPurgeGameTrophiesModule trophiesContract
+        IPurgeCoinModule coinContract
     ) external;
 
     function calcPrizePoolForJackpot(

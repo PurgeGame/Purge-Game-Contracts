@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {IPurgeGameTrophiesModule} from "../interfaces/PurgeGameModuleInterfaces.sol";
 import {IPurgeJackpots} from "../interfaces/IPurgeJackpots.sol";
 import {PurgeGameStorage} from "../storage/PurgeGameStorage.sol";
 
@@ -35,16 +34,13 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
      * @param cap Optional cap for batched payouts; zero falls back to DEFAULT_PAYOUTS_PER_TX.
      * @param rngWord Randomness used for jackpot and ticket selection.
      * @param jackpotsAddr Address of the jackpots contract to invoke.
-     * @param trophiesContract Unused (kept for interface compatibility while trophies are removed).
      */
     function finalizeEndgame(
         uint24 lvl,
         uint32 cap,
         uint256 rngWord,
-        address jackpotsAddr,
-        IPurgeGameTrophiesModule trophiesContract
+        address jackpotsAddr
     ) external {
-        trophiesContract;
         uint24 prevLevel = lvl - 1;
         bool traitWin = lastExterminatedTrait != TRAIT_ID_TIMEOUT;
         if (traitWin) {
@@ -226,7 +222,7 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         uint256 returnWei;
 
         if (kind == 0) {
-            (address[] memory winnersArr, uint256[] memory amountsArr, , uint256 refund) = IPurgeJackpots(
+            (address[] memory winnersArr, uint256[] memory amountsArr, uint256 refund) = IPurgeJackpots(
                 jackpotsAddr
             ).runBafJackpot(poolWei, lvl, rngWord);
             for (uint256 i; i < winnersArr.length; ) {
@@ -237,7 +233,7 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
             }
             returnWei = refund;
         } else if (kind == 1) {
-            (, returnWei) = IPurgeJackpots(jackpotsAddr).runDecimatorJackpot(poolWei, lvl, rngWord);
+            returnWei = IPurgeJackpots(jackpotsAddr).runDecimatorJackpot(poolWei, lvl, rngWord);
         }
         if (consumeCarry) {
             rewardPool -= (poolWei - returnWei);

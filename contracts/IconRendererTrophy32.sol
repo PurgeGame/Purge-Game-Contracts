@@ -168,6 +168,11 @@ contract IconRendererTrophy32 {
             !isStake &&
             !isBaf &&
             !isDec;
+        bool forcePlaceholder = isExtermination &&
+            (tokenId == 0 || ((extras[0] & (uint32(1) << 31)) != 0));
+        if (forcePlaceholder) {
+            exTr = 0xFFFF;
+        }
         bool invertFlag = (data & TROPHY_FLAG_INVERT) != 0;
         uint32 statusFlags = extras[0];
         bool isBond = (statusFlags & (uint32(1) << 31)) != 0;
@@ -182,6 +187,9 @@ contract IconRendererTrophy32 {
         uint256 ethAttachment = data & TROPHY_OWED_MASK;
         if ((statusFlags & 2) == 0 && ethAttachment != 0) {
             statusFlags |= 2;
+        }
+        if (forcePlaceholder) {
+            statusFlags = 0; // keep placeholder extermination renders badge-free for token 0 and bonds
         }
         bool hasEthAttachment = ethAttachment != 0;
         uint24 stakedLevel = uint24(

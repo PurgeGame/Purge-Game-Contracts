@@ -67,7 +67,7 @@ contract PurgeJackpots is IPurgeJackpots {
         bool active;
     }
 
-    // Leading contributor inside a subbucket (used to pick the trophy owner).
+    // Leading contributor inside a subbucket (used to pick the subbucket winner).
     struct DecSubbucketTop {
         address player;
         uint192 burn;
@@ -213,10 +213,11 @@ contract PurgeJackpots is IPurgeJackpots {
     // ---------------------------------------------------------------------
     /**
      * @notice Resolve the BAF jackpot for a level.
-     * @dev Pool split (percent of `poolWei`): 10% top bettor + 10% BAF trophy, 10% random pick
-     *      between 3rd/4th leaderboard slots, 10% affiliate draw (top referrers from prior 20 levels),
-     *      10% retro tops (recent levels), 7%/3% scatter buckets from trait tickets, 5/3/2% to
-     *      staked trophy owners. Any unfilled shares are refunded to the caller via `returnAmountWei`.
+     * @dev Pool split (percent of `poolWei`): 20% top bettor (absorbing the former trophy slice),
+     *      10% random pick between 3rd/4th leaderboard slots, 10% affiliate draw (top referrers from
+     *      prior 20 levels), 10% retro tops (recent levels), 7%/3% scatter buckets from trait tickets,
+     *      with the old stake slice (10%) refunded. Any unfilled shares are refunded to the caller via
+     *      `returnAmountWei`.
      */
     function runBafJackpot(
         uint256 poolWei,
@@ -229,7 +230,6 @@ contract PurgeJackpots is IPurgeJackpots {
         returns (
             address[] memory winners,
             uint256[] memory amounts,
-            uint256 trophyPoolDelta,
             uint256 returnAmountWei
     )
     {
@@ -244,7 +244,7 @@ contract PurgeJackpots is IPurgeJackpots {
         uint256 salt;
 
         {
-            // Slice A: top bettor now receives the combined share that previously funded the trophy (20% total).
+            // Slice A: top bettor now receives the combined share that previously funded the extra slice (20% total).
             uint256 topPrize = (P * 2) / 10;
             (address w, ) = _bafTop(lvl, 0);
             uint256 s0 = _bafScore(w, lvl);
@@ -284,7 +284,7 @@ contract PurgeJackpots is IPurgeJackpots {
         }
 
         {
-            // Former stake-trophy slice (10%) is refunded now that trophies are removed.
+            // Former stake slice (10%) is refunded while the feature is disabled.
             toReturn += (P * 10) / 100;
         }
 
@@ -608,7 +608,7 @@ contract PurgeJackpots is IPurgeJackpots {
         }
 
         _clearBafTop(lvl);
-        return (winners, amounts, 0, toReturn);
+        return (winners, amounts, toReturn);
     }
 
     function runDecimatorJackpot(
@@ -619,7 +619,7 @@ contract PurgeJackpots is IPurgeJackpots {
         external
         override
         onlyGame
-        returns (uint256 trophyPoolDelta, uint256 returnAmountWei)
+        returns (uint256 returnAmountWei)
     {
         // Decimator jackpots defer ETH distribution to per-player claims; this call snapshots winners.
         uint256 totalBurn;
@@ -641,7 +641,7 @@ contract PurgeJackpots is IPurgeJackpots {
         }
 
         if (totalBurn == 0) {
-            return (0, poolWei);
+            return poolWei;
         }
 
         DecClaimRound storage round = decClaimRound[lvl];
@@ -650,7 +650,7 @@ contract PurgeJackpots is IPurgeJackpots {
         round.level = lvl;
         round.active = true;
 
-        return (trophyPoolDelta, 0);
+        return 0;
     }
 
     // ---------------------------------------------------------------------

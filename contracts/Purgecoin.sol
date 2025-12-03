@@ -3,10 +3,9 @@ pragma solidity ^0.8.26;
 
 /// @title Purgecoin
 /// @notice ERC20-style game token that doubles as accounting for coinflip wagers, stakes, quests, and jackpots.
-/// @dev Acts as the hub for gameplay modules (game, NFTs, trophies, quests, jackpots). Mint/burn only occurs
+/// @dev Acts as the hub for gameplay modules (game, NFTs, quests, jackpots). Mint/burn only occurs
 ///      through explicit gameplay flows; there is intentionally no public mint.
 import {PurgeGameNFT} from "./PurgeGameNFT.sol";
-import {IPurgeGameTrophies} from "./PurgeGameTrophies.sol";
 import {PurgeAffiliate} from "./PurgeAffiliate.sol";
 import {IPurgeGame} from "./interfaces/IPurgeGame.sol";
 import {IPurgeQuestModule, QuestInfo, PlayerQuestView} from "./interfaces/IPurgeQuestModule.sol";
@@ -103,7 +102,6 @@ contract Purgecoin {
     // Core modules; set once via `wire`.
     IPurgeGame internal purgeGame;
     PurgeGameNFT internal purgeGameNFT;
-    IPurgeGameTrophies internal purgeGameTrophies;
     IPurgeQuestModule internal questModule;
     PurgeAffiliate public immutable affiliateProgram;
     address public jackpots;
@@ -150,11 +148,8 @@ contract Purgecoin {
     address internal bountyOwedTo;
     // stakeResolutionDay[level] stores the coinflip day used to resolve that level's stakes.
     mapping(uint24 => uint48) internal stakeResolutionDay;
-    // Prevents duplicate trophy minting when a level's stake prize resolves.
-    mapping(uint24 => bool) internal stakeTrophyAwarded;
     address public immutable bonds;
     address public immutable regularRenderer;
-    address public immutable trophyRenderer;
 
     // ---------------------------------------------------------------------
     // ERC20 state
@@ -231,8 +226,7 @@ contract Purgecoin {
 
     modifier onlyGameplayContracts() {
         address sender = msg.sender;
-        if (sender != address(purgeGame) && sender != address(purgeGameNFT) && sender != address(purgeGameTrophies))
-            revert OnlyGame();
+        if (sender != address(purgeGame) && sender != address(purgeGameNFT)) revert OnlyGame();
         _;
     }
 
@@ -241,7 +235,6 @@ contract Purgecoin {
         if (
             sender != address(purgeGame) &&
             sender != address(purgeGameNFT) &&
-            sender != address(purgeGameTrophies) &&
             sender != address(affiliateProgram)
         ) revert OnlyGame();
         _;
@@ -250,12 +243,11 @@ contract Purgecoin {
     // ---------------------------------------------------------------------
     // Constructor
     // ---------------------------------------------------------------------
-    constructor(address bonds_, address affiliate_, address regularRenderer_, address trophyRenderer_) {
+    constructor(address bonds_, address affiliate_, address regularRenderer_) {
         if (bonds_ == address(0) || affiliate_ == address(0)) revert ZeroAddress();
         bonds = bonds_;
         affiliateProgram = PurgeAffiliate(affiliate_);
         regularRenderer = regularRenderer_;
-        trophyRenderer = trophyRenderer_;
         uint256 bondSeed = 2_000_000 * MILLION;
         _mint(bonds_, bondSeed);
     }
@@ -317,11 +309,6 @@ contract Purgecoin {
 
         uint256 effectiveAmount = amount;
         // Trophies can boost the effective contribution.
-        uint8 decBonusPct = purgeGameTrophies.decStakeBonus(caller);
-        if (decBonusPct != 0) {
-            effectiveAmount += (effectiveAmount * decBonusPct) / 100;
-        }
-
         // Bucket logic selects how many people share a jackpot slice; special every DECIMATOR_SPECIAL_LEVEL.
         bool specialDec = (lvl % DECIMATOR_SPECIAL_LEVEL) == 0;
         uint8 bucket = specialDec
@@ -350,13 +337,6 @@ contract Purgecoin {
         }
 
         emit DecimatorBurn(caller, amount, bucketUsed);
-    }
-
-    function _awardStakeTrophy(uint24 level, StakeResolution memory res) private {
-        if (stakeTrophyAwarded[level]) return;
-        if (res.winningRiskLevels == 0) return;
-        if (res.topStakeWinner == address(0) || res.topStakeAmount == 0) return;
-        stakeTrophyAwarded[level] = true;
     }
 
     function _stakeFreeMoneyView() private view returns (uint256) {
@@ -442,8 +422,6 @@ contract Purgecoin {
         stored.topStakeWinner = res.topStakeWinner;
         stored.topStakeAmount = res.topStakeAmount;
         stored.resolved = true;
-        // Award the stake trophy as soon as the resolution snapshot is finalized.
-        _awardStakeTrophy(level, stored);
         return stored;
     }
 
@@ -661,13 +639,6 @@ contract Purgecoin {
         if (stepBps > 250) {
             stepBps = 250;
         }
-        // Long distance stakes can pick up an extra boost if the player holds stake trophies.
-        if (distance >= 20) {
-            uint8 stakeTrophyBoost = purgeGameTrophies.stakeTrophyBonus(sender);
-            if (stakeTrophyBoost != 0) {
-                stepBps += (stepBps * stakeTrophyBoost) / 100;
-            }
-        }
 
         uint256 boostedPrincipal = burnAmt;
         if (distance != 0) {
@@ -739,17 +710,16 @@ contract Purgecoin {
         emit StakeCreated(sender, targetLevel, risk, burnAmt);
     }
 
-    /// @notice Wire game, NFT, trophies, quest module, and jackpots using an address array.
-    /// @dev Order: [game, nft, trophies, quest module, jackpots]; set-once per slot.
+    /// @notice Wire game, NFT, quest module, and jackpots using an address array.
+    /// @dev Order: [game, nft, quest module, jackpots]; set-once per slot.
     function wire(address[] calldata addresses) external {
         if (msg.sender != bonds) revert OnlyBonds();
 
         uint256 len = addresses.length;
         if (len > 0) _setGame(addresses[0]);
         if (len > 1) _setNft(addresses[1]);
-        if (len > 2) _setTrophies(addresses[2]);
-        if (len > 3) _setQuestModule(addresses[3]);
-        if (len > 4) _setJackpots(addresses[4]);
+        if (len > 2) _setQuestModule(addresses[2]);
+        if (len > 3) _setJackpots(addresses[3]);
     }
 
     function _setGame(address game_) private {
@@ -768,16 +738,6 @@ contract Purgecoin {
         if (current == address(0)) {
             purgeGameNFT = PurgeGameNFT(nft_);
         } else if (nft_ != current) {
-            revert AlreadyWired();
-        }
-    }
-
-    function _setTrophies(address trophies_) private {
-        if (trophies_ == address(0)) return;
-        address current = address(purgeGameTrophies);
-        if (current == address(0)) {
-            purgeGameTrophies = IPurgeGameTrophies(trophies_);
-        } else if (trophies_ != current) {
             revert AlreadyWired();
         }
     }
@@ -820,9 +780,8 @@ contract Purgecoin {
         _mint(bonds, amount);
     }
 
-    /// @notice Grant a pending coinflip stake during gameplay flows instead of minting PURGE.
-    /// @dev Access: PurgeGame, NFT, or trophy module only. Zero address is ignored.
-    /// @notice Credit a coinflip stake from authorized contracts (game, NFT, trophies, affiliate).
+    /// @notice Credit a coinflip stake from authorized contracts (game, NFT, affiliate).
+    /// @dev Access: PurgeGame, NFT, or affiliate module only. Zero address is ignored.
     function creditFlip(address player, uint256 amount) external onlyFlipContracts {
         if (player == address(0) || amount == 0) return;
         addFlip(player, amount, false, false);
@@ -954,7 +913,7 @@ contract Purgecoin {
     }
 
     /// @notice Burn PURGE from `target` during gameplay flows (purchases, fees).
-    /// @dev Access: PurgeGame, NFT, or trophy module only. OZ ERC20 `_burn` reverts on zero address or insufficient balance.
+    /// @dev Access: PurgeGame or NFT only. OZ ERC20 `_burn` reverts on zero address or insufficient balance.
     function burnCoin(address target, uint256 amount) external onlyGameplayContracts {
         _burn(target, amount);
     }

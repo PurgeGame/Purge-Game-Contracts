@@ -2,7 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {IPurgeGameNFT} from "./PurgeGameNFT.sol";
-import {IPurgeCoinModule, IPurgeGameTrophiesModule} from "./interfaces/PurgeGameModuleInterfaces.sol";
+import {IPurgeCoinModule} from "./interfaces/PurgeGameModuleInterfaces.sol";
 import {IPurgeCoin} from "./interfaces/IPurgeCoin.sol";
 import {IPurgeAffiliate} from "./interfaces/IPurgeAffiliate.sol";
 import {IPurgeRendererLike} from "./interfaces/IPurgeRendererLike.sol";
@@ -832,8 +832,7 @@ contract PurgeGame is PurgeGameStorage {
                 lvl,
                 cap,
                 rngWord,
-                jackpots,
-                IPurgeGameTrophiesModule(address(0))
+                jackpots
             )
         );
         if (!ok) return;
@@ -1154,7 +1153,7 @@ contract PurgeGame is PurgeGameStorage {
 
         address jackpotsAddr = jackpots;
         if (jackpotsAddr == address(0)) revert E();
-        (, uint256 returnWei) = IPurgeJackpots(jackpotsAddr).runDecimatorJackpot(pool, lvl, rngWord);
+        uint256 returnWei = IPurgeJackpots(jackpotsAddr).runDecimatorJackpot(pool, lvl, rngWord);
 
         if (returnWei != 0) {
             rewardPool += returnWei;
@@ -1173,8 +1172,7 @@ contract PurgeGame is PurgeGameStorage {
                 lvl,
                 rngWord,
                 effectiveWei,
-                IPurgeCoinModule(address(coin)),
-                IPurgeGameTrophiesModule(address(0))
+                IPurgeCoinModule(address(coin))
             )
         );
         if (!ok) return;
@@ -1202,8 +1200,7 @@ contract PurgeGame is PurgeGameStorage {
                 isDaily,
                 lvl,
                 randWord,
-                IPurgeCoinModule(address(coin)),
-                IPurgeGameTrophiesModule(address(0))
+                IPurgeCoinModule(address(coin))
             )
         );
         if (!ok) return;

@@ -2,7 +2,6 @@
 pragma solidity ^0.8.26;
 
 import {IPurgeGame} from "./interfaces/IPurgeGame.sol";
-import {IPurgeGameTrophies} from "./PurgeGameTrophies.sol";
 
 interface IPurgeCoinAffiliate {
     function balanceOf(address account) external view returns (uint256);
@@ -98,7 +97,6 @@ contract PurgeAffiliate {
 
     IPurgeCoinAffiliate private coin;
     IPurgeGame private purgeGame;
-    IPurgeGameTrophies private trophies;
 
     // ---------------------------------------------------------------------
     // Affiliate state
@@ -178,13 +176,12 @@ contract PurgeAffiliate {
     // ---------------------------------------------------------------------
     // Wiring
     // ---------------------------------------------------------------------
-    /// @notice Wire coin, game, and trophies via an address array ([coin, game, trophies]).
+    /// @notice Wire coin and game via an address array ([coin, game]).
     /// @dev Each address can be set once; non-zero updates must match the existing value.
     function wire(address[] calldata addresses) external {
         if (msg.sender != bonds) revert OnlyBonds();
         _setCoin(addresses.length > 0 ? addresses[0] : address(0));
         _setGame(addresses.length > 1 ? addresses[1] : address(0));
-        _setTrophies(addresses.length > 2 ? addresses[2] : address(0));
     }
 
     function _setCoin(address coinAddr) private {
@@ -216,16 +213,6 @@ contract PurgeAffiliate {
             }
             referralLocksActive = true; // allow locking of referral codes only once the game is wired
         } else if (gameAddr != current) {
-            revert AlreadyConfigured();
-        }
-    }
-
-    function _setTrophies(address trophiesAddr) private {
-        if (trophiesAddr == address(0)) return;
-        address current = address(trophies);
-        if (current == address(0)) {
-            trophies = IPurgeGameTrophies(trophiesAddr);
-        } else if (trophiesAddr != current) {
             revert AlreadyConfigured();
         }
     }
@@ -395,21 +382,16 @@ contract PurgeAffiliate {
 
         uint256 baseAmount = amount;
         mapping(address => uint256) storage earned = affiliateCoinEarned[lvl];
-        IPurgeGameTrophies trophies_ = trophies;
 
         address[3] memory players;
         uint256[3] memory amounts;
         uint256 cursor;
 
         // Pay direct affiliate
-        // Direct affiliate: rakeback and score are based on the base amount; stake bonus only boosts the payout.
+        // Direct affiliate: rakeback and score are based on the base amount.
         uint256 rakebackShare = (baseAmount * uint256(rakebackPct)) / 100;
         uint256 affiliateShareBase = baseAmount - rakebackShare;
-        uint8 stakeBonus = address(trophies_) != address(0) ? trophies_.affiliateStakeBonus(affiliateAddr) : 0;
         uint256 affiliatePayout = affiliateShareBase;
-        if (stakeBonus != 0) {
-            affiliatePayout += (affiliateShareBase * stakeBonus) / 100;
-        }
 
         uint256 newTotal = earned[affiliateAddr] + affiliateShareBase; // score ignores stake bonus
         earned[affiliateAddr] = newTotal;

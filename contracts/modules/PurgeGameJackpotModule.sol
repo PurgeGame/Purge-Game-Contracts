@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {IPurgeCoinModule, IPurgeGameTrophiesModule} from "../interfaces/PurgeGameModuleInterfaces.sol";
+import {IPurgeCoinModule} from "../interfaces/PurgeGameModuleInterfaces.sol";
 import {PurgeGameStorage} from "../storage/PurgeGameStorage.sol";
 import {PurgeTraitUtils} from "../PurgeTraitUtils.sol";
 
@@ -32,7 +32,7 @@ interface IPurgeBondsJackpot {
  * @notice Delegate-called module that hosts the jackpot distribution logic for `PurgeGame`.
  *         The storage layout mirrors the core contract so writes land in the parent via `delegatecall`.
  *         Acts as the single routing layer for jackpot math: pool sizing, trait splits, coin vs ETH
- *         routing, and trophy credit flow all originate here so auditors can focus on one surface.
+ *         routing, and credit flow all originate here so auditors can focus on one surface.
  */
 contract PurgeGameJackpotModule is PurgeGameStorage {
     event PlayerCredited(address indexed player, address indexed recipient, uint256 amount);
@@ -71,12 +71,10 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         uint24 lvl;
         uint256 ethPool;
         uint256 coinPool;
-        bool mapTrophy;
         uint256 entropy;
         uint32 winningTraitsPacked;
         uint64 traitShareBpsPacked;
         IPurgeCoinModule coinContract;
-        IPurgeGameTrophiesModule trophiesContract;
     }
 
     /// @notice Pays early-purge jackpots during purchase phase or the rolling daily jackpots at end of level.
@@ -85,8 +83,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         bool isDaily,
         uint24 lvl,
         uint256 randWord,
-        IPurgeCoinModule coinContract,
-        IPurgeGameTrophiesModule trophiesContract
+        IPurgeCoinModule coinContract
     ) external {
         uint8 percentBefore = earlyPurgePercent;
         bool purchasePhaseActive = (gameState == 2 && phase <= 2);
@@ -130,12 +127,10 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
                     lvl: lvl,
                     ethPool: ethPool,
                     coinPool: priceCoin * 10,
-                    mapTrophy: false,
                     entropy: randWord ^ (uint256(lvl) << 192),
                     winningTraitsPacked: winningTraitsPacked,
                     traitShareBpsPacked: DAILY_JACKPOT_SHARES_PACKED,
-                    coinContract: coinContract,
-                    trophiesContract: trophiesContract
+                    coinContract: coinContract
                 }),
                 false,
                 false
@@ -153,12 +148,10 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
                     lvl: lvl,
                     ethPool: budget,
                     coinPool: 0,
-                    mapTrophy: false,
                     entropy: randWord ^ (uint256(lvl) << 192),
                     winningTraitsPacked: winningTraitsPacked,
                     traitShareBpsPacked: DAILY_JACKPOT_SHARES_PACKED,
-                    coinContract: coinContract,
-                    trophiesContract: trophiesContract
+                    coinContract: coinContract
                 }),
                 true,
                 false
@@ -189,13 +182,11 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
                     lvl: nextLevel,
                     ethPool: futureEthPool,
                     coinPool: priceCoin * 10,
-                    mapTrophy: false,
                     // Reuse the same entropy slice so the carryover jackpot shares traits/offsets with the level payout.
                     entropy: randWord ^ (uint256(nextLevel) << 192),
                     winningTraitsPacked: winningTraitsPacked,
                     traitShareBpsPacked: DAILY_JACKPOT_SHARES_PACKED,
-                    coinContract: coinContract,
-                    trophiesContract: trophiesContract
+                    coinContract: coinContract
                 }),
                 false,
                 !lastDaily // lastDaily reward slice already debited; carryover is prize pool
@@ -217,8 +208,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         uint24 lvl,
         uint256 rngWord,
         uint256 effectiveWei,
-        IPurgeCoinModule coinContract,
-        IPurgeGameTrophiesModule trophiesContract
+        IPurgeCoinModule coinContract
     ) external {
         uint8[4] memory winningTraits = _getRandomTraits(rngWord);
         uint32 winningTraitsPacked = _packWinningTraits(winningTraits);
@@ -228,12 +218,10 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
                     lvl: lvl,
                     ethPool: effectiveWei,
                     coinPool: 0,
-                    mapTrophy: false,
                     entropy: rngWord,
                     winningTraitsPacked: winningTraitsPacked,
                     traitShareBpsPacked: MAP_JACKPOT_SHARES_PACKED,
-                    coinContract: coinContract,
-                    trophiesContract: trophiesContract
+                    coinContract: coinContract
                 }),
                 false,
                 false
@@ -510,7 +498,6 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
             uint256 bondSpent;
             (entropyState, delta, , bondSpent) = _resolveTraitWinners(
                 coinContract,
-                IPurgeGameTrophiesModule(address(0)),
                 false,
                 lvl,
                 traitId,
@@ -548,7 +535,6 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
             }
             (entropy, , , ) = _resolveTraitWinners(
                 coinContract,
-                IPurgeGameTrophiesModule(address(0)),
                 true,
                 lvl,
                 traitId,
@@ -582,7 +568,6 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
     /// @dev Resolves winners for a single trait bucket (trophies removed).
     function _resolveTraitWinners(
         IPurgeCoinModule coinContract,
-        IPurgeGameTrophiesModule /*trophiesContract*/,
         bool payCoin,
         uint24 lvl,
         uint8 traitId,

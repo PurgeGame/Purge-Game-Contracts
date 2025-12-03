@@ -161,9 +161,8 @@ contract PurgeGameNFT {
         return _currentIndex;
     }
 
-    constructor(address regularRenderer_, address trophyRenderer_, address coin_) {
+    constructor(address regularRenderer_, address coin_) {
         regularRenderer = ITokenRenderer(regularRenderer_);
-        trophyRenderer_;
         coin = IPurgeCoin(coin_);
         affiliateProgram = IPurgeCoin(coin_).affiliateProgram();
         _mint(msg.sender, 1); // Mint the eternal token #0 to deployer

@@ -4,7 +4,7 @@ async function main() {
   const [deployer] = await ethers.getSigners();
   console.log("Deploying with:", deployer.address);
 
-  const STETH_MAINNET = "0xae7ab96520de3a18e5e111b5eaab095312d7fe84";
+  const bondsAddr = deployer.address;
 
   console.log("1. Deploying MockLinkToken...");
   const MockLinkToken = await ethers.getContractFactory("MockLinkToken");
@@ -24,29 +24,31 @@ async function main() {
   await vrf.waitForDeployment();
   console.log("   MockVRFCoordinator deployed at:", await vrf.getAddress());
 
-  console.log("4. Deploying Purgecoin...");
+  console.log("4. Deploying Mock stETH...");
+  const MockERC20 = await ethers.getContractFactory("MockERC20");
+  const steth = await MockERC20.deploy();
+  await steth.waitForDeployment();
+  console.log("   Mock stETH deployed at:", await steth.getAddress());
+
+  console.log("5. Deploying PurgeAffiliate...");
+  const PurgeAffiliate = await ethers.getContractFactory("PurgeAffiliate");
+  const affiliate = await PurgeAffiliate.deploy(bondsAddr);
+  await affiliate.waitForDeployment();
+  console.log("   PurgeAffiliate deployed at:", await affiliate.getAddress());
+
+  console.log("6. Deploying Purgecoin...");
   const Purgecoin = await ethers.getContractFactory("Purgecoin");
-  const purgecoin = await Purgecoin.deploy();
+  const purgecoin = await Purgecoin.deploy(bondsAddr, await affiliate.getAddress(), await renderer.getAddress());
   await purgecoin.waitForDeployment();
   console.log("   Purgecoin deployed at:", await purgecoin.getAddress());
 
-  console.log("5. Deploying PurgeGameNFT...");
+  console.log("7. Deploying PurgeGameNFT...");
   const PurgeGameNFT = await ethers.getContractFactory("PurgeGameNFT");
-  const purgeNFT = await PurgeGameNFT.deploy(
-    await renderer.getAddress(),
-    await renderer.getAddress(),
-    await purgecoin.getAddress()
-  );
+  const purgeNFT = await PurgeGameNFT.deploy(await renderer.getAddress(), await purgecoin.getAddress());
   await purgeNFT.waitForDeployment();
   console.log("   PurgeGameNFT deployed at:", await purgeNFT.getAddress());
 
-  console.log("6. Deploying PurgeGameTrophies...");
-  const PurgeGameTrophies = await ethers.getContractFactory("PurgeGameTrophies");
-  const purgeTrophies = await PurgeGameTrophies.deploy(await purgeNFT.getAddress());
-  await purgeTrophies.waitForDeployment();
-  console.log("   PurgeGameTrophies deployed at:", await purgeTrophies.getAddress());
-
-  console.log("7. Deploying Modules...");
+  console.log("8. Deploying Modules...");
   const PurgeGameEndgameModule = await ethers.getContractFactory("PurgeGameEndgameModule");
   const endgameModule = await PurgeGameEndgameModule.deploy();
   await endgameModule.waitForDeployment();
@@ -67,29 +69,32 @@ async function main() {
       console.log("   PurgeQuestModule deployment failed, using Mock?", e.message);
   }
 
+  let jackpotsAddr = bondsAddr;
   try {
       const PurgeJackpots = await ethers.getContractFactory("contracts/PurgeJackpots.sol:PurgeJackpots");
-      const jackpots = await PurgeJackpots.deploy();
+      const jackpots = await PurgeJackpots.deploy(bondsAddr);
       await jackpots.waitForDeployment();
-      console.log("   Jackpots module deployed.");
+      jackpotsAddr = await jackpots.getAddress();
+      console.log("   Jackpots module deployed at:", jackpotsAddr);
   } catch (e) {
       console.log("   Jackpots module deployment failed.", e.message);
   }
 
-  console.log("8. Deploying PurgeGame...");
+  console.log("9. Deploying PurgeGame...");
   const PurgeGame = await ethers.getContractFactory("PurgeGame");
   const purgeGame = await PurgeGame.deploy(
     await purgecoin.getAddress(),
     await renderer.getAddress(),
     await purgeNFT.getAddress(),
-    await purgeTrophies.getAddress(),
     await endgameModule.getAddress(),
     await jackpotModule.getAddress(),
     await vrf.getAddress(),
     ethers.ZeroHash,
     1n,
     await link.getAddress(),
-    STETH_MAINNET
+    await steth.getAddress(),
+    jackpotsAddr,
+    bondsAddr
   );
   await purgeGame.waitForDeployment();
   console.log("   PurgeGame deployed at:", await purgeGame.getAddress());
