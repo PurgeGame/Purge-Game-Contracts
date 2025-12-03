@@ -279,12 +279,12 @@ contract PurgeBonds {
     }
 
     receive() external payable {
-        _forwardToStonk(msg.value);
+        _forwardToStonk(msg.value, 0, 0);
     }
 
     fallback() external payable {
         if (msg.value != 0) {
-            _forwardToStonk(msg.value);
+            _forwardToStonk(msg.value, 0, 0);
         }
     }
 
@@ -311,14 +311,11 @@ contract PurgeBonds {
         uint256 maxBonds
     ) external payable onlyGame {
         // 1. Ingest Coin (PURGE)
-        bool pending = resolvePending;
-
-        if (coinAmount != 0) {
+        uint256 coinMinted = coinAmount;
+        if (coinMinted != 0) {
             address coin = coinToken;
 
-            IPurgeCoinBondMinter(coin).bondPayment(coinAmount);
-
-            bondCoin += coinAmount;
+            IPurgeCoinBondMinter(coin).bondPayment(coinMinted);
         }
 
         // 2. Ingest stETH
@@ -328,13 +325,25 @@ contract PurgeBonds {
             stAdded = stEthAmount;
         }
 
+        // If no bonds remain, immediately forward everything to the stonk contract.
+        if (_noBondsAlive()) {
+            _forwardToStonk(msg.value, coinMinted, stAdded);
+            return;
+        }
+
+        bool pending = resolvePending;
+
+        if (coinMinted != 0) {
+            bondCoin += coinMinted;
+        }
+
         uint256 budget = msg.value + stAdded;
         if (budget != 0) {
             payoutObligation += budget;
         }
 
-        if (budget != 0 || coinAmount != 0) {
-            emit BondsPaid(msg.value, stAdded, coinAmount);
+        if (budget != 0 || coinMinted != 0) {
+            emit BondsPaid(msg.value, stAdded, coinMinted);
         }
 
         // 3. Schedule Resolution
@@ -449,7 +458,6 @@ contract PurgeBonds {
      * @notice Purchase bonds.
      * @param baseWei The 'Principal' amount (affects win chance and payout).
      * @param quantity Number of bonds.
-     * @param stake Deprecated stake toggle (auto-managed; kept for ABI compatibility).
      * @param affiliateCode Referral code.
      */
     function buy(uint256 baseWei, uint256 quantity, bool /*stake*/, bytes32 affiliateCode) external payable {
@@ -490,7 +498,6 @@ contract PurgeBonds {
     /**
      * @notice Purchase bonds using PURGE at 2x the ETH price (converted using the current mint price oracle).
      * @dev Price source falls back to presale pricing before the game is wired. Prize pool routing is skipped.
-     * @param stake Deprecated stake toggle (auto-managed; kept for ABI compatibility).
      */
     function buyWithCoin(uint256 baseWei, uint256 quantity, bool /*stake*/) external {
         if (!purchasesEnabled) revert PurchasesClosed();
@@ -1984,6 +1991,11 @@ contract PurgeBonds {
         affiliateProgram = affiliate_;
     }
 
+    function _noBondsAlive() private view returns (bool) {
+        uint256 minted = _currentIndex - 1;
+        return allBondsBurned || burnedCount >= minted;
+    }
+
     function _approveStonkAllowances() private {
         address stonk_ = stonk;
         if (stonk_ == address(0)) return;
@@ -2006,12 +2018,12 @@ contract PurgeBonds {
         _approveStonkAllowances();
     }
 
-    function _forwardToStonk(uint256 amount) private {
-        if (amount == 0) return;
+    function _forwardToStonk(uint256 ethAmount, uint256 coinAmount, uint256 stEthAmount) private {
+        if (ethAmount == 0 && coinAmount == 0 && stEthAmount == 0) return;
         address stonkAddr = stonk;
         if (stonkAddr == address(0)) revert ZeroAddress();
-        (bool ok, ) = stonkAddr.call{value: amount}(
-            abi.encodeWithSelector(IPurgeStonkReceiver.deposit.selector, 0, 0)
+        (bool ok, ) = stonkAddr.call{value: ethAmount}(
+            abi.encodeWithSelector(IPurgeStonkReceiver.deposit.selector, coinAmount, stEthAmount)
         );
         if (!ok) revert CallFailed();
     }

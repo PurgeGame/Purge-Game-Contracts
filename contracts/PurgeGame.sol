@@ -106,6 +106,7 @@ contract PurgeGame is PurgeGameStorage {
     event ReverseFlip(address indexed caller, uint256 totalQueued, uint256 cost);
     event VrfCoordinatorUpdated(address indexed previous, address indexed current);
     event PrizePoolBondBuy(uint256 spendWei, uint256 quantity);
+    event TrophyBondsMinted(address indexed player, uint256 amountWei, uint256 quantity, uint256 basePerBondWei);
 
     // -----------------------
     // Immutable Addresses
@@ -147,6 +148,7 @@ contract PurgeGame is PurgeGameStorage {
     uint8 private constant BOND_RNG_RESOLVE_PASSES = 3; // cap iterations to stay gas-safe
     uint16 private constant PRIZE_POOL_BOND_BPS_PER_DAILY = 20; // 0.2% per daily (~2% total across 10) = 10% of the ~20% daily float
     uint256 private constant PRIZE_POOL_BOND_BASE = 0.02 ether;
+    uint256 private constant TROPHY_BOND_MAX_BASE = 0.5 ether;
 
     // mintPacked_ layout (LSB ->):
     // [0-23]=last ETH level, [24-47]=total ETH level count, [48-71]=ETH level streak,
@@ -877,6 +879,29 @@ contract PurgeGame is PurgeGameStorage {
         if (!ok) return;
     }
 
+    function _mintTrophyBonds(address to, uint256 amountWei) private returns (uint256 spentWei) {
+        if (to == address(0) || amountWei == 0) revert E();
+        address bondsAddr = bonds;
+        if (bondsAddr == address(0)) revert E();
+        if (amountWei < PRIZE_POOL_BOND_BASE) revert E();
+
+        uint256 quantity = (amountWei + TROPHY_BOND_MAX_BASE - 1) / TROPHY_BOND_MAX_BASE; // ceil division
+        uint256 basePerBond = amountWei / quantity;
+        if (basePerBond < PRIZE_POOL_BOND_BASE) {
+            basePerBond = PRIZE_POOL_BOND_BASE;
+            quantity = amountWei / basePerBond;
+            if (quantity == 0) quantity = 1;
+        }
+
+        spentWei = basePerBond * quantity;
+
+        address[] memory recipients = new address[](1);
+        recipients[0] = to;
+
+        IPurgeBonds(bondsAddr).purchaseGameBonds(recipients, quantity, basePerBond, true);
+        emit TrophyBondsMinted(to, spentWei, quantity, basePerBond);
+    }
+
     /// @notice Unified external hook for trusted modules to adjust PurgeGame accounting.
     /// @param op      Operation selector.
     /// @param account Player to credit (when applicable).
@@ -886,8 +911,8 @@ contract PurgeGame is PurgeGameStorage {
         lvl;
         if (op == PurgeGameExternalOp.TrophyPayout) {
             if (msg.sender != address(trophies)) revert E();
-            trophyPool -= amount;
-            _addClaimableEth(account, amount);
+            uint256 spent = _mintTrophyBonds(account, amount);
+            trophyPool -= spent;
         } else if (op == PurgeGameExternalOp.TrophyRecycle) {
             if (msg.sender != address(trophies)) revert E();
             trophyPool -= amount;

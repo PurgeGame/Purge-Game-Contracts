@@ -62,7 +62,7 @@ abstract contract PurgeGameStorage {
     uint256 internal bafHundredPool; // reserved pool for the BAF 100-level special
     uint256 internal rngWordCurrent; // latest VRF word (or 0 if pending)
     uint256 internal vrfRequestId; // last VRF request id used to match fulfillments
-    uint256 internal trophyPool; // ETH earmarked for trophy payouts
+    uint256 internal trophyPool; // ETH earmarked for trophy payouts (bond-minted at claim time)
     uint256 internal totalFlipReversals; // number of reverse flips purchased against current RNG
     uint256 internal principalStEth; // stETH principal the contract has staked
     uint48 public deployTimestamp; // deployment timestamp for long-tail inactivity guard

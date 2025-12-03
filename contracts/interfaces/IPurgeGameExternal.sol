@@ -12,7 +12,7 @@ interface IPurgeGameExternal {
     /// @notice Apply a trusted state transition initiated by an external module.
     /// @param op      The operation being requested.
     /// @param account Recipient/player address to credit (when applicable).
-    /// @param amount  Amount in wei to apply for the operation.
+    /// @param amount  Amount in wei to apply for the operation (trophy payouts mint bond value, not ETH).
     /// @param lvl     Level context for the request (used by callers for bookkeeping).
     function applyExternalOp(PurgeGameExternalOp op, address account, uint256 amount, uint24 lvl) external;
 }

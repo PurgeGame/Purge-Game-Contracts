@@ -235,6 +235,8 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
 
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
     uint16 private constant DECIMATOR_TRAIT_SENTINEL = 0xFFFB;
+    uint256 private constant TROPHY_BOND_MIN_BASE = 0.02 ether;
+    uint256 private constant TROPHY_BOND_MAX_BASE = 0.5 ether;
 
     // ---------------------------------------------------------------------
     // Storage
@@ -1137,6 +1139,22 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
         return PURGE_TROPHY_KIND_LEVEL;
     }
 
+    function _trophyBondSpend(uint256 amount) private pure returns (uint256 spend) {
+        if (amount < TROPHY_BOND_MIN_BASE) {
+            return 0;
+        }
+        uint256 quantity = (amount + TROPHY_BOND_MAX_BASE - 1) / TROPHY_BOND_MAX_BASE;
+        uint256 basePerBond = amount / quantity;
+        if (basePerBond < TROPHY_BOND_MIN_BASE) {
+            basePerBond = TROPHY_BOND_MIN_BASE;
+            quantity = amount / basePerBond;
+            if (quantity == 0) {
+                quantity = 1;
+            }
+        }
+        spend = basePerBond * quantity;
+    }
+
     // ---------------------------------------------------------------------
     // Claiming
     // ---------------------------------------------------------------------
@@ -1168,7 +1186,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
             uint256 denom = ctx.claimsRemaining;
             ctx.payout = ctx.owed / denom;
             if (ctx.payout == 0) revert ClaimNotReady();
-            ctx.newOwed = ctx.owed - ctx.payout;
             ctx.ethClaimed = true;
             ctx.updatedLast = ctx.currentLevel;
             ctx.claimsRemaining = uint8(ctx.claimsRemaining - 1);
@@ -1179,7 +1196,6 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
                 uint32 vestEnd = uint32(baseStartLevel) + COIN_DRIP_STEPS;
                 uint256 denom = vestEnd > ctx.currentLevel ? vestEnd - ctx.currentLevel : 1;
                 ctx.payout = ctx.owed / denom;
-                ctx.newOwed = ctx.owed - ctx.payout;
                 ctx.ethClaimed = true;
                 ctx.updatedLast = ctx.currentLevel;
             }
@@ -1187,6 +1203,13 @@ contract PurgeGameTrophies is IPurgeGameTrophies {
 
         if (_isBafTrophy(ctx.info)) {
             _processBafClaim(msg.sender, ctx, priceUnit);
+        }
+
+        if (ctx.ethClaimed) {
+            uint256 bondSpend = _trophyBondSpend(ctx.payout);
+            if (bondSpend == 0 || bondSpend > ctx.owed) revert ClaimNotReady();
+            ctx.payout = bondSpend;
+            ctx.newOwed = ctx.owed - bondSpend;
         }
 
         if (!ctx.ethClaimed && !ctx.coinClaimed) revert ClaimNotReady();
