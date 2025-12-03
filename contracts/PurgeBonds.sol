@@ -435,7 +435,8 @@ contract PurgeBonds {
     // ===========================================================================
 
     function _purchaseStakeFlag() private view returns (bool) {
-        return prizePoolFunded;
+        // Post-presale (game wired) bonds default to staked/soulbound.
+        return game != address(0) ? true : prizePoolFunded;
     }
 
     function _routePurchaseProceeds(uint256 amount) private {
@@ -505,7 +506,15 @@ contract PurgeBonds {
         bool stakeFlag = _purchaseStakeFlag();
         if (stakeFlag && msg.sender.code.length != 0) revert Unauthorized();
 
-        _mintBatch(msg.sender, quantity, basePerBond, price, stakeFlag);
+        bool marketableBonus = (game != address(0)) && (basePerBond * quantity >= 2.5 ether);
+        if (marketableBonus && quantity > 1) {
+            _mintBatch(msg.sender, quantity - 1, basePerBond, price, true);
+            _mintBatch(msg.sender, 1, basePerBond, price, false);
+        } else if (marketableBonus) {
+            _mintBatch(msg.sender, 1, basePerBond, price, false);
+        } else {
+            _mintBatch(msg.sender, quantity, basePerBond, price, stakeFlag);
+        }
 
         _notifyQuestBond(msg.sender, basePerBond);
         _bumpOnSales(msg.value);
@@ -547,7 +556,15 @@ contract PurgeBonds {
         bool stakeFlag = _purchaseStakeFlag();
         if (stakeFlag && msg.sender.code.length != 0) revert Unauthorized();
 
-        _mintBatch(msg.sender, quantity, basePerBond, 0, stakeFlag);
+        bool marketableBonus = (game != address(0)) && (basePerBond * quantity >= 2.5 ether);
+        if (marketableBonus && quantity > 1) {
+            _mintBatch(msg.sender, quantity - 1, basePerBond, 0, true);
+            _mintBatch(msg.sender, 1, basePerBond, 0, false);
+        } else if (marketableBonus) {
+            _mintBatch(msg.sender, 1, basePerBond, 0, false);
+        } else {
+            _mintBatch(msg.sender, quantity, basePerBond, 0, stakeFlag);
+        }
 
         _notifyQuestBond(msg.sender, basePerBond);
         _bumpOnSales(totalWei);
@@ -579,6 +596,11 @@ contract PurgeBonds {
             basePerBond = 0.5 ether;
         }
         if (basePerBond < MIN_BASE_PRICE) revert InvalidBase();
+
+        // Force staked defaults for game-driven mints post-presale.
+        if (game != address(0)) {
+            stake = true;
+        }
 
         uint256 mintCount = quantity;
         if (len == 1) {
@@ -1323,6 +1345,58 @@ contract PurgeBonds {
         distance = uint32(packed >> BOND_BASE_TICK_BITS);
     }
 
+    struct BondMetaCache {
+        uint256 anchor;
+        uint256 base;
+        bool valid;
+    }
+
+    function _bondBaseForResolve(
+        uint256 tokenId,
+        BondMetaCache memory cache
+    ) private view returns (uint256 baseWei, BondMetaCache memory newCache) {
+        newCache = cache;
+        uint64 packed;
+        if (cache.valid && tokenId > cache.anchor) {
+            packed = bondMeta[tokenId];
+            if (packed == 0) {
+                return (cache.base, newCache);
+            }
+        } else {
+            packed = bondMeta[tokenId];
+        }
+
+        if (packed != 0) {
+            (uint256 base, ) = _unpackBondMeta(packed);
+            newCache.anchor = tokenId;
+            newCache.base = base;
+            newCache.valid = true;
+            return (base, newCache);
+        }
+
+        uint256 cursor = tokenId;
+        while (cursor != 0) {
+            unchecked {
+                --cursor;
+            }
+            packed = bondMeta[cursor];
+            if (packed != 0) {
+                (uint256 base, ) = _unpackBondMeta(packed);
+                newCache.anchor = cursor;
+                newCache.base = base;
+                newCache.valid = true;
+                return (base, newCache);
+            }
+        }
+
+        uint256 legacyBase = basePriceOf[tokenId];
+        if (legacyBase == 0) {
+            legacyBase = DEFAULT_BASE_PER_BOND;
+        }
+        newCache.valid = false; // legacy path; do not reuse cache
+        return (legacyBase, newCache);
+    }
+
     function _bondMetaFor(uint256 tokenId) private view returns (uint256 baseWei, uint32 distance) {
         uint256 cursor = tokenId;
         while (true) {
@@ -1669,90 +1743,98 @@ contract PurgeBonds {
         }
 
         uint256 totalSlots = rangeEnd - tid + 1;
-        uint256 randomCount = (totalSlots * 20) / 100;
-        if (randomCount == 0 && totalSlots != 0) {
-            randomCount = 1;
-        }
-        if (randomCount > totalSlots) {
-            randomCount = totalSlots;
-        }
-
-        uint256[] memory randomIds = new uint256[](randomCount);
-        uint256 randomFilled;
-        uint256 seed = rngWord;
-        while (randomFilled < randomCount) {
-            uint256 candidate = tid + (seed % totalSlots);
-            bool dup = false;
-            unchecked {
-                for (uint256 j; j < randomFilled; ++j) {
-                    if (randomIds[j] == candidate) {
-                        dup = true;
-                        break;
-                    }
-                }
-            }
-            if (!dup) {
-                randomIds[randomFilled] = candidate;
-                unchecked {
-                    ++randomFilled;
-                }
-            }
-            seed = uint256(keccak256(abi.encode(seed, randomFilled, tid)));
-        }
-
+        uint256 initialBudget = budget;
         bool halted;
         uint256 heldCoinTotal;
         uint256 heldEthTotal;
-        for (uint256 i; i < randomFilled; ) {
-            (budget, halted, heldCoinTotal, heldEthTotal) = _resolveSingle(
-                randomIds[i],
+        BondMetaCache memory metaCache;
+        uint256 processed;
+        uint256 cursor = tid;
+        uint256 halfBudget = initialBudget >> 1;
+
+        // Phase 1: sequential from the front of the window.
+        while (!halted && processed < totalSlots && cursor <= rangeEnd) {
+            (budget, halted, heldCoinTotal, heldEthTotal, metaCache) = _resolveSingle(
+                cursor,
                 rngWord,
                 budget,
                 heldCoinTotal,
-                heldEthTotal
+                heldEthTotal,
+                metaCache
             );
             if (halted) {
+                tid = cursor;
                 break;
-            }
-            unchecked {
-                ++i;
-            }
-        }
-
-        uint256 processed;
-        uint256 cursor = tid;
-        while (!halted && processed < totalSlots && cursor <= maxId) {
-            bool skip;
-            unchecked {
-                for (uint256 k; k < randomFilled; ++k) {
-                    if (randomIds[k] == cursor) {
-                        skip = true;
-                        break;
-                    }
-                }
-            }
-            if (!skip) {
-                (budget, halted, heldCoinTotal, heldEthTotal) = _resolveSingle(
-                    cursor,
-                    rngWord,
-                    budget,
-                    heldCoinTotal,
-                    heldEthTotal
-                );
-                if (halted) {
-                    tid = cursor;
-                    break;
-                }
             }
             unchecked {
                 ++cursor;
                 ++processed;
             }
+            // If we know another RNG batch will be needed (window is capped) and we've spent >50%,
+            // pivot to a randomized start within the remaining slice.
+            if (rangeEnd < maxId && processed < totalSlots) {
+                uint256 spent = initialBudget - budget;
+                if (spent > halfBudget) {
+                    break;
+                }
+            }
         }
-        if (processed == totalSlots) {
-            tid = rangeEnd + 1;
-        } else if (cursor > tid) {
-            tid = cursor;
+
+        // Phase 2: consume remaining budget starting from a random point in the remaining slice.
+        if (!halted && processed < totalSlots && cursor <= rangeEnd && rangeEnd < maxId) {
+            uint256 remaining = rangeEnd - cursor + 1;
+            uint256 offset = remaining == 0 ? 0 : uint256(keccak256(abi.encode(rngWord, cursor, processed, budget))) % remaining;
+            uint256 start = cursor + offset;
+
+            // Walk start..rangeEnd
+            uint256 walk = start;
+            while (!halted && walk <= rangeEnd) {
+                (budget, halted, heldCoinTotal, heldEthTotal, metaCache) = _resolveSingle(
+                    walk,
+                    rngWord,
+                    budget,
+                    heldCoinTotal,
+                    heldEthTotal,
+                    metaCache
+                );
+                if (halted) {
+                    tid = walk;
+                    break;
+                }
+                unchecked {
+                    ++walk;
+                    ++processed;
+                }
+            }
+
+            // Wrap around to cursor..start-1
+            walk = cursor;
+            while (!halted && walk < start) {
+                (budget, halted, heldCoinTotal, heldEthTotal, metaCache) = _resolveSingle(
+                    walk,
+                    rngWord,
+                    budget,
+                    heldCoinTotal,
+                    heldEthTotal,
+                    metaCache
+                );
+                if (halted) {
+                    tid = walk;
+                    break;
+                }
+                unchecked {
+                    ++walk;
+                    ++processed;
+                }
+            }
+        }
+
+        if (!halted) {
+            if (processed == totalSlots) {
+                tid = rangeEnd + 1;
+            } else if (cursor > tid) {
+                tid = cursor;
+            }
         }
 
         if (heldEthTotal != 0 || heldCoinTotal != 0) {
@@ -2198,16 +2280,17 @@ contract PurgeBonds {
         win = roll < chanceBps;
     }
 
-    function _resolveBond(uint256 tokenId, uint256 rngWord) private returns (uint8 outcome, uint256 heldCoin, uint256 heldEth) {
-        (uint256 basePrice, ) = _bondMetaFor(tokenId);
-        uint256 packed = _packedOwnershipOf(tokenId);
+    function _resolveBond(
+        uint256 tokenId,
+        uint256 rngWord,
+        uint256 basePrice,
+        uint256 packed
+    ) private returns (uint8 outcome, uint256 heldCoin, uint256 heldEth) {
         uint256 weight = _coinWeightMultiplier(packed);
         address owner_ = address(uint160(packed));
-        uint16 chance;
-        uint256 roll;
-
-        bool win;
-        (win, chance, roll) = bondOutcome(tokenId, rngWord);
+        uint16 chance = _winChanceFromBase(basePrice);
+        uint256 roll = uint256(keccak256(abi.encodePacked(rngWord, tokenId))) % 1000;
+        bool win = roll < chance;
         if (win) {
             if (owner_ == address(this)) {
                 uint256 coinShare;
@@ -2302,21 +2385,27 @@ contract PurgeBonds {
         uint256 rngWord,
         uint256 budget,
         uint256 heldCoinAcc,
-        uint256 heldEthAcc
-    ) private returns (uint256 newBudget, bool stop, uint256 heldCoin, uint256 heldEth) {
+        uint256 heldEthAcc,
+        BondMetaCache memory metaCache
+    )
+        private
+        returns (uint256 newBudget, bool stop, uint256 heldCoin, uint256 heldEth, BondMetaCache memory cacheOut)
+    {
         newBudget = budget;
         heldCoin = heldCoinAcc;
         heldEth = heldEthAcc;
+        cacheOut = metaCache;
         uint256 packed = _packedOwnershipAt(tokenId);
         if (packed == 0 || (packed & _BITMASK_BURNED) != 0) {
-            return (newBudget, false, heldCoin, heldEth);
+            return (newBudget, false, heldCoin, heldEth, cacheOut);
         }
 
-        (uint256 basePrice, ) = _bondMetaFor(tokenId);
+        uint256 basePrice;
+        (basePrice, cacheOut) = _bondBaseForResolve(tokenId, cacheOut);
         uint256 delta = basePrice >= 1 ether ? 0 : (1 ether - basePrice);
-        if (newBudget < delta) return (newBudget, true, heldCoin, heldEth);
+        if (newBudget < delta) return (newBudget, true, heldCoin, heldEth, cacheOut);
 
-        (uint8 outcome, uint256 heldCoinWin, uint256 heldEthWin) = _resolveBond(tokenId, rngWord);
+        (uint8 outcome, uint256 heldCoinWin, uint256 heldEthWin) = _resolveBond(tokenId, rngWord, basePrice, packed);
         if (outcome == 1) {
             if (delta != 0) newBudget -= delta;
             _markClaimable(tokenId, basePrice);
@@ -2327,7 +2416,7 @@ contract PurgeBonds {
         }
         if (heldCoinWin != 0) heldCoin += heldCoinWin;
         if (heldEthWin != 0) heldEth += heldEthWin;
-        return (newBudget, false, heldCoin, heldEth);
+        return (newBudget, false, heldCoin, heldEth, cacheOut);
     }
 
     function _payoutLiveWinner(uint256 tokenId, uint256 packed, address owner_) private {

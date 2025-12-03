@@ -11,7 +11,7 @@ struct PendingJackpotBondMint {
 }
 
 struct ClaimableBondInfo {
-    uint256 weiAmount; // ETH value earmarked for bonds
+    uint128 weiAmount; // ETH value earmarked for bonds (capped to keep struct in one slot)
     uint96 basePerBondWei; // preferred base per bond (0 defaults to 0.5 ether)
     bool stake; // whether bonds should be staked/soulbound
 }

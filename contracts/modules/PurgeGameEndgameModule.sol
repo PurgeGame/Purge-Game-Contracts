@@ -379,7 +379,7 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
             info.stake = stake;
         }
         unchecked {
-            info.weiAmount += weiAmount;
+            info.weiAmount = uint128(uint256(info.weiAmount) + weiAmount);
         }
     }
 

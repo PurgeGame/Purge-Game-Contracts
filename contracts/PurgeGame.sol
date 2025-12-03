@@ -971,7 +971,7 @@ contract PurgeGame is PurgeGameStorage {
         recipients[0] = player;
         uint256 spend = quantity * base;
         bool stake = info.stake || info.basePerBondWei == 0; // default to staked when unset
-        info.weiAmount = creditWei - spend;
+        info.weiAmount = uint128(creditWei - spend);
         bondCreditEscrow = escrow - spend;
         IPurgeBonds(bondsAddr).payBonds{value: spend}(0, 0, 0, 0, 0);
         IPurgeBonds(bondsAddr).purchaseGameBonds(recipients, quantity, base, stake);
