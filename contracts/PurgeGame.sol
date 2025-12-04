@@ -399,17 +399,15 @@ contract PurgeGame is PurgeGameStorage {
             if (
                 deployTs != 0 && uint256(ts) >= uint256(deployTs) + DEPLOY_IDLE_TIMEOUT // uint256 to avoid uint48 overflow
             ) {
-                _drainToBonds(day);
-                gameState = 0;
-                _requestRngBestEffort(0, false, level, day);
+                drainToBonds(day);
                 return;
             }
         }
         uint8 _gameState = gameState;
         // Liveness drain
         if (ts - 365 days > lst && _gameState != 0) {
-            _drainToBonds(day);
-            gameState = 0;
+            drainToBonds(day);
+            return;
         }
         uint24 lvl = level;
 
@@ -1307,6 +1305,12 @@ contract PurgeGame is PurgeGameStorage {
         bondContract.payBonds{value: ethBal}(0, stBal, day, 0, 0);
     }
 
+    function drainToBonds(uint48 day) private {
+        _drainToBonds(day);
+        gameState = 0;
+        _requestRngBestEffort(day);
+    }
+
     // --- Reward vault & liquidity -----------------------------------------------------
 
     function _stakeEth(uint256 amount) private {
@@ -1545,38 +1549,27 @@ contract PurgeGame is PurgeGameStorage {
         return IPurgeBonds(bondsAddr).finalizeShutdown(maxIds);
     }
 
-    function _requestRngBestEffort(
-        uint8 gameState_,
-        bool isMapJackpotDay,
-        uint24 lvl,
-        uint48 day
-    ) private returns (bool requested) {
+    function _requestRngBestEffort(uint48 day) private returns (bool requested) {
         // Best-effort request that swallows VRF failures (used during idle shutdown).
-        VRFRandomWordsRequest memory req = VRFRandomWordsRequest({
-            keyHash: vrfKeyHash,
-            subId: vrfSubscriptionId,
-            requestConfirmations: VRF_REQUEST_CONFIRMATIONS,
-            callbackGasLimit: VRF_CALLBACK_GAS_LIMIT,
-            numWords: 1,
-            extraArgs: bytes("")
-        });
-
-        try vrfCoordinator.requestRandomWords(req) returns (uint256 id) {
-            if ((gameState_ == 2 && isMapJackpotDay) || (gameState_ == 0)) {
-                IPurgeBonds(bonds).setTransfersLocked(true, day);
-            }
+        try
+            vrfCoordinator.requestRandomWords(
+                VRFRandomWordsRequest({
+                    keyHash: vrfKeyHash,
+                    subId: vrfSubscriptionId,
+                    requestConfirmations: VRF_REQUEST_CONFIRMATIONS,
+                    callbackGasLimit: VRF_CALLBACK_GAS_LIMIT,
+                    numWords: 1,
+                    extraArgs: bytes("")
+                })
+            )
+        returns (uint256 id) {
+            IPurgeBonds(bonds).setTransfersLocked(true, day);
             vrfRequestId = id;
             rngFulfilled = false;
             rngWordCurrent = 0;
             rngLockedFlag = true;
             rngRequestTime = uint48(block.timestamp);
-            if (gameState_ == 0) {
-                shutdownRngRequestDay = day;
-            }
 
-            bool decClose = (((lvl % 100 != 0 && (lvl % 100 != 99) && gameState_ == 1) ||
-                (lvl % 100 == 0 && isMapJackpotDay)) && decWindowOpen);
-            if (decClose) decWindowOpen = false;
             return true;
         } catch {
             return false;
@@ -1659,14 +1652,6 @@ contract PurgeGame is PurgeGameStorage {
         }
         rngFulfilled = true;
         rngWordCurrent = word;
-
-        if (gameState == 0 && shutdownRngRequestDay != 0) {
-            uint48 reqDay = shutdownRngRequestDay;
-            if (rngWordByDay[reqDay] == 0) {
-                rngWordByDay[reqDay] = word;
-            }
-            shutdownRngRequestDay = 0;
-        }
     }
 
     function _currentNudgeCost(uint256 reversals) private pure returns (uint256 cost) {
