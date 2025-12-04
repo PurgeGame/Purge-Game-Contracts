@@ -79,6 +79,7 @@ abstract contract PurgeGameStorage {
     uint256 internal totalFlipReversals; // number of reverse flips purchased against current RNG
     uint256 internal principalStEth; // stETH principal the contract has staked
     uint48 public deployTimestamp; // deployment timestamp for long-tail inactivity guard
+    uint48 internal shutdownRngRequestDay; // day index used when requesting RNG during shutdown/idle drain
 
     // ---------------------------------------------------------------------
     // Minting / airdrops

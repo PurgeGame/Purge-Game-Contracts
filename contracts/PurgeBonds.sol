@@ -154,7 +154,6 @@ contract PurgeBonds {
     uint256 private constant COIN_WEIGHT_MARKETABLE = 5; // Unstaked (transferable) weight (no penalty)
     uint256 private constant MIN_BASE_PRICE = 0.02 ether; // Minimum bond size
     uint256 private constant AUTO_RESOLVE_BATCH = 100;
-    uint256 private constant GAS_LIMITED_RESOLVE_MAX = 150;
     uint256 private constant SALES_BUMP_NUMERATOR = 1005; // +0.5% price per threshold
     uint256 private constant SALES_BUMP_DENOMINATOR = 1000;
     uint256 private constant PRESALE_PRICE_PER_1000_DEFAULT = 0.01 ether;
@@ -1431,7 +1430,6 @@ contract PurgeBonds {
 
     function _resolveLimit(uint256 requested) private pure returns (uint256) {
         uint256 limit = requested == 0 ? AUTO_RESOLVE_BATCH : requested;
-        if (limit > GAS_LIMITED_RESOLVE_MAX) limit = GAS_LIMITED_RESOLVE_MAX;
         return limit;
     }
 

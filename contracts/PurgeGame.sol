@@ -467,6 +467,7 @@ contract PurgeGame is PurgeGameStorage {
             ) {
                 _drainToBonds(day);
                 gameState = 0;
+                _requestRngBestEffort(0, false, level, day);
                 return;
             }
         }
@@ -513,7 +514,7 @@ contract PurgeGame is PurgeGameStorage {
                     if (lvl != 0) {
                         address topStake = coinContract.recordStakeResolution(lvl, day);
                         address trophyAddr = trophies;
-                        if (trophyAddr != address(0) && topStake != address(0)) {
+                        if (topStake != address(0)) {
                             try IPurgeTrophies(trophyAddr).mintStake(topStake, lvl) {} catch {}
                         }
                     }
@@ -551,22 +552,15 @@ contract PurgeGame is PurgeGameStorage {
                 }
 
                 if (!mapJackpotPaid) {
-                    bool ranDecHundred = false;
-                    bool decHundredFinished = true;
+                    if (!_processMapBatch(cap)) {
+                        break;
+                    }
                     if (lvl % 100 == 0) {
-                        ranDecHundred = true;
-                        decHundredFinished = _runDecimatorHundredJackpot(lvl, rngWord);
-                        if (!decHundredFinished) {
+                        if (!_runDecimatorHundredJackpot(lvl, rngWord)) {
                             break; // keep working this jackpot slice before moving on
                         }
                     }
 
-                    if (ranDecHundred && !decHundredFinished) {
-                        break; // level-100 decimator work consumes this tick
-                    }
-                    if (!_processMapBatch(cap)) {
-                        break;
-                    }
                     uint256 totalWeiForBond = rewardPool + currentPrizePool;
                     if (_bondMaintenanceForMap(day, totalWeiForBond, rngWord, cap)) {
                         break; // bond batch consumed this tick; rerun advanceGame to continue
@@ -1558,7 +1552,6 @@ contract PurgeGame is PurgeGameStorage {
 
     function _bondMaintenanceForMap(uint48 day, uint256 totalWei, uint256 rngWord, uint32 cap) private returns (bool) {
         address bondsAddr = bonds;
-        if (bondsAddr == address(0)) return false;
         IPurgeBonds bondContract = IPurgeBonds(bondsAddr);
 
         uint256 maxBonds = cap == 0 ? 100 : uint256(cap);
@@ -1587,15 +1580,15 @@ contract PurgeGame is PurgeGameStorage {
         uint256 bondSkim = yieldPool / 4; // 25% to bonds
         uint256 rewardTopUp = yieldPool / 20; // 5% to reward pool
 
-        uint256 ethForBonds = ethYield >= bondSkim ? bondSkim : ethYield;
+        uint256 ethForBonds = bondSkim <= ethYield ? bondSkim : ethYield;
         uint256 stForBonds = bondSkim > ethForBonds ? bondSkim - ethForBonds : 0;
         if (stForBonds > stYield) {
             stForBonds = stYield;
             bondSkim = ethForBonds + stForBonds;
         }
 
-        uint256 availableEthAfterBond = ethYield > ethForBonds ? ethYield - ethForBonds : 0;
-        uint256 rewardFromEth = availableEthAfterBond >= rewardTopUp ? rewardTopUp : availableEthAfterBond;
+        uint256 ethAfterBond = ethYield > ethForBonds ? ethYield - ethForBonds : 0;
+        uint256 rewardFromEth = rewardTopUp <= ethAfterBond ? rewardTopUp : ethAfterBond;
         if (rewardFromEth != 0) {
             rewardPool += rewardFromEth;
         }
@@ -1616,6 +1609,44 @@ contract PurgeGame is PurgeGameStorage {
         address bondsAddr = bonds;
         if (bondsAddr == address(0)) revert E();
         return IPurgeBonds(bondsAddr).finalizeShutdown(maxIds);
+    }
+
+    function _requestRngBestEffort(
+        uint8 gameState_,
+        bool isMapJackpotDay,
+        uint24 lvl,
+        uint48 day
+    ) private returns (bool requested) {
+        // Best-effort request that swallows VRF failures (used during idle shutdown).
+        VRFRandomWordsRequest memory req = VRFRandomWordsRequest({
+            keyHash: vrfKeyHash,
+            subId: vrfSubscriptionId,
+            requestConfirmations: VRF_REQUEST_CONFIRMATIONS,
+            callbackGasLimit: VRF_CALLBACK_GAS_LIMIT,
+            numWords: 1,
+            extraArgs: bytes("")
+        });
+
+        try vrfCoordinator.requestRandomWords(req) returns (uint256 id) {
+            if ((gameState_ == 2 && isMapJackpotDay) || (gameState_ == 0)) {
+                IPurgeBonds(bonds).setTransfersLocked(true, day);
+            }
+            vrfRequestId = id;
+            rngFulfilled = false;
+            rngWordCurrent = 0;
+            rngLockedFlag = true;
+            rngRequestTime = uint48(block.timestamp);
+            if (gameState_ == 0) {
+                shutdownRngRequestDay = day;
+            }
+
+            bool decClose = (((lvl % 100 != 0 && (lvl % 100 != 99) && gameState_ == 1) ||
+                (lvl % 100 == 0 && isMapJackpotDay)) && decWindowOpen);
+            if (decClose) decWindowOpen = false;
+            return true;
+        } catch {
+            return false;
+        }
     }
 
     function _requestRng(uint8 gameState_, bool isMapJackpotDay, uint24 lvl, uint48 day) private {
@@ -1694,6 +1725,14 @@ contract PurgeGame is PurgeGameStorage {
         }
         rngFulfilled = true;
         rngWordCurrent = word;
+
+        if (gameState == 0 && shutdownRngRequestDay != 0) {
+            uint48 reqDay = shutdownRngRequestDay;
+            if (rngWordByDay[reqDay] == 0) {
+                rngWordByDay[reqDay] = word;
+            }
+            shutdownRngRequestDay = 0;
+        }
     }
 
     function _currentNudgeCost(uint256 reversals) private pure returns (uint256 cost) {
