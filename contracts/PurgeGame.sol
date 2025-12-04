@@ -542,40 +542,44 @@ contract PurgeGame is PurgeGameStorage {
                         batchesPending = false;
                     }
                     payDailyJackpot(false, lvl, rngWord);
-                    if (nextPrizePool >= lastPrizePool) {
+                    if (!batchesPending && nextPrizePool >= lastPrizePool) {
+                        airdropMultiplier = _calculateAirdropMultiplier(nft.purchaseCount(), lvl);
                         lastPurchaseDay = true;
                     }
                     _unlockRng(day);
                     break;
                 }
 
-                bool ranDecHundred;
-                bool decHundredFinished = true;
-                if (lvl % 100 == 0) {
-                    ranDecHundred = true;
-                    decHundredFinished = _runDecimatorHundredJackpot(lvl, rngWord);
-                    if (!decHundredFinished) {
-                        break; // keep working this jackpot slice before moving on
+                if (!mapJackpotPaid) {
+                    bool ranDecHundred = false;
+                    bool decHundredFinished = true;
+                    if (lvl % 100 == 0) {
+                        ranDecHundred = true;
+                        decHundredFinished = _runDecimatorHundredJackpot(lvl, rngWord);
+                        if (!decHundredFinished) {
+                            break; // keep working this jackpot slice before moving on
+                        }
                     }
-                }
 
-                if (ranDecHundred && !decHundredFinished) {
-                    break; // level-100 decimator work consumes this tick
-                }
-                if (!_processMapBatch(cap)) {
-                    break;
-                }
-                uint256 totalWeiForBond = rewardPool + currentPrizePool;
-                if (_bondMaintenanceForMap(day, totalWeiForBond, rngWord, cap)) {
-                    break; // bond batch consumed this tick; rerun advanceGame to continue
-                }
-                uint256 mapEffectiveWei = _calcPrizePoolForJackpot(lvl, rngWord);
-                payMapJackpot(lvl, rngWord, mapEffectiveWei);
+                    if (ranDecHundred && !decHundredFinished) {
+                        break; // level-100 decimator work consumes this tick
+                    }
+                    if (!_processMapBatch(cap)) {
+                        break;
+                    }
+                    uint256 totalWeiForBond = rewardPool + currentPrizePool;
+                    if (_bondMaintenanceForMap(day, totalWeiForBond, rngWord, cap)) {
+                        break; // bond batch consumed this tick; rerun advanceGame to continue
+                    }
+                    uint256 mapEffectiveWei = _calcPrizePoolForJackpot(lvl, rngWord);
+                    payMapJackpot(lvl, rngWord, mapEffectiveWei);
+                    mapJackpotPaid = true;
 
-                airdropMapsProcessedCount = 0;
-                if (airdropIndex >= pendingMapMints.length) {
-                    airdropIndex = 0;
-                    delete pendingMapMints;
+                    airdropMapsProcessedCount = 0;
+                    if (airdropIndex >= pendingMapMints.length) {
+                        airdropIndex = 0;
+                        delete pendingMapMints;
+                    }
                 }
 
                 uint32 purchaseCountRaw = nft.purchaseCount();
@@ -608,6 +612,7 @@ contract PurgeGame is PurgeGameStorage {
                 earlyPurgePercent = 0;
                 levelStartTime = ts;
                 gameState = 3;
+                mapJackpotPaid = false;
                 lastPurchaseDay = false;
                 if (lvl % 100 == 99) decWindowOpen = true;
                 _unlockRng(day); // open RNG after map jackpot is finalized

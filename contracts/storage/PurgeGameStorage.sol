@@ -47,6 +47,7 @@ abstract contract PurgeGameStorage {
     uint32 internal airdropMultiplier = 1; // airdrop bonus multiplier (scaled integer)
     uint8 internal jackpotCounter; // jackpots processed within the current level
     uint8 internal earlyPurgePercent; // % of previous prize pool carried into early purge reward (0-255)
+    bool internal mapJackpotPaid; // true once the map jackpot has been executed for the current purchase phase
     bool internal lastPurchaseDay; // true once the map prize target is met; next tick skips daily/jackpot prep
     bool internal decWindowOpen = true; // latch to hold decimator window open until RNG is requested
 
