@@ -10,10 +10,6 @@ interface IPurgeGameAffiliatePayout {
     function affiliatePayoutAddress(address player) external view returns (address recipient, address affiliateOwner);
 }
 
-interface IPurgeGameWithBonds {
-    function bonds() external view returns (address);
-}
-
 /**
  * @title PurgeGameEndgameModule
  * @notice Delegate-called module that hosts the slow-path endgame settlement logic for `PurgeGame`.
@@ -23,8 +19,6 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
     // -----------------------
     // Custom Errors / Events
     // -----------------------
-    error MissingExterminator();
-
     event PlayerCredited(address indexed player, address indexed recipient, uint256 amount);
 
     uint32 private constant DEFAULT_PAYOUTS_PER_TX = 420;
@@ -39,41 +33,42 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
     /**
      * @notice Settles a completed level by paying trait-related slices, jackpots, and participant airdrops.
      * @dev Called by the core game contract via `delegatecall` so state mutations land on the parent.
-     *      Trait payouts are primed up front on a trait win; `phase` then gates the participant payout vs jackpot/cleanup pass.
+     *      Returns true once all endgame work for the previous level is finished so the core can advance.
      * @param lvl Current level index (1-based) that just completed.
      * @param cap Optional cap for batched payouts; zero falls back to DEFAULT_PAYOUTS_PER_TX.
      * @param rngWord Randomness used for jackpot and ticket selection.
      * @param jackpotsAddr Address of the jackpots contract to invoke.
      */
-    function finalizeEndgame(uint24 lvl, uint32 cap, uint256 rngWord, address jackpotsAddr) external {
-        uint24 prevLevel = lvl - 1;
+    function finalizeEndgame(
+        uint24 lvl,
+        uint32 cap,
+        uint256 rngWord,
+        address jackpotsAddr
+    ) external returns (bool readyForPurchase) {
+        uint24 prevLevel = lvl == 0 ? 0 : lvl - 1;
         uint16 traitRaw = lastExterminatedTrait;
-        if (traitRaw != TRAIT_ID_TIMEOUT && !levelExterminatorPaid[prevLevel]) {
-            _primeTraitPayouts(prevLevel, uint8(traitRaw), rngWord);
-        }
-        uint8 _phase = phase;
-        if (_phase > 3) {
-            if (traitRaw != TRAIT_ID_TIMEOUT) {
-                uint256 participantPool = currentPrizePool;
-                if (participantPool != 0) {
-                    // Finalize the participant slice from `_primeTraitPayouts` in a gas-bounded manner.
-                    _payoutParticipants(cap, prevLevel, participantPool, uint8(traitRaw));
-                    return;
-                }
-            }
-            _runJackpots(prevLevel, rngWord, jackpotsAddr);
-            phase = 0;
-            return;
-        }
-
-        gameState = 2;
-        if (lvl == 1) {
-            return;
-        }
-
         if (traitRaw == TRAIT_ID_TIMEOUT) {
-            return;
+            _runRewardJackpots(prevLevel, rngWord, jackpotsAddr);
+            return true;
         }
+
+        uint8 traitId = uint8(traitRaw);
+        if (!levelExterminatorPaid[prevLevel]) {
+            _primeTraitPayouts(prevLevel, traitId, rngWord);
+            return false;
+        }
+
+        uint256 participantPool = currentPrizePool;
+        if (participantPool != 0) {
+            // Finalize the participant slice from `_primeTraitPayouts` in a gas-bounded manner.
+            _payoutParticipants(cap, prevLevel, participantPool, traitId);
+            if (currentPrizePool != 0) {
+                return false;
+            }
+        }
+
+        _runRewardJackpots(prevLevel, rngWord, jackpotsAddr);
+        return true;
     }
 
     /**
@@ -120,7 +115,7 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         return arr[uint256(lvl) - 1];
     }
 
-    function _runJackpots(uint24 prevLevel, uint256 rngWord, address jackpotsAddr) private {
+    function _runRewardJackpots(uint24 prevLevel, uint256 rngWord, address jackpotsAddr) private {
         uint256 rewardPoolLocal = rewardPool;
         uint24 prevMod10 = prevLevel % 10;
         uint24 prevMod100 = prevLevel % 100;
@@ -192,12 +187,7 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         _addClaimableEth(ex, ethPortion);
     }
 
-    function _distributeTicketBonus(
-        uint24 prevLevel,
-        uint8 traitId,
-        uint256 ticketBonus,
-        uint256 rngWord
-    ) private {
+    function _distributeTicketBonus(uint24 prevLevel, uint8 traitId, uint256 ticketBonus, uint256 rngWord) private {
         address[] storage arr = traitPurgeTicket[prevLevel][traitId];
         uint256 arrLen = arr.length;
         address[3] memory winners;
@@ -389,13 +379,11 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         ClaimableBondInfo storage info = claimableBondInfo[player];
         uint256 creditWei = info.weiAmount;
         if (creditWei == 0) return false;
-        uint256 escrow = bondCreditEscrow;
-        if (escrow < creditWei) return false;
 
         info.weiAmount = 0;
         info.basePerBondWei = 0;
         info.stake = false;
-        bondCreditEscrow = escrow - creditWei;
+        bondCreditEscrow = bondCreditEscrow - creditWei;
         _addClaimableEth(player, creditWei);
         return true;
     }

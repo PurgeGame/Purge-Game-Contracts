@@ -14,9 +14,107 @@ interface IStETH {
     function transferFrom(address from, address to, uint256 amount) external returns (bool);
 }
 
+/// @notice Minimal ERC20 used for vault share classes (coin-only and eth-only).
+contract PurgeVaultShare {
+    error Unauthorized();
+    error ZeroAddress();
+    error Insufficient();
+
+    event Transfer(address indexed from, address indexed to, uint256 amount);
+    event Approval(address indexed owner, address indexed spender, uint256 amount);
+
+    string public name;
+    string public symbol;
+    uint8 public constant decimals = 18;
+
+    uint256 public totalSupply;
+    mapping(address => uint256) public balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
+
+    address public immutable vault;
+
+    modifier onlyVault() {
+        if (msg.sender != vault) revert Unauthorized();
+        _;
+    }
+
+    constructor(
+        string memory name_,
+        string memory symbol_,
+        address vault_,
+        uint256 initialSupply,
+        address initialHolder
+    ) {
+        if (vault_ == address(0) || initialHolder == address(0)) revert ZeroAddress();
+        name = name_;
+        symbol = symbol_;
+        vault = vault_;
+        totalSupply = initialSupply;
+        balanceOf[initialHolder] = initialSupply;
+        emit Transfer(address(0), initialHolder, initialSupply);
+    }
+
+    // --- ERC20 surface ---
+    function approve(address spender, uint256 amount) external returns (bool) {
+        allowance[msg.sender][spender] = amount;
+        emit Approval(msg.sender, spender, amount);
+        return true;
+    }
+
+    function transfer(address to, uint256 amount) external returns (bool) {
+        _transfer(msg.sender, to, amount);
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
+        uint256 allowed = allowance[from][msg.sender];
+        if (allowed != type(uint256).max) {
+            if (allowed < amount) revert Insufficient();
+            allowance[from][msg.sender] = allowed - amount;
+            emit Approval(from, msg.sender, allowance[from][msg.sender]);
+        }
+        _transfer(from, to, amount);
+        return true;
+    }
+
+    // --- Vault-controlled mint/burn ---
+    function vaultMint(address to, uint256 amount) external onlyVault {
+        if (to == address(0)) revert ZeroAddress();
+        totalSupply += amount;
+        unchecked {
+            balanceOf[to] += amount;
+        }
+        emit Transfer(address(0), to, amount);
+    }
+
+    function vaultBurn(address from, uint256 amount) external onlyVault {
+        uint256 bal = balanceOf[from];
+        if (amount == 0 || amount > bal) revert Insufficient();
+        unchecked {
+            balanceOf[from] = bal - amount;
+            totalSupply -= amount;
+        }
+        emit Transfer(from, address(0), amount);
+    }
+
+    // --- Internal helpers ---
+    function _transfer(address from, address to, uint256 amount) private {
+        if (to == address(0)) revert ZeroAddress();
+        uint256 bal = balanceOf[from];
+        if (amount == 0 || amount > bal) revert Insufficient();
+        unchecked {
+            balanceOf[from] = bal - amount;
+            balanceOf[to] += amount;
+        }
+        emit Transfer(from, to, amount);
+    }
+}
+
 /// @title PurgeStonkShare
-/// @notice Minimal ERC20 share token. Caller deposits ETH, stETH, and PURGE coin (pulled via transferFrom);
-///         holders burn shares to redeem their proportional slice of the pooled assets.
+/// @notice Vault that holds ETH, stETH, and PURGE. Two share classes:
+///         - coinShare: claims PURGE only
+///         - ethShare: claims ETH/stETH only
+///         Each class has independent supply and retains the "burn all, mint a new billion" behavior.
 contract PurgeStonkNFT {
     // ---------------------------------------------------------------------
     // Errors
@@ -50,9 +148,9 @@ contract PurgeStonkNFT {
     uint256 public constant INITIAL_SUPPLY = 1_000_000_000 * 1e18; // 1 billion
     uint256 public constant REFILL_SUPPLY = 1_000_000_000 * 1e18; // 1 billion (used if final share is burned)
 
-    uint256 public totalSupply;
-    mapping(address => uint256) public balanceOf;
-    mapping(address => mapping(address => uint256)) public allowance;
+    // Share classes
+    PurgeVaultShare public immutable coinShare; // PURGE-only claims
+    PurgeVaultShare public immutable ethShare; // ETH/stETH-only claims
 
     // ---------------------------------------------------------------------
     // Wiring
@@ -71,9 +169,8 @@ contract PurgeStonkNFT {
         steth = IStETH(stEth_);
         bonds = bonds_;
 
-        totalSupply = INITIAL_SUPPLY;
-        balanceOf[msg.sender] = INITIAL_SUPPLY;
-        emit Transfer(address(0), msg.sender, INITIAL_SUPPLY);
+        coinShare = new PurgeVaultShare("Purge Vault Coin", "PGVCOIN", address(this), INITIAL_SUPPLY, msg.sender);
+        ethShare = new PurgeVaultShare("Purge Vault Eth", "PGVETH", address(this), INITIAL_SUPPLY, msg.sender);
     }
 
     // ---------------------------------------------------------------------
@@ -114,19 +211,41 @@ contract PurgeStonkNFT {
     }
 
     // ---------------------------------------------------------------------
-    // Claim via burn
+    // Claims via burn
     // ---------------------------------------------------------------------
-    /// @notice Burn `amount` shares to redeem the proportional slice of ETH, stETH, and coin.
-    function purge(uint256 amount, address to) external returns (uint256 ethOut, uint256 stEthOut, uint256 coinOut) {
+    /// @notice Burn coin-share tokens to redeem the proportional slice of PURGE.
+    function purgeCoin(uint256 amount, address to) external returns (uint256 coinOut) {
         if (to == address(0)) revert ZeroAddress();
-        uint256 bal = balanceOf[msg.sender];
+        PurgeVaultShare share = coinShare;
+        uint256 bal = share.balanceOf(msg.sender);
         if (amount == 0 || amount > bal) revert Insufficient();
 
-        uint256 supply = totalSupply;
+        uint256 supplyBefore = share.totalSupply();
+        uint256 coinBal = _tokenBalance(coin);
+        coinOut = (coinBal * amount) / supplyBefore;
+
+        // Burn caller shares; if caller is burning the entire supply, refill to keep token alive.
+        share.vaultBurn(msg.sender, amount);
+        if (supplyBefore == amount) {
+            share.vaultMint(msg.sender, REFILL_SUPPLY);
+        }
+
+        emit Claim(msg.sender, to, amount, 0, 0, coinOut);
+        if (coinOut != 0) _payToken(coin, to, coinOut);
+    }
+
+    /// @notice Burn eth-share tokens to redeem the proportional slice of ETH and stETH.
+    function purgeEth(uint256 amount, address to) external returns (uint256 ethOut, uint256 stEthOut) {
+        if (to == address(0)) revert ZeroAddress();
+        PurgeVaultShare share = ethShare;
+        uint256 bal = share.balanceOf(msg.sender);
+        if (amount == 0 || amount > bal) revert Insufficient();
+
+        uint256 supplyBefore = share.totalSupply();
         uint256 ethBal = address(this).balance;
         uint256 stBal = _tokenBalance(address(steth));
         uint256 combined = ethBal + stBal;
-        uint256 claimValue = (combined * amount) / supply;
+        uint256 claimValue = (combined * amount) / supplyBefore;
 
         if (claimValue <= ethBal) {
             ethOut = claimValue;
@@ -136,32 +255,28 @@ contract PurgeStonkNFT {
             if (stEthOut > stBal) revert Insufficient();
         }
 
-        coinOut = (_tokenBalance(coin) * amount) / supply;
-
-        unchecked {
-            balanceOf[msg.sender] = bal - amount;
-            if (supply == amount) {
-                // Prevent supply from hitting zero; recycle with a fresh billion to caller.
-                totalSupply = REFILL_SUPPLY;
-                balanceOf[msg.sender] += REFILL_SUPPLY;
-                emit Transfer(address(0), msg.sender, REFILL_SUPPLY);
-            } else {
-                totalSupply = supply - amount;
-            }
+        share.vaultBurn(msg.sender, amount);
+        if (supplyBefore == amount) {
+            share.vaultMint(msg.sender, REFILL_SUPPLY);
         }
 
-        emit Transfer(msg.sender, address(0), amount);
-        emit Claim(msg.sender, to, amount, ethOut, stEthOut, coinOut);
-
+        emit Claim(msg.sender, to, amount, ethOut, stEthOut, 0);
         if (ethOut != 0) _payEth(to, ethOut);
         if (stEthOut != 0) _payToken(address(steth), to, stEthOut);
-        if (coinOut != 0) _payToken(coin, to, coinOut);
     }
 
     /// @notice View helper to preview a claim without burning.
-    function previewClaim(uint256 amount) external view returns (uint256 ethOut, uint256 stEthOut, uint256 coinOut) {
-        if (amount == 0 || amount > totalSupply) revert Insufficient();
-        uint256 supply = totalSupply;
+    function previewCoin(uint256 amount) external view returns (uint256 coinOut) {
+        uint256 supply = coinShare.totalSupply();
+        if (amount == 0 || amount > supply) revert Insufficient();
+        uint256 coinBal = _tokenBalance(coin);
+        coinOut = (coinBal * amount) / supply;
+    }
+
+    /// @notice View helper to preview an ETH/stETH claim without burning.
+    function previewEth(uint256 amount) external view returns (uint256 ethOut, uint256 stEthOut) {
+        uint256 supply = ethShare.totalSupply();
+        if (amount == 0 || amount > supply) revert Insufficient();
         uint256 ethBal = address(this).balance;
         uint256 stBal = _tokenBalance(address(steth));
         uint256 combined = ethBal + stBal;
@@ -173,7 +288,6 @@ contract PurgeStonkNFT {
             ethOut = ethBal;
             stEthOut = claimValue - ethBal;
         }
-        coinOut = (_tokenBalance(coin) * amount) / supply;
     }
 
     function _tokenBalance(address token) private view returns (uint256) {
@@ -192,41 +306,5 @@ contract PurgeStonkNFT {
     function _pullToken(address token, address from, uint256 amount) private {
         if (amount == 0) return;
         if (!IERC20Minimal(token).transferFrom(from, address(this), amount)) revert TransferFailed();
-    }
-
-    // ---------------------------------------------------------------------
-    // ERC20
-    // ---------------------------------------------------------------------
-    function approve(address spender, uint256 amount) external returns (bool) {
-        allowance[msg.sender][spender] = amount;
-        emit Approval(msg.sender, spender, amount);
-        return true;
-    }
-
-    function transfer(address to, uint256 amount) external returns (bool) {
-        _transfer(msg.sender, to, amount);
-        return true;
-    }
-
-    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
-        uint256 allowed = allowance[from][msg.sender];
-        if (allowed != type(uint256).max) {
-            if (allowed < amount) revert Insufficient();
-            allowance[from][msg.sender] = allowed - amount;
-            emit Approval(from, msg.sender, allowance[from][msg.sender]);
-        }
-        _transfer(from, to, amount);
-        return true;
-    }
-
-    function _transfer(address from, address to, uint256 amount) private {
-        if (to == address(0)) revert ZeroAddress();
-        uint256 bal = balanceOf[from];
-        if (amount == 0 || amount > bal) revert Insufficient();
-        unchecked {
-            balanceOf[from] = bal - amount;
-            balanceOf[to] += amount;
-        }
-        emit Transfer(from, to, amount);
     }
 }

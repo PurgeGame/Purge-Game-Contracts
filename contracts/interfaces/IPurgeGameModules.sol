@@ -9,7 +9,7 @@ interface IPurgeGameEndgameModule {
         uint32 cap,
         uint256 rngWord,
         address jackpots
-    ) external;
+    ) external returns (bool readyForPurchase);
 }
 
 interface IPurgeGameJackpotModule {

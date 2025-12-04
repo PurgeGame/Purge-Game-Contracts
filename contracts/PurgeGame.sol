@@ -102,7 +102,7 @@ contract PurgeGame is PurgeGameStorage {
     event BondCreditAdded(address indexed player, uint256 amount);
     event Jackpot(uint256 traits); // Encodes jackpot metadata
     event Purge(address indexed player, uint256[] tokenIds);
-    event Advance(uint8 gameState, uint8 phase);
+    event Advance(uint8 gameState);
     event ReverseFlip(address indexed caller, uint256 totalQueued, uint256 cost);
     event VrfCoordinatorUpdated(address indexed previous, address indexed current);
     event PrizePoolBondBuy(uint256 spendWei, uint256 quantity);
@@ -265,11 +265,11 @@ contract PurgeGame is PurgeGameStorage {
         recipient = affiliateOwner == address(0) ? player : affiliateOwner;
     }
 
-    // --- State machine: advance one tick ------------------------------------------------
-
-    function currentPhase() external view returns (uint8) {
-        return phase;
+    function mapJackpotStatus() external view returns (bool ready) {
+        ready = (gameState == 2) && lastPurchaseDay;
     }
+
+    // --- State machine: advance one tick ------------------------------------------------
 
     function mintPrice() external view returns (uint256) {
         return price;
@@ -325,11 +325,18 @@ contract PurgeGame is PurgeGameStorage {
     function purchaseInfo()
         external
         view
-        returns (uint24 lvl, uint8 gameState_, uint8 phase_, bool rngLocked_, uint256 priceWei, uint256 priceCoinUnit)
+        returns (
+            uint24 lvl,
+            uint8 gameState_,
+            bool lastPurchaseDay_,
+            bool rngLocked_,
+            uint256 priceWei,
+            uint256 priceCoinUnit
+        )
     {
         lvl = level;
         gameState_ = gameState;
-        phase_ = phase;
+        lastPurchaseDay_ = (gameState_ == 2) && lastPurchaseDay;
         rngLocked_ = rngLockedFlag;
         priceWei = price;
         priceCoinUnit = priceCoin;
@@ -471,7 +478,8 @@ contract PurgeGame is PurgeGameStorage {
         }
         uint24 lvl = level;
 
-        uint8 _phase = phase;
+        bool lastPurchase = (_gameState == 2) ? lastPurchaseDay : false;
+        bool mapRngDay = (_gameState == 2) && lastPurchase;
 
         uint48 gateIdx = dailyIdx;
         uint32 currentDay = uint32(day);
@@ -493,7 +501,7 @@ contract PurgeGame is PurgeGameStorage {
                 }
             }
 
-            uint256 rngWord = rngAndTimeGate(day, lvl);
+            uint256 rngWord = rngAndTimeGate(day, lvl, mapRngDay);
             if (rngWord == 1) {
                 break;
             }
@@ -526,9 +534,7 @@ contract PurgeGame is PurgeGameStorage {
 
             // --- State 2 - Purchase / Airdrop ---
             if (_gameState == 2) {
-                if (_phase <= 2) {
-                    bool advanceToAirdrop = (_phase == 2 && nextPrizePool >= lastPrizePool);
-
+                if (!lastPurchaseDay) {
                     bool batchesPending = airdropIndex < pendingMapMints.length;
                     if (batchesPending) {
                         bool batchesFinished = _processMapBatch(cap);
@@ -536,94 +542,80 @@ contract PurgeGame is PurgeGameStorage {
                         batchesPending = false;
                     }
                     payDailyJackpot(false, lvl, rngWord);
-
-                    if (advanceToAirdrop && !batchesPending) {
-                        airdropMultiplier = _calculateAirdropMultiplier(nft.purchaseCount(), lvl);
-                        phase = 3;
+                    if (nextPrizePool >= lastPrizePool) {
+                        lastPurchaseDay = true;
                     }
                     _unlockRng(day);
-
                     break;
                 }
 
-                if (_phase == 3) {
-                    bool ranDecHundred;
-                    bool decHundredFinished = true;
-                    if (lvl % 100 == 0) {
-                        ranDecHundred = true;
-                        decHundredFinished = _runDecimatorHundredJackpot(lvl, rngWord);
-                        if (!decHundredFinished) {
-                            break; // keep working this jackpot slice before moving on
-                        }
-                    }
-
-                    phase = 4;
-                    _phase = 4; // fall through to phase 4 logic in the same call when nothing ran
-                    if (ranDecHundred && !decHundredFinished) {
-                        break; // level-100 decimator work consumes this tick
+                bool ranDecHundred;
+                bool decHundredFinished = true;
+                if (lvl % 100 == 0) {
+                    ranDecHundred = true;
+                    decHundredFinished = _runDecimatorHundredJackpot(lvl, rngWord);
+                    if (!decHundredFinished) {
+                        break; // keep working this jackpot slice before moving on
                     }
                 }
 
-                if (_phase == 4) {
-                    if (!_processMapBatch(cap)) {
+                if (ranDecHundred && !decHundredFinished) {
+                    break; // level-100 decimator work consumes this tick
+                }
+                if (!_processMapBatch(cap)) {
+                    break;
+                }
+                uint256 totalWeiForBond = rewardPool + currentPrizePool;
+                if (_bondMaintenanceForMap(day, totalWeiForBond, rngWord, cap)) {
+                    break; // bond batch consumed this tick; rerun advanceGame to continue
+                }
+                uint256 mapEffectiveWei = _calcPrizePoolForJackpot(lvl, rngWord);
+                payMapJackpot(lvl, rngWord, mapEffectiveWei);
+
+                airdropMapsProcessedCount = 0;
+                if (airdropIndex >= pendingMapMints.length) {
+                    airdropIndex = 0;
+                    delete pendingMapMints;
+                }
+
+                uint32 purchaseCountRaw = nft.purchaseCount();
+                if (!traitCountsSeedQueued) {
+                    uint32 multiplier_ = airdropMultiplier;
+                    if (!nft.processPendingMints(cap, multiplier_)) {
                         break;
                     }
-                    uint256 totalWeiForBond = rewardPool + currentPrizePool;
-                    if (_bondMaintenanceForMap(day, totalWeiForBond, rngWord, cap)) {
-                        break; // bond batch consumed this tick; rerun advanceGame to continue
+                    if (purchaseCountRaw != 0) {
+                        traitCountsSeedQueued = true;
+                        traitRebuildCursor = 0;
                     }
-                    uint256 mapEffectiveWei = _calcPrizePoolForJackpot(lvl, rngWord);
-                    payMapJackpot(lvl, rngWord, mapEffectiveWei);
-
-                    airdropMapsProcessedCount = 0;
-                    if (airdropIndex >= pendingMapMints.length) {
-                        airdropIndex = 0;
-                        delete pendingMapMints;
-                    }
-                    phase = 5;
-                    break;
                 }
 
-                if (_phase == 5) {
-                    uint32 purchaseCountRaw = nft.purchaseCount();
-                    if (!traitCountsSeedQueued) {
-                        uint32 multiplier_ = airdropMultiplier;
-                        if (!nft.processPendingMints(cap, multiplier_)) {
-                            break;
-                        }
-                        if (purchaseCountRaw != 0) {
-                            traitCountsSeedQueued = true;
-                            traitRebuildCursor = 0;
-                        }
+                if (traitCountsSeedQueued) {
+                    uint32 targetCount = _purchaseTargetCountFromRaw(purchaseCountRaw);
+                    if (traitRebuildCursor < targetCount) {
+                        _rebuildTraitCounts(cap, targetCount);
+                        break;
                     }
-
-                    if (traitCountsSeedQueued) {
-                        uint32 targetCount = _purchaseTargetCountFromRaw(purchaseCountRaw);
-                        if (traitRebuildCursor < targetCount) {
-                            _rebuildTraitCounts(cap, targetCount);
-                            break;
-                        }
-                        _seedTraitCounts();
-                        traitCountsSeedQueued = false;
-                    }
-
-                    uint32 mintedCount = _purchaseTargetCountFromRaw(purchaseCountRaw);
-                    nft.finalizePurchasePhase(mintedCount, rngWordCurrent);
-                    _maybeResolveBonds(cap);
-                    traitRebuildCursor = 0;
-                    airdropMultiplier = 1;
-                    earlyPurgePercent = 0;
-                    levelStartTime = ts;
-                    gameState = 3;
-                    if (lvl % 100 == 99) decWindowOpen = true;
-                    _unlockRng(day); // open RNG after map jackpot is finalized
+                    _seedTraitCounts();
+                    traitCountsSeedQueued = false;
                 }
+
+                uint32 mintedCount = _purchaseTargetCountFromRaw(purchaseCountRaw);
+                nft.finalizePurchasePhase(mintedCount, rngWordCurrent);
+                _maybeResolveBonds(cap);
+                traitRebuildCursor = 0;
+                airdropMultiplier = 1;
+                earlyPurgePercent = 0;
+                levelStartTime = ts;
+                gameState = 3;
+                lastPurchaseDay = false;
+                if (lvl % 100 == 99) decWindowOpen = true;
+                _unlockRng(day); // open RNG after map jackpot is finalized
                 break;
             }
 
             // --- State 3 - Purge ---
             if (_gameState == 3) {
-                // Purge begins only after phase 5 is latched during purchase finalization.
                 bool batchesPending = airdropIndex < pendingMapMints.length;
                 if (batchesPending) {
                     bool batchesFinished = _processMapBatch(cap);
@@ -637,7 +629,7 @@ contract PurgeGame is PurgeGameStorage {
             }
         } while (false);
 
-        emit Advance(_gameState, _phase);
+        emit Advance(_gameState);
 
         if (_gameState != 0 && cap == 0) coinContract.creditFlip(caller, priceCoin >> 1);
     }
@@ -796,12 +788,14 @@ contract PurgeGame is PurgeGameStorage {
 
             address trophyAddr = trophies;
             if (trophyAddr != address(0)) {
-                try IPurgeTrophies(trophyAddr).mintExterminator(
-                    callerExterminator,
-                    levelSnapshot,
-                    exTrait,
-                    exterminationInvertFlag
-                ) {} catch {}
+                try
+                    IPurgeTrophies(trophyAddr).mintExterminator(
+                        callerExterminator,
+                        levelSnapshot,
+                        exTrait,
+                        exterminationInvertFlag
+                    )
+                {} catch {}
             }
 
             lastExterminatedTrait = exTrait;
@@ -856,16 +850,15 @@ contract PurgeGame is PurgeGameStorage {
     /// @notice Delegatecall into the endgame module to resolve slow settlement paths.
     function _runEndgameModule(uint24 lvl, uint32 cap, uint256 rngWord) internal {
         // Endgame settlement logic lives in PurgeGameEndgameModule (delegatecall keeps state on this contract).
-        (bool ok, ) = endgameModule.delegatecall(
-            abi.encodeWithSelector(
-                IPurgeGameEndgameModule.finalizeEndgame.selector,
-                lvl,
-                cap,
-                rngWord,
-                jackpots
-            )
+        (bool ok, bytes memory data) = endgameModule.delegatecall(
+            abi.encodeWithSelector(IPurgeGameEndgameModule.finalizeEndgame.selector, lvl, cap, rngWord, jackpots)
         );
-        if (!ok) return;
+        if (!ok || data.length == 0) return;
+
+        bool readyForPurchase = abi.decode(data, (bool));
+        if (readyForPurchase) {
+            gameState = 2; // No endgame work pending; move directly into the purchase/airdrop state.
+        }
     }
 
     /// @notice Unified external hook for trusted modules to adjust PurgeGame accounting.
@@ -923,13 +916,11 @@ contract PurgeGame is PurgeGameStorage {
         ClaimableBondInfo storage info = claimableBondInfo[player];
         uint256 creditWei = info.weiAmount;
         if (creditWei == 0) return false;
-        uint256 escrow = bondCreditEscrow;
-        if (escrow < creditWei) return false;
 
         info.weiAmount = 0;
         info.basePerBondWei = 0;
         info.stake = false;
-        bondCreditEscrow = escrow - creditWei;
+        bondCreditEscrow = bondCreditEscrow - creditWei;
         _addClaimableEth(player, creditWei);
         emit BondCreditLiquidated(player, creditWei);
         return true;
@@ -1482,7 +1473,7 @@ contract PurgeGame is PurgeGameStorage {
 
     // --- Flips, VRF, payments, rarity ----------------------------------------------------------------
 
-    function rngAndTimeGate(uint48 day, uint24 lvl) internal returns (uint256 word) {
+    function rngAndTimeGate(uint48 day, uint24 lvl, bool isMapJackpotDay) internal returns (uint256 word) {
         if (day == dailyIdx) revert NotTimeYet();
 
         _resolveBondsBeforeRng(day);
@@ -1492,20 +1483,20 @@ contract PurgeGame is PurgeGameStorage {
         if (currentWord == 0 && rngLockedFlag && rngRequestTime != 0) {
             uint48 elapsed = uint48(block.timestamp) - rngRequestTime;
             if (elapsed >= 18 hours) {
-                _requestRng(gameState, phase, lvl, day);
+                _requestRng(gameState, isMapJackpotDay, lvl, day);
                 return 1;
             }
         }
 
         if (currentWord == 0) {
             if (rngLockedFlag) revert RngNotReady();
-            _requestRng(gameState, phase, lvl, day);
+            _requestRng(gameState, isMapJackpotDay, lvl, day);
             return 1;
         }
 
         if (!rngLockedFlag) {
             // Stale entropy from previous cycle; request a fresh word.
-            _requestRng(gameState, phase, lvl, day);
+            _requestRng(gameState, isMapJackpotDay, lvl, day);
             return 1;
         }
 
@@ -1622,8 +1613,8 @@ contract PurgeGame is PurgeGameStorage {
         return IPurgeBonds(bondsAddr).finalizeShutdown(maxIds);
     }
 
-    function _requestRng(uint8 gameState_, uint8 phase_, uint24 lvl, uint48 day) private {
-        bool shouldLockBonds = (gameState_ == 2 && phase_ == 3) || (gameState_ == 0);
+    function _requestRng(uint8 gameState_, bool isMapJackpotDay, uint24 lvl, uint48 day) private {
+        bool shouldLockBonds = (gameState_ == 2 && isMapJackpotDay) || (gameState_ == 0);
         if (shouldLockBonds) {
             IPurgeBonds(bonds).setTransfersLocked(true, day);
         }
@@ -1646,7 +1637,7 @@ contract PurgeGame is PurgeGameStorage {
         rngRequestTime = uint48(block.timestamp);
 
         bool decClose = (((lvl % 100 != 0 && (lvl % 100 != 99) && gameState_ == 1) ||
-            (lvl % 100 == 0 && phase_ == 3)) && decWindowOpen);
+            (lvl % 100 == 0 && isMapJackpotDay)) && decWindowOpen);
         if (decClose) decWindowOpen = false;
     }
 

@@ -90,7 +90,8 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         IPurgeCoinModule coinContract
     ) external {
         uint8 percentBefore = earlyPurgePercent;
-        bool purchasePhaseActive = (gameState == 2 && phase <= 2);
+        bool mapReady = _mapJackpotReadyLocal();
+        bool purchasePhaseActive = (gameState == 2 && !mapReady);
         bool boostArmedBefore = earlyPurgeBoostArmed;
         uint8 percentAfter = purchasePhaseActive ? _currentEarlyPurgePercent() : percentBefore;
         if (purchasePhaseActive) {
@@ -882,13 +883,11 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         ClaimableBondInfo storage info = claimableBondInfo[player];
         uint256 creditWei = info.weiAmount;
         if (creditWei == 0) return false;
-        uint256 escrow = bondCreditEscrow;
-        if (escrow < creditWei) return false;
 
         info.weiAmount = 0;
         info.basePerBondWei = 0;
         info.stake = false;
-        bondCreditEscrow = escrow - creditWei;
+        bondCreditEscrow = bondCreditEscrow - creditWei;
         _addClaimableEth(player, creditWei);
         return true;
     }
@@ -994,10 +993,10 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
             }
         }
         bool throttleWrites;
-        if (phase <= 1) {
+        bool mapReady = _mapJackpotReadyLocal();
+        if (gameState == 2 && !mapReady) {
             throttleWrites = true;
-            phase = 2;
-        } else if (phase == 3) {
+        } else if (gameState == 2 && mapReady) {
             bool firstAirdropBatch = (idx == 0 && processed == 0);
             if (firstAirdropBatch) {
                 throttleWrites = true;
@@ -1181,5 +1180,9 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         uint256 pct = ((currentPrizePool + nextPrizePool) * 100) / prevPoolWei;
         if (pct > type(uint8).max) return type(uint8).max;
         return uint8(pct);
+    }
+
+    function _mapJackpotReadyLocal() private view returns (bool) {
+        return (gameState == 2 && lastPurchaseDay);
     }
 }

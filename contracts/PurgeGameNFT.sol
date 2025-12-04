@@ -279,11 +279,17 @@ contract PurgeGameNFT {
         if (quantity == 0 || quantity > type(uint32).max) revert InvalidQuantity();
         if (payInCoin && payKind != MintPaymentKind.DirectEth) revert E();
 
-        (uint24 targetLevel, uint8 state, uint8 phase, bool rngLocked_, uint256 priceWei, uint256 priceCoinUnit) = game
-            .purchaseInfo();
+        (
+            uint24 targetLevel,
+            uint8 state,
+            bool mapJackpotReady,
+            bool rngLocked_,
+            uint256 priceWei,
+            uint256 priceCoinUnit
+        ) = game.purchaseInfo();
 
         if ((targetLevel % 20) == 16) revert NotTimeYet();
-        if (rngLocked_ && phase >= 3 && state == 2) revert RngNotReady();
+        if (rngLocked_ && state == 2 && mapJackpotReady) revert RngNotReady();
 
         uint256 coinCost = quantity * priceCoinUnit;
         uint256 expectedWei = priceWei * quantity;
@@ -316,7 +322,7 @@ contract PurgeGameNFT {
             if (targetLevel == 100) {
                 _levelHundredMintCount[buyer] = levelHundredCount;
             }
-            if (phase == 3 && (targetLevel % 100) > 90) {
+            if (mapJackpotReady && (targetLevel % 100) > 90) {
                 bonus += (quantity * priceCoinUnit) / 5;
             }
         }
@@ -351,8 +357,14 @@ contract PurgeGameNFT {
         MintPaymentKind payKind
     ) private {
         // Map purchase flow: mints 4:1 scaled quantity and immediately queues them for purge draws.
-        (uint24 lvl, uint8 state, uint8 phase, bool rngLocked_, uint256 priceWei, uint256 priceUnit) = game
-            .purchaseInfo();
+        (
+            uint24 lvl,
+            uint8 state,
+            bool mapJackpotReady,
+            bool rngLocked_,
+            uint256 priceWei,
+            uint256 priceUnit
+        ) = game.purchaseInfo();
         if (state == 3 && payInCoin) revert NotTimeYet();
         if (quantity == 0 || quantity > type(uint32).max) revert InvalidQuantity();
         if (rngLocked_) revert RngNotReady();
@@ -392,7 +404,7 @@ contract PurgeGameNFT {
             if (lvl == 100) {
                 _levelHundredMintCount[buyer] = levelHundredCount;
             }
-            if (phase == 3 && (lvl % 100) > 90) {
+            if (mapJackpotReady && (lvl % 100) > 90) {
                 bonus += coinCost / 5;
             }
             if (payKind != MintPaymentKind.DirectEth) {

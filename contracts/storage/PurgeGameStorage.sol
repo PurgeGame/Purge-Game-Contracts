@@ -47,7 +47,7 @@ abstract contract PurgeGameStorage {
     uint32 internal airdropMultiplier = 1; // airdrop bonus multiplier (scaled integer)
     uint8 internal jackpotCounter; // jackpots processed within the current level
     uint8 internal earlyPurgePercent; // % of previous prize pool carried into early purge reward (0-255)
-    uint8 internal phase; // sub-phase within gameState (0..7)
+    bool internal lastPurchaseDay; // true once the map prize target is met; next tick skips daily/jackpot prep
     bool internal decWindowOpen = true; // latch to hold decimator window open until RNG is requested
 
     // Slot 2: RNG/trait flags + stETH address.
