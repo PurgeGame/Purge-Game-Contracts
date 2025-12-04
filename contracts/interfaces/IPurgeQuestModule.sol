@@ -3,7 +3,7 @@ pragma solidity ^0.8.26;
 
 struct QuestRequirements {
     uint32 mints; // Number of mints/purges required (whole NFTs)
-    uint256 tokenAmount; // PURGE base units (6 decimals) for token-denominated quests or stake principal; wei for bond size quests
+    uint256 tokenAmount; // PURGE base units (6 decimals) for token-denominated quests or stake principal; wei for bong size quests
     uint16 stakeDistance; // Minimum stake distance when required
     uint8 stakeRisk; // Minimum stake risk when required
 }
@@ -49,7 +49,7 @@ interface IPurgeQuestModule {
         external
         returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed);
 
-    function handleBondPurchase(address player, uint256 basePerBondWei)
+    function handleBongPurchase(address player, uint256 basePerBongWei)
         external
         returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed);
 

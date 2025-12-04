@@ -18,10 +18,10 @@ interface IIconRendererTrophy32Svg {
         uint32 statusFlags;
         uint24 lvl;
         bool invertFlag;
-        bool isBond;
-        uint16 bondChanceBps;
-        bool bondMatured;
-        uint32 bondProgress1e6;
+        bool isBong;
+        uint16 bongChanceBps;
+        bool bongMatured;
+        uint32 bongProgress1e6;
     }
 
     function trophySvg(SvgParams calldata params) external view returns (string memory);
@@ -51,13 +51,13 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg {
     string private constant STAKE_BADGE_HEX = "#4d2b1f";
     string private constant STAKE_STATUS_TRANSFORM = "matrix(0.02548 0 0 0.02548 -10.583 -10.500)";
     string private constant ETH_STATUS_TRANSFORM = "matrix(0.00800 0 0 0.00800 -3.131 -5.100)";
-    uint32 private constant BOND_BADGE_ETH_SCALE_1e6 = 33_000;
-    uint32 private constant BOND_BADGE_FLAME_SCALE_1e6 = 20_000;
-    int32 private constant BOND_BADGE_ETH_CX = 392;
-    int32 private constant BOND_BADGE_ETH_CY = 439;
-    int32 private constant BOND_BADGE_FLAME_CX = 430;
-    int32 private constant BOND_BADGE_FLAME_CY = 315;
-    string private constant BOND_BADGE_FLAME_HEX = "#ff3300";
+    uint32 private constant BONG_BADGE_ETH_SCALE_1e6 = 33_000;
+    uint32 private constant BONG_BADGE_FLAME_SCALE_1e6 = 20_000;
+    int32 private constant BONG_BADGE_ETH_CX = 392;
+    int32 private constant BONG_BADGE_ETH_CY = 439;
+    int32 private constant BONG_BADGE_FLAME_CX = 430;
+    int32 private constant BONG_BADGE_FLAME_CY = 315;
+    string private constant BONG_BADGE_FLAME_HEX = "#ff3300";
     string private constant MAP_CORNER_TRANSFORM = "matrix(0.51 0 0 0.51 -6.12 -6.12)";
     string private constant FLAME_CORNER_TRANSFORM = "matrix(0.02810 0 0 0.02810 -12.03 -9.082)";
     uint16 private constant ICON_VB = 512; // normalized icon viewBox (square)
@@ -101,9 +101,9 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg {
         bool isDec = params.isDec;
         uint24 lvl = params.lvl;
         uint32 statusFlags = params.statusFlags;
-        uint16 bondChanceBps = params.bondChanceBps;
-        bool bondMatured = params.bondMatured;
-        bool isBond = params.isBond;
+        uint16 bongChanceBps = params.bongChanceBps;
+        bool bongMatured = params.bongMatured;
+        bool isBong = params.isBong;
 
         // Placeholder or stake trophies skip trait-driven palette lookup and instead
         // derive colors from owner/referrer overrides plus registry-configured sizes.
@@ -132,7 +132,7 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg {
             uint32 rOut;
             uint32 rMid;
             uint32 rIn;
-            if (isBond) {
+            if (isBong) {
                 rOut = 66;
                 rMid = 51;
                 rIn = 40;
@@ -144,20 +144,20 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg {
                 rIn = uint32((uint256(rOut) * RATIO_IN_1e6) / 1_000_000);
             }
 
-            string memory head = isBond
+            string memory head = isBong
                 ? _svgHeader("#30d100", "#cccccc")
                 : _svgHeader(borderColor, _resolve(tokenId, 3, "#d9d9d9"));
-            string memory placeholderFlameColor = isBond ? "#ff3300" : _resolve(tokenId, 1, "#ff3300");
-            string memory ringColor = isBond ? "#30d100" : _paletteColor(ringIdx, lvl);
-            bool showProgress = isBond && !bondMatured ? false : (isBond && !bondMatured);
+            string memory placeholderFlameColor = isBong ? "#ff3300" : _resolve(tokenId, 1, "#ff3300");
+            string memory ringColor = isBong ? "#30d100" : _paletteColor(ringIdx, lvl);
+            bool showProgress = isBong && !bongMatured ? false : (isBong && !bongMatured);
             string memory progressColor = placeholderFlameColor;
-            string memory bandColor = isBond
+            string memory bandColor = isBong
                 ? "#111"
                 : (showProgress ? _bandColorForProgress(progressColor) : placeholderFlameColor);
             string memory rings = _rings(
                 ringColor,
                 bandColor,
-                isBond ? "#fff" : _resolve(tokenId, 2, "#fff"),
+                isBong ? "#fff" : _resolve(tokenId, 2, "#fff"),
                 rOut,
                 rMid,
                 rIn,
@@ -165,7 +165,7 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg {
                 0
             );
 
-            string memory clip = isBond
+            string memory clip = isBong
                 ? ""
                 : string(
                     abi.encodePacked(
@@ -175,12 +175,12 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg {
                     )
                 );
 
-            string memory centerGlyph = isBond
-                ? _bondCenterGlyph(placeholderFlameColor, diamondPath, rIn)
+            string memory centerGlyph = isBong
+                ? _bongCenterGlyph(placeholderFlameColor, diamondPath, rIn)
                 : _centerGlyph(isMap, isAffiliate, isStake, placeholderFlameColor, ringColor, diamondPath);
             string memory progress = "";
             if (showProgress) {
-                progress = _bondProgressArc(rIn, rMid, params.bondProgress1e6, progressColor);
+                progress = _bongProgressArc(rIn, rMid, params.bongProgress1e6, progressColor);
             }
             string memory body = string(abi.encodePacked(rings, clip, progress, centerGlyph));
             return
@@ -188,7 +188,7 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg {
                     head,
                     body,
                     isMap,
-                    isBond ? false : isExtermination,
+                    isBong ? false : isExtermination,
                     placeholderFlameColor,
                     diamondPath,
                     statusFlags
@@ -468,7 +468,7 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg {
             );
     }
 
-    function _bondCenterGlyph(
+    function _bongCenterGlyph(
         string memory defaultFillColor,
         string memory flamePath,
         uint32 rIn
@@ -505,7 +505,7 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg {
         return string(abi.encodePacked(ethIcon, flames));
     }
 
-    function _bondProgressArc(
+    function _bongProgressArc(
         uint32 innerRadius,
         uint32 midRadius,
         uint32 progress1e6,
@@ -517,12 +517,12 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg {
         uint256 strokeW = bandWidth == 0 ? 1 : bandWidth;
         string memory radius = _midRadiusToString(innerRadius, midRadius);
         string memory dash = pct100.toString();
-        int256 rotateDeg = -90 + _bondRotationOffset(pct100);
+        int256 rotateDeg = -90 + _bongRotationOffset(pct100);
         string memory rotateStr = _intToString(rotateDeg);
         return
             string(
                 abi.encodePacked(
-                    "<g class='bondeg' transform='rotate(",
+                    "<g class='bongeg' transform='rotate(",
                     rotateStr,
                     ")'>",
                     "<circle cx='0' cy='0' r='",
@@ -566,11 +566,11 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg {
     }
 
     function _badgeFlameTx(uint32 scale1e6) private pure returns (int256) {
-        return -int256(BOND_BADGE_FLAME_CX) * int256(uint256(scale1e6));
+        return -int256(BONG_BADGE_FLAME_CX) * int256(uint256(scale1e6));
     }
 
     function _badgeFlameTy(uint32 scale1e6) private pure returns (int256) {
-        return -int256(BOND_BADGE_FLAME_CY) * int256(uint256(scale1e6));
+        return -int256(BONG_BADGE_FLAME_CY) * int256(uint256(scale1e6));
     }
 
     function _midRadiusToString(uint32 innerRadius, uint32 midRadius) private pure returns (string memory) {
@@ -578,7 +578,7 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg {
         return uint256(r).toString();
     }
 
-    function _bondRotationOffset(uint256 pct100) private pure returns (int256) {
+    function _bongRotationOffset(uint256 pct100) private pure returns (int256) {
         if (pct100 >= 90) return int256((pct100 - 90) / 3);
         return int256(0);
     }
@@ -823,7 +823,7 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg {
         return 88;
     }
 
-    function _bondScaleFromChance(uint16 chanceBps, bool matured) private pure returns (uint32) {
+    function _bongScaleFromChance(uint16 chanceBps, bool matured) private pure returns (uint32) {
         uint256 base = matured ? 1_380_000 : 1_300_000;
         uint256 delta = (uint256(chanceBps) * 400_000) / 10_000;
         uint256 scale = base + delta;

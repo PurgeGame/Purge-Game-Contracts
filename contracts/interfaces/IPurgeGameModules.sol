@@ -35,22 +35,22 @@ interface IPurgeGameJackpotModule {
 
     function processMapBatch(uint32 writesBudget) external returns (bool finished);
 
-    function processPendingJackpotBonds(
+    function processPendingJackpotBongs(
         uint256 maxMints
     ) external returns (bool finished, uint256 processed);
 }
 
-interface IPurgeGameBondModule {
-    function bondMaintenanceForMap(
-        address bondsAddr,
+interface IPurgeGameBongModule {
+    function bongMaintenanceForMap(
+        address bongsAddr,
         address stethAddr,
         uint48 day,
         uint256 totalWei,
         uint256 rngWord,
         uint32 cap
     ) external returns (bool worked);
-    function stakeForTargetRatio(address bondsAddr, address stethAddr, uint24 lvl) external;
-    function drainToBonds(address bondsAddr, address stethAddr, uint48 day) external;
+    function stakeForTargetRatio(address bongsAddr, address stethAddr, uint24 lvl) external;
+    function drainToBongs(address bongsAddr, address stethAddr, uint48 day) external;
 }
 
 interface IPurgeGameMintModule {

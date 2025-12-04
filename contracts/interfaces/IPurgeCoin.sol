@@ -36,7 +36,7 @@ interface IPurgeCoin {
 
     function notifyQuestMint(address player, uint32 quantity, bool paidWithEth) external;
 
-    function notifyQuestBond(address player, uint256 basePerBondWei) external;
+    function notifyQuestBong(address player, uint256 basePerBongWei) external;
 
     function notifyQuestPurge(address player, uint32 quantity) external;
 
@@ -54,5 +54,5 @@ interface IPurgeCoin {
 
     function getPlayerQuestView(address player) external view returns (PlayerQuestView memory viewData);
 
-    function bondPayment(uint256 amount) external;
+    function bongPayment(uint256 amount) external;
 }

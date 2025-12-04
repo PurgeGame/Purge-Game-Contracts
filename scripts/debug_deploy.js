@@ -4,7 +4,7 @@ async function main() {
   const [deployer] = await ethers.getSigners();
   console.log("Deploying with:", deployer.address);
 
-  const bondsAddr = deployer.address;
+  const bongsAddr = deployer.address;
 
   console.log("1. Deploying MockLinkToken...");
   const MockLinkToken = await ethers.getContractFactory("MockLinkToken");
@@ -32,13 +32,13 @@ async function main() {
 
   console.log("5. Deploying PurgeAffiliate...");
   const PurgeAffiliate = await ethers.getContractFactory("PurgeAffiliate");
-  const affiliate = await PurgeAffiliate.deploy(bondsAddr);
+  const affiliate = await PurgeAffiliate.deploy(bongsAddr);
   await affiliate.waitForDeployment();
   console.log("   PurgeAffiliate deployed at:", await affiliate.getAddress());
 
   console.log("6. Deploying Purgecoin...");
   const Purgecoin = await ethers.getContractFactory("Purgecoin");
-  const purgecoin = await Purgecoin.deploy(bondsAddr, await affiliate.getAddress(), await renderer.getAddress());
+  const purgecoin = await Purgecoin.deploy(bongsAddr, await affiliate.getAddress(), await renderer.getAddress());
   await purgecoin.waitForDeployment();
   console.log("   Purgecoin deployed at:", await purgecoin.getAddress());
 
@@ -70,10 +70,10 @@ async function main() {
   await mintModule.waitForDeployment();
   console.log("   MintModule deployed.");
 
-  const PurgeGameBondModule = await ethers.getContractFactory("PurgeGameBondModule");
-  const bondModule = await PurgeGameBondModule.deploy();
-  await bondModule.waitForDeployment();
-  console.log("   BondModule deployed.");
+  const PurgeGameBongModule = await ethers.getContractFactory("PurgeGameBongModule");
+  const bongModule = await PurgeGameBongModule.deploy();
+  await bongModule.waitForDeployment();
+  console.log("   BongModule deployed.");
 
   // Check if PurgeQuestModule exists or use Mock
   try {
@@ -85,10 +85,10 @@ async function main() {
       console.log("   PurgeQuestModule deployment failed, using Mock?", e.message);
   }
 
-  let jackpotsAddr = bondsAddr;
+  let jackpotsAddr = bongsAddr;
   try {
       const PurgeJackpots = await ethers.getContractFactory("contracts/PurgeJackpots.sol:PurgeJackpots");
-      const jackpots = await PurgeJackpots.deploy(bondsAddr);
+      const jackpots = await PurgeJackpots.deploy(bongsAddr);
       await jackpots.waitForDeployment();
       jackpotsAddr = await jackpots.getAddress();
       console.log("   Jackpots module deployed at:", jackpotsAddr);
@@ -105,14 +105,14 @@ async function main() {
     await endgameModule.getAddress(),
     await jackpotModule.getAddress(),
     await mintModule.getAddress(),
-    await bondModule.getAddress(),
+    await bongModule.getAddress(),
     await vrf.getAddress(),
     ethers.ZeroHash,
     1n,
     await link.getAddress(),
     await steth.getAddress(),
     jackpotsAddr,
-    bondsAddr,
+    bongsAddr,
     await trophies.getAddress()
   );
   await purgeGame.waitForDeployment();

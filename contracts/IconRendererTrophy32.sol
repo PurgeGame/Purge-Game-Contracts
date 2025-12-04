@@ -28,7 +28,7 @@ contract IconRendererTrophy32 {
     IPurgedRead private immutable coin;
     IIcons32 private immutable icons;
     IColorRegistry private immutable registry;
-    address public immutable bonds;
+    address public immutable bongs;
     IIconRendererTrophy32Svg private immutable svgRenderer;
 
     IERC721Lite private nft;
@@ -40,14 +40,14 @@ contract IconRendererTrophy32 {
         address icons_,
         address registry_,
         address svgRenderer_,
-        address bonds_
+        address bongs_
     ) {
         coin = IPurgedRead(coin_);
         icons = IIcons32(icons_);
         registry = IColorRegistry(registry_);
-        if (svgRenderer_ == address(0) || bonds_ == address(0)) revert E();
+        if (svgRenderer_ == address(0) || bongs_ == address(0)) revert E();
         svgRenderer = IIconRendererTrophy32Svg(svgRenderer_);
-        bonds = bonds_;
+        bongs = bongs_;
     }
 
     function setMyColors(
@@ -94,13 +94,13 @@ contract IconRendererTrophy32 {
         return registry.setTopAffiliateColor(msg.sender, address(nft), tokenId, trophyHex);
     }
 
-    modifier onlyBonds() {
-        if (msg.sender != bonds) revert E();
+    modifier onlyBongs() {
+        if (msg.sender != bongs) revert E();
         _;
     }
 
-    /// @notice Wire NFT contract in a single call; callable only by bonds, set-once.
-    function wire(address[] calldata addresses) external onlyBonds {
+    /// @notice Wire NFT contract in a single call; callable only by bongs, set-once.
+    function wire(address[] calldata addresses) external onlyBongs {
         _setNft(addresses.length > 0 ? addresses[0] : address(0));
     }
 
@@ -124,13 +124,13 @@ contract IconRendererTrophy32 {
         // bits [167:152]=exterminated trait (0xFFFF placeholder), [151:128]=level,
         // [204:200]=trophy type flags, [228:205]=staked level, [127:0]=owed ETH.
         // `extras` is a small status bundle set by the caller: extras[0] status bits
-        // (bit31=bond render, bit0=staked, bit1=matured), extras[1]=bond created distance,
-        // extras[2]=bond current distance, extras[3]=chance bps | (bit31=staked).
+        // (bit31=bong render, bit0=staked, bit1=matured), extras[1]=bong created distance,
+        // extras[2]=bong current distance, extras[3]=chance bps | (bit31=staked).
         return _tokenURI(tokenId, data, extras, 0);
     }
 
-    /// @notice Render PurgeBond NFTs as exterminator trophy placeholders.
-    function bondTokenURI(
+    /// @notice Render PurgeBong NFTs as exterminator trophy placeholders.
+    function bongTokenURI(
         uint256 tokenId,
         uint32 createdDistance,
         uint32 currentDistance,
@@ -139,7 +139,7 @@ contract IconRendererTrophy32 {
         uint256 sellCoinValue
     ) external view returns (string memory) {
         uint32[4] memory extras;
-        // High bit in extras[0] marks bond rendering for attribute injection.
+        // High bit in extras[0] marks bong rendering for attribute injection.
         extras[0] = (uint32(1) << 31) | (staked_ ? 1 : 0) | (currentDistance == 0 ? 2 : 0);
         extras[1] = createdDistance;
         extras[2] = currentDistance;
@@ -153,7 +153,7 @@ contract IconRendererTrophy32 {
         uint256 tokenId,
         uint256 data,
         uint32[4] memory extras,
-        uint256 bondSellCoin
+        uint256 bongSellCoin
     ) private view returns (string memory) {
         if ((data >> 128) == 0) revert("renderer:notTrophy");
 
@@ -176,21 +176,21 @@ contract IconRendererTrophy32 {
         }
         bool invertFlag = (data & TROPHY_FLAG_INVERT) != 0;
         uint32 statusFlags = extras[0];
-        bool isBond = (statusFlags & (uint32(1) << 31)) != 0;
-        uint32 bondCreated = extras[1];
-        uint32 bondCurrent = extras[2];
-        uint32 bondPack = extras[3];
-        bool bondStaked = (bondPack & (uint32(1) << 31)) != 0;
-        uint16 bondChance = uint16(bondPack);
-        bool bondMatured = (statusFlags & 2) != 0 || bondCurrent == 0;
-        if (bondStaked) statusFlags |= 1;
-        if (bondMatured) statusFlags |= 2;
+        bool isBong = (statusFlags & (uint32(1) << 31)) != 0;
+        uint32 bongCreated = extras[1];
+        uint32 bongCurrent = extras[2];
+        uint32 bongPack = extras[3];
+        bool bongStaked = (bongPack & (uint32(1) << 31)) != 0;
+        uint16 bongChance = uint16(bongPack);
+        bool bongMatured = (statusFlags & 2) != 0 || bongCurrent == 0;
+        if (bongStaked) statusFlags |= 1;
+        if (bongMatured) statusFlags |= 2;
         uint256 ethAttachment = data & TROPHY_OWED_MASK;
         if ((statusFlags & 2) == 0 && ethAttachment != 0) {
             statusFlags |= 2;
         }
         if (forcePlaceholder) {
-            statusFlags = 0; // keep placeholder extermination renders badge-free for token 0 and bonds
+            statusFlags = 0; // keep placeholder extermination renders badge-free for token 0 and bongs
         }
         bool hasEthAttachment = ethAttachment != 0;
         uint24 stakedLevel = uint24(
@@ -205,8 +205,8 @@ contract IconRendererTrophy32 {
                 : 0;
             stakedDurationStr = duration.toString();
             stakeAttrValue = string.concat(stakedDurationStr, " Levels");
-        } else if (isBond) {
-            stakeAttrValue = bondStaked ? "Yes" : "No";
+        } else if (isBong) {
+            stakeAttrValue = bongStaked ? "Yes" : "No";
         }
 
         string memory lvlStr = (lvl == 0) ? "TBD" : uint256(lvl).toString();
@@ -308,7 +308,7 @@ contract IconRendererTrophy32 {
         }
 
         string memory attrs;
-        if (!isBond) {
+        if (!isBong) {
             attrs = string(
                 abi.encodePacked(
                     '[{"trait_type":"Level","value":"',
@@ -343,8 +343,8 @@ contract IconRendererTrophy32 {
             attrs = string(abi.encodePacked(attrs, "]"));
         }
 
-        uint32 bondProgress = isBond
-            ? _bondElapsedPct1e6(bondCreated, bondCurrent, bondMatured)
+        uint32 bongProgress = isBong
+            ? _bongElapsedPct1e6(bongCreated, bongCurrent, bongMatured)
             : 0;
         IIconRendererTrophy32Svg.SvgParams memory svgParams = IIconRendererTrophy32Svg.SvgParams({
             tokenId: tokenId,
@@ -357,34 +357,34 @@ contract IconRendererTrophy32 {
             statusFlags: statusFlags,
             lvl: lvl,
             invertFlag: invertFlag,
-            isBond: isBond,
-            bondChanceBps: bondChance,
-            bondMatured: bondMatured,
-            bondProgress1e6: bondProgress
+            isBong: isBong,
+            bongChanceBps: bongChance,
+            bongMatured: bongMatured,
+            bongProgress1e6: bongProgress
         });
         string memory img = svgRenderer.trophySvg(svgParams);
-        if (isBond) {
-            string memory name_ = bondMatured
-                ? string.concat("Matured PurgeBond #", tokenId.toString())
+        if (isBong) {
+            string memory name_ = bongMatured
+                ? string.concat("Matured PurgeBong #", tokenId.toString())
                 : string.concat(
-                    _formatBpsPercent(bondChance),
-                    " PurgeBond #",
+                    _formatBpsPercent(bongChance),
+                    " PurgeBong #",
                     tokenId.toString()
                 );
-            string memory bondAttrs = _bondAttributes(
-                bondMatured,
-                bondStaked,
-                bondCreated,
-                bondCurrent,
-                bondChance,
-                bondSellCoin
+            string memory bongAttrs = _bongAttributes(
+                bongMatured,
+                bongStaked,
+                bongCreated,
+                bongCurrent,
+                bongChance,
+                bongSellCoin
             );
             return
-                _packBond(
+                _packBong(
                     img,
                     name_,
                     "A sequential claim on the revenue derived from Purge Game.",
-                    bondAttrs
+                    bongAttrs
                 );
         }
         return _pack(tokenId, true, img, lvl, desc, trophyType, attrs);
@@ -403,7 +403,7 @@ contract IconRendererTrophy32 {
     }
 
 
-    function _bondElapsedPct1e6(
+    function _bongElapsedPct1e6(
         uint32 created,
         uint32 current,
         bool matured
@@ -466,7 +466,7 @@ contract IconRendererTrophy32 {
             );
     }
 
-    function _packBond(
+    function _packBong(
         string memory svg,
         string memory name_,
         string memory desc,
@@ -535,7 +535,7 @@ contract IconRendererTrophy32 {
             );
     }
 
-    function _bondAttributes(
+    function _bongAttributes(
         bool matured,
         bool staked,
         uint32 created,

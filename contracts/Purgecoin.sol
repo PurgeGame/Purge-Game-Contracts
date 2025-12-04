@@ -42,7 +42,7 @@ contract Purgecoin {
     error StakeInvalid();
     error ZeroAddress();
     error NotDecimatorWindow();
-    error OnlyBonds();
+    error OnlyBongs();
     error OnlyAffiliate();
     error AlreadyWired();
 
@@ -148,7 +148,7 @@ contract Purgecoin {
     address internal bountyOwedTo;
     // stakeResolutionDay[level] stores the coinflip day used to resolve that level's stakes.
     mapping(uint24 => uint48) internal stakeResolutionDay;
-    address public immutable bonds;
+    address public immutable bongs;
     address public immutable regularRenderer;
 
     // ---------------------------------------------------------------------
@@ -243,13 +243,13 @@ contract Purgecoin {
     // ---------------------------------------------------------------------
     // Constructor
     // ---------------------------------------------------------------------
-    constructor(address bonds_, address affiliate_, address regularRenderer_) {
-        if (bonds_ == address(0) || affiliate_ == address(0)) revert ZeroAddress();
-        bonds = bonds_;
+    constructor(address bongs_, address affiliate_, address regularRenderer_) {
+        if (bongs_ == address(0) || affiliate_ == address(0)) revert ZeroAddress();
+        bongs = bongs_;
         affiliateProgram = PurgeAffiliate(affiliate_);
         regularRenderer = regularRenderer_;
-        uint256 bondSeed = 2_000_000 * MILLION;
-        _mint(bonds_, bondSeed);
+        uint256 bongSeed = 2_000_000 * MILLION;
+        _mint(bongs_, bongSeed);
     }
 
     /// @notice Burn PURGE to increase the caller’s coinflip stake, applying streak bonuses when eligible.
@@ -713,7 +713,7 @@ contract Purgecoin {
     /// @notice Wire game, NFT, quest module, and jackpots using an address array.
     /// @dev Order: [game, nft, quest module, jackpots]; set-once per slot.
     function wire(address[] calldata addresses) external {
-        if (msg.sender != bonds) revert OnlyBonds();
+        if (msg.sender != bongs) revert OnlyBongs();
 
         uint256 len = addresses.length;
         if (len > 0) _setGame(addresses[0]);
@@ -773,11 +773,11 @@ contract Purgecoin {
         _mint(address(this), presaleTotal);
     }
 
-    /// @notice Mint PURGE to the bonds contract for bond payouts (game or bonds caller).
-    function bondPayment(uint256 amount) external {
+    /// @notice Mint PURGE to the bongs contract for bong payouts (game or bongs caller).
+    function bongPayment(uint256 amount) external {
         address sender = msg.sender;
-        if (sender != bonds) revert OnlyGame();
-        _mint(bonds, amount);
+        if (sender != bongs) revert OnlyGame();
+        _mint(bongs, amount);
     }
 
     /// @notice Credit a coinflip stake from authorized contracts (game, NFT, affiliate).
@@ -879,13 +879,13 @@ contract Purgecoin {
         }
     }
 
-    function notifyQuestBond(address player, uint256 basePerBondWei) external {
-        if (msg.sender != bonds) revert OnlyBonds();
+    function notifyQuestBong(address player, uint256 basePerBongWei) external {
+        if (msg.sender != bongs) revert OnlyBongs();
         IPurgeQuestModule module = questModule;
-        if (address(module) == address(0) || player == address(0) || basePerBondWei == 0) return;
-        (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleBondPurchase(
+        if (address(module) == address(0) || player == address(0) || basePerBongWei == 0) return;
+        (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleBongPurchase(
             player,
-            basePerBondWei
+            basePerBongWei
         );
         uint256 questReward = _questApplyReward(player, reward, hardMode, questType, streak, completed);
         if (questReward != 0) {

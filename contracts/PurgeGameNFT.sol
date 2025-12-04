@@ -444,7 +444,7 @@ contract PurgeGameNFT {
         // ETH purchases optionally bypass payment when in-game credit is used; all flows are forwarded to game logic.
         if (payKind == MintPaymentKind.DirectEth) {
             if (msg.value != expectedWei) revert E();
-        } else if (payKind == MintPaymentKind.Claimable || payKind == MintPaymentKind.BondCredit) {
+        } else if (payKind == MintPaymentKind.Claimable || payKind == MintPaymentKind.BongCredit) {
             if (msg.value != 0) revert E();
         } else if (payKind == MintPaymentKind.Combined) {
             if (msg.value > expectedWei) revert E();

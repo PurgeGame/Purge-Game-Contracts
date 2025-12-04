@@ -2,7 +2,7 @@ const hre = require("hardhat");
 const fs = require("fs");
 const path = require("path");
 
-const OUTPUT_DIR = path.join(__dirname, "..", "artifacts", "tmp", "bond-renders");
+const OUTPUT_DIR = path.join(__dirname, "..", "artifacts", "tmp", "bong-renders");
 
 function decodeDataUri(uri) {
   const json = JSON.parse(Buffer.from(uri.split(",")[1], "base64").toString());
@@ -74,7 +74,7 @@ async function main() {
 
   const samples = [
     {
-      name: "bond-early-unstaked-0pct",
+      name: "bong-early-unstaked-0pct",
       tokenId: 1,
       created: 120,
       current: 120,
@@ -82,7 +82,7 @@ async function main() {
       staked: false,
     },
     {
-      name: "bond-quarter-staked",
+      name: "bong-quarter-staked",
       tokenId: 2,
       created: 120,
       current: 90,
@@ -90,7 +90,7 @@ async function main() {
       staked: true,
     },
     {
-      name: "bond-half-unstaked",
+      name: "bong-half-unstaked",
       tokenId: 3,
       created: 100,
       current: 50,
@@ -98,7 +98,7 @@ async function main() {
       staked: false,
     },
     {
-      name: "bond-threequarter-staked",
+      name: "bong-threequarter-staked",
       tokenId: 4,
       created: 80,
       current: 20,
@@ -106,7 +106,7 @@ async function main() {
       staked: true,
     },
     {
-      name: "bond-near-unstaked-94pct",
+      name: "bong-near-unstaked-94pct",
       tokenId: 5,
       created: 90,
       current: 5,
@@ -117,7 +117,7 @@ async function main() {
 
   for (const sample of samples) {
     await nft.setOwner(sample.tokenId, owner);
-    const uri = await renderer.bondTokenURI(
+    const uri = await renderer.bongTokenURI(
       sample.tokenId,
       sample.created,
       sample.current,

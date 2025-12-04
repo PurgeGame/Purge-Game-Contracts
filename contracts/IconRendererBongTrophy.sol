@@ -5,8 +5,8 @@ import "@openzeppelin/contracts/utils/Base64.sol";
 import "@openzeppelin/contracts/utils/Strings.sol";
 import "./interfaces/IconRendererTypes.sol"; // For IColorRegistry, IERC721Lite
 
-interface IPurgeBondRenderer {
-    function bondTokenURI(
+interface IPurgeBongRenderer {
+    function bongTokenURI(
         uint256 tokenId,
         uint32 createdDistance,
         uint32 currentDistance,
@@ -16,10 +16,10 @@ interface IPurgeBondRenderer {
     ) external view returns (string memory);
 }
 
-contract IconRendererBondTrophy is IPurgeBondRenderer {
+contract IconRendererBongTrophy is IPurgeBongRenderer {
     using Strings for uint256;
 
-    address public immutable bonds;
+    address public immutable bongs;
     IColorRegistry public immutable registry;
 
     string private constant _ETH_PATH = 
@@ -34,12 +34,12 @@ contract IconRendererBondTrophy is IPurgeBondRenderer {
 
     string private constant _FLAME_D = "M431.48,504.54c-5.24-10.41-12.36-18.75-21.62-24.98-6.91-4.65-14.21-8.76-21.56-12.69-12.95-6.93-26.54-12.66-38.78-20.91-19.24-12.96-31.77-30.57-36.56-53.37-3.66-17.46-2.13-34.69,2.89-51.71,4.01-13.6,10.35-26.15,16.95-38.6,7.71-14.54,15.86-28.87,21.81-44.28,3.39-8.77,5.94-17.76,7.2-27.11,0,3.69,.24,7.4-.04,11.07-1.48,19.17-7.44,37.4-11.94,55.94-3.57,14.72-6.92,29.46-6.53,44.78,.46,18.05,6.14,34.08,19.02,46.86,9.15,9.09,19.11,17.38,28.83,25.89,8.46,7.41,17.32,14.37,24.28,23.36,7.48,9.66,11.24,20.77,13.22,32.63,.32,1.93,.63,3.86,1.02,6.22,4.22-6.71,8.24-12.99,12.15-19.34,2.97-4.81,5.94-9.63,8.66-14.58,8.98-16.34,8-31.83-4.22-46.28-6.7-7.92-13.41-15.82-20.01-23.82-4.83-5.86-9.23-12.01-10.54-19.77-1.49-8.9,.02-17.43,3.25-25.74,3.45-8.89,7.2-17.67,10.28-26.69,3.52-10.29,5.13-21.02,5.5-31.89,.14-4.19-.28-8.39-.74-12.61-3.91,16.79-14.43,29.92-23.51,43.8-7.15,10.93-14.4,21.79-19.47,33.9-3.78,9.03-6.23,18.4-6.71,28.2-.59,11.95,2.26,23.17,8.54,33.28,3.76,6.07,8.44,11.56,12.72,17.31,.36,.49,.75,.96,1.13,1.44l-.39,.49c-2.78-2-5.65-3.89-8.33-6.02-12.9-10.23-23.86-22.09-30.76-37.27-5.35-11.77-6.76-24.15-5.31-36.9,2.41-21.24,11.63-39.66,23.7-56.9,7.63-10.9,15.43-21.7,22.75-32.81,7.31-11.11,11.78-23.44,13.48-36.65,1.58-12.32,.38-24.49-2.45-36.55-2.43-10.38-6-20.36-10.24-30.13l.47-.43c3.18,3.14,6.6,6.08,9.51,9.45,16.8,19.42,27.96,41.68,33.29,66.83,3.12,14.73,3.44,29.56,1.84,44.51-1.06,9.89-2.25,19.82-2.49,29.75-.27,11.05,3.86,21.06,9.7,30.3,5.19,8.22,10.8,16.18,15.83,24.48,7.27,12.01,11.77,25.09,13,39.09,1.06,12.19-1.32,23.97-5.7,35.33-4.68,12.14-11.42,23.07-19.75,33.04-.28,.34-.5,.73-.98,1.42,.58-.2,.81-.21,.94-.33,13.86-12.66,25.56-26.91,32.56-44.59,4.2-10.61,4.64-21.64,2.92-32.71-1.55-9.97-3.84-19.83-5.69-29.75-1.3-6.98-1.62-14.03-.96-21.16,2.41,11.44,9.46,20.38,15.71,29.77,4.45,6.69,8.7,13.49,10.95,21.34l.78-.11c-.52-5.46-.86-10.95-1.6-16.38-1.57-11.65-6.36-22.27-10.97-32.92-5.36-12.4-10.87-24.73-14.2-37.9-4.6-18.21-6.04-36.6-3.4-55.24,.17-1.22,.27-2.44,.62-3.65,3.31,18.57,10.98,35.38,19.91,51.69,5.97,10.9,12.18,21.66,18.06,32.61,7.08,13.2,12.26,27.14,14.41,42.02,4.35,30.04-2.87,56.63-24.51,78.55-9.21,9.33-20.5,15.79-31.95,21.98-9.44,5.1-18.91,10.16-28.11,15.67-11.91,7.14-21.38,16.78-27.83,29.82Z";
 
-    constructor(address bonds_, address registry_) {
-        bonds = bonds_;
+    constructor(address bongs_, address registry_) {
+        bongs = bongs_;
         registry = IColorRegistry(registry_);
     }
 
-    function bondTokenURI(
+    function bongTokenURI(
         uint256 tokenId,
         uint32 createdDistance,
         uint32 currentDistance,
@@ -50,15 +50,15 @@ contract IconRendererBondTrophy is IPurgeBondRenderer {
         bool matured = (currentDistance == 0);
         
         string memory name_ = matured
-            ? string.concat("Matured PurgeBond #", tokenId.toString())
+            ? string.concat("Matured PurgeBong #", tokenId.toString())
             : string.concat(
                 _formatBpsPercent(chanceBps),
-                " PurgeBond #",
+                " PurgeBong #",
                 tokenId.toString()
             );
 
         string memory desc = "A sequential claim on the revenue derived from Purge Game.";
-        string memory attributes = _bondAttributes(
+        string memory attributes = _bongAttributes(
             matured,
             staked,
             createdDistance,
@@ -74,42 +74,65 @@ contract IconRendererBondTrophy is IPurgeBondRenderer {
     }
 
     function _getColors(uint256 tokenId) private view returns (string[4] memory colors) {
-        // Defaults
-        colors[0] = "#30d100"; // Border / Outline
-        colors[1] = "#ff3300"; // Flame
-        colors[2] = "#30d100"; // Outer Circle / ETH
-        colors[3] = "#cccccc"; // Background / Square
+        // Deterministic pseudo-random palette per tokenId.
+        colors[0] = _outlineColor(tokenId); // Border / Outline (non-green)
+        colors[1] = _redShade(tokenId);     // Flame (red family)
+        colors[2] = _greenShade(tokenId);   // Outer Circle / ETH (green family)
+        colors[3] = "#cccccc";               // Background / Square (fixed neutral)
 
-        address owner;
-        if (bonds != address(0)) {
-            try IERC721Lite(bonds).ownerOf(tokenId) returns (address o) {
-                owner = o;
-            } catch {
-                // ignore failure
-            }
-        }
-        if (owner == address(0)) return colors;
+        // Only honor explicit per-bong overrides; defaults stay fixed so bongs do not
+        // inherit random owner color prefs.
+        if (bongs == address(0)) return colors;
 
-        // Check Token Specific then Owner Specific
-        // Channel 0: Outline (Border)
-        string memory c = registry.tokenColor(bonds, tokenId, 0);
-        if (bytes(c).length == 0) c = registry.addressColor(owner, 0);
+        string memory c = registry.tokenColor(bongs, tokenId, 0);
         if (bytes(c).length != 0) colors[0] = c;
 
-        // Channel 1: Flame
-        c = registry.tokenColor(bonds, tokenId, 1);
-        if (bytes(c).length == 0) c = registry.addressColor(owner, 1);
+        c = registry.tokenColor(bongs, tokenId, 1);
         if (bytes(c).length != 0) colors[1] = c;
 
-        // Channel 2: Diamond (Outer Circle)
-        c = registry.tokenColor(bonds, tokenId, 2);
-        if (bytes(c).length == 0) c = registry.addressColor(owner, 2);
+        c = registry.tokenColor(bongs, tokenId, 2);
         if (bytes(c).length != 0) colors[2] = c;
 
-        // Channel 3: Square (Background)
-        c = registry.tokenColor(bonds, tokenId, 3);
-        if (bytes(c).length == 0) c = registry.addressColor(owner, 3);
+        c = registry.tokenColor(bongs, tokenId, 3);
         if (bytes(c).length != 0) colors[3] = c;
+    }
+
+    function _outlineColor(uint256 tokenId) private pure returns (string memory) {
+        // Hue buckets that avoid greens: 0 (red), 25 (orange), 300 (magenta),
+        // 260 (purple), 210 (blue), 340 (pink).
+        uint256 h = _rand(tokenId, "bong-outline");
+        uint8 bucket = uint8(h % 6);
+        uint16 baseHue = bucket == 0
+            ? 0
+            : bucket == 1
+                ? 25
+                : bucket == 2
+                    ? 300
+                    : bucket == 3
+                        ? 260
+                        : bucket == 4
+                            ? 210
+                            : uint16(340);
+        uint16 hue = uint16((baseHue + (h % 15)) % 360);
+        uint8 sat = 160 + uint8((h >> 8) % 80); // 160-239
+        uint8 val = 150 + uint8((h >> 16) % 90); // 150-239
+        return _rgbHex(_hsvToRgb(hue, sat, val));
+    }
+
+    function _greenShade(uint256 tokenId) private pure returns (string memory) {
+        uint256 h = _rand(tokenId, "bong-green");
+        uint16 hue = 105 + uint16(h % 70); // 105-174 (greens)
+        uint8 sat = 180 + uint8((h >> 8) % 70); // 180-249
+        uint8 val = 170 + uint8((h >> 16) % 70); // 170-239
+        return _rgbHex(_hsvToRgb(hue, sat, val));
+    }
+
+    function _redShade(uint256 tokenId) private pure returns (string memory) {
+        uint256 h = _rand(tokenId, "bong-red");
+        uint16 hue = uint16(h % 2 == 0 ? (uint16(h % 25)) : uint16(330 + (h % 30))); // 0-24 or 330-359
+        uint8 sat = 200 + uint8((h >> 8) % 55); // 200-254
+        uint8 val = 190 + uint8((h >> 16) % 60); // 190-249
+        return _rgbHex(_hsvToRgb(hue % 360, sat, val));
     }
 
     function _generateSvg(uint16 chanceBps, string[4] memory colors) private pure returns (string memory) {
@@ -139,17 +162,32 @@ contract IconRendererBondTrophy is IPurgeBondRenderer {
         );
 
         string memory flames;
-        // Middle flame always visible
-        flames = string.concat(
-            "<use href='#flame-icon' x='256' y='", (330 - fOff).toString(), "' width='180' height='180' transform='translate(-90, -90)'/>"
-        );
         
-        // Outer flames only visible if chance >= 15% (150 bps)
-        if (chanceBps >= 150) {
+        // Middle flame: Visible if <= 15% (only flame) OR >= 30% (full set)
+        if (chanceBps <= 150 || chanceBps >= 300) {
+            flames = string.concat(
+                "<use href='#flame-icon' x='256' y='", (330 - fOff).toString(), "' width='180' height='180' transform='translate(-90, -90)'/>"
+            );
+        }
+        
+        // Outer flames: Visible if > 15%
+        if (chanceBps > 150) {
+            uint256 outerY = 300;
+            uint256 outerXBase = 206;
+            uint256 outerXBaseRight = 306;
+
+            // Special positioning for 16-29% range (only 2 flames)
+            // Relaxed spacing (halfway between tight and wide)
+            if (chanceBps < 300) {
+                outerY = 310;
+                outerXBase = 211;
+                outerXBaseRight = 301;
+            }
+
             flames = string.concat(
                 flames,
-                "<use href='#flame-icon' x='", (206 + xOff).toString(), "' y='", (300 - fOff).toString(), "' width='180' height='180' transform='translate(-90, -90)'/>",
-                "<use href='#flame-icon' x='", (306 - xOff).toString(), "' y='", (300 - fOff).toString(), "' width='180' height='180' transform='translate(-90, -90)'/>"
+                "<use href='#flame-icon' x='", (outerXBase + xOff).toString(), "' y='", (outerY - fOff).toString(), "' width='180' height='180' transform='translate(-90, -90)'/>",
+                "<use href='#flame-icon' x='", (outerXBaseRight - xOff).toString(), "' y='", (outerY - fOff).toString(), "' width='180' height='180' transform='translate(-90, -90)'/>"
             );
         }
 
@@ -174,7 +212,7 @@ contract IconRendererBondTrophy is IPurgeBondRenderer {
         );
     }
 
-    function _bondAttributes(
+    function _bongAttributes(
         bool matured,
         bool staked,
         uint32 created,
@@ -225,5 +263,69 @@ contract IconRendererBondTrophy is IPurgeBondRenderer {
         fracStr[4] = bytes1(uint8(48 + (frac / 10) % 10));
         fracStr[5] = bytes1(uint8(48 + (frac % 10)));
         return string.concat(whole.toString(), ".", string(fracStr), " PURGE");
+    }
+
+    function _hsvToRgb(uint16 h, uint8 s, uint8 v) private pure returns (uint24) {
+        uint256 region = h / 60;
+        uint256 remainder = (h % 60) * 255 / 60;
+
+        uint256 p = (uint256(v) * (255 - s)) / 255;
+        uint256 q = (uint256(v) * (255 - (s * remainder) / 255)) / 255;
+        uint256 t = (uint256(v) * (255 - (s * (255 - remainder)) / 255)) / 255;
+
+        uint8 r;
+        uint8 g;
+        uint8 b;
+        if (region == 0) {
+            r = v;
+            g = uint8(t);
+            b = uint8(p);
+        } else if (region == 1) {
+            r = uint8(q);
+            g = v;
+            b = uint8(p);
+        } else if (region == 2) {
+            r = uint8(p);
+            g = v;
+            b = uint8(t);
+        } else if (region == 3) {
+            r = uint8(p);
+            g = uint8(q);
+            b = v;
+        } else if (region == 4) {
+            r = uint8(t);
+            g = uint8(p);
+            b = v;
+        } else {
+            r = v;
+            g = uint8(p);
+            b = uint8(q);
+        }
+        return (uint24(r) << 16) | (uint24(g) << 8) | b;
+    }
+
+    function _rgbHex(uint24 rgb) private pure returns (string memory) {
+        bytes memory out = new bytes(7);
+        out[0] = "#";
+        out[1] = _hexChar(uint8(rgb >> 20));
+        out[2] = _hexChar(uint8(rgb >> 16));
+        out[3] = _hexChar(uint8(rgb >> 12));
+        out[4] = _hexChar(uint8(rgb >> 8));
+        out[5] = _hexChar(uint8(rgb >> 4));
+        out[6] = _hexChar(uint8(rgb));
+        return string(out);
+    }
+
+    function _hexChar(uint8 nibble) private pure returns (bytes1) {
+        nibble &= 0x0f;
+        return nibble < 10 ? bytes1(nibble + 48) : bytes1(nibble + 87); // 0-9,a-f
+    }
+
+    function _min256(uint16 a, uint16 b) private pure returns (uint16) {
+        return a < b ? a : b;
+    }
+
+    function _rand(uint256 tokenId, string memory salt) private pure returns (uint256) {
+        return uint256(keccak256(abi.encodePacked(salt, tokenId)));
     }
 }

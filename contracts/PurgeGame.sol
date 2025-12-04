@@ -12,11 +12,11 @@ import {
     IPurgeGameEndgameModule,
     IPurgeGameJackpotModule,
     IPurgeGameMintModule,
-    IPurgeGameBondModule
+    IPurgeGameBongModule
 } from "./interfaces/IPurgeGameModules.sol";
 import {MintPaymentKind} from "./interfaces/IPurgeGame.sol";
 import {PurgeGameExternalOp} from "./interfaces/IPurgeGameExternal.sol";
-import {PurgeGameStorage, ClaimableBondInfo} from "./storage/PurgeGameStorage.sol";
+import {PurgeGameStorage, ClaimableBongInfo} from "./storage/PurgeGameStorage.sol";
 import {PurgeGameCredit} from "./utils/PurgeGameCredit.sol";
 
 interface IStETH {
@@ -27,25 +27,25 @@ interface IStETH {
     function transferFrom(address from, address to, uint256 amount) external returns (bool);
 }
 
-interface IPurgeBonds {
-    function payBonds(
+interface IPurgeBongs {
+    function payBongs(
         uint256 coinAmount,
         uint256 stEthAmount,
         uint48 rngDay,
         uint256 rngWord,
-        uint256 maxBonds
+        uint256 maxBongs
     ) external payable;
-    function resolvePendingBonds(uint256 maxBonds) external;
+    function resolvePendingBongs(uint256 maxBongs) external;
     function resolvePending() external view returns (bool);
     function notifyGameOver() external;
     function finalizeShutdown(uint256 maxIds) external returns (uint256 processedIds, uint256 burned, bool complete);
     function setTransfersLocked(bool locked, uint48 rngDay) external;
     function stakeRateBps() external view returns (uint16);
     function purchasesEnabled() external view returns (bool);
-    function purchaseGameBonds(
+    function purchaseGameBongs(
         address[] calldata recipients,
         uint256 quantity,
-        uint256 basePerBondWei,
+        uint256 basePerBongWei,
         bool stake
     ) external returns (uint256 startTokenId);
 }
@@ -95,7 +95,7 @@ contract PurgeGame is PurgeGameStorage {
     error NotTimeYet(); // Called in a phase where the action is not permitted
     error RngNotReady(); // VRF request still pending
     error RngLocked(); // RNG is already locked; nudge not allowed
-    error BondsNotResolved(); // Pending bond resolution must be completed before requesting new RNG
+    error BongsNotResolved(); // Pending bong resolution must be completed before requesting new RNG
     error InvalidQuantity(); // Invalid quantity or token count for the action
     error CoinPaused(); // LINK top-ups unavailable while RNG is locked
     error VrfUpdateNotReady(); // VRF swap not allowed yet (not stuck long enough or randomness already received)
@@ -104,14 +104,14 @@ contract PurgeGame is PurgeGameStorage {
     // Events
     // -----------------------
     event PlayerCredited(address indexed player, address indexed recipient, uint256 amount);
-    event BondCreditAdded(address indexed player, uint256 amount);
+    event BongCreditAdded(address indexed player, uint256 amount);
     event Jackpot(uint256 traits); // Encodes jackpot metadata
     event Purge(address indexed player, uint256[] tokenIds);
     event Advance(uint8 gameState);
     event ReverseFlip(address indexed caller, uint256 totalQueued, uint256 cost);
     event VrfCoordinatorUpdated(address indexed previous, address indexed current);
-    event PrizePoolBondBuy(uint256 spendWei, uint256 quantity);
-    event BondCreditLiquidated(address indexed player, uint256 amount);
+    event PrizePoolBongBuy(uint256 spendWei, uint256 quantity);
+    event BongCreditLiquidated(address indexed player, uint256 amount);
 
     // -----------------------
     // Immutable Addresses
@@ -119,14 +119,14 @@ contract PurgeGame is PurgeGameStorage {
     IPurgeRendererLike private immutable renderer; // Trusted renderer; used for tokenURI composition
     IPurgeCoin private immutable coin; // Trusted coin/game-side coordinator (PURGE ERC20)
     IPurgeGameNFT private immutable nft; // ERC721 interface for mint/burn/metadata surface
-    address public immutable bonds; // Bond contract for resolution and metadata
+    address public immutable bongs; // Bong contract for resolution and metadata
     address private immutable affiliateProgram; // Cached affiliate program for payout routing
     IStETH private immutable steth; // stETH token held by the game
     address private immutable jackpots; // PurgeJackpots contract
     address private immutable endgameModule; // Delegate module for endgame settlement
     address private immutable jackpotModule; // Delegate module for jackpot routines
     address private immutable mintModule; // Delegate module for mint packing + trait rebuild helpers
-    address private immutable bondModule; // Delegate module for bond upkeep and staking
+    address private immutable bongModule; // Delegate module for bong upkeep and staking
     IVRFCoordinator private vrfCoordinator; // Chainlink VRF coordinator (mutable for emergencies)
     bytes32 private immutable vrfKeyHash; // VRF key hash
     uint256 private immutable vrfSubscriptionId; // VRF subscription identifier
@@ -135,7 +135,7 @@ contract PurgeGame is PurgeGameStorage {
 
     uint256 private constant DEPLOY_IDLE_TIMEOUT = (365 days * 5) / 2; // 2.5 years
     uint48 private constant LEVEL_START_SENTINEL = type(uint48).max;
-    uint16 private constant BOND_LIQUIDATION_DISCOUNT_BPS = 6500; // 65% of face value when liquidating bond credit to coin
+    uint16 private constant BONG_LIQUIDATION_DISCOUNT_BPS = 6500; // 65% of face value when liquidating bong credit to coin
 
     // -----------------------
     // Game Constants
@@ -181,14 +181,14 @@ contract PurgeGame is PurgeGameStorage {
      * @param endgameModule_    Delegate module handling endgame settlement
      * @param jackpotModule_    Delegate module handling jackpot distribution
      * @param mintModule_       Delegate module handling mint packing and trait rebuild helpers
-     * @param bondModule_       Delegate module handling bond upkeep, staking, and shutdown drains
+     * @param bongModule_       Delegate module handling bong upkeep, staking, and shutdown drains
      * @param vrfCoordinator_   Chainlink VRF coordinator
      * @param vrfKeyHash_       VRF key hash
      * @param vrfSubscriptionId_ VRF subscription identifier
      * @param linkToken_        LINK token contract (ERC677) for VRF billing
      * @param stEthToken_       stETH token address
      * @param jackpots_         PurgeJackpots contract address (wires Decimator/BAF jackpots)
-     * @param bonds_            Bonds contract address
+     * @param bongs_            Bongs contract address
      * @param trophies_         Standalone trophy ERC721 contract (cosmetic only)
      */
     constructor(
@@ -198,14 +198,14 @@ contract PurgeGame is PurgeGameStorage {
         address endgameModule_,
         address jackpotModule_,
         address mintModule_,
-        address bondModule_,
+        address bongModule_,
         address vrfCoordinator_,
         bytes32 vrfKeyHash_,
         uint256 vrfSubscriptionId_,
         address linkToken_,
         address stEthToken_,
         address jackpots_,
-        address bonds_,
+        address bongs_,
         address trophies_
     ) {
         coin = IPurgeCoin(purgeCoinContract);
@@ -214,7 +214,7 @@ contract PurgeGame is PurgeGameStorage {
         endgameModule = endgameModule_;
         jackpotModule = jackpotModule_;
         mintModule = mintModule_;
-        bondModule = bondModule_;
+        bongModule = bongModule_;
         vrfCoordinator = IVRFCoordinator(vrfCoordinator_);
         affiliateProgram = coin.affiliateProgram();
         affiliateProgramAddr = affiliateProgram;
@@ -225,16 +225,15 @@ contract PurgeGame is PurgeGameStorage {
         if (
             stEthToken_ == address(0) ||
             jackpots_ == address(0) ||
-            bonds_ == address(0) ||
+            bongs_ == address(0) ||
             trophies_ == address(0) ||
             mintModule_ == address(0) ||
-            bondModule_ == address(0)
-        )
-            revert E();
+            bongModule_ == address(0)
+        ) revert E();
         jackpots = jackpots_;
-        bonds = bonds_;
+        bongs = bongs_;
         trophies = trophies_;
-        if (!steth.approve(bonds_, type(uint256).max)) revert E();
+        if (!steth.approve(bongs_, type(uint256).max)) revert E();
         deployTimestamp = uint48(block.timestamp);
     }
 
@@ -341,10 +340,10 @@ contract PurgeGame is PurgeGameStorage {
         return uint24((mintPacked_[player] >> ETH_LEVEL_STREAK_SHIFT) & MINT_MASK_24);
     }
 
-    /// @notice Record a mint, funded by ETH (`msg.value`), claimable winnings, or bond credit.
+    /// @notice Record a mint, funded by ETH (`msg.value`), claimable winnings, or bong credit.
     /// @dev ETH paths require `msg.value == costWei`. Claimable paths deduct from `claimableWinnings` and fund prize pools.
-    ///      Bond credit uses the same `costWei` accounting but does not increase prize pools and must send zero ETH.
-    ///      Combined allows any mix of ETH, claimable, and bond credit (in that order) to cover `costWei`.
+    ///      Bong credit uses the same `costWei` accounting but does not increase prize pools and must send zero ETH.
+    ///      Combined allows any mix of ETH, claimable, and bong credit (in that order) to cover `costWei`.
     function recordMint(
         address player,
         uint24 lvl,
@@ -376,7 +375,7 @@ contract PurgeGame is PurgeGameStorage {
     ) private returns (uint256 prizeContribution) {
         (bool ok, uint256 prize, uint256 creditUsed) = PurgeGameCredit.processMintPayment(
             claimableWinnings,
-            bondCredit,
+            bongCredit,
             player,
             amount,
             payKind,
@@ -384,12 +383,12 @@ contract PurgeGame is PurgeGameStorage {
         );
         if (!ok) revert E();
         if (creditUsed != 0) {
-            uint256 escrow = bondCreditEscrow;
+            uint256 escrow = bongCreditEscrow;
             if (escrow != 0) {
                 uint256 applied = creditUsed < escrow ? creditUsed : escrow;
                 unchecked {
                     prize += applied;
-                    bondCreditEscrow = escrow - applied;
+                    bongCreditEscrow = escrow - applied;
                 }
             }
         }
@@ -412,14 +411,14 @@ contract PurgeGame is PurgeGameStorage {
             if (
                 deployTs != 0 && uint256(ts) >= uint256(deployTs) + DEPLOY_IDLE_TIMEOUT // uint256 to avoid uint48 overflow
             ) {
-                drainToBonds(day);
+                drainToBongs(day);
                 return;
             }
         }
         uint8 _gameState = gameState;
         // Liveness drain
         if (ts - 365 days > lst && _gameState != 0) {
-            drainToBonds(day);
+            drainToBongs(day);
             return;
         }
         uint24 lvl = level;
@@ -460,7 +459,7 @@ contract PurgeGame is PurgeGameStorage {
                         address topStake = coinContract.recordStakeResolution(lvl, day);
                         address trophyAddr = trophies;
                         if (topStake != address(0)) {
-                            try IPurgeTrophies(trophyAddr).mintStake(topStake, lvl) {} catch {}
+                            IPurgeTrophies(trophyAddr).mintStake(topStake, lvl);
                         }
                     }
                     if (lastExterminatedTrait != TRAIT_ID_TIMEOUT) {
@@ -506,9 +505,9 @@ contract PurgeGame is PurgeGameStorage {
                         }
                     }
 
-                    uint256 totalWeiForBond = rewardPool + currentPrizePool;
-                    if (_bondMaintenanceForMapModule(day, totalWeiForBond, rngWord, cap)) {
-                        break; // bond batch consumed this tick; rerun advanceGame to continue
+                    uint256 totalWeiForBong = rewardPool + currentPrizePool;
+                    if (_bongMaintenanceForMapModule(day, totalWeiForBong, rngWord, cap)) {
+                        break; // bong batch consumed this tick; rerun advanceGame to continue
                     }
                     uint256 mapEffectiveWei = _calcPrizePoolForJackpot(lvl, rngWord);
                     payMapJackpot(lvl, rngWord, mapEffectiveWei);
@@ -546,7 +545,6 @@ contract PurgeGame is PurgeGameStorage {
 
                 uint32 mintedCount = _purchaseTargetCountFromRawModule(purchaseCountRaw);
                 nft.finalizePurchasePhase(mintedCount, rngWordCurrent);
-                _maybeResolveBonds(cap);
                 traitRebuildCursor = 0;
                 airdropMultiplier = 1;
                 earlyPurgePercent = 0;
@@ -844,16 +842,16 @@ contract PurgeGame is PurgeGameStorage {
         if (!ok) revert E();
     }
 
-    function _bondMaintenanceForMapModule(
+    function _bongMaintenanceForMapModule(
         uint48 day,
         uint256 totalWei,
         uint256 rngWord,
         uint32 cap
     ) private returns (bool worked) {
-        (bool ok, bytes memory data) = bondModule.delegatecall(
+        (bool ok, bytes memory data) = bongModule.delegatecall(
             abi.encodeWithSelector(
-                IPurgeGameBondModule.bondMaintenanceForMap.selector,
-                bonds,
+                IPurgeGameBongModule.bongMaintenanceForMap.selector,
+                bongs,
                 address(steth),
                 day,
                 totalWei,
@@ -866,17 +864,17 @@ contract PurgeGame is PurgeGameStorage {
     }
 
     function _stakeForTargetRatioModule(uint24 lvl) private {
-        (bool ok, bytes memory data) = bondModule.delegatecall(
-            abi.encodeWithSelector(IPurgeGameBondModule.stakeForTargetRatio.selector, bonds, address(steth), lvl)
+        (bool ok, bytes memory data) = bongModule.delegatecall(
+            abi.encodeWithSelector(IPurgeGameBongModule.stakeForTargetRatio.selector, bongs, address(steth), lvl)
         );
         if (!ok) {
             _revertWith(data);
         }
     }
 
-    function _drainToBondsModule(uint48 day) private {
-        (bool ok, bytes memory data) = bondModule.delegatecall(
-            abi.encodeWithSelector(IPurgeGameBondModule.drainToBonds.selector, bonds, address(steth), day)
+    function _drainToBongsModule(uint48 day) private {
+        (bool ok, bytes memory data) = bongModule.delegatecall(
+            abi.encodeWithSelector(IPurgeGameBongModule.drainToBongs.selector, bongs, address(steth), day)
         );
         if (!ok) {
             _revertWith(data);
@@ -916,7 +914,7 @@ contract PurgeGame is PurgeGameStorage {
         uint256 amount = claimableWinnings[player];
         if (amount <= 1) revert E();
         coin.burnCoin(player, priceCoin / 10); // Burn cost = 10% of current coin unit price
-        _mintClaimableBonds(player, 0);
+        _mintClaimableBongs(player, 0);
         uint256 payout;
         unchecked {
             claimableWinnings[player] = 1;
@@ -931,85 +929,85 @@ contract PurgeGame is PurgeGameStorage {
         return stored - 1;
     }
 
-    /// @notice Toggle auto-liquidation of bond credits into claimable winnings (tax applies on withdrawal).
-    /// @dev When enabled, any existing bond credit is immediately converted if escrowed funds are available.
-    function setAutoBondLiquidate(bool enabled) external {
-        autoBondLiquidate[msg.sender] = enabled;
+    /// @notice Toggle auto-liquidation of bong credits into claimable winnings (tax applies on withdrawal).
+    /// @dev When enabled, any existing bong credit is immediately converted if escrowed funds are available.
+    function setAutoBongLiquidate(bool enabled) external {
+        autoBongLiquidate[msg.sender] = enabled;
         if (enabled) {
-            _autoLiquidateBondCredit(msg.sender);
+            _autoLiquidateBongCredit(msg.sender);
         }
     }
 
-    function _autoLiquidateBondCredit(address player) private returns (bool converted) {
-        if (!autoBondLiquidate[player]) return false;
-        ClaimableBondInfo storage info = claimableBondInfo[player];
+    function _autoLiquidateBongCredit(address player) private returns (bool converted) {
+        if (!autoBongLiquidate[player]) return false;
+        ClaimableBongInfo storage info = claimableBongInfo[player];
         uint256 creditWei = info.weiAmount;
         if (creditWei == 0) return false;
 
         info.weiAmount = 0;
-        info.basePerBondWei = 0;
+        info.basePerBongWei = 0;
         info.stake = false;
-        bondCreditEscrow = bondCreditEscrow - creditWei;
+        bongCreditEscrow = bongCreditEscrow - creditWei;
         _addClaimableEth(player, creditWei);
-        emit BondCreditLiquidated(player, creditWei);
+        emit BongCreditLiquidated(player, creditWei);
         return true;
     }
 
-    /// @notice Mint any claimable bond credits without claiming ETH winnings.
+    /// @notice Mint any claimable bong credits without claiming ETH winnings.
     /// @param maxBatches Optional cap on batches processed this call (0 = all).
-    function claimBondCredits(uint32 maxBatches) external {
-        _mintClaimableBonds(msg.sender, maxBatches);
+    function claimBongCredits(uint32 maxBatches) external {
+        _mintClaimableBongs(msg.sender, maxBatches);
     }
 
-    function bondCreditOf(address player) external view returns (uint256) {
-        return bondCredit[player];
+    function bongCreditOf(address player) external view returns (uint256) {
+        return bongCredit[player];
     }
 
-    /// @notice Convert bond credit (earmarked for bonds) into PURGE at a discounted rate.
+    /// @notice Convert bong credit (earmarked for bongs) into PURGE at a discounted rate.
     /// @param minCoinOut Slippage guard on credited coin.
-    function liquidateBondCreditForCoin(uint256 minCoinOut) external {
-        ClaimableBondInfo storage info = claimableBondInfo[msg.sender];
+    function liquidateBongCreditForCoin(uint256 minCoinOut) external {
+        ClaimableBongInfo storage info = claimableBongInfo[msg.sender];
         uint256 creditWei = info.weiAmount;
         if (creditWei == 0) revert E();
-        uint256 escrow = bondCreditEscrow;
+        uint256 escrow = bongCreditEscrow;
         if (escrow < creditWei) revert E();
         uint256 priceWei = price;
         if (priceWei == 0) revert E();
 
         uint256 coinOut = (creditWei * priceCoin) / priceWei;
-        coinOut = (coinOut * BOND_LIQUIDATION_DISCOUNT_BPS) / 10_000; // apply poor rate
+        coinOut = (coinOut * BONG_LIQUIDATION_DISCOUNT_BPS) / 10_000; // apply poor rate
         if (coinOut == 0 || coinOut < minCoinOut) revert E();
 
         uint256 paidValueWei = (coinOut * priceWei) / priceCoin;
         uint256 profitWei = creditWei > paidValueWei ? (creditWei - paidValueWei) : 0;
 
         info.weiAmount = 0;
-        bondCreditEscrow = escrow - creditWei;
+        bongCreditEscrow = escrow - creditWei;
         if (profitWei != 0) {
             uint256 toReward = profitWei / 2;
             rewardPool += toReward;
             unchecked {
-                bondCreditEscrow += profitWei - toReward; // bondholder share stays in escrow
+                bongCreditEscrow += profitWei - toReward; // bongholder share stays in escrow
             }
         }
         coin.creditFlip(msg.sender, coinOut);
     }
 
-    /// @notice Mint any claimable bonds owed to `player` before paying ETH winnings.
+    /// @notice Mint any claimable bongs owed to `player` before paying ETH winnings.
     /// @param maxBatches Ignored (kept for interface parity; single bucket model).
-    function _mintClaimableBonds(address player, uint32 maxBatches) private {
+    function _mintClaimableBongs(address player, uint32 maxBatches) private {
         maxBatches; // unused
-        if (_autoLiquidateBondCredit(player)) return;
-        ClaimableBondInfo storage info = claimableBondInfo[player];
+        if (_autoLiquidateBongCredit(player)) return;
+        ClaimableBongInfo storage info = claimableBongInfo[player];
         uint256 creditWei = info.weiAmount;
         if (creditWei == 0) return;
-        address bondsAddr = bonds;
-        if (bondsAddr == address(0)) return;
-        if (!IPurgeBonds(bondsAddr).purchasesEnabled()) return;
+        address bongsAddr = bongs;
+        if (bongsAddr == address(0)) return;
+        if (!IPurgeBongs(bongsAddr).purchasesEnabled()) return;
 
-        uint256 base = info.basePerBondWei == 0 ? 0.5 ether : info.basePerBondWei;
+        uint256 base = info.basePerBongWei == 0 ? 0.5 ether : info.basePerBongWei;
         uint256 maxQuantity = creditWei / base;
-        uint256 escrow = bondCreditEscrow;
+        uint256 escrow = bongCreditEscrow;
         if (maxQuantity == 0 || escrow < base) return;
         uint256 maxEscrowQty = escrow / base;
         uint256 quantity = maxQuantity < maxEscrowQty ? maxQuantity : maxEscrowQty;
@@ -1018,16 +1016,16 @@ contract PurgeGame is PurgeGameStorage {
         address[] memory recipients = new address[](1);
         recipients[0] = player;
         uint256 spend = quantity * base;
-        bool stake = info.stake || info.basePerBondWei == 0; // default to staked when unset
+        bool stake = info.stake || info.basePerBongWei == 0; // default to staked when unset
         info.weiAmount = uint128(creditWei - spend);
-        bondCreditEscrow = escrow - spend;
-        IPurgeBonds(bondsAddr).payBonds{value: spend}(0, 0, 0, 0, 0);
-        IPurgeBonds(bondsAddr).purchaseGameBonds(recipients, quantity, base, stake);
+        bongCreditEscrow = escrow - spend;
+        IPurgeBongs(bongsAddr).payBongs{value: spend}(0, 0, 0, 0, 0);
+        IPurgeBongs(bongsAddr).purchaseGameBongs(recipients, quantity, base, stake);
     }
 
-    /// @notice Credit claimable ETH for a player from bond redemptions (bonds contract only).
-    function creditBondWinnings(address player) external payable {
-        if (msg.sender != bonds || player == address(0) || msg.value == 0) revert E();
+    /// @notice Credit claimable ETH for a player from bong redemptions (bongs contract only).
+    function creditBongWinnings(address player) external payable {
+        if (msg.sender != bongs || player == address(0) || msg.value == 0) revert E();
         if (player == address(this)) {
             currentPrizePool += msg.value;
             return;
@@ -1035,15 +1033,15 @@ contract PurgeGame is PurgeGameStorage {
         _addClaimableEth(player, msg.value);
     }
 
-    /// @notice Deposit bond purchase reward share into the tracked reward pool (bonds only).
-    function bondRewardDeposit() external payable {
-        if (msg.sender != bonds || msg.value == 0) revert E();
+    /// @notice Deposit bong purchase reward share into the tracked reward pool (bongs only).
+    function bongRewardDeposit() external payable {
+        if (msg.sender != bongs || msg.value == 0) revert E();
         rewardPool += msg.value;
     }
 
-    /// @notice Deposit bond purchase yield share without touching tracked pools (bonds only).
-    function bondYieldDeposit() external payable {
-        if (msg.sender != bonds || msg.value == 0) revert E();
+    /// @notice Deposit bong purchase yield share without touching tracked pools (bongs only).
+    function bongYieldDeposit() external payable {
+        if (msg.sender != bongs || msg.value == 0) revert E();
         // Intentionally left untracked; balance stays on contract.
     }
 
@@ -1086,13 +1084,13 @@ contract PurgeGame is PurgeGameStorage {
 
     // --- Credits & jackpot helpers ------------------------------------------------------------------
 
-    /// @notice Credit non-withdrawable bond proceeds to a player; callable only by the bonds contract.
-    function addBondCredit(address player, uint256 amount) external {
-        if (msg.sender != bonds || player == address(0) || amount == 0) revert E();
+    /// @notice Credit non-withdrawable bong proceeds to a player; callable only by the bongs contract.
+    function addBongCredit(address player, uint256 amount) external {
+        if (msg.sender != bongs || player == address(0) || amount == 0) revert E();
         unchecked {
-            bondCredit[player] += amount;
+            bongCredit[player] += amount;
         }
-        emit BondCreditAdded(player, amount);
+        emit BongCreditAdded(player, amount);
     }
 
     /// @notice Credit ETH winnings to a player’s claimable balance and emit an accounting event.
@@ -1185,18 +1183,18 @@ contract PurgeGame is PurgeGameStorage {
         return true;
     }
 
-    function drainToBonds(uint48 day) private {
-        _drainToBondsModule(day);
+    function drainToBongs(uint48 day) private {
+        _drainToBongsModule(day);
         gameState = 0;
         _requestRngBestEffort(day);
     }
 
     // --- Reward vault & liquidity -----------------------------------------------------
 
-    /// @notice Swap ETH <-> stETH with the bonds contract to rebalance liquidity.
-    /// @dev Access: bonds only. stEthForEth=true pulls stETH from bonds and sends back ETH; false stakes incoming ETH and forwards minted stETH.
-    function swapWithBonds(bool stEthForEth, uint256 amount) external payable {
-        if (msg.sender != bonds || amount == 0) revert E();
+    /// @notice Swap ETH <-> stETH with the bongs contract to rebalance liquidity.
+    /// @dev Access: bongs only. stEthForEth=true pulls stETH from bongs and sends back ETH; false stakes incoming ETH and forwards minted stETH.
+    function swapWithBongs(bool stEthForEth, uint256 amount) external payable {
+        if (msg.sender != bongs || amount == 0) revert E();
 
         if (stEthForEth) {
             if (msg.value != 0) revert E();
@@ -1279,11 +1277,11 @@ contract PurgeGame is PurgeGameStorage {
         return abi.decode(data, (bool));
     }
 
-    /// @notice Process pending jackpot bond mints outside the main game tick.
-    /// @param maxMints Max bonds to mint this call (0 = default chunk size).
-    function workJackpotBondMints(uint256 maxMints) external {
+    /// @notice Process pending jackpot bong mints outside the main game tick.
+    /// @param maxMints Max bongs to mint this call (0 = default chunk size).
+    function workJackpotBongMints(uint256 maxMints) external {
         (bool ok, bytes memory data) = jackpotModule.delegatecall(
-            abi.encodeWithSelector(IPurgeGameJackpotModule.processPendingJackpotBonds.selector, maxMints)
+            abi.encodeWithSelector(IPurgeGameJackpotModule.processPendingJackpotBongs.selector, maxMints)
         );
         if (!ok || data.length == 0) return;
 
@@ -1293,28 +1291,17 @@ contract PurgeGame is PurgeGameStorage {
         }
     }
 
-    function _maybeResolveBonds(uint32 cap) private returns (bool worked) {
-        address bondsAddr = bonds;
-        if (bondsAddr == address(0)) return false;
-        IPurgeBonds bondContract = IPurgeBonds(bondsAddr);
-        if (!bondContract.resolvePending()) return false;
-
-        uint256 limit = cap == 0 ? 40 : uint256(cap);
-        bondContract.resolvePendingBonds(limit);
-        return true;
-    }
-
-    /// @notice After the liveness drain has notified the bonds contract, permissionlessly burn remaining unmatured bonds.
-    /// @param maxIds Number of token ids to scan in this call (0 = default chunk size in bonds).
+    /// @notice After the liveness drain has notified the bongs contract, permissionlessly burn remaining unmatured bongs.
+    /// @param maxIds Number of token ids to scan in this call (0 = default chunk size in bongs).
     /// @return processedIds Token ids scanned.
-    /// @return burned Bonds burned.
+    /// @return burned Bongs burned.
     /// @return complete True if shutdown burning is finished.
-    function finalizeBondShutdown(
+    function finalizeBongShutdown(
         uint256 maxIds
     ) external returns (uint256 processedIds, uint256 burned, bool complete) {
-        address bondsAddr = bonds;
-        if (bondsAddr == address(0)) revert E();
-        return IPurgeBonds(bondsAddr).finalizeShutdown(maxIds);
+        address bongsAddr = bongs;
+        if (bongsAddr == address(0)) revert E();
+        return IPurgeBongs(bongsAddr).finalizeShutdown(maxIds);
     }
 
     function _requestRngBestEffort(uint48 day) private returns (bool requested) {
@@ -1331,7 +1318,7 @@ contract PurgeGame is PurgeGameStorage {
                 })
             )
         returns (uint256 id) {
-            IPurgeBonds(bonds).setTransfersLocked(true, day);
+            IPurgeBongs(bongs).setTransfersLocked(true, day);
             vrfRequestId = id;
             rngFulfilled = false;
             rngWordCurrent = 0;
@@ -1345,9 +1332,9 @@ contract PurgeGame is PurgeGameStorage {
     }
 
     function _requestRng(uint8 gameState_, bool isMapJackpotDay, uint24 lvl, uint48 day) private {
-        bool shouldLockBonds = (gameState_ == 2 && isMapJackpotDay) || (gameState_ == 0);
-        if (shouldLockBonds) {
-            IPurgeBonds(bonds).setTransfersLocked(true, day);
+        bool shouldLockBongs = (gameState_ == 2 && isMapJackpotDay) || (gameState_ == 0);
+        if (shouldLockBongs) {
+            IPurgeBongs(bongs).setTransfersLocked(true, day);
         }
 
         // Hard revert if Chainlink request fails; this intentionally halts game progress until VRF funding/config is fixed.
@@ -1372,10 +1359,10 @@ contract PurgeGame is PurgeGameStorage {
         if (decClose) decWindowOpen = false;
     }
 
-    /// @notice Emergency hook for the bonds contract to repoint VRF after prolonged downtime.
+    /// @notice Emergency hook for the bongs contract to repoint VRF after prolonged downtime.
     /// @dev Requires three consecutive day slots to have zeroed RNG entries.
     function emergencyUpdateVrfCoordinator(address newCoordinator) external {
-        if (msg.sender != bonds) revert E();
+        if (msg.sender != bongs) revert E();
         address current = address(vrfCoordinator);
         if (!_threeDayRngGap(_currentDayIndex())) revert VrfUpdateNotReady();
 

@@ -2,7 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {IPurgeCoinModule} from "../interfaces/PurgeGameModuleInterfaces.sol";
-import {PurgeGameStorage, PendingJackpotBondMint, ClaimableBondInfo} from "../storage/PurgeGameStorage.sol";
+import {PurgeGameStorage, PendingJackpotBongMint, ClaimableBongInfo} from "../storage/PurgeGameStorage.sol";
 import {PurgeTraitUtils} from "../PurgeTraitUtils.sol";
 
 interface IPurgeGameAffiliatePayout {
@@ -13,15 +13,15 @@ interface IStETH {
     function balanceOf(address account) external view returns (uint256);
 }
 
-interface IPurgeGameWithBonds {
-    function bonds() external view returns (address);
+interface IPurgeGameWithBongs {
+    function bongs() external view returns (address);
 }
 
-interface IPurgeBondsJackpot {
-    function purchaseGameBonds(
+interface IPurgeBongsJackpot {
+    function purchaseGameBongs(
         address[] calldata recipients,
         uint256 quantity,
-        uint256 basePerBondWei,
+        uint256 basePerBongWei,
         bool stake
     ) external returns (uint256 startTokenId);
     function purchasesEnabled() external view returns (bool);
@@ -61,14 +61,14 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
     uint16 private constant DAILY_JACKPOT_BPS_9 = 1225;
     uint32 private constant WRITES_BUDGET_SAFE = 800;
     uint64 private constant MAP_LCG_MULT = 0x5851F42D4C957F2D;
-    uint16 private constant JACKPOT_BOND_BPS = 1000; // default bond skim bps (overridable per jackpot)
-    uint16 private constant JACKPOT_BOND_BPS_GRAND = 5000; // 50% skim for the top bucket
-    uint16 private constant JACKPOT_BOND_BPS_OTHER = 1000; // 10% skim for other buckets
-    uint256 private constant JACKPOT_BOND_MIN_BASE = 0.02 ether;
-    uint256 private constant JACKPOT_BOND_MAX_BASE = 0.5 ether;
-    uint8 private constant JACKPOT_BOND_MAX_MULTIPLIER = 4; // cap total bonds to keep gas bounded
-    uint16 private constant BOND_BPS_MAP = 5000; // 50% of MAP jackpots routed into bonds
-    uint16 private constant BOND_BPS_DAILY = 2000; // 20% of daily/early-purge jackpots routed into bonds
+    uint16 private constant JACKPOT_BONG_BPS = 1000; // default bong skim bps (overridable per jackpot)
+    uint16 private constant JACKPOT_BONG_BPS_GRAND = 5000; // 50% skim for the top bucket
+    uint16 private constant JACKPOT_BONG_BPS_OTHER = 1000; // 10% skim for other buckets
+    uint256 private constant JACKPOT_BONG_MIN_BASE = 0.02 ether;
+    uint256 private constant JACKPOT_BONG_MAX_BASE = 0.5 ether;
+    uint8 private constant JACKPOT_BONG_MAX_MULTIPLIER = 4; // cap total bongs to keep gas bounded
+    uint16 private constant BONG_BPS_MAP = 5000; // 50% of MAP jackpots routed into bongs
+    uint16 private constant BONG_BPS_DAILY = 2000; // 20% of daily/early-purge jackpots routed into bongs
 
     // Packed parameters for a single jackpot run to keep the call surface lean.
     struct JackpotParams {
@@ -139,7 +139,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
                 }),
                 false,
                 false,
-                BOND_BPS_DAILY
+                BONG_BPS_DAILY
             );
 
             // Only the reward pool-funded slice should reduce reward pool accounting.
@@ -161,7 +161,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
                 }),
                 true,
                 false,
-                BOND_BPS_DAILY
+                BONG_BPS_DAILY
             );
 
             uint24 nextLevel = lvl + 1;
@@ -197,7 +197,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
                 }),
                 false,
                 !lastDaily, // lastDaily reward slice already debited; carryover is prize pool
-                BOND_BPS_DAILY
+                BONG_BPS_DAILY
             );
 
             unchecked {
@@ -233,7 +233,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
                 }),
                 false,
                 false,
-                BOND_BPS_MAP
+                BONG_BPS_MAP
             ));
 
         uint48 questDay = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
@@ -424,14 +424,14 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         JackpotParams memory jp,
         bool fromPrizePool,
         bool fromRewardPool,
-        uint16 bondBps
+        uint16 bongBps
     ) private returns (uint256 paidEth) {
         // Runs jackpot and debits caller-selected pools; returns ETH paid for accounting.
         uint8[4] memory traitIds = _unpackWinningTraits(jp.winningTraitsPacked);
         uint16[4] memory shareBps = _shareBpsByBucket(jp.traitShareBpsPacked, uint8(jp.entropy & 3));
 
         if (jp.ethPool != 0) {
-            paidEth = _runJackpotEthFlow(jp, traitIds, shareBps, bondBps);
+            paidEth = _runJackpotEthFlow(jp, traitIds, shareBps, bongBps);
         }
 
         if (jp.coinPool != 0) {
@@ -450,11 +450,11 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         JackpotParams memory jp,
         uint8[4] memory traitIds,
         uint16[4] memory shareBps,
-        uint16 bondBps
+        uint16 bongBps
     ) private returns (uint256 totalPaidEth) {
         uint8 band = uint8((jp.lvl % 100) / 20) + 1;
         uint16[4] memory bucketCounts = _traitBucketCounts(band, jp.entropy);
-        address bondsAddr = IPurgeGameWithBonds(address(this)).bonds();
+        address bongsAddr = IPurgeGameWithBongs(address(this)).bongs();
         return
             _distributeJackpotEth(
                 jp.lvl,
@@ -464,8 +464,8 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
                 shareBps,
                 bucketCounts,
                 jp.coinContract,
-                bondsAddr,
-                bondBps
+                bongsAddr,
+                bongBps
             );
     }
 
@@ -491,10 +491,10 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         uint16[4] memory shareBps,
         uint16[4] memory bucketCounts,
         IPurgeCoinModule coinContract,
-        address bondsAddr,
-        uint16 bondBps
+        address bongsAddr,
+        uint16 bongBps
     ) private returns (uint256 totalPaidEth) {
-        // Each trait bucket gets a slice; the last bucket absorbs remainder to avoid dust. totalPaidEth counts ETH plus bond spend.
+        // Each trait bucket gets a slice; the last bucket absorbs remainder to avoid dust. totalPaidEth counts ETH plus bong spend.
         uint256 ethDistributed;
         uint256 entropyState = entropy;
 
@@ -508,8 +508,8 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
                 }
             }
             uint256 delta;
-            uint256 bondSpent;
-            (entropyState, delta, , bondSpent) = _resolveTraitWinners(
+            uint256 bongSpent;
+            (entropyState, delta, , bongSpent) = _resolveTraitWinners(
                 coinContract,
                 false,
                 lvl,
@@ -518,11 +518,11 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
                 share,
                 entropyState,
                 bucketCount,
-                bondsAddr,
-                traitIdx == 0 ? JACKPOT_BOND_BPS_GRAND : (bondBps == 0 ? 0 : JACKPOT_BOND_BPS_OTHER),
+                bongsAddr,
+                traitIdx == 0 ? JACKPOT_BONG_BPS_GRAND : (bongBps == 0 ? 0 : JACKPOT_BONG_BPS_OTHER),
                 traitIdx == 0
             );
-            totalPaidEth += delta + bondSpent;
+            totalPaidEth += delta + bongSpent;
             unchecked {
                 ++traitIdx;
             }
@@ -592,10 +592,10 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         uint256 traitShare,
         uint256 entropy,
         uint16 winnerCount,
-        address bondsAddr,
-        uint16 bondBps,
+        address bongsAddr,
+        uint16 bongBps,
         bool isGrandBucket
-    ) private returns (uint256 entropyState, uint256 ethDelta, uint256 coinDelta, uint256 bondSpent) {
+    ) private returns (uint256 entropyState, uint256 ethDelta, uint256 coinDelta, uint256 bongSpent) {
         entropyState = entropy;
 
         if (traitShare == 0) return (entropyState, 0, 0, 0);
@@ -614,19 +614,19 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         if (winners.length == 0) return (entropyState, 0, 0, 0);
 
         uint256 ethPoolForWinners = traitShare;
-        if (!payCoin && bondBps != 0 && bondsAddr != address(0) && IPurgeBondsJackpot(bondsAddr).purchasesEnabled()) {
-            (bondSpent, ethPoolForWinners) = _jackpotBondSpend(
-                bondsAddr,
+        if (!payCoin && bongBps != 0 && bongsAddr != address(0) && IPurgeBongsJackpot(bongsAddr).purchasesEnabled()) {
+            (bongSpent, ethPoolForWinners) = _jackpotBongSpend(
+                bongsAddr,
                 winners,
                 traitShare,
                 entropyState,
-                bondBps,
+                bongBps,
                 isGrandBucket
             );
         }
 
         uint256 perWinner = ethPoolForWinners / totalCount;
-        if (perWinner == 0) return (entropyState, 0, 0, bondSpent);
+        if (perWinner == 0) return (entropyState, 0, 0, bongSpent);
 
         uint256 len = winners.length;
         for (uint256 i; i < len; ) {
@@ -641,47 +641,47 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
             }
         }
 
-        return (entropyState, ethDelta, coinDelta, bondSpent);
+        return (entropyState, ethDelta, coinDelta, bongSpent);
     }
 
-    function _jackpotBondSpend(
-        address bondsAddr,
+    function _jackpotBongSpend(
+        address bongsAddr,
         address[] memory winners,
         uint256 traitShare,
         uint256 entropyState,
-        uint16 bondBps,
+        uint16 bongBps,
         bool isGrandBucket
-    ) private returns (uint256 bondSpent, uint256 ethPoolForWinners) {
+    ) private returns (uint256 bongSpent, uint256 ethPoolForWinners) {
         uint256 winnersLen = winners.length;
-        if (bondsAddr == address(0) || winnersLen == 0) return (0, traitShare);
+        if (bongsAddr == address(0) || winnersLen == 0) return (0, traitShare);
 
-        if (bondBps == 0) return (0, traitShare);
+        if (bongBps == 0) return (0, traitShare);
 
-        uint256 bondBudget = (traitShare * bondBps) / 10_000;
-        if (bondBudget < JACKPOT_BOND_MIN_BASE) return (0, traitShare);
+        uint256 bongBudget = (traitShare * bongBps) / 10_000;
+        if (bongBudget < JACKPOT_BONG_MIN_BASE) return (0, traitShare);
 
-        uint256 basePerBond = bondBudget / winnersLen;
-        if (!isGrandBucket && basePerBond > JACKPOT_BOND_MIN_BASE) {
-            basePerBond = JACKPOT_BOND_MIN_BASE; // spread non-grand buckets across more bonds when budget allows
+        uint256 basePerBong = bongBudget / winnersLen;
+        if (!isGrandBucket && basePerBong > JACKPOT_BONG_MIN_BASE) {
+            basePerBong = JACKPOT_BONG_MIN_BASE; // spread non-grand buckets across more bongs when budget allows
         }
-        if (basePerBond < JACKPOT_BOND_MIN_BASE) {
-            basePerBond = JACKPOT_BOND_MIN_BASE;
+        if (basePerBong < JACKPOT_BONG_MIN_BASE) {
+            basePerBong = JACKPOT_BONG_MIN_BASE;
         }
 
-        uint256 quantity = bondBudget / basePerBond;
+        uint256 quantity = bongBudget / basePerBong;
         if (quantity == 0) return (0, traitShare);
 
-        uint256 maxQuantity = winnersLen * JACKPOT_BOND_MAX_MULTIPLIER;
+        uint256 maxQuantity = winnersLen * JACKPOT_BONG_MAX_MULTIPLIER;
         if (quantity > maxQuantity) {
             quantity = maxQuantity;
         }
 
-        basePerBond = (bondBudget + quantity - 1) / quantity; // ceil to fully spend bond budget
-        if (basePerBond < JACKPOT_BOND_MIN_BASE) {
-            basePerBond = JACKPOT_BOND_MIN_BASE;
+        basePerBong = (bongBudget + quantity - 1) / quantity; // ceil to fully spend bong budget
+        if (basePerBong < JACKPOT_BONG_MIN_BASE) {
+            basePerBong = JACKPOT_BONG_MIN_BASE;
         }
 
-        uint256 spend = basePerBond * quantity;
+        uint256 spend = basePerBong * quantity;
         if (spend == 0 || spend > traitShare) return (0, traitShare);
 
         uint16 offset = uint16(entropyState % winnersLen);
@@ -695,32 +695,32 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         }
         uint16 locked = uint16(quantity - marketable);
         if (locked != 0) {
-            _creditClaimableBonds(winners, locked, uint96(basePerBond), offset, true);
+            _creditClaimableBongs(winners, locked, uint96(basePerBong), offset, true);
         }
         if (marketable != 0) {
             uint256 off2 = uint256(offset) + uint256(locked);
             if (off2 >= winnersLen) {
                 off2 = off2 % winnersLen;
             }
-            _creditClaimableBonds(winners, marketable, uint96(basePerBond), uint16(off2), false);
+            _creditClaimableBongs(winners, marketable, uint96(basePerBong), uint16(off2), false);
         }
-        bondSpent = spend;
-        _fundBonds(spend);
+        bongSpent = spend;
+        _fundBongs(spend);
 
-        ethPoolForWinners = traitShare - bondSpent;
+        ethPoolForWinners = traitShare - bongSpent;
     }
 
-    /// @notice Process queued jackpot bond mints outside the main game loop.
-    /// @param maxMints Max bonds to mint this call (0 = default safety cap).
+    /// @notice Process queued jackpot bong mints outside the main game loop.
+    /// @param maxMints Max bongs to mint this call (0 = default safety cap).
     /// @return finished True if all pending batches are fully processed.
-    /// @return processed Number of bonds minted this call.
-    function processPendingJackpotBonds(uint256 maxMints) external returns (bool finished, uint256 processed) {
-        uint256 cursor = pendingJackpotBondCursor;
-        uint256 total = pendingJackpotBondMints.length;
+    /// @return processed Number of bongs minted this call.
+    function processPendingJackpotBongs(uint256 maxMints) external returns (bool finished, uint256 processed) {
+        uint256 cursor = pendingJackpotBongCursor;
+        uint256 total = pendingJackpotBongMints.length;
         if (cursor >= total) {
             if (cursor != 0) {
-                delete pendingJackpotBondMints;
-                pendingJackpotBondCursor = 0;
+                delete pendingJackpotBongMints;
+                pendingJackpotBongCursor = 0;
             }
             return (true, 0);
         }
@@ -729,16 +729,16 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
             maxMints = 512; // stay well under block gas even for large batches
         }
 
-        address bondsAddr = IPurgeGameWithBonds(address(this)).bonds();
-        if (bondsAddr == address(0) || !IPurgeBondsJackpot(bondsAddr).purchasesEnabled()) {
+        address bongsAddr = IPurgeGameWithBongs(address(this)).bongs();
+        if (bongsAddr == address(0) || !IPurgeBongsJackpot(bongsAddr).purchasesEnabled()) {
             return (false, 0);
         }
 
         while (cursor < total && processed < maxMints) {
-            PendingJackpotBondMint storage batch = pendingJackpotBondMints[cursor];
+            PendingJackpotBongMint storage batch = pendingJackpotBongMints[cursor];
             uint256 winnersLen = batch.winners.length;
             if (winnersLen == 0 || batch.quantity == 0) {
-                delete pendingJackpotBondMints[cursor];
+                delete pendingJackpotBongMints[cursor];
                 unchecked {
                     ++cursor;
                 }
@@ -746,7 +746,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
             }
 
             if (batch.cursor >= batch.quantity) {
-                delete pendingJackpotBondMints[cursor];
+                delete pendingJackpotBongMints[cursor];
                 unchecked {
                     ++cursor;
                 }
@@ -767,31 +767,31 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
                 }
             }
 
-            try IPurgeBondsJackpot(bondsAddr).purchaseGameBonds(
+            try IPurgeBongsJackpot(bongsAddr).purchaseGameBongs(
                 recipients,
                 take,
-                batch.basePerBondWei,
+                batch.basePerBongWei,
                 batch.stake
             ) {
                 processed += take;
                 uint256 newCursor = uint256(batch.cursor) + take;
                 batch.cursor = uint16(newCursor);
                 if (newCursor >= batch.quantity) {
-                    delete pendingJackpotBondMints[cursor];
+                    delete pendingJackpotBongMints[cursor];
                     unchecked {
                         ++cursor;
                     }
                 }
             } catch {
-                break; // bonds contract rejected the batch; allow retry in a later call
+                break; // bongs contract rejected the batch; allow retry in a later call
             }
         }
 
-        pendingJackpotBondCursor = cursor;
+        pendingJackpotBongCursor = cursor;
         finished = (cursor >= total);
         if (finished && cursor != 0) {
-            delete pendingJackpotBondMints;
-            pendingJackpotBondCursor = 0;
+            delete pendingJackpotBongMints;
+            pendingJackpotBongCursor = 0;
         }
     }
 
@@ -837,14 +837,14 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         (recipient, ) = IPurgeGameAffiliatePayout(address(this)).affiliatePayoutAddress(player);
     }
 
-    function _creditClaimableBonds(
+    function _creditClaimableBongs(
         address[] memory winners,
         uint16 quantity,
-        uint96 basePerBond,
+        uint96 basePerBong,
         uint16 offset,
         bool stake
     ) private {
-        if (quantity == 0 || winners.length == 0 || basePerBond == 0) return;
+        if (quantity == 0 || winners.length == 0 || basePerBong == 0) return;
         uint256 len = winners.length;
         uint256 per = quantity / len;
         uint256 rem = quantity % len;
@@ -857,7 +857,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
             }
             if (share != 0) {
                 address recipient = winners[(uint256(offset) + i) % len];
-                _addClaimableBond(recipient, uint256(share) * uint256(basePerBond), basePerBond, stake);
+                _addClaimableBong(recipient, uint256(share) * uint256(basePerBong), basePerBong, stake);
             }
             unchecked {
                 ++i;
@@ -865,37 +865,37 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         }
     }
 
-    function _addClaimableBond(address player, uint256 weiAmount, uint96 basePerBond, bool stake) private {
-        if (player == address(0) || weiAmount == 0 || basePerBond == 0) return;
-        ClaimableBondInfo storage info = claimableBondInfo[player];
-        if (info.basePerBondWei == 0) {
-            info.basePerBondWei = basePerBond;
+    function _addClaimableBong(address player, uint256 weiAmount, uint96 basePerBong, bool stake) private {
+        if (player == address(0) || weiAmount == 0 || basePerBong == 0) return;
+        ClaimableBongInfo storage info = claimableBongInfo[player];
+        if (info.basePerBongWei == 0) {
+            info.basePerBongWei = basePerBong;
             info.stake = stake;
         }
         unchecked {
             info.weiAmount = uint128(uint256(info.weiAmount) + weiAmount);
         }
-        _autoLiquidateBondCredit(player);
+        _autoLiquidateBongCredit(player);
     }
 
-    function _autoLiquidateBondCredit(address player) private returns (bool converted) {
-        if (!autoBondLiquidate[player]) return false;
-        ClaimableBondInfo storage info = claimableBondInfo[player];
+    function _autoLiquidateBongCredit(address player) private returns (bool converted) {
+        if (!autoBongLiquidate[player]) return false;
+        ClaimableBongInfo storage info = claimableBongInfo[player];
         uint256 creditWei = info.weiAmount;
         if (creditWei == 0) return false;
 
         info.weiAmount = 0;
-        info.basePerBondWei = 0;
+        info.basePerBongWei = 0;
         info.stake = false;
-        bondCreditEscrow = bondCreditEscrow - creditWei;
+        bongCreditEscrow = bongCreditEscrow - creditWei;
         _addClaimableEth(player, creditWei);
         return true;
     }
 
-    function _fundBonds(uint256 amount) private {
+    function _fundBongs(uint256 amount) private {
         if (amount == 0) return;
         unchecked {
-            bondCreditEscrow += amount;
+            bongCreditEscrow += amount;
         }
     }
 

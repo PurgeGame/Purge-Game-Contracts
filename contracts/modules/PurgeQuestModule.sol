@@ -23,7 +23,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
     uint8 private constant QUEST_TYPE_AFFILIATE = 4;
     uint8 private constant QUEST_TYPE_PURGE = 5;
     uint8 private constant QUEST_TYPE_DECIMATOR = 6;
-    uint8 private constant QUEST_TYPE_BOND = 7;
+    uint8 private constant QUEST_TYPE_BONG = 7;
     uint8 private constant QUEST_TYPE_COUNT = 8;
 
     // Quest flags for difficulty and forced behavior
@@ -48,8 +48,8 @@ contract PurgeQuestModule is IPurgeQuestModule {
     uint16 private constant QUEST_MIN_FLIP_STAKE_TOKEN = 1_000;
     uint16 private constant QUEST_MIN_MINT = 1;
     uint24 private constant DECIMATOR_SPECIAL_LEVEL = 100;
-    uint256 private constant QUEST_BOND_MIN_WEI = 25e15; // 0.025 ETH
-    uint256 private constant QUEST_BOND_MAX_WEI = 0.5 ether;
+    uint256 private constant QUEST_BONG_MIN_WEI = 25e15; // 0.025 ETH
+    uint256 private constant QUEST_BONG_MAX_WEI = 0.5 ether;
 
     address public immutable coin;
     IPurgeGame private questGame;
@@ -343,15 +343,15 @@ contract PurgeQuestModule is IPurgeQuestModule {
         return (0, false, quest.questType, state.streak, false);
     }
 
-    /// @notice Handle bond purchases tracked by the base-per-bond size (wei).
-    function handleBondPurchase(
+    /// @notice Handle bong purchases tracked by the base-per-bong size (wei).
+    function handleBongPurchase(
         address player,
-        uint256 basePerBondWei
+        uint256 basePerBongWei
     ) external onlyCoin returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) {
         DailyQuest[QUEST_SLOT_COUNT] memory quests = activeQuests;
         uint48 currentDay = _currentQuestDay(quests);
         PlayerQuestState storage state = questPlayerState[player];
-        if (player == address(0) || basePerBondWei == 0 || currentDay == 0) {
+        if (player == address(0) || basePerBongWei == 0 || currentDay == 0) {
             return (0, false, quests[0].questType, state.streak, false);
         }
         _questSyncState(state, currentDay);
@@ -359,20 +359,20 @@ contract PurgeQuestModule is IPurgeQuestModule {
             return (0, false, QUEST_TYPE_MINT_ETH, state.streak, false);
         }
 
-        (DailyQuest memory quest, uint8 slotIndex) = _currentDayQuestOfType(quests, currentDay, QUEST_TYPE_BOND);
+        (DailyQuest memory quest, uint8 slotIndex) = _currentDayQuestOfType(quests, currentDay, QUEST_TYPE_BONG);
         if (slotIndex == type(uint8).max) {
-            return (0, false, QUEST_TYPE_BOND, state.streak, false);
+            return (0, false, QUEST_TYPE_BONG, state.streak, false);
         }
 
         _questSyncProgress(state, slotIndex, currentDay, quest.version);
         uint8 tier = _questTier(state.baseStreak);
         uint128 progressAfter = state.progress[slotIndex];
-        uint128 baseSize = uint128(basePerBondWei);
+        uint128 baseSize = uint128(basePerBongWei);
         if (baseSize > progressAfter) {
             progressAfter = baseSize;
             state.progress[slotIndex] = progressAfter;
         }
-        uint256 target = _questBondTargetWei(tier, quest.entropy);
+        uint256 target = _questBongTargetWei(tier, quest.entropy);
         if (progressAfter < target) {
             return (0, false, quest.questType, state.streak, false);
         }
@@ -641,8 +641,8 @@ contract PurgeQuestModule is IPurgeQuestModule {
             req.tokenAmount = uint256(_questDecimatorTargetTokens(tier, quest.entropy)) * MILLION;
         } else if (qType == QUEST_TYPE_AFFILIATE) {
             req.tokenAmount = uint256(_questAffiliateTargetTokens(tier, quest.entropy)) * MILLION;
-        } else if (qType == QUEST_TYPE_BOND) {
-            req.tokenAmount = _questBondTargetWei(tier, quest.entropy);
+        } else if (qType == QUEST_TYPE_BONG) {
+            req.tokenAmount = _questBongTargetWei(tier, quest.entropy);
         } else if (qType == QUEST_TYPE_STAKE) {
             if ((quest.stakeMask & QUEST_STAKE_REQUIRE_PRINCIPAL) != 0) {
                 req.tokenAmount = uint256(_questStakePrincipalTarget(tier, quest.entropy)) * MILLION;
@@ -888,10 +888,10 @@ contract PurgeQuestModule is IPurgeQuestModule {
         return _questLinearTarget(QUEST_MIN_TOKEN, uint32(maxVal), difficulty);
     }
 
-    function _questBondTargetWei(uint8 tier, uint256 entropy) private pure returns (uint256) {
-        uint256 step = (QUEST_BOND_MAX_WEI - QUEST_BOND_MIN_WEI) / QUEST_TIER_MAX_INDEX;
-        uint256 tierMin = QUEST_BOND_MIN_WEI + (step * tier);
-        uint256 tierMax = tier == QUEST_TIER_MAX_INDEX ? QUEST_BOND_MAX_WEI : (tierMin + step);
+    function _questBongTargetWei(uint8 tier, uint256 entropy) private pure returns (uint256) {
+        uint256 step = (QUEST_BONG_MAX_WEI - QUEST_BONG_MIN_WEI) / QUEST_TIER_MAX_INDEX;
+        uint256 tierMin = QUEST_BONG_MIN_WEI + (step * tier);
+        uint256 tierMax = tier == QUEST_TIER_MAX_INDEX ? QUEST_BONG_MAX_WEI : (tierMin + step);
         if (tierMax <= tierMin) {
             return tierMin;
         }

@@ -1,19 +1,19 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-struct PendingJackpotBondMint {
-    uint96 basePerBondWei; // win-odds base per bond (capped at 0.5 ETH)
+struct PendingJackpotBongMint {
+    uint96 basePerBongWei; // win-odds base per bong (capped at 0.5 ETH)
     uint16 cursor; // how many recipients have been minted from this batch
-    uint16 quantity; // total bonds to mint for this batch
+    uint16 quantity; // total bongs to mint for this batch
     uint16 offset; // rotation offset into winners when deriving recipients
-    bool stake; // whether bonds should be staked/soulbound
-    address[] winners; // jackpot winners used to derive bond recipients (keeps ordering deterministic)
+    bool stake; // whether bongs should be staked/soulbound
+    address[] winners; // jackpot winners used to derive bong recipients (keeps ordering deterministic)
 }
 
-struct ClaimableBondInfo {
-    uint128 weiAmount; // ETH value earmarked for bonds (capped to keep struct in one slot)
-    uint96 basePerBondWei; // preferred base per bond (0 defaults to 0.5 ether)
-    bool stake; // whether bonds should be staked/soulbound
+struct ClaimableBongInfo {
+    uint128 weiAmount; // ETH value earmarked for bongs (capped to keep struct in one slot)
+    uint96 basePerBongWei; // preferred base per bong (0 defaults to 0.5 ether)
+    bool stake; // whether bongs should be staked/soulbound
 }
 
 /**
@@ -98,11 +98,11 @@ abstract contract PurgeGameStorage {
     uint32[256] internal traitRemaining; // remaining supply per trait id
     mapping(address => uint256) internal mintPacked_; // bit-packed mint history (see PurgeGame ETH_* constants for layout)
 
-    // Bond maintenance state
-    uint24 internal lastBondFundingLevel; // tracks the last level where bond funding was performed
-    uint48 internal lastBondResolutionDay; // last day index that auto bond resolution ran
-    uint256 internal bondCreditEscrow; // ETH escrowed to back bond-credit prize funding
-    mapping(address => bool) internal autoBondLiquidate; // opt-in flag to auto-liquidate bond credits into winnings
+    // Bong maintenance state
+    uint24 internal lastBongFundingLevel; // tracks the last level where bong funding was performed
+    uint48 internal lastBongResolutionDay; // last day index that auto bong resolution ran
+    uint256 internal bongCreditEscrow; // ETH escrowed to back bong-credit prize funding
+    mapping(address => bool) internal autoBongLiquidate; // opt-in flag to auto-liquidate bong credits into winnings
 
     // ---------------------------------------------------------------------
     // RNG history
@@ -110,16 +110,16 @@ abstract contract PurgeGameStorage {
     mapping(uint48 => uint256) internal rngWordByDay; // VRF words keyed by dailyIdx; 0 means "not yet recorded"
 
     // ---------------------------------------------------------------------
-    // Bond credits (non-withdrawable)
+    // Bong credits (non-withdrawable)
     // ---------------------------------------------------------------------
-    mapping(address => uint256) internal bondCredit; // Credit from bond sales that can be spent on mints
+    mapping(address => uint256) internal bongCredit; // Credit from bong sales that can be spent on mints
 
     // ---------------------------------------------------------------------
-    // Jackpot bond batching (deferred minting for gas safety)
+    // Jackpot bong batching (deferred minting for gas safety)
     // ---------------------------------------------------------------------
-    PendingJackpotBondMint[] internal pendingJackpotBondMints; // queued bond batches funded by jackpots
-    uint256 internal pendingJackpotBondCursor; // cursor into pendingJackpotBondMints for incremental processing
-    mapping(address => ClaimableBondInfo) internal claimableBondInfo; // per-player bond credits (only spendable on bonds)
+    PendingJackpotBongMint[] internal pendingJackpotBongMints; // queued bong batches funded by jackpots
+    uint256 internal pendingJackpotBongCursor; // cursor into pendingJackpotBongMints for incremental processing
+    mapping(address => ClaimableBongInfo) internal claimableBongInfo; // per-player bong credits (only spendable on bongs)
 
     // ---------------------------------------------------------------------
     // Cosmetic trophies

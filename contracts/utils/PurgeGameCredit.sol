@@ -6,7 +6,7 @@ import "../interfaces/IPurgeGame.sol";
 library PurgeGameCredit {
     function availableCredit(
         mapping(address => uint256) storage claimableWinnings,
-        mapping(address => uint256) storage bondCredit,
+        mapping(address => uint256) storage bongCredit,
         address buyer,
         MintPaymentKind payKind,
         uint256 msgValue
@@ -20,9 +20,9 @@ library PurgeGameCredit {
             }
             return (true, available, 0);
         }
-        if (payKind == MintPaymentKind.BondCredit) {
+        if (payKind == MintPaymentKind.BongCredit) {
             if (msgValue != 0) return (false, 0, 0);
-            available = bondCredit[buyer];
+            available = bongCredit[buyer];
             if (available == 0) return (false, 0, 0);
             return (true, available, 0);
         }
@@ -34,7 +34,7 @@ library PurgeGameCredit {
                     claimableAvail = claimable - 1;
                 }
             }
-            uint256 credit = bondCredit[buyer];
+            uint256 credit = bongCredit[buyer];
             ethValue = msgValue;
             available = ethValue + claimableAvail + credit;
             if (available == 0) return (false, 0, 0);
@@ -45,7 +45,7 @@ library PurgeGameCredit {
 
     function processMintPayment(
         mapping(address => uint256) storage claimableWinnings,
-        mapping(address => uint256) storage bondCredit,
+        mapping(address => uint256) storage bongCredit,
         address player,
         uint256 amount,
         MintPaymentKind payKind,
@@ -64,12 +64,12 @@ library PurgeGameCredit {
             }
             return (true, amount, 0);
         }
-        if (payKind == MintPaymentKind.BondCredit) {
+        if (payKind == MintPaymentKind.BongCredit) {
             if (msgValue != 0) return (false, 0, 0);
-            uint256 credit = bondCredit[player];
+            uint256 credit = bongCredit[player];
             if (credit < amount) return (false, 0, 0);
             unchecked {
-                bondCredit[player] = credit - amount;
+                bongCredit[player] = credit - amount;
             }
             return (true, 0, amount);
         }
@@ -91,10 +91,10 @@ library PurgeGameCredit {
                 }
             }
             if (remaining != 0) {
-                uint256 credit = bondCredit[player];
+                uint256 credit = bongCredit[player];
                 if (credit < remaining) return (false, 0, 0);
                 unchecked {
-                    bondCredit[player] = credit - remaining;
+                    bongCredit[player] = credit - remaining;
                 }
                 creditUsed = remaining;
                 remaining = 0;

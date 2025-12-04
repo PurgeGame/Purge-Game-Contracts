@@ -26,7 +26,7 @@ contract PurgeJackpots is IPurgeJackpots {
     error DecAlreadyClaimed();
     error DecNotWinner();
     error AlreadyWired();
-    error OnlyBonds();
+    error OnlyBongs();
     error OnlyCoin();
     error OnlyGame();
 
@@ -121,16 +121,16 @@ contract PurgeJackpots is IPurgeJackpots {
         _;
     }
 
-    address public immutable bonds;
+    address public immutable bongs;
 
-    constructor(address bonds_) {
-        if (bonds_ == address(0)) revert OnlyBonds();
-        bonds = bonds_;
+    constructor(address bongs_) {
+        if (bongs_ == address(0)) revert OnlyBongs();
+        bongs = bongs_;
     }
 
-    /// @notice One-time wiring using address array ([coin, game]); callable only by bonds.
+    /// @notice One-time wiring using address array ([coin, game]); callable only by bongs.
     function wire(address[] calldata addresses) external override {
-        if (msg.sender != bonds) revert OnlyBonds();
+        if (msg.sender != bongs) revert OnlyBongs();
 
         _setCoin(addresses.length > 0 ? addresses[0] : address(0));
         _setGame(addresses.length > 1 ? addresses[1] : address(0));
@@ -216,7 +216,7 @@ contract PurgeJackpots is IPurgeJackpots {
      * @dev Pool split (percent of `poolWei`): 20% top bettor (absorbing the former trophy slice),
      *      10% random pick between 3rd/4th leaderboard slots, 10% exterminator draw (prior 20 levels),
      *      10% affiliate draw (top referrers from prior 20 levels), 10% retro tops (recent levels),
-     *      20%/20% scatter buckets from trait tickets (first scatter bucket pays out in bonds). Any unfilled shares are refunded to the caller via
+     *      20%/20% scatter buckets from trait tickets (first scatter bucket pays out in bongs). Any unfilled shares are refunded to the caller via
      *      `returnAmountWei`.
      */
     function runBafJackpot(
@@ -227,7 +227,7 @@ contract PurgeJackpots is IPurgeJackpots {
         external
         override
         onlyGame
-        returns (address[] memory winners, uint256[] memory amounts, uint256 bondMask, uint256 returnAmountWei)
+        returns (address[] memory winners, uint256[] memory amounts, uint256 bongMask, uint256 returnAmountWei)
     {
         uint256 P = poolWei;
         // Max distinct winners: 1 (top) + 1 (pick) + 4 (exterminator draw) + 4 (affiliate draw) + 3 (retro) + 50 + 50 (scatter buckets) = 113.
@@ -616,7 +616,7 @@ contract PurgeJackpots is IPurgeJackpots {
         }
 
         // Scatter slice: 200 total draws (4 tickets * 50 rounds). Per round, take top-2 by BAF score.
-        // First bucket splits 20% evenly (max 50 winners) in bonds; second bucket splits 20% evenly (max 50 winners) in ETH.
+        // First bucket splits 20% evenly (max 50 winners) in bongs; second bucket splits 20% evenly (max 50 winners) in ETH.
         {
             // Slice E: scatter tickets from trait sampler so casual participants can land smaller cuts.
             uint256 scatterTop = (P * 20) / 100;
@@ -690,7 +690,7 @@ contract PurgeJackpots is IPurgeJackpots {
                 for (uint256 i; i < firstCount; ) {
                     uint256 scoreHint = _bafScore(firstWinners[i], lvl);
                     if (per != 0 && _creditOrRefund(firstWinners[i], per, tmpW, tmpA, n, scoreHint, true)) {
-                        mask |= (uint256(1) << n); // mark scatter bonds bucket for bond payout
+                        mask |= (uint256(1) << n); // mark scatter bongs bucket for bong payout
                         unchecked {
                             ++n;
                         }
@@ -735,10 +735,10 @@ contract PurgeJackpots is IPurgeJackpots {
             }
         }
 
-        bondMask = mask;
+        bongMask = mask;
 
         _clearBafTop(lvl);
-        return (winners, amounts, bondMask, toReturn);
+        return (winners, amounts, bongMask, toReturn);
     }
 
     function runDecimatorJackpot(

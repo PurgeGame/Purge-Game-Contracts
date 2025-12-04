@@ -19,9 +19,9 @@ contract MockGame {
         return rngWord;
     }
 
-    function bondRewardDeposit() external payable {}
+    function bongRewardDeposit() external payable {}
 
-    function bondYieldDeposit() external payable {}
+    function bongYieldDeposit() external payable {}
 
-    function creditBondWinnings(address) external payable {}
+    function creditBongWinnings(address) external payable {}
 }

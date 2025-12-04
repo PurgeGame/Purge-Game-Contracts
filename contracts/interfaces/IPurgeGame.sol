@@ -6,7 +6,7 @@ import {IPurgeGameExternal} from "./IPurgeGameExternal.sol";
 enum MintPaymentKind {
     DirectEth,
     Claimable,
-    BondCredit,
+    BongCredit,
     Combined
 }
 
@@ -52,9 +52,9 @@ interface IPurgeGame is IPurgeGameExternal {
     ) external payable returns (uint256 coinReward);
 
     function rngLocked() external view returns (bool);
-    function bondCreditOf(address player) external view returns (uint256);
-    function addBondCredit(address player, uint256 amount) external payable;
-    function creditBondWinnings(address player) external payable;
+    function bongCreditOf(address player) external view returns (uint256);
+    function addBongCredit(address player, uint256 amount) external payable;
+    function creditBongWinnings(address player) external payable;
 
     /// @notice Sample up to 100 trait purge tickets from a random trait and recent level (last 20).
     function sampleTraitTickets(uint256 entropy) external view returns (uint24 lvl, uint8 trait, address[] memory tickets);
