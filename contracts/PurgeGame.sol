@@ -227,32 +227,12 @@ contract PurgeGame is PurgeGameStorage {
 
     // --- View: lightweight game status -------------------------------------------------
 
-    function jackpotCounterView() external view returns (uint8) {
-        return jackpotCounter;
-    }
-
-    function rewardPoolView() external view returns (uint256) {
-        return rewardPool;
-    }
-
     function prizePoolTargetView() external view returns (uint256) {
         return lastPrizePool;
     }
 
-    function prizePoolCurrentView() external view returns (uint256) {
-        return currentPrizePool;
-    }
-
     function nextPrizePoolView() external view returns (uint256) {
         return nextPrizePool;
-    }
-
-    function trophiesAddress() external view returns (address) {
-        return trophies;
-    }
-
-    function affiliateProgramAddress() external view returns (address) {
-        return affiliateProgramAddr;
     }
 
     /// @notice Resolve the payout recipient for a player, routing synthetic MAP-only players to their affiliate owner.
@@ -265,10 +245,6 @@ contract PurgeGame is PurgeGameStorage {
         recipient = affiliateOwner == address(0) ? player : affiliateOwner;
     }
 
-    function mapJackpotStatus() external view returns (bool ready) {
-        ready = (gameState == 2) && lastPurchaseDay;
-    }
-
     // --- State machine: advance one tick ------------------------------------------------
 
     function mintPrice() external view returns (uint256) {
@@ -279,16 +255,8 @@ contract PurgeGame is PurgeGameStorage {
         return priceCoin;
     }
 
-    function principalStEthBalance() external view returns (uint256) {
-        return principalStEth;
-    }
-
     function rngWordForDay(uint48 day) external view returns (uint256) {
         return rngWordByDay[day];
-    }
-
-    function getEarlyPurgePercent() external view returns (uint8) {
-        return earlyPurgePercent;
     }
 
     function rngLocked() public view returns (bool) {
@@ -358,40 +326,6 @@ contract PurgeGame is PurgeGameStorage {
 
     function ethMintStreakCount(address player) external view returns (uint24) {
         return uint24((mintPacked_[player] >> ETH_LEVEL_STREAK_SHIFT) & MINT_MASK_24);
-    }
-
-    /// @notice Ticket counts per trait for a given level (useful for paging the arrays off-chain).
-    function traitTicketLengths(uint24 lvl) external view returns (uint256[256] memory lengths) {
-        address[][256] storage tickets = traitPurgeTicket[lvl];
-        for (uint256 i; i < 256; ) {
-            lengths[i] = tickets[i].length;
-            unchecked {
-                ++i;
-            }
-        }
-    }
-
-    /// @notice Paged read of ticket holders for a specific trait at a level.
-    function traitTicketSlice(
-        uint24 lvl,
-        uint8 trait,
-        uint256 start,
-        uint256 count
-    ) external view returns (address[] memory slice) {
-        address[] storage arr = traitPurgeTicket[lvl][trait];
-        uint256 len = arr.length;
-        if (start >= len) return new address[](0);
-        uint256 n = count;
-        uint256 remaining = len - start;
-        if (n > remaining) n = remaining;
-
-        slice = new address[](n);
-        for (uint256 i; i < n; ) {
-            slice[i] = arr[start + i];
-            unchecked {
-                ++i;
-            }
-        }
     }
 
     /// @notice Record a mint, funded by ETH (`msg.value`), claimable winnings, or bond credit.
@@ -2003,10 +1937,6 @@ contract PurgeGame is PurgeGameStorage {
         address[] storage arr = levelExterminators;
         if (arr.length < lvl) return address(0);
         return arr[uint256(lvl) - 1];
-    }
-
-    function getLastExterminatedTrait() external view returns (uint16) {
-        return lastExterminatedTrait;
     }
 
     function getTraitRemainingQuad(

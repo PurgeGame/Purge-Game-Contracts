@@ -25,13 +25,9 @@ interface IPurgeGame is IPurgeGameExternal {
 
     function prizePoolTargetView() external view returns (uint256);
 
-    function getEarlyPurgePercent() external view returns (uint8);
-
     function decWindow() external view returns (bool on, uint24 lvl);
 
     function isBafLevelActive(uint24 lvl) external view returns (bool);
-
-    function principalStEthBalance() external view returns (uint256);
 
     function purchaseInfo()
         external

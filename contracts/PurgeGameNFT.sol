@@ -488,17 +488,12 @@ contract PurgeGameNFT {
             rakebackMint = IPurgeAffiliate(affiliateAddr).payAffiliate(affiliateAmount, affiliateCode, payer, lvl);
         }
 
-        if (!mapPurchase) {
-            uint8 percentReached = game.getEarlyPurgePercent();
-            uint256 epPercent = percentReached;
-            if (epPercent < 20) {
-                uint256 bonusPct = 20 - epPercent;
-                uint256 coinCost = (scaledQty * priceUnit) / 100;
-                uint256 earlyBonus = (coinCost * bonusPct) / 100;
-                if (earlyBonus != 0) {
-                    unchecked {
-                        bonusMint += earlyBonus;
-                    }
+        if (!mapPurchase && gameState == 3) {
+            uint256 coinCost = (scaledQty * priceUnit) / 100;
+            uint256 earlyBonus = (coinCost * 20) / 100;
+            if (earlyBonus != 0) {
+                unchecked {
+                    bonusMint += earlyBonus;
                 }
             }
         }
