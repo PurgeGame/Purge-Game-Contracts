@@ -43,6 +43,7 @@ interface IPurgeGameJackpotModule {
 interface IPurgeGameBongModule {
     function bongMaintenanceForMap(
         address bongsAddr,
+        address coinAddr,
         address stethAddr,
         uint48 day,
         uint256 totalWei,

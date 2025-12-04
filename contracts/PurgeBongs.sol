@@ -132,10 +132,17 @@ contract PurgeBongs {
         uint256 claimedCount;
         uint256 paidOut;
         uint256[8] bucketTotals; // aggregate small bucket weights (for sanity bounds)
+        uint256[8] bucketRunningTotals; // mutable copy used for liability tracking (paired funding mode)
+        uint256 smallLiability; // running ceil(bucket) exposure for smalls (paired funding mode)
+        uint256 largeLiability; // running paired/unpaired exposure for larges (paired funding mode)
+        uint256 unpairedLarge; // remaining large principal with pairId=0 (paired funding mode)
+        uint256 fundingBuffer; // optional additive buffer above computed liability (paired funding mode)
         uint256 coinPerBond; // PURGE amount per bond at resolution (floored)
         uint256 coinRemaining; // remaining PURGE reserved for this level
         bool resolved;
         bool staged;
+        bool pairedLiability; // true when staged with pairing/aggregated small metadata
+        bool aggregateSmalls; // true when small buckets are aggregated for liability + payout
     }
 
     struct ClaimLeaf {
@@ -150,6 +157,12 @@ contract PurgeBongs {
         uint256 bucketStart; // prefix sum within the bucket (for smalls)
     }
 
+    struct PairingBound {
+        uint64 pairId;
+        uint256 sideA;
+        uint256 sideB;
+    }
+
     // ---------------------------------------------------------------------
     // Constants
     // ---------------------------------------------------------------------
@@ -157,7 +170,6 @@ contract PurgeBongs {
     uint256 private constant ONE = 1 ether;
     uint256 private constant FULL_SCALE = 1e18;
     uint256 private constant MAX_PRICE = 5 ether;
-    int256 private constant WAD_I = 1e18;
     uint16 public constant stakeRateBps = 10_000; // kept for interface compatibility
 
     // ---------------------------------------------------------------------
@@ -177,22 +189,8 @@ contract PurgeBongs {
     bool public gameOver;
     bool public transfersLocked; // only used for shutdown
     bool public purchasesEnabled = true;
-    // Pricing memory (monotone upward per issuance, anchored to previous clearing)
-    uint256 public lastClearingPrice;
-    uint256 public lastSold;
-    uint256 public initialPrice; // must be set before first issuance
-    uint16 public discountBps = 500; // start 5% under last clearing
-    uint16 public stepBps = 100; // 1% of last price scaled by volume band
-    uint16 public minBand = 50; // min normalizer for slope
+    bool public jackpotRewardsEnabled = true;
     address public renderer;
-    // Adaptive direct-sale pricing (fast up, slow down)
-    uint256 public saleBasePrice; // wei
-    uint256 public saleDecayUpWad; // 1e18-scaled exponent factor when ahead of schedule
-    uint256 public saleDecayDownWad; // 1e18-scaled exponent factor when behind schedule
-    uint256 public saleTargetRateWad; // bonds per second, 1e18-scaled
-    uint256 public saleCooldownBuffer; // clamp negative deviation (units = bonds)
-    uint256 public saleLaunchTime; // unix seconds; 0 disables adaptive pricing
-    uint256 public saleSold; // cumulative bonds counted toward adaptive pricing
 
     // levelId => config
     mapping(uint24 => LevelConfig) public levels;
@@ -212,7 +210,10 @@ contract PurgeBongs {
     mapping(address => mapping(address => bool)) private operatorApproval;
     mapping(uint24 => bool) public levelLocked;
     mapping(uint24 => mapping(uint256 => uint256)) public levelDenomCount; // basePerBondWei => units outstanding
+    mapping(uint24 => uint256) public levelSmallPrincipal; // running total principal for small entries (<0.5 ETH)
+    mapping(uint24 => uint256) public levelLargePrincipal; // running total principal for large entries (>=0.5 ETH)
     mapping(uint24 => uint256) public levelMaxPayoutComputed; // rolling worst-case liability (updated on mint/liquidation)
+    mapping(uint24 => mapping(uint64 => PairingBound)) private levelPairingSums; // pairId => side totals (paired funding mode)
 
     // simple reentrancy guard
     uint256 private locked = 1;
@@ -284,23 +285,16 @@ contract PurgeBongs {
         coinToken = coin_;
     }
 
-    function setInitialPrice(uint256 priceWei) external onlyOwner {
-        initialPrice = priceWei;
-    }
-
-    function setPricingParams(uint16 discountBps_, uint16 stepBps_, uint16 minBand_) external onlyOwner {
-        if (discountBps_ > 10_000) revert InvalidAmount();
-        discountBps = discountBps_;
-        stepBps = stepBps_;
-        minBand = minBand_;
-    }
-
     function setRenderer(address renderer_) external onlyOwner {
         renderer = renderer_;
     }
 
     function setPurchasesEnabled(bool enabled) external onlyOwner {
         purchasesEnabled = enabled;
+    }
+
+    function setJackpotRewardsEnabled(bool enabled) external onlyOwner {
+        jackpotRewardsEnabled = enabled;
     }
 
     /// @notice Wire core contracts (coin, game, vault) and propagate wiring to downstream modules.
@@ -432,7 +426,7 @@ contract PurgeBongs {
         uint256 leafCount,
         uint256[8] calldata bucketTotals
     ) external onlyOwner {
-        _stageLevel(levelId, root, maxPayout, 0, leafCount, bucketTotals);
+        _stageLevel(levelId, root, maxPayout, 0, leafCount, bucketTotals, new PairingBound[](0), false, false);
     }
 
     /// @notice Stage a level with an optional EV-style matched payout cap (informational only).
@@ -444,7 +438,55 @@ contract PurgeBongs {
         uint256 leafCount,
         uint256[8] calldata bucketTotals
     ) external onlyOwner {
-        _stageLevel(levelId, root, maxPayout, matchedMaxPayout, leafCount, bucketTotals);
+        _stageLevel(
+            levelId,
+            root,
+            maxPayout,
+            matchedMaxPayout,
+            leafCount,
+            bucketTotals,
+            new PairingBound[](0),
+            false,
+            false
+        );
+    }
+
+    /// @notice Stage a level using pairing metadata to cap large-bucket worst-case payouts.
+    function stageLevelWithPairing(
+        uint24 levelId,
+        bytes32 root,
+        uint256 maxPayout,
+        uint256 matchedMaxPayout,
+        uint256 leafCount,
+        uint256[8] calldata bucketTotals,
+        PairingBound[] calldata pairings
+    ) external onlyOwner {
+        _stageLevel(levelId, root, maxPayout, matchedMaxPayout, leafCount, bucketTotals, pairings, true, false);
+    }
+
+    /// @notice Stage a level aggregating all small buckets (single RNG offset) to keep small-bucket variance under 1 ETH.
+    function stageLevelAggregatedSmalls(
+        uint24 levelId,
+        bytes32 root,
+        uint256 maxPayout,
+        uint256 matchedMaxPayout,
+        uint256 leafCount,
+        uint256[8] calldata bucketTotals
+    ) external onlyOwner {
+        _stageLevel(levelId, root, maxPayout, matchedMaxPayout, leafCount, bucketTotals, new PairingBound[](0), false, true);
+    }
+
+    /// @notice Stage a level using pairing metadata and aggregated small buckets.
+    function stageLevelWithPairingAggregatedSmalls(
+        uint24 levelId,
+        bytes32 root,
+        uint256 maxPayout,
+        uint256 matchedMaxPayout,
+        uint256 leafCount,
+        uint256[8] calldata bucketTotals,
+        PairingBound[] calldata pairings
+    ) external onlyOwner {
+        _stageLevel(levelId, root, maxPayout, matchedMaxPayout, leafCount, bucketTotals, pairings, true, true);
     }
 
     function _stageLevel(
@@ -453,14 +495,20 @@ contract PurgeBongs {
         uint256 maxPayout,
         uint256 matchedMaxPayout,
         uint256 leafCount,
-        uint256[8] calldata bucketTotals
+        uint256[8] calldata bucketTotals,
+        PairingBound[] memory pairings,
+        bool pairedFunding,
+        bool aggregateSmalls
     ) private {
         if ((levelId % 5 != 0) || root == bytes32(0) || leafCount == 0) revert InvalidLevel();
         LevelConfig storage cfg = levels[levelId];
         if (cfg.staged) revert InvalidLevel();
         if (matchedMaxPayout != 0 && matchedMaxPayout > maxPayout) revert InvalidLevel();
 
-        uint256 computed = levelMaxPayoutComputed[levelId];
+        bool dynamicFunding = pairedFunding || aggregateSmalls;
+        uint256 computed = dynamicFunding
+            ? _computeDynamicMaxPayout(levelId, cfg, bucketTotals, pairings, aggregateSmalls)
+            : levelMaxPayoutComputed[levelId];
         if (maxPayout == 0) {
             maxPayout = computed;
         } else if (computed != 0 && maxPayout < computed) {
@@ -470,15 +518,168 @@ contract PurgeBongs {
 
         cfg.root = root;
         cfg.maxPayout = maxPayout;
-        cfg.matchedMaxPayout = matchedMaxPayout == 0 ? maxPayout : matchedMaxPayout;
+        if (dynamicFunding) {
+            cfg.fundingBuffer = maxPayout > computed ? maxPayout - computed : 0;
+        } else {
+            cfg.fundingBuffer = 0;
+        }
+        levelMaxPayoutComputed[levelId] = maxPayout;
+        uint256 matched = matchedMaxPayout;
+        if (matched == 0) {
+            matched = dynamicFunding ? computed : maxPayout;
+        }
+        cfg.matchedMaxPayout = matched;
         cfg.leafCount = leafCount;
         cfg.bucketTotals = bucketTotals;
+        cfg.aggregateSmalls = aggregateSmalls;
+        if (!dynamicFunding) {
+            cfg.bucketRunningTotals = [uint256(0), 0, 0, 0, 0, 0, 0, 0];
+            cfg.smallLiability = 0;
+            cfg.largeLiability = 0;
+            cfg.unpairedLarge = 0;
+            cfg.pairedLiability = false;
+        } else {
+            cfg.pairedLiability = true;
+        }
         cfg.staged = true;
         levelLocked[levelId] = true; // freeze transfers for this level
         levelQueue.push(levelId);
 
         emit LevelStaged(levelId, root, maxPayout, leafCount);
         emit LevelStageMetadata(levelId, cfg.matchedMaxPayout);
+    }
+
+    function _bucketWorstCase(uint256 total) private pure returns (uint256) {
+        if (total == 0) return 0;
+        return ((total + ONE - 1) / ONE) * ONE;
+    }
+
+    function _smallWorstCase(uint256[8] calldata totals) private pure returns (uint256 total) {
+        for (uint256 i; i < 8; ) {
+            total += _bucketWorstCase(totals[i]);
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    function _computeDynamicMaxPayout(
+        uint24 levelId,
+        LevelConfig storage cfg,
+        uint256[8] calldata bucketTotals,
+        PairingBound[] memory pairings,
+        bool aggregateSmalls
+    ) private returns (uint256) {
+        uint256 smallPrincipal = levelSmallPrincipal[levelId];
+        uint256 largePrincipal = levelLargePrincipal[levelId];
+
+        uint256 bucketSum;
+        for (uint256 i; i < 8; ) {
+            uint256 t = bucketTotals[i];
+            bucketSum += t;
+            cfg.bucketRunningTotals[i] = t;
+            unchecked {
+                ++i;
+            }
+        }
+        if (bucketSum != smallPrincipal) revert InvalidLevel();
+
+        uint256 smallLiability = aggregateSmalls ? _bucketWorstCase(bucketSum) : _smallWorstCase(bucketTotals);
+        cfg.smallLiability = smallLiability;
+
+        uint256 pairPrincipal;
+        uint256 largeLiability;
+        uint256 len = pairings.length;
+        if (len == 0) {
+            largeLiability = largePrincipal * 2;
+        } else {
+            for (uint256 i; i < len; ) {
+                PairingBound memory p = pairings[i];
+                if (p.pairId == 0) revert InvalidLevel();
+                PairingBound storage sums = levelPairingSums[levelId][p.pairId];
+                if (sums.pairId != 0) revert InvalidLevel(); // duplicate pair id
+                sums.pairId = p.pairId;
+                sums.sideA = p.sideA;
+                sums.sideB = p.sideB;
+
+                uint256 larger = p.sideA >= p.sideB ? p.sideA : p.sideB;
+                if (larger != 0) {
+                    largeLiability += larger * 2;
+                }
+                pairPrincipal += p.sideA + p.sideB;
+                unchecked {
+                    ++i;
+                }
+            }
+        }
+        if (pairPrincipal > largePrincipal) revert InvalidLevel();
+
+        uint256 unpaired = largePrincipal - pairPrincipal;
+        cfg.unpairedLarge = unpaired;
+        cfg.largeLiability = largeLiability + unpaired * 2;
+        cfg.pairedLiability = true;
+        cfg.aggregateSmalls = aggregateSmalls;
+        return cfg.smallLiability + cfg.largeLiability;
+    }
+
+    function _reduceSmallLiability(LevelConfig storage cfg, uint8 bucketId, uint256 amount) private {
+        if (bucketId > 7) revert InvalidLevel();
+        uint256 prev = cfg.bucketRunningTotals[bucketId];
+        if (prev < amount) revert InvalidAmount();
+        uint256 before;
+        uint256 afterTotal;
+        if (cfg.aggregateSmalls) {
+            uint256 totalBefore;
+            for (uint256 i; i < 8; ) {
+                totalBefore += cfg.bucketRunningTotals[i];
+                unchecked {
+                    ++i;
+                }
+            }
+            before = _bucketWorstCase(totalBefore);
+            uint256 newTotal = prev - amount;
+            cfg.bucketRunningTotals[bucketId] = newTotal;
+            uint256 totalAfter = totalBefore - amount;
+            afterTotal = _bucketWorstCase(totalAfter);
+        } else {
+            before = _bucketWorstCase(prev);
+            uint256 newTotal = prev - amount;
+            afterTotal = _bucketWorstCase(newTotal);
+            cfg.bucketRunningTotals[bucketId] = newTotal;
+        }
+        cfg.smallLiability = cfg.smallLiability + afterTotal - before;
+    }
+
+    function _reduceLargeLiability(
+        LevelConfig storage cfg,
+        uint24 levelId,
+        uint64 pairId,
+        bool pairSide,
+        uint256 amount
+    ) private {
+        if (pairId == 0) {
+            uint256 unpaired = cfg.unpairedLarge;
+            if (unpaired < amount) revert InvalidAmount();
+            cfg.unpairedLarge = unpaired - amount;
+            uint256 delta = amount * 2;
+            if (cfg.largeLiability < delta) revert InvalidLevel();
+            cfg.largeLiability -= delta;
+            return;
+        }
+
+        PairingBound storage sums = levelPairingSums[levelId][pairId];
+        if (sums.sideA == 0 && sums.sideB == 0) revert InvalidLevel();
+        uint256 before = (sums.sideA >= sums.sideB ? sums.sideA : sums.sideB) * 2;
+        if (pairSide) {
+            if (sums.sideB < amount) revert InvalidAmount();
+            sums.sideB -= amount;
+        } else {
+            if (sums.sideA < amount) revert InvalidAmount();
+            sums.sideA -= amount;
+        }
+        uint256 afterMax = (sums.sideA >= sums.sideB ? sums.sideA : sums.sideB) * 2;
+        if (cfg.largeLiability < before) revert InvalidLevel();
+        cfg.largeLiability = cfg.largeLiability - before + afterMax;
     }
 
     /**
@@ -729,9 +930,13 @@ contract PurgeBongs {
     }
 
     function _bondLevelFor(uint24 gameLevel) private pure returns (uint24) {
-        if (gameLevel == 0) return 0;
-        // Open sales 25 levels before resolution and keep them open until 21 levels before resolution.
-        // Map to the resolution bucket that is 25-21 levels ahead (multiples of 5 only).
+        if (gameLevel == 0) return 5; // presale bonds point to level 5 bucket
+        if (gameLevel <= 3) return 5;
+        if (gameLevel <= 6) return 10;
+        if (gameLevel <= 8) return 15;
+        if (gameLevel <= 12) return 20;
+        if (gameLevel <= 15) return 25;
+        // Standard window: 25-21 levels ahead of resolution bucket (multiples of 5 only).
         uint24 ahead = gameLevel + 25;
         uint24 bucket = ahead / 5;
         return bucket * 5;
@@ -991,19 +1196,35 @@ contract PurgeBongs {
         // Adjust max payout to reflect removal of this leaf's worst-case liability.
         if (leaf.isLarge && leaf.amount < SMALL_THRESHOLD) revert InvalidAmount();
         if (!leaf.isLarge && leaf.amount >= SMALL_THRESHOLD) revert InvalidAmount();
-        uint256 worstCase = leaf.isLarge ? leaf.amount * 2 : ONE;
-        if (cfg.maxPayout >= worstCase) {
-            cfg.maxPayout -= worstCase;
+        uint256 oldMaxPayout = cfg.maxPayout;
+        if (cfg.pairedLiability) {
+            if (leaf.isLarge) {
+                _reduceLargeLiability(cfg, leaf.levelId, leaf.pairId, leaf.pairSide, leaf.amount);
+            } else {
+                _reduceSmallLiability(cfg, leaf.bucketId, leaf.amount);
+            }
+            uint256 baseLiability = cfg.smallLiability + cfg.largeLiability;
+            cfg.maxPayout = baseLiability + cfg.fundingBuffer;
+            levelMaxPayoutComputed[leaf.levelId] = cfg.maxPayout;
         } else {
-            cfg.maxPayout = 0;
+            uint256 worstCase = leaf.isLarge ? leaf.amount * 2 : ONE;
+            if (cfg.maxPayout >= worstCase) {
+                cfg.maxPayout -= worstCase;
+            } else {
+                cfg.maxPayout = 0;
+            }
+            uint256 comp = levelMaxPayoutComputed[leaf.levelId];
+            levelMaxPayoutComputed[leaf.levelId] = comp >= worstCase ? comp - worstCase : 0;
         }
-        uint256 comp = levelMaxPayoutComputed[leaf.levelId];
-        levelMaxPayoutComputed[leaf.levelId] = comp >= worstCase ? comp - worstCase : 0;
+
+        uint256 newPendingMax = pendingMax - oldMaxPayout + cfg.maxPayout;
+        uint256 obligationsAfter = bondObligations - payout;
+        if (obligationsAfter < newPendingMax) revert InsufficientObligations();
 
         _setClaimed(leaf.levelId, leaf.leafIndex);
         cfg.claimedCount += 1;
         cfg.paidOut += payout;
-        bondObligations -= payout;
+        bondObligations = obligationsAfter;
 
         _consumeBondUnits(leaf.player, leaf.levelId, leaf.amount, 1);
         _payout(leaf.player, payout);
@@ -1061,6 +1282,19 @@ contract PurgeBongs {
         uint256 bucketTotal = cfg.bucketTotals[leaf.bucketId];
         if (bucketTotal != 0 && leaf.bucketStart + leaf.amount > bucketTotal) revert InvalidAmount();
 
+        if (cfg.aggregateSmalls) {
+            uint256 prefix;
+            for (uint256 i; i < leaf.bucketId; ) {
+                prefix += cfg.bucketTotals[i];
+                unchecked {
+                    ++i;
+                }
+            }
+            uint256 offsetAgg = uint256(keccak256(abi.encode(cfg.seed, "aggSmall"))) % ONE;
+            uint256 startAgg = prefix + leaf.bucketStart + offsetAgg;
+            return (startAgg / ONE != (startAgg + leaf.amount) / ONE) ? ONE : 0;
+        }
+
         uint256 offset = uint256(keccak256(abi.encode(cfg.seed, leaf.bucketId))) % ONE;
         uint256 start = leaf.bucketStart + offset;
         // wins if interval crosses a 1 ETH boundary after applying offset
@@ -1083,7 +1317,7 @@ contract PurgeBongs {
         );
     }
 
-    function _consumeBondUnits(address owner, uint24 levelId, uint256 basePerBondWei, uint256 units) private {
+    function _consumeBondUnits(address holder, uint24 levelId, uint256 basePerBondWei, uint256 units) private {
         if (units == 0) revert InvalidAmount();
         if (basePerBondWei == 0) revert InvalidAmount();
         uint256 totalBurn = basePerBondWei * units;
@@ -1094,8 +1328,15 @@ contract PurgeBongs {
         uint256 principal = levelPrincipal[levelId];
         if (principal < totalBurn) revert InvalidAmount();
         levelPrincipal[levelId] = principal - totalBurn;
+        if (basePerBondWei >= SMALL_THRESHOLD) {
+            uint256 largePrincipal = levelLargePrincipal[levelId];
+            levelLargePrincipal[levelId] = largePrincipal >= totalBurn ? largePrincipal - totalBurn : 0;
+        } else {
+            uint256 smallPrincipal = levelSmallPrincipal[levelId];
+            levelSmallPrincipal[levelId] = smallPrincipal >= totalBurn ? smallPrincipal - totalBurn : 0;
+        }
 
-        _burn(owner, levelId, totalBurn);
+        _burn(holder, levelId, totalBurn);
     }
 
     // standard merkle proof verification (keccak256 hash pair, sorted)
@@ -1246,12 +1487,16 @@ contract PurgeBongs {
 
         uint24 currentLvl = _currentLevel();
         uint24 lvl = _bondLevelFor(currentLvl);
-        if (lvl == 0) {
-            if (currentLvl != 0) revert PurchasesClosed(); // presale only when game level is 0
-        } else {
-            uint24 diff = lvl > currentLvl ? lvl - currentLvl : 0;
-            if (diff < 21 || diff > 25) revert PurchasesClosed(); // sales open only 25→21 levels ahead of resolution
-        }
+        if (lvl == 0 || currentLvl >= lvl) revert PurchasesClosed();
+
+        uint24 diff = lvl - currentLvl;
+        bool earlyWindow = (lvl == 5 && currentLvl <= 3) ||
+            (lvl == 10 && currentLvl <= 6) ||
+            (lvl == 15 && currentLvl <= 8) ||
+            (lvl == 20 && currentLvl <= 12) ||
+            (lvl == 25 && currentLvl <= 15);
+        bool standardWindow = (diff >= 21 && diff <= 25);
+        if (!earlyWindow && !standardWindow) revert PurchasesClosed(); // sales open only in configured windows
 
         startIndex = levelIssuedCount[lvl];
 
@@ -1275,13 +1520,15 @@ contract PurgeBongs {
         if (levelLocked[levelId]) revert TransfersLocked();
         levelIssuedCount[levelId] += count;
         levelPrincipal[levelId] += basePerBongWei * count;
+        if (basePerBongWei >= SMALL_THRESHOLD) {
+            levelLargePrincipal[levelId] += basePerBongWei * count;
+        } else {
+            levelSmallPrincipal[levelId] += basePerBongWei * count;
+        }
         levelSupply[levelId] += basePerBongWei * count;
         levelDenomCount[levelId][basePerBongWei] += count;
         uint256 worst = _worstCase(basePerBongWei);
         levelMaxPayoutComputed[levelId] += worst * count;
-        if (saleLaunchTime != 0) {
-            saleSold += count;
-        }
         bool large = basePerBongWei >= SMALL_THRESHOLD;
 
         for (uint256 i; i < count; ) {
@@ -1291,135 +1538,6 @@ contract PurgeBongs {
                 ++i;
             }
         }
-    }
-
-    // ---------------------------------------------------------------------
-    // Pricing helpers (monotone upward per issuance + adaptive sale quoting)
-    // ---------------------------------------------------------------------
-    function quoteStartPrice() public view returns (uint256) {
-        if (lastClearingPrice != 0) {
-            return (lastClearingPrice * (10_000 - discountBps)) / 10_000;
-        }
-        return initialPrice;
-    }
-
-    function quotePrice(uint256 currentSold) external view returns (uint256) {
-        uint256 startPrice = quoteStartPrice();
-        // Choose a step so that after `lastSold` bonds, price reaches (or slightly exceeds) the last clearing price.
-        uint256 step;
-        if (lastClearingPrice > startPrice && lastSold != 0) {
-            uint256 diff = lastClearingPrice - startPrice;
-            // ceil(diff / lastSold) to guarantee reaching the target by lastSold.
-            step = (diff + lastSold - 1) / lastSold;
-        } else if (stepBps != 0) {
-            uint256 denom = minBand == 0 ? 1 : minBand;
-            step = (startPrice * stepBps) / (10_000 * denom);
-        }
-
-        uint256 price = startPrice + currentSold * step;
-        if (price > MAX_PRICE) price = MAX_PRICE;
-        return price;
-    }
-
-    /// @notice Configure adaptive direct-sale pricing (VRGDA-style).
-    /// @param basePrice Starting price in wei.
-    /// @param targetRateWad Bonds per second, 1e18-scaled (e.g., 0.05 bonds/sec => 5e16).
-    /// @param decayUpWad Exponent multiplier when ahead of schedule (1e18-scaled).
-    /// @param decayDownWad Exponent multiplier when behind schedule (1e18-scaled, usually smaller).
-    /// @param cooldownBuffer Clamp on negative deviation (units = bonds) to prevent steep drops.
-    /// @param launchTime Optional override for start time; 0 uses current block.timestamp.
-    function configureAdaptiveSale(
-        uint256 basePrice,
-        uint256 targetRateWad,
-        uint256 decayUpWad,
-        uint256 decayDownWad,
-        uint256 cooldownBuffer,
-        uint256 launchTime
-    ) external onlyOwner {
-        saleBasePrice = basePrice;
-        saleTargetRateWad = targetRateWad;
-        saleDecayUpWad = decayUpWad;
-        saleDecayDownWad = decayDownWad;
-        saleCooldownBuffer = cooldownBuffer;
-        saleLaunchTime = launchTime == 0 ? block.timestamp : launchTime;
-    }
-
-    /// @notice Quote adaptive price for `quantity` bonds using current sale state.
-    /// @dev Small-loop integral; reverts for very large qty to prevent gas griefing.
-    function quoteAdaptiveSale(uint256 quantity) external view returns (uint256 cost, uint256 nextPrice) {
-        if (saleLaunchTime == 0 || saleTargetRateWad == 0 || saleBasePrice == 0) {
-            return (0, 0);
-        }
-        if (quantity > 256) revert InvalidAmount();
-
-        uint256 sold = saleSold;
-        uint256 timeNow = block.timestamp;
-        for (uint256 i; i < quantity; ) {
-            int256 diff = int256(sold + i) - _targetSold(timeNow);
-            cost += _adaptivePrice(diff);
-            unchecked {
-                ++i;
-            }
-        }
-
-        int256 nextDiff = int256(sold + quantity) - _targetSold(timeNow);
-        nextPrice = _adaptivePrice(nextDiff);
-    }
-
-    function _targetSold(uint256 t) private view returns (int256) {
-        if (saleLaunchTime == 0 || saleTargetRateWad == 0 || t <= saleLaunchTime) return 0;
-        uint256 elapsed = t - saleLaunchTime;
-        return int256((saleTargetRateWad * elapsed) / FULL_SCALE);
-    }
-
-    function _adaptivePrice(int256 diff) private view returns (uint256) {
-        if (saleBasePrice == 0) return 0;
-        int256 clamped = diff;
-        if (clamped < 0 && saleCooldownBuffer != 0) {
-            int256 floor = -int256(saleCooldownBuffer);
-            if (clamped < floor) clamped = floor;
-        }
-        int256 decay = clamped > 0 ? int256(saleDecayUpWad) : int256(saleDecayDownWad);
-        int256 k = _wadMul(decay, clamped);
-        int256 factor = _wadExp(k);
-        return uint256(_wadMulSigned(int256(saleBasePrice), factor));
-    }
-
-    function _wadMul(int256 a, int256 b) private pure returns (int256) {
-        return int256((int256(a) * int256(b)) / WAD_I);
-    }
-
-    function _wadMulSigned(int256 a, int256 b) private pure returns (int256) {
-        return (a * b) / WAD_I;
-    }
-
-    // Taken from solmate PRB-math style expWad; 59x18 fixed-point exponent.
-    function _wadExp(int256 x) private pure returns (int256 r) {
-        unchecked {
-            if (x <= -42139678854452767551) return 0;
-            if (x >= 135305999368893231589) revert InvalidAmount();
-
-            x = (x << 78) / 5 ** 18;
-            int256 k = ((x << 96) / 54916777467707473351141471128 + (1 << 95)) >> 96;
-            x = x - k * 54916777467707473351141471128;
-            int256 y = x + 1346386616545796478920950773328;
-            y = ((y * x) >> 96) + 57155421227552351082224309758464;
-            int256 p = y + x - 94201549194550492254356042504812;
-            p = (p * p + (int256(3273285459638523848632254066296) << 96)) >> 96;
-            int256 q = y - 2855989394907223263936484059900;
-            q = (q * x >> 96) + 50020603652535783019961831881945;
-            q = (q * x >> 96) - 533845033583426703283633433725380;
-            q = (q * x >> 96) + 3604857256930695427073651918091429;
-            r = int256(p) * int256(1 << 96) / q;
-            r = (r * 1677202110996718588342820967067443963516166) >> (int256(195) - k);
-        }
-    }
-
-    function finalizeIssuance(uint256 clearingPrice, uint256 sold) external onlyGame {
-        if (clearingPrice != 0) {
-            lastClearingPrice = clearingPrice;
-        }
-        lastSold = sold;
     }
 
     // ERC1155 metadata

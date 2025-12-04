@@ -28,6 +28,7 @@ interface IPurgeCoin {
 
     function normalizeActivePurgeQuests() external;
 
+    function vault() external view returns (address);
 
     function coinflipTop(uint24 level) external view returns (address player, uint96 score);
 

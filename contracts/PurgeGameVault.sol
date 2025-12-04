@@ -18,6 +18,7 @@ interface IVaultCoin {
     function vaultEscrowFrom(address from, uint256 amount) external;
     function vaultMintTo(address to, uint256 amount) external;
     function vaultMintAllowance() external view returns (uint256);
+    function setVault(address vault_) external;
 }
 
 /// @notice Minimal ERC20 used for vault share classes (coin-only and eth-only).
@@ -278,6 +279,36 @@ contract PurgeStonkNFT {
         emit Claim(msg.sender, to, amount, ethOut, stEthOut, 0);
         if (ethOut != 0) _payEth(to, ethOut);
         if (stEthOut != 0) _payToken(address(steth), to, stEthOut);
+    }
+
+    /// @notice View the coin-share burn required to withdraw a target amount of PURGE.
+    function previewBurnForCoinOut(uint256 coinOut) external view returns (uint256 burnAmount) {
+        uint256 reserve = coinReserve;
+        if (coinOut == 0 || coinOut > reserve) revert Insufficient();
+        uint256 supply = coinShare.totalSupply();
+        // ceil(coinOut * supply / reserve)
+        burnAmount = (coinOut * supply + reserve - 1) / reserve;
+    }
+
+    /// @notice View the eth-share burn required to withdraw a target ETH-equivalent value.
+    /// @dev Value is measured as ethOut + stEthOut.
+    function previewBurnForEthOut(uint256 targetValue) external view returns (uint256 burnAmount, uint256 ethOut, uint256 stEthOut) {
+        uint256 supply = ethShare.totalSupply();
+        uint256 ethBal = address(this).balance;
+        uint256 stBal = _tokenBalance(address(steth));
+        uint256 combined = ethBal + stBal;
+        if (targetValue == 0 || targetValue > combined) revert Insufficient();
+
+        // ceil(targetValue * supply / combined)
+        burnAmount = (targetValue * supply + combined - 1) / combined;
+
+        uint256 claimValue = (combined * burnAmount) / supply;
+        if (claimValue <= ethBal) {
+            ethOut = claimValue;
+        } else {
+            ethOut = ethBal;
+            stEthOut = claimValue - ethBal;
+        }
     }
 
     /// @notice View helper to preview a claim without burning.

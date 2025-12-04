@@ -25,6 +25,7 @@ interface IPurgeBongsJackpot {
         bool stake
     ) external returns (uint256 startTokenId);
     function purchasesEnabled() external view returns (bool);
+    function jackpotRewardsEnabled() external view returns (bool);
 }
 
 /**
@@ -614,7 +615,13 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         if (winners.length == 0) return (entropyState, 0, 0, 0);
 
         uint256 ethPoolForWinners = traitShare;
-        if (!payCoin && bongBps != 0 && bongsAddr != address(0) && IPurgeBongsJackpot(bongsAddr).purchasesEnabled()) {
+        if (
+            !payCoin &&
+            bongBps != 0 &&
+            bongsAddr != address(0) &&
+            IPurgeBongsJackpot(bongsAddr).purchasesEnabled() &&
+            IPurgeBongsJackpot(bongsAddr).jackpotRewardsEnabled()
+        ) {
             (bongSpent, ethPoolForWinners) = _jackpotBongSpend(
                 bongsAddr,
                 winners,
@@ -730,7 +737,11 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         }
 
         address bongsAddr = IPurgeGameWithBongs(address(this)).bongs();
-        if (bongsAddr == address(0) || !IPurgeBongsJackpot(bongsAddr).purchasesEnabled()) {
+        if (
+            bongsAddr == address(0) ||
+            !IPurgeBongsJackpot(bongsAddr).purchasesEnabled() ||
+            !IPurgeBongsJackpot(bongsAddr).jackpotRewardsEnabled()
+        ) {
             return (false, 0);
         }
 

@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {PurgeGameStorage} from "../storage/PurgeGameStorage.sol";
+import {IPurgeCoin} from "../interfaces/IPurgeCoin.sol";
 
 interface IPurgeBongsLite {
     function payBongs(uint256 coinAmount, uint256 stEthAmount, uint48 rngDay, uint256 rngWord, uint256 maxBongs) external payable;
@@ -14,6 +15,10 @@ interface IPurgeBongsLite {
 interface IStETHLite {
     function submit(address referral) external payable returns (uint256);
     function balanceOf(address account) external view returns (uint256);
+}
+
+interface IPurgeGameVaultLike {
+    function deposit(uint256 coinAmount, uint256 stEthAmount) external payable;
 }
 
 /**
@@ -30,6 +35,7 @@ contract PurgeGameBongModule is PurgeGameStorage {
     /// @notice Handle bong funding/resolve work during map jackpot prep.
     function bongMaintenanceForMap(
         address bongsAddr,
+        address coinAddr,
         address stethAddr,
         uint48 day,
         uint256 totalWei,
@@ -58,8 +64,10 @@ contract PurgeGameBongModule is PurgeGameStorage {
         uint256 ethYield = ethBal > tracked ? ethBal - tracked : 0;
         uint256 yieldPool = stYield + ethYield;
 
-        // Mint 5% of totalWei (priced in PURGE) to the bongs contract.
-        uint256 bongMint = (totalWei * priceCoin) / (20 * price);
+        // Mintable coin from map jackpot: 5% of totalWei (priced in PURGE).
+        uint256 mintableCoin = (totalWei * priceCoin) / (20 * price);
+        uint256 bondCoin = (mintableCoin * 40) / 100;
+        uint256 vaultCoin = mintableCoin - bondCoin;
 
         uint256 bongSkim = yieldPool / 4; // 25% to bongs
         uint256 rewardTopUp = yieldPool / 20; // 5% to reward pool
@@ -77,9 +85,17 @@ contract PurgeGameBongModule is PurgeGameStorage {
             rewardPool += rewardFromEth;
         }
 
-        bongContract.payBongs{value: ethForBongs}(bongMint, stForBongs, day, rngWord, maxBongs);
+        // Route vault share (if any) as mint allowance; ignore failures to avoid blocking jackpots.
+        if (vaultCoin != 0) {
+            address vaultAddr = IPurgeCoin(coinAddr).vault();
+            if (vaultAddr != address(0)) {
+                try IPurgeGameVaultLike(vaultAddr).deposit{value: 0}(vaultCoin, 0) {} catch {}
+            }
+        }
+
+        bongContract.payBongs{value: ethForBongs}(bondCoin, stForBongs, day, rngWord, maxBongs);
         lastBongFundingLevel = level;
-        return (bongSkim != 0 || bongMint != 0 || rewardFromEth != 0);
+        return (bongSkim != 0 || mintableCoin != 0 || rewardFromEth != 0);
     }
 
     /// @notice Stake excess reward pool into stETH based on bongs-configured ratio.

@@ -425,10 +425,10 @@ contract Purgecoin {
         _mint(bongs, amount);
     }
 
-    /// @notice Escrow coin to the vault without minting (burns sender, credits vault allowance).
+    /// @notice Escrow virtual coin to the vault (no token movement); increases mint allowance.
     function vaultEscrowFrom(address from, uint256 amount) external onlyVault {
+        from; // unused (kept for interface compatibility)
         if (amount == 0) return;
-        _burn(from, amount);
         vaultMintAllowance += amount;
     }
 

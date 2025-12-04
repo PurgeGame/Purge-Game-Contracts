@@ -82,6 +82,7 @@ interface IVRFCoordinator {
 interface ILinkToken {
     function transferAndCall(address to, uint256 value, bytes calldata data) external returns (bool);
 }
+
 // ===========================================================================
 // Contract
 // ===========================================================================
@@ -129,8 +130,10 @@ contract PurgeGame is PurgeGameStorage {
     address private immutable bongModule; // Delegate module for bong upkeep and staking
     IVRFCoordinator private vrfCoordinator; // Chainlink VRF coordinator (mutable for emergencies)
     bytes32 private immutable vrfKeyHash; // VRF key hash
-    uint256 private immutable vrfSubscriptionId; // VRF subscription identifier
+    uint256 private vrfSubscriptionId; // VRF subscription identifier (mutable for coordinator swaps)
     address private immutable linkToken; // LINK token contract for top-ups
+    address private immutable vrfAdmin; // VRF subscription owner contract allowed to rotate/wire VRF config
+    bool private vrfConfigWired; // true once the initial VRF coordinator/subscription are set
     // Trusted collaborators: coin/nft/jackpots/modules are expected to be non-reentrant and non-malicious.
 
     uint256 private constant DEPLOY_IDLE_TIMEOUT = (365 days * 5) / 2; // 2.5 years
@@ -190,6 +193,7 @@ contract PurgeGame is PurgeGameStorage {
      * @param jackpots_         PurgeJackpots contract address (wires Decimator/BAF jackpots)
      * @param bongs_            Bongs contract address
      * @param trophies_         Standalone trophy ERC721 contract (cosmetic only)
+     * @param vrfAdmin_         VRF owner/admin contract authorized to rotate the coordinator/subscription on stalls
      */
     constructor(
         address purgeCoinContract,
@@ -206,7 +210,8 @@ contract PurgeGame is PurgeGameStorage {
         address stEthToken_,
         address jackpots_,
         address bongs_,
-        address trophies_
+        address trophies_,
+        address vrfAdmin_
     ) {
         coin = IPurgeCoin(purgeCoinContract);
         renderer = IPurgeRendererLike(renderer_);
@@ -221,18 +226,13 @@ contract PurgeGame is PurgeGameStorage {
         vrfKeyHash = vrfKeyHash_;
         vrfSubscriptionId = vrfSubscriptionId_;
         linkToken = linkToken_;
+        vrfAdmin = vrfAdmin_;
         steth = IStETH(stEthToken_);
-        if (
-            stEthToken_ == address(0) ||
-            jackpots_ == address(0) ||
-            bongs_ == address(0) ||
-            trophies_ == address(0) ||
-            mintModule_ == address(0) ||
-            bongModule_ == address(0)
-        ) revert E();
         jackpots = jackpots_;
         bongs = bongs_;
         trophies = trophies_;
+        if (vrfAdmin_ == address(0)) revert E();
+        vrfConfigWired = (vrfCoordinator_ != address(0) && vrfSubscriptionId_ != 0);
         if (!steth.approve(bongs_, type(uint256).max)) revert E();
         deployTimestamp = uint48(block.timestamp);
     }
@@ -250,9 +250,6 @@ contract PurgeGame is PurgeGameStorage {
     /// @notice Resolve the payout recipient for a player, routing synthetic MAP-only players to their affiliate owner.
     function affiliatePayoutAddress(address player) public view returns (address recipient, address affiliateOwner) {
         address affiliateAddr = affiliateProgram;
-        if (affiliateAddr == address(0)) {
-            return (player, address(0));
-        }
         (affiliateOwner, ) = IPurgeAffiliate(affiliateAddr).syntheticMapInfo(player);
         recipient = affiliateOwner == address(0) ? player : affiliateOwner;
     }
@@ -288,6 +285,22 @@ contract PurgeGame is PurgeGameStorage {
         if (day == 0 || rngWordByDay[day - 1] != 0) return false;
         if (day < 2 || rngWordByDay[day - 2] != 0) return false;
         return true;
+    }
+
+    /// @notice True if no VRF word has been recorded for the last 3 day slots.
+    function rngStalledForThreeDays() external view returns (bool) {
+        return _threeDayRngGap(_currentDayIndex());
+    }
+
+    /// @notice One-time wiring of VRF config from the VRF admin contract (on deployment).
+    function wireInitialVrf(address coordinator_, uint256 subId) external {
+        if (msg.sender != vrfAdmin || vrfConfigWired) revert E();
+        if (coordinator_ == address(0) || subId == 0) revert E();
+        address current = address(vrfCoordinator);
+        vrfCoordinator = IVRFCoordinator(coordinator_);
+        vrfSubscriptionId = subId;
+        vrfConfigWired = true;
+        emit VrfCoordinatorUpdated(current, coordinator_);
     }
 
     function decWindow() external view returns (bool on, uint24 lvl) {
@@ -860,6 +873,7 @@ contract PurgeGame is PurgeGameStorage {
             abi.encodeWithSelector(
                 IPurgeGameBongModule.bongMaintenanceForMap.selector,
                 bongs,
+                address(coin),
                 address(steth),
                 day,
                 totalWei,
@@ -1366,13 +1380,20 @@ contract PurgeGame is PurgeGameStorage {
     /// @return complete True if shutdown burning is finished.
     function finalizeBongShutdown(
         uint256 maxIds
-    ) external returns (uint256 processedIds, uint256 burned, bool complete) {
+    ) public returns (uint256 processedIds, uint256 burned, bool complete) {
+        return _finalizeBongShutdown(maxIds);
+    }
+
+    function _finalizeBongShutdown(
+        uint256 maxIds
+    ) private returns (uint256 processedIds, uint256 burned, bool complete) {
         address bongsAddr = bongs;
         if (bongsAddr == address(0)) revert E();
         return IPurgeBongs(bongsAddr).finalizeShutdown(maxIds);
     }
 
     function _requestRngBestEffort(uint48 day) private returns (bool requested) {
+        if (!vrfConfigWired) revert E();
         // Best-effort request that swallows VRF failures (used during idle shutdown).
         try
             vrfCoordinator.requestRandomWords(
@@ -1400,6 +1421,7 @@ contract PurgeGame is PurgeGameStorage {
     }
 
     function _requestRng(uint8 gameState_, bool isMapJackpotDay, uint24 lvl, uint48 day) private {
+        if (!vrfConfigWired) revert E();
         bool shouldLockBongs = (gameState_ == 2 && isMapJackpotDay) || (gameState_ == 0);
         if (shouldLockBongs) {
             IPurgeBongs(bongs).setTransfersLocked(true, day);
@@ -1427,14 +1449,20 @@ contract PurgeGame is PurgeGameStorage {
         if (decClose) decWindowOpen = false;
     }
 
-    /// @notice Emergency hook for the bongs contract to repoint VRF after prolonged downtime.
-    /// @dev Requires three consecutive day slots to have zeroed RNG entries.
-    function emergencyUpdateVrfCoordinator(address newCoordinator) external {
-        if (msg.sender != bongs) revert E();
-        address current = address(vrfCoordinator);
+    /// @notice Rotate VRF coordinator + subscription id after a 3-day RNG stall.
+    /// @dev Access: vrfAdmin (VRF owner contract).
+    function updateVrfCoordinatorAndSub(address newCoordinator, uint256 newSubId) external {
+        if (msg.sender != vrfAdmin) revert E();
         if (!_threeDayRngGap(_currentDayIndex())) revert VrfUpdateNotReady();
+        _setVrfConfig(newCoordinator, newSubId, address(vrfCoordinator));
+    }
+
+    function _setVrfConfig(address newCoordinator, uint256 newSubId, address current) private {
+        if (newCoordinator == address(0)) revert E();
 
         vrfCoordinator = IVRFCoordinator(newCoordinator);
+        vrfSubscriptionId = newSubId;
+        vrfConfigWired = true;
 
         rngLockedFlag = false;
         rngFulfilled = true;
