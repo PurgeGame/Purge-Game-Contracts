@@ -65,6 +65,16 @@ async function main() {
   await jackpotModule.waitForDeployment();
   console.log("   JackpotModule deployed.");
 
+  const PurgeGameMintModule = await ethers.getContractFactory("PurgeGameMintModule");
+  const mintModule = await PurgeGameMintModule.deploy();
+  await mintModule.waitForDeployment();
+  console.log("   MintModule deployed.");
+
+  const PurgeGameBondModule = await ethers.getContractFactory("PurgeGameBondModule");
+  const bondModule = await PurgeGameBondModule.deploy();
+  await bondModule.waitForDeployment();
+  console.log("   BondModule deployed.");
+
   // Check if PurgeQuestModule exists or use Mock
   try {
       const PurgeQuestModule = await ethers.getContractFactory("contracts/modules/PurgeQuestModule.sol:PurgeQuestModule");
@@ -94,6 +104,8 @@ async function main() {
     await purgeNFT.getAddress(),
     await endgameModule.getAddress(),
     await jackpotModule.getAddress(),
+    await mintModule.getAddress(),
+    await bondModule.getAddress(),
     await vrf.getAddress(),
     ethers.ZeroHash,
     1n,

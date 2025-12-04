@@ -8,7 +8,12 @@ import {IPurgeAffiliate} from "./interfaces/IPurgeAffiliate.sol";
 import {IPurgeRendererLike} from "./interfaces/IPurgeRendererLike.sol";
 import {IPurgeJackpots} from "./interfaces/IPurgeJackpots.sol";
 import {IPurgeTrophies} from "./interfaces/IPurgeTrophies.sol";
-import {IPurgeGameEndgameModule, IPurgeGameJackpotModule} from "./interfaces/IPurgeGameModules.sol";
+import {
+    IPurgeGameEndgameModule,
+    IPurgeGameJackpotModule,
+    IPurgeGameMintModule,
+    IPurgeGameBondModule
+} from "./interfaces/IPurgeGameModules.sol";
 import {MintPaymentKind} from "./interfaces/IPurgeGame.sol";
 import {PurgeGameExternalOp} from "./interfaces/IPurgeGameExternal.sol";
 import {PurgeGameStorage, ClaimableBondInfo} from "./storage/PurgeGameStorage.sol";
@@ -120,6 +125,8 @@ contract PurgeGame is PurgeGameStorage {
     address private immutable jackpots; // PurgeJackpots contract
     address private immutable endgameModule; // Delegate module for endgame settlement
     address private immutable jackpotModule; // Delegate module for jackpot routines
+    address private immutable mintModule; // Delegate module for mint packing + trait rebuild helpers
+    address private immutable bondModule; // Delegate module for bond upkeep and staking
     IVRFCoordinator private vrfCoordinator; // Chainlink VRF coordinator (mutable for emergencies)
     bytes32 private immutable vrfKeyHash; // VRF key hash
     uint256 private immutable vrfSubscriptionId; // VRF subscription identifier
@@ -134,8 +141,6 @@ contract PurgeGame is PurgeGameStorage {
     // Game Constants
     // -----------------------
     uint48 private constant JACKPOT_RESET_TIME = 82620; // "Day" windows are offset from unix midnight by this anchor
-    uint32 private constant TRAIT_REBUILD_TOKENS_PER_TX = 2500; // Max tokens processed per trait rebuild slice (post-level-1)
-    uint32 private constant TRAIT_REBUILD_TOKENS_LEVEL1 = 1800; // Level 1 first-slice cap
     uint8 private constant JACKPOT_LEVEL_CAP = 10;
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
     uint24 private constant DECIMATOR_SPECIAL_LEVEL = 100;
@@ -143,11 +148,6 @@ contract PurgeGame is PurgeGameStorage {
     uint32 private constant VRF_CALLBACK_GAS_LIMIT = 200_000;
     uint16 private constant VRF_REQUEST_CONFIRMATIONS = 10;
     uint256 private constant RNG_NUDGE_BASE_COST = 100 * 1e6; // PURGE has 6 decimals
-    uint256 private constant REWARD_POOL_MIN_STAKE = 0.5 ether;
-    uint256 private constant BOND_RNG_RESOLVE_LIMIT = 150; // mirrors bonds GAS_LIMITED_RESOLVE_MAX
-    uint8 private constant BOND_RNG_RESOLVE_PASSES = 3; // cap iterations to stay gas-safe
-    uint16 private constant PRIZE_POOL_BOND_BPS_PER_DAILY = 20; // 0.2% per daily (~2% total across 10) = 10% of the ~20% daily float
-    uint256 private constant PRIZE_POOL_BOND_BASE = 0.02 ether;
 
     // mintPacked_ layout (LSB ->):
     // [0-23]=last ETH level, [24-47]=total ETH level count, [48-71]=ETH level streak,
@@ -180,6 +180,8 @@ contract PurgeGame is PurgeGameStorage {
      * @param nftContract       ERC721 game contract
      * @param endgameModule_    Delegate module handling endgame settlement
      * @param jackpotModule_    Delegate module handling jackpot distribution
+     * @param mintModule_       Delegate module handling mint packing and trait rebuild helpers
+     * @param bondModule_       Delegate module handling bond upkeep, staking, and shutdown drains
      * @param vrfCoordinator_   Chainlink VRF coordinator
      * @param vrfKeyHash_       VRF key hash
      * @param vrfSubscriptionId_ VRF subscription identifier
@@ -195,6 +197,8 @@ contract PurgeGame is PurgeGameStorage {
         address nftContract,
         address endgameModule_,
         address jackpotModule_,
+        address mintModule_,
+        address bondModule_,
         address vrfCoordinator_,
         bytes32 vrfKeyHash_,
         uint256 vrfSubscriptionId_,
@@ -209,6 +213,8 @@ contract PurgeGame is PurgeGameStorage {
         nft = IPurgeGameNFT(nftContract);
         endgameModule = endgameModule_;
         jackpotModule = jackpotModule_;
+        mintModule = mintModule_;
+        bondModule = bondModule_;
         vrfCoordinator = IVRFCoordinator(vrfCoordinator_);
         affiliateProgram = coin.affiliateProgram();
         affiliateProgramAddr = affiliateProgram;
@@ -216,7 +222,14 @@ contract PurgeGame is PurgeGameStorage {
         vrfSubscriptionId = vrfSubscriptionId_;
         linkToken = linkToken_;
         steth = IStETH(stEthToken_);
-        if (stEthToken_ == address(0) || jackpots_ == address(0) || bonds_ == address(0) || trophies_ == address(0))
+        if (
+            stEthToken_ == address(0) ||
+            jackpots_ == address(0) ||
+            bonds_ == address(0) ||
+            trophies_ == address(0) ||
+            mintModule_ == address(0) ||
+            bondModule_ == address(0)
+        )
             revert E();
         jackpots = jackpots_;
         bonds = bonds_;
@@ -344,7 +357,7 @@ contract PurgeGame is PurgeGameStorage {
 
         if (coinMint) {
             if (msg.value != 0 || payKind != MintPaymentKind.DirectEth) revert E();
-            return _recordMintData(player, lvl, true, 0);
+            return _recordMintDataModule(player, lvl, true, 0);
         }
 
         uint256 amount = costWei;
@@ -353,7 +366,7 @@ contract PurgeGame is PurgeGameStorage {
             nextPrizePool += prizeContribution;
         }
 
-        coinReward = _recordMintData(player, lvl, false, mintUnits);
+        coinReward = _recordMintDataModule(player, lvl, false, mintUnits);
     }
 
     function _processMintPayment(
@@ -453,7 +466,7 @@ contract PurgeGame is PurgeGameStorage {
                     if (lastExterminatedTrait != TRAIT_ID_TIMEOUT) {
                         payDailyJackpot(false, level, rngWord);
                     }
-                    _stakeForTargetRatio(lvl);
+                    _stakeForTargetRatioModule(lvl);
                     bool decOpen = ((lvl >= 25) && ((lvl % 10) == 5) && ((lvl % 100) != 95));
                     // Preserve an already-open window for the level-100 decimator special until its RNG request closes it.
                     if (!decWindowOpen && decOpen) {
@@ -476,7 +489,7 @@ contract PurgeGame is PurgeGameStorage {
                     }
                     payDailyJackpot(false, lvl, rngWord);
                     if (!batchesPending && nextPrizePool >= lastPrizePool) {
-                        airdropMultiplier = _calculateAirdropMultiplier(nft.purchaseCount(), lvl);
+                        airdropMultiplier = _calculateAirdropMultiplierModule(nft.purchaseCount(), lvl);
                         lastPurchaseDay = true;
                     }
                     _unlockRng(day);
@@ -494,7 +507,7 @@ contract PurgeGame is PurgeGameStorage {
                     }
 
                     uint256 totalWeiForBond = rewardPool + currentPrizePool;
-                    if (_bondMaintenanceForMap(day, totalWeiForBond, rngWord, cap)) {
+                    if (_bondMaintenanceForMapModule(day, totalWeiForBond, rngWord, cap)) {
                         break; // bond batch consumed this tick; rerun advanceGame to continue
                     }
                     uint256 mapEffectiveWei = _calcPrizePoolForJackpot(lvl, rngWord);
@@ -521,16 +534,17 @@ contract PurgeGame is PurgeGameStorage {
                 }
 
                 if (traitCountsSeedQueued) {
-                    uint32 targetCount = _purchaseTargetCountFromRaw(purchaseCountRaw);
+                    uint32 targetCount = _purchaseTargetCountFromRawModule(purchaseCountRaw);
                     if (traitRebuildCursor < targetCount) {
-                        _rebuildTraitCounts(cap, targetCount);
+                        uint256 baseTokenId = nft.currentBaseTokenId();
+                        _rebuildTraitCountsModule(cap, targetCount, baseTokenId);
                         break;
                     }
                     _seedTraitCounts();
                     traitCountsSeedQueued = false;
                 }
 
-                uint32 mintedCount = _purchaseTargetCountFromRaw(purchaseCountRaw);
+                uint32 mintedCount = _purchaseTargetCountFromRawModule(purchaseCountRaw);
                 nft.finalizePurchasePhase(mintedCount, rngWordCurrent);
                 _maybeResolveBonds(cap);
                 traitRebuildCursor = 0;
@@ -792,6 +806,90 @@ contract PurgeGame is PurgeGameStorage {
         }
     }
 
+    // --- Delegate helpers (mint module) --------------------------------------------------------------
+
+    function _recordMintDataModule(
+        address player,
+        uint24 lvl,
+        bool coinMint,
+        uint32 mintUnits
+    ) private returns (uint256 coinReward) {
+        (bool ok, bytes memory data) = mintModule.delegatecall(
+            abi.encodeWithSelector(IPurgeGameMintModule.recordMintData.selector, player, lvl, coinMint, mintUnits)
+        );
+        if (!ok || data.length == 0) revert E();
+        return abi.decode(data, (uint256));
+    }
+
+    function _calculateAirdropMultiplierModule(uint32 purchaseCount, uint24 lvl) private returns (uint32) {
+        (bool ok, bytes memory data) = mintModule.delegatecall(
+            abi.encodeWithSelector(IPurgeGameMintModule.calculateAirdropMultiplier.selector, purchaseCount, lvl)
+        );
+        if (!ok || data.length == 0) revert E();
+        return abi.decode(data, (uint32));
+    }
+
+    function _purchaseTargetCountFromRawModule(uint32 rawCount) private returns (uint32) {
+        (bool ok, bytes memory data) = mintModule.delegatecall(
+            abi.encodeWithSelector(IPurgeGameMintModule.purchaseTargetCountFromRaw.selector, rawCount)
+        );
+        if (!ok || data.length == 0) revert E();
+        return abi.decode(data, (uint32));
+    }
+
+    function _rebuildTraitCountsModule(uint32 tokenBudget, uint32 target, uint256 baseTokenId) private {
+        (bool ok, ) = mintModule.delegatecall(
+            abi.encodeWithSelector(IPurgeGameMintModule.rebuildTraitCounts.selector, tokenBudget, target, baseTokenId)
+        );
+        if (!ok) revert E();
+    }
+
+    function _bondMaintenanceForMapModule(
+        uint48 day,
+        uint256 totalWei,
+        uint256 rngWord,
+        uint32 cap
+    ) private returns (bool worked) {
+        (bool ok, bytes memory data) = bondModule.delegatecall(
+            abi.encodeWithSelector(
+                IPurgeGameBondModule.bondMaintenanceForMap.selector,
+                bonds,
+                address(steth),
+                day,
+                totalWei,
+                rngWord,
+                cap
+            )
+        );
+        if (!ok || data.length == 0) revert E();
+        return abi.decode(data, (bool));
+    }
+
+    function _stakeForTargetRatioModule(uint24 lvl) private {
+        (bool ok, bytes memory data) = bondModule.delegatecall(
+            abi.encodeWithSelector(IPurgeGameBondModule.stakeForTargetRatio.selector, bonds, address(steth), lvl)
+        );
+        if (!ok) {
+            _revertWith(data);
+        }
+    }
+
+    function _drainToBondsModule(uint48 day) private {
+        (bool ok, bytes memory data) = bondModule.delegatecall(
+            abi.encodeWithSelector(IPurgeGameBondModule.drainToBonds.selector, bonds, address(steth), day)
+        );
+        if (!ok) {
+            _revertWith(data);
+        }
+    }
+
+    function _revertWith(bytes memory data) private pure {
+        if (data.length == 0) revert E();
+        assembly ("memory-safe") {
+            revert(add(data, 0x20), mload(data))
+        }
+    }
+
     /// @notice Unified external hook for trusted modules to adjust PurgeGame accounting.
     /// @param op      Operation selector.
     /// @param account Player to credit (when applicable).
@@ -1008,178 +1106,6 @@ contract PurgeGame is PurgeGameStorage {
         emit PlayerCredited(beneficiary, recipient, weiAmount);
     }
 
-    function _recordMintData(
-        address player,
-        uint24 lvl,
-        bool coinMint,
-        uint32 mintUnits
-    ) private returns (uint256 coinReward) {
-        uint256 prevData = mintPacked_[player];
-        uint32 day = _currentMintDay();
-        uint256 data;
-
-        if (coinMint) {
-            data = _applyMintDay(prevData, day, COIN_DAY_SHIFT, MINT_MASK_32, COIN_DAY_STREAK_SHIFT, MINT_MASK_20);
-        } else {
-            uint256 priceCoinLocal = priceCoin;
-            uint24 prevLevel = uint24((prevData >> ETH_LAST_LEVEL_SHIFT) & MINT_MASK_24);
-            uint24 total = uint24((prevData >> ETH_LEVEL_COUNT_SHIFT) & MINT_MASK_24);
-            uint24 streak = uint24((prevData >> ETH_LEVEL_STREAK_SHIFT) & MINT_MASK_24);
-            bool sameLevel = prevLevel == lvl;
-            bool newCentury = (prevLevel / 100) != (lvl / 100);
-            uint256 levelUnitsBefore = (prevData >> ETH_LEVEL_UNITS_SHIFT) & MINT_MASK_16;
-            if (!sameLevel && prevLevel + 1 != lvl) {
-                levelUnitsBefore = 0;
-            }
-            bool bonusPaid = sameLevel && (((prevData >> ETH_LEVEL_BONUS_SHIFT) & 1) == 1);
-            uint256 levelUnitsAfter = levelUnitsBefore + uint256(mintUnits);
-            if (levelUnitsAfter > MINT_MASK_16) {
-                levelUnitsAfter = MINT_MASK_16;
-            }
-            bool awardBonus = (!bonusPaid) && levelUnitsAfter >= 400;
-            if (awardBonus) {
-                coinReward += (priceCoinLocal * 5) / 2;
-                bonusPaid = true;
-            }
-
-            if (!sameLevel && levelUnitsAfter < 4) {
-                data = _setPacked(prevData, ETH_LEVEL_UNITS_SHIFT, MINT_MASK_16, levelUnitsAfter);
-                data = _setPacked(data, ETH_LEVEL_BONUS_SHIFT, 1, bonusPaid ? 1 : 0);
-                if (data != prevData) {
-                    mintPacked_[player] = data;
-                }
-                return coinReward;
-            }
-
-            data = _applyMintDay(prevData, day, ETH_DAY_SHIFT, MINT_MASK_32, ETH_DAY_STREAK_SHIFT, MINT_MASK_20);
-
-            if (sameLevel) {
-                data = _setPacked(data, ETH_LEVEL_UNITS_SHIFT, MINT_MASK_16, levelUnitsAfter);
-                data = _setPacked(data, ETH_LEVEL_BONUS_SHIFT, 1, bonusPaid ? 1 : 0);
-                if (data != prevData) {
-                    mintPacked_[player] = data;
-                }
-                return coinReward;
-            }
-
-            if (newCentury) {
-                total = 1;
-            } else if (total < type(uint24).max) {
-                unchecked {
-                    total = uint24(total + 1);
-                }
-            }
-
-            if (prevLevel != 0 && prevLevel + 1 == lvl) {
-                if (streak < type(uint24).max) {
-                    unchecked {
-                        streak = uint24(streak + 1);
-                    }
-                }
-            } else {
-                streak = 1;
-            }
-
-            data = _setPacked(data, ETH_LAST_LEVEL_SHIFT, MINT_MASK_24, lvl);
-            data = _setPacked(data, ETH_LEVEL_COUNT_SHIFT, MINT_MASK_24, total);
-            data = _setPacked(data, ETH_LEVEL_STREAK_SHIFT, MINT_MASK_24, streak);
-            data = _setPacked(data, ETH_LEVEL_UNITS_SHIFT, MINT_MASK_16, levelUnitsAfter);
-            data = _setPacked(data, ETH_LEVEL_BONUS_SHIFT, 1, bonusPaid ? 1 : 0);
-
-            uint256 rewardUnit = priceCoinLocal / 10;
-            uint256 streakReward;
-            if (streak >= 2) {
-                uint256 capped = streak >= 61 ? 60 : uint256(streak - 1);
-                streakReward = capped * rewardUnit;
-            }
-
-            uint256 totalReward;
-            if (total >= 2) {
-                uint256 cappedTotal = total >= 61 ? 60 : uint256(total - 1);
-                totalReward = (cappedTotal * rewardUnit * 30) / 100;
-            }
-
-            if (streakReward != 0 || totalReward != 0) {
-                unchecked {
-                    coinReward += streakReward + totalReward;
-                }
-            }
-
-            if (streak == lvl && lvl >= 20 && (lvl % 10 == 0)) {
-                uint256 milestoneBonus = (uint256(lvl) / 2) * priceCoinLocal;
-                coinReward += milestoneBonus;
-            }
-
-            if (total >= 20 && (total % 10 == 0)) {
-                uint256 totalMilestone = (uint256(total) / 2) * priceCoinLocal;
-                coinReward += (totalMilestone * 30) / 100;
-            }
-        }
-
-        if (data != prevData) {
-            mintPacked_[player] = data;
-        }
-        return coinReward;
-    }
-
-    function _applyMintDay(
-        uint256 data,
-        uint32 day,
-        uint256 dayShift,
-        uint256 dayMask,
-        uint256 streakShift,
-        uint256 streakMask
-    ) private pure returns (uint256) {
-        data = _bumpMintDay(data, day, dayShift, dayMask, streakShift, streakMask);
-        if (dayShift != AGG_DAY_SHIFT) {
-            data = _bumpMintDay(data, day, AGG_DAY_SHIFT, MINT_MASK_32, AGG_DAY_STREAK_SHIFT, MINT_MASK_20);
-        }
-        return data;
-    }
-
-    function _currentMintDay() private view returns (uint32) {
-        uint48 day = dailyIdx;
-        if (day == 0) {
-            // Matches the JACKPOT_RESET_TIME-offset day index used in advanceGame.
-            day = _currentDayIndex();
-        }
-        return uint32(day);
-    }
-
-    function _bumpMintDay(
-        uint256 data,
-        uint32 day,
-        uint256 dayShift,
-        uint256 dayMask,
-        uint256 streakShift,
-        uint256 streakMask
-    ) private pure returns (uint256) {
-        uint32 prevDay = uint32((data >> dayShift) & dayMask);
-        if (prevDay == day) {
-            return data;
-        }
-
-        uint256 streak = (data >> streakShift) & streakMask;
-        if (prevDay != 0 && day == prevDay + 1) {
-            if (streak < streakMask) {
-                unchecked {
-                    streak += 1;
-                }
-            }
-        } else {
-            streak = 1;
-        }
-
-        uint256 clearedDay = data & ~(dayMask << dayShift);
-        uint256 updated = clearedDay | (uint256(day) << dayShift);
-        uint256 clearedStreak = updated & ~(streakMask << streakShift);
-        return clearedStreak | (streak << streakShift);
-    }
-
-    function _setPacked(uint256 data, uint256 shift, uint256 mask, uint256 value) private pure returns (uint256) {
-        return (data & ~(mask << shift)) | ((value & mask) << shift);
-    }
-
     // --- Shared jackpot helpers ----------------------------------------------------------------------
 
     function _runDecimatorHundredJackpot(uint24 lvl, uint256 rngWord) internal returns (bool finished) {
@@ -1259,68 +1185,13 @@ contract PurgeGame is PurgeGameStorage {
         return true;
     }
 
-    function _purchasePrizePoolBondSlice() private {
-        uint256 base = dailyJackpotBase;
-        if (base == 0) return;
-
-        uint256 budget = (base * PRIZE_POOL_BOND_BPS_PER_DAILY) / 10_000; // small skim per daily jackpot
-        uint256 available = currentPrizePool;
-        if (budget == 0 || available < budget) {
-            budget = available;
-        }
-        if (budget < PRIZE_POOL_BOND_BASE) return;
-
-        uint256 quantity = budget / PRIZE_POOL_BOND_BASE;
-        uint256 spend = quantity * PRIZE_POOL_BOND_BASE;
-        if (spend == 0) return;
-
-        currentPrizePool = available - spend;
-
-        if (!IPurgeBonds(bonds).purchasesEnabled()) {
-            currentPrizePool += spend; // revert the deduction so funds remain in prize pool
-            return;
-        }
-
-        address[] memory recipients = new address[](1);
-        recipients[0] = address(this);
-
-        IPurgeBonds(bonds).purchaseGameBonds(recipients, quantity, PRIZE_POOL_BOND_BASE, true);
-        emit PrizePoolBondBuy(spend, quantity);
-    }
-
-    function _drainToBonds(uint48 day) private {
-        address bondsAddr = bonds;
-        if (bondsAddr == address(0)) return;
-
-        IPurgeBonds bondContract = IPurgeBonds(bondsAddr);
-        bondContract.notifyGameOver();
-
-        uint256 stBal = steth.balanceOf(address(this));
-        if (stBal != 0) {
-            principalStEth = 0;
-        }
-
-        uint256 ethBal = address(this).balance;
-        // Inform bonds of shutdown and transfer pooled assets; bonds will resolve once it has RNG.
-        bondContract.payBonds{value: ethBal}(0, stBal, day, 0, 0);
-    }
-
     function drainToBonds(uint48 day) private {
-        _drainToBonds(day);
+        _drainToBondsModule(day);
         gameState = 0;
         _requestRngBestEffort(day);
     }
 
     // --- Reward vault & liquidity -----------------------------------------------------
-
-    function _stakeEth(uint256 amount) private {
-        // Best-effort staking; skip if stETH deposits are paused or unavailable.
-        try steth.submit{value: amount}(address(0)) returns (uint256 minted) {
-            principalStEth += minted;
-        } catch {
-            return;
-        }
-    }
 
     /// @notice Swap ETH <-> stETH with the bonds contract to rebalance liquidity.
     /// @dev Access: bonds only. stEthForEth=true pulls stETH from bonds and sends back ETH; false stakes incoming ETH and forwards minted stETH.
@@ -1355,65 +1226,10 @@ contract PurgeGame is PurgeGameStorage {
         }
     }
 
-    function _stakeForTargetRatio(uint24 lvl) private {
-        // Skip only for levels ending in 99 or 00 to avoid endgame edge cases.
-        uint24 cycle = lvl % 100;
-        if (cycle == 99 || cycle == 0) return;
-
-        uint256 pool = rewardPool;
-        if (pool == 0) return;
-
-        uint256 rateBps = 10_000;
-        address bondsAddr = bonds;
-        if (bondsAddr != address(0)) {
-            rateBps = IPurgeBonds(bondsAddr).stakeRateBps();
-        }
-        if (rateBps == 0) return;
-
-        uint256 targetSt = (pool * rateBps) / 10_000; // stake against configured share of reward pool
-        uint256 stBal = principalStEth;
-        if (stBal >= targetSt) return;
-
-        uint256 stakeAmount = targetSt - stBal;
-        if (stakeAmount < REWARD_POOL_MIN_STAKE) return;
-
-        _stakeEth(stakeAmount);
-    }
-
-    function _resolveBondsBeforeRng(uint48 day) private {
-        if (lastBondResolutionDay == day) return;
-
-        address bondsAddr = bonds;
-        if (bondsAddr == address(0)) {
-            lastBondResolutionDay = day;
-            return;
-        }
-
-        IPurgeBonds bondContract = IPurgeBonds(bondsAddr);
-        if (!bondContract.resolvePending()) {
-            lastBondResolutionDay = day;
-            return;
-        }
-
-        uint8 passes;
-        do {
-            bondContract.resolvePendingBonds(BOND_RNG_RESOLVE_LIMIT);
-            unchecked {
-                ++passes;
-            }
-        } while (bondContract.resolvePending() && passes < BOND_RNG_RESOLVE_PASSES);
-
-        if (bondContract.resolvePending()) revert BondsNotResolved();
-
-        lastBondResolutionDay = day;
-    }
-
     // --- Flips, VRF, payments, rarity ----------------------------------------------------------------
 
     function rngAndTimeGate(uint48 day, uint24 lvl, bool isMapJackpotDay) internal returns (uint256 word) {
         if (day == dailyIdx) revert NotTimeYet();
-
-        _resolveBondsBeforeRng(day);
 
         uint256 currentWord = rngFulfilled ? rngWordCurrent : 0;
 
@@ -1486,54 +1302,6 @@ contract PurgeGame is PurgeGameStorage {
         uint256 limit = cap == 0 ? 40 : uint256(cap);
         bondContract.resolvePendingBonds(limit);
         return true;
-    }
-
-    function _bondMaintenanceForMap(uint48 day, uint256 totalWei, uint256 rngWord, uint32 cap) private returns (bool) {
-        address bondsAddr = bonds;
-        IPurgeBonds bondContract = IPurgeBonds(bondsAddr);
-
-        uint256 maxBonds = cap == 0 ? 100 : uint256(cap);
-        // If a batch is already pending, just resolve more and skip new funding.
-        if (bondContract.resolvePending()) {
-            // Resolve existing batch in one hop (no new funding).
-            bondContract.payBonds{value: 0}(0, 0, day, rngWord, maxBonds);
-            return true;
-        }
-
-        // Only fund once per level; subsequent calls act as resolve-only.
-        if (lastBondFundingLevel == level) {
-            return false;
-        }
-
-        uint256 stBal = steth.balanceOf(address(this));
-        uint256 stYield = stBal > principalStEth ? (stBal - principalStEth) : 0;
-        uint256 ethBal = address(this).balance;
-        uint256 tracked = currentPrizePool + nextPrizePool + rewardPool + bondCreditEscrow;
-        uint256 ethYield = ethBal > tracked ? ethBal - tracked : 0;
-        uint256 yieldPool = stYield + ethYield;
-
-        // Mint 5% of totalWei (priced in PURGE) to the bonds contract.
-        uint256 bondMint = (totalWei * priceCoin) / (20 * price);
-
-        uint256 bondSkim = yieldPool / 4; // 25% to bonds
-        uint256 rewardTopUp = yieldPool / 20; // 5% to reward pool
-
-        uint256 ethForBonds = bondSkim <= ethYield ? bondSkim : ethYield;
-        uint256 stForBonds = bondSkim > ethForBonds ? bondSkim - ethForBonds : 0;
-        if (stForBonds > stYield) {
-            stForBonds = stYield;
-            bondSkim = ethForBonds + stForBonds;
-        }
-
-        uint256 ethAfterBond = ethYield > ethForBonds ? ethYield - ethForBonds : 0;
-        uint256 rewardFromEth = rewardTopUp <= ethAfterBond ? rewardTopUp : ethAfterBond;
-        if (rewardFromEth != 0) {
-            rewardPool += rewardFromEth;
-        }
-
-        bondContract.payBonds{value: ethForBonds}(bondMint, stForBonds, day, rngWord, maxBonds);
-        lastBondFundingLevel = level;
-        return (bondSkim != 0 || bondMint != 0 || rewardFromEth != 0);
     }
 
     /// @notice After the liveness drain has notified the bonds contract, permissionlessly burn remaining unmatured bonds.
@@ -1807,86 +1575,6 @@ contract PurgeGame is PurgeGameStorage {
         }
 
         renderer.setStartingTraitRemaining(snapshot);
-    }
-
-    /// @notice Rebuild `traitRemaining` by scanning scheduled token traits in capped slices.
-    /// @param tokenBudget Max tokens to process this call (0 => default 4,096).
-    /// @return finished True when all tokens for the level have been incorporated.
-    function _rebuildTraitCounts(uint32 tokenBudget, uint32 target) internal returns (bool finished) {
-        uint32 cursor = traitRebuildCursor;
-        if (cursor >= target) return true;
-
-        uint32 batch = (tokenBudget == 0) ? TRAIT_REBUILD_TOKENS_PER_TX : tokenBudget;
-        bool startingSlice = cursor == 0;
-        if (startingSlice) {
-            uint32 firstBatch = (level == 1) ? TRAIT_REBUILD_TOKENS_LEVEL1 : TRAIT_REBUILD_TOKENS_PER_TX;
-            batch = firstBatch;
-        }
-        uint32 remaining = target - cursor;
-        if (batch > remaining) batch = remaining;
-
-        uint32[256] memory localCounts;
-
-        uint256 baseTokenId = nft.currentBaseTokenId();
-
-        for (uint32 i; i < batch; ) {
-            uint32 tokenOffset = cursor + i;
-            uint32 traitPack = _traitsForToken(baseTokenId + tokenOffset);
-            uint8 t0 = uint8(traitPack);
-            uint8 t1 = uint8(traitPack >> 8);
-            uint8 t2 = uint8(traitPack >> 16);
-            uint8 t3 = uint8(traitPack >> 24);
-
-            unchecked {
-                ++localCounts[t0];
-                ++localCounts[t1];
-                ++localCounts[t2];
-                ++localCounts[t3];
-                ++i;
-            }
-        }
-
-        uint32[256] storage remainingCounts = traitRemaining;
-        for (uint16 traitId; traitId < 256; ) {
-            uint32 incoming = localCounts[traitId];
-            if (incoming != 0) {
-                // Assumes the first slice will touch all traits to overwrite stale counts from the previous level.
-                if (startingSlice) {
-                    remainingCounts[traitId] = incoming;
-                } else {
-                    remainingCounts[traitId] += incoming;
-                }
-            }
-            unchecked {
-                ++traitId;
-            }
-        }
-
-        traitRebuildCursor = cursor + batch;
-        finished = (traitRebuildCursor == target);
-        // The first slice overwrites stale counts; subsequent slices accumulate until finished.
-    }
-
-    function _calculateAirdropMultiplier(uint32 purchaseCount, uint24 lvl) private pure returns (uint32) {
-        if (purchaseCount == 0) {
-            return 1;
-        }
-        uint256 target = (lvl % 10 == 8) ? 10_000 : 5_000;
-        if (purchaseCount >= target) {
-            return 1;
-        }
-        uint256 numerator = target + uint256(purchaseCount) - 1;
-        return uint32(numerator / purchaseCount);
-    }
-
-    function _purchaseTargetCountFromRaw(uint32 rawCount) private view returns (uint32) {
-        if (rawCount == 0) {
-            return 0;
-        }
-        uint32 multiplier = airdropMultiplier;
-        uint256 scaled = uint256(rawCount) * uint256(multiplier);
-        if (scaled > type(uint32).max) revert E();
-        return uint32(scaled);
     }
 
     function _consumeTrait(uint8 traitId, uint32 endLevel) private returns (bool reachedZero) {

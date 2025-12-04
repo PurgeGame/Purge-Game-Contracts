@@ -39,3 +39,35 @@ interface IPurgeGameJackpotModule {
         uint256 maxMints
     ) external returns (bool finished, uint256 processed);
 }
+
+interface IPurgeGameBondModule {
+    function bondMaintenanceForMap(
+        address bondsAddr,
+        address stethAddr,
+        uint48 day,
+        uint256 totalWei,
+        uint256 rngWord,
+        uint32 cap
+    ) external returns (bool worked);
+    function stakeForTargetRatio(address bondsAddr, address stethAddr, uint24 lvl) external;
+    function drainToBonds(address bondsAddr, address stethAddr, uint48 day) external;
+}
+
+interface IPurgeGameMintModule {
+    function recordMintData(
+        address player,
+        uint24 lvl,
+        bool coinMint,
+        uint32 mintUnits
+    ) external returns (uint256 coinReward);
+
+    function calculateAirdropMultiplier(uint32 purchaseCount, uint24 lvl) external pure returns (uint32);
+
+    function purchaseTargetCountFromRaw(uint32 rawCount) external view returns (uint32);
+
+    function rebuildTraitCounts(
+        uint32 tokenBudget,
+        uint32 target,
+        uint256 baseTokenId
+    ) external returns (bool finished);
+}
