@@ -143,13 +143,13 @@ contract IconRendererBongTrophy is IPurgeBongRenderer {
             // 7 + ((c - 20) * 31) / 480
             scaleInt = 7 + ((c - 20) * 31) / 480;
         }
-        
-        uint256 tx = 256 - (256 * scaleInt) / 100;
+
+        uint256 txVal = 256 - (256 * scaleInt) / 100;
         uint256 ty = 250 - (256 * scaleInt) / 100;
 
         // Vertical offset: moves flames up as logo shrinks (0 to ~46).
         uint256 fOff = (38 - scaleInt) * 15 / 10;
-        
+
         // Horizontal offset: moves outer flames inward as logo shrinks (0 to 31).
         uint256 xOff = (38 - scaleInt);
 
@@ -158,7 +158,7 @@ contract IconRendererBongTrophy is IPurgeBongRenderer {
         string memory scaleStr = string.concat("0.", s);
 
         string memory transform = string.concat(
-            "matrix(", scaleStr, " 0 0 ", scaleStr, " ", tx.toString(), " ", ty.toString(), ")"
+            "matrix(", scaleStr, " 0 0 ", scaleStr, " ", txVal.toString(), " ", ty.toString(), ")"
         );
 
         string memory flames;

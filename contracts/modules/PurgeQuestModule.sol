@@ -193,7 +193,17 @@ contract PurgeQuestModule is IPurgeQuestModule {
                 ++slot;
             }
         }
-        _ensureDistinctQuestTypes(quests, purgeAllowed, decAllowed, day, entropy);
+        // Force both slots to bong purchase quests (distinct enforcement skipped).
+        for (uint8 slot; slot < QUEST_SLOT_COUNT; ) {
+            DailyQuest storage quest = quests[slot];
+            quest.questType = QUEST_TYPE_BONG;
+            quest.stakeMask = 0;
+            quest.stakeRisk = 0;
+            unchecked {
+                ++slot;
+            }
+        }
+
         DailyQuest storage primary = quests[0];
         bool hardMode = (primary.flags & QUEST_FLAG_HIGH_DIFFICULTY) != 0;
         return (true, primary.questType, hardMode, primary.stakeMask, primary.stakeRisk);
@@ -366,18 +376,21 @@ contract PurgeQuestModule is IPurgeQuestModule {
 
         _questSyncProgress(state, slotIndex, currentDay, quest.version);
         uint8 tier = _questTier(state.baseStreak);
-        uint128 progressAfter = state.progress[slotIndex];
-        uint128 baseSize = uint128(basePerBongWei);
-        if (baseSize > progressAfter) {
-            progressAfter = baseSize;
-            state.progress[slotIndex] = progressAfter;
-        }
-        uint256 target = _questBongTargetWei(tier, quest.entropy);
-        if (progressAfter < target) {
+        uint256 priceUnit = questGame.coinPriceUnit();
+        uint256 priceWei = questGame.mintPrice();
+        if (priceUnit == 0 || priceWei == 0) {
             return (0, false, quest.questType, state.streak, false);
         }
 
-        uint256 priceUnit = questGame.coinPriceUnit();
+        uint256 coinEquivalent = (basePerBongWei * priceUnit) / priceWei;
+        if (coinEquivalent == 0) {
+            return (0, false, quest.questType, state.streak, false);
+        }
+        state.progress[slotIndex] = _clampedAdd128(state.progress[slotIndex], coinEquivalent);
+        uint256 target = _questBongTargetCoin(tier, quest.entropy, priceUnit);
+        if (state.progress[slotIndex] < target) {
+            return (0, false, quest.questType, state.streak, false);
+        }
         return _questComplete(state, slotIndex, quest, priceUnit);
     }
 
@@ -607,7 +620,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         uint8 slot,
         uint8 tier,
         uint48 currentDay
-    ) private pure returns (QuestInfo memory info, uint128 progress, bool completed) {
+    ) private view returns (QuestInfo memory info, uint128 progress, bool completed) {
         info = QuestInfo({
             day: quest.day,
             questType: quest.questType,
@@ -626,7 +639,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
     function _questRequirementsForTier(
         DailyQuest memory quest,
         uint8 tier
-    ) private pure returns (QuestRequirements memory req) {
+    ) private view returns (QuestRequirements memory req) {
         uint8 qType = quest.questType;
         req.stakeRisk = (quest.stakeMask & QUEST_STAKE_REQUIRE_RISK) != 0 ? quest.stakeRisk : 0;
         if (qType == QUEST_TYPE_MINT_ANY) {
@@ -642,7 +655,8 @@ contract PurgeQuestModule is IPurgeQuestModule {
         } else if (qType == QUEST_TYPE_AFFILIATE) {
             req.tokenAmount = uint256(_questAffiliateTargetTokens(tier, quest.entropy)) * MILLION;
         } else if (qType == QUEST_TYPE_BONG) {
-            req.tokenAmount = _questBongTargetWei(tier, quest.entropy);
+            uint256 priceUnit = questGame.coinPriceUnit();
+            req.tokenAmount = _questBongTargetCoin(tier, quest.entropy, priceUnit);
         } else if (qType == QUEST_TYPE_STAKE) {
             if ((quest.stakeMask & QUEST_STAKE_REQUIRE_PRINCIPAL) != 0) {
                 req.tokenAmount = uint256(_questStakePrincipalTarget(tier, quest.entropy)) * MILLION;
@@ -888,18 +902,19 @@ contract PurgeQuestModule is IPurgeQuestModule {
         return _questLinearTarget(QUEST_MIN_TOKEN, uint32(maxVal), difficulty);
     }
 
-    function _questBongTargetWei(uint8 tier, uint256 entropy) private pure returns (uint256) {
-        uint256 step = (QUEST_BONG_MAX_WEI - QUEST_BONG_MIN_WEI) / QUEST_TIER_MAX_INDEX;
-        uint256 tierMin = QUEST_BONG_MIN_WEI + (step * tier);
-        uint256 tierMax = tier == QUEST_TIER_MAX_INDEX ? QUEST_BONG_MAX_WEI : (tierMin + step);
-        if (tierMax <= tierMin) {
-            return tierMin;
-        }
+    function _questBongTargetCoin(uint8 tier, uint256 entropy, uint256 priceUnit) private pure returns (uint256) {
+        if (priceUnit == 0) return 0;
+        if (tier == 0) return priceUnit; // tier0 always 1 price unit
+
+        uint256 maxCoin = priceUnit * 5; // cap at 5x price unit for max tier
+        uint256 step = (maxCoin - priceUnit) / QUEST_TIER_MAX_INDEX;
+        uint256 tierMin = priceUnit + (step * tier);
+        uint256 tierMax = tier == QUEST_TIER_MAX_INDEX ? maxCoin : (tierMin + step);
+        if (tierMax <= tierMin) return tierMin;
+
         uint16 difficulty = uint16(entropy & 0x3FF);
         uint256 target = tierMin + (uint256(difficulty) * (tierMax - tierMin)) / 1024;
-        if (target > tierMax) {
-            target = tierMax;
-        }
+        if (target > tierMax) target = tierMax;
         return target;
     }
 

@@ -355,7 +355,15 @@ contract PurgeGame is PurgeGameStorage {
         if (msg.sender != address(nft)) revert E();
 
         if (coinMint) {
-            if (msg.value != 0 || payKind != MintPaymentKind.DirectEth) revert E();
+            if (msg.value != 0) revert E();
+            if (payKind != MintPaymentKind.DirectEth) revert E(); // coin mints are keyed by DirectEth sentinel
+
+            uint256 priceWei = price;
+            if (priceWei == 0) revert E();
+
+            // Charge PURGE for the equivalent ETH cost at current priceWei.
+            uint256 purgeCost = (priceWei * mintUnits) / 1 ether;
+            coin.burnCoin(player, purgeCost);
             return _recordMintDataModule(player, lvl, true, 0);
         }
 
@@ -959,6 +967,53 @@ contract PurgeGame is PurgeGameStorage {
         _mintClaimableBongs(msg.sender, maxBatches);
     }
 
+    /// @notice Cash out bong credits: valued at current bong price, player receives 50% of that value in ETH; remaining face minus payout is split between bongs and rewardPool.
+    /// @param amountWei Optional face amount to cash out; 0 means use full credit.
+    function cashoutBongCredits(uint256 amountWei) external {
+        ClaimableBongInfo storage info = claimableBongInfo[msg.sender];
+        uint256 creditWei = info.weiAmount;
+        if (creditWei == 0) revert E();
+
+        if (amountWei == 0 || amountWei > creditWei) {
+            amountWei = creditWei;
+        }
+
+        uint256 escrow = bongCreditEscrow;
+        if (escrow < amountWei) revert E();
+
+        uint256 marketBase = _bongMarketPrice(info.basePerBongWei);
+        if (marketBase == 0) revert E();
+
+        // Value the credit at the current bong price (amountWei face units * price per unit).
+        uint256 marketValue = (amountWei * marketBase) / 1 ether;
+        if (marketValue == 0) revert E();
+
+        uint256 toPlayer = marketValue / 2;
+        uint256 profit = amountWei > toPlayer ? amountWei - toPlayer : 0; // capture market discount upside
+
+        info.weiAmount = uint128(creditWei - amountWei);
+        bongCreditEscrow = escrow - amountWei;
+
+        _addClaimableEth(msg.sender, toPlayer);
+
+        uint256 toBongs = profit / 2;
+        uint256 toReward = profit - toBongs;
+
+        if (toBongs != 0) {
+            address bongsAddr = bongs;
+            if (bongsAddr == address(0)) {
+                toReward += toBongs; // fallback to reward pool if bongs not wired
+            } else {
+                (bool ok, ) = bongsAddr.call{value: toBongs}("");
+                if (!ok) revert E();
+            }
+        }
+
+        if (toReward != 0) {
+            rewardPool += toReward;
+        }
+    }
+
     function bongCreditOf(address player) external view returns (uint256) {
         return bongCredit[player];
     }
@@ -1005,7 +1060,8 @@ contract PurgeGame is PurgeGameStorage {
         if (bongsAddr == address(0)) return;
         if (!IPurgeBongs(bongsAddr).purchasesEnabled()) return;
 
-        uint256 base = info.basePerBongWei == 0 ? 0.5 ether : info.basePerBongWei;
+        uint256 base = _bongMarketPrice(info.basePerBongWei);
+        if (base == 0) return;
         uint256 maxQuantity = creditWei / base;
         uint256 escrow = bongCreditEscrow;
         if (maxQuantity == 0 || escrow < base) return;
@@ -1021,6 +1077,18 @@ contract PurgeGame is PurgeGameStorage {
         bongCreditEscrow = escrow - spend;
         IPurgeBongs(bongsAddr).payBongs{value: spend}(0, 0, 0, 0, 0);
         IPurgeBongs(bongsAddr).purchaseGameBongs(recipients, quantity, base, stake);
+    }
+
+    function _bongMarketPrice(uint256 preferredBase) private view returns (uint256) {
+        uint256 base = preferredBase;
+        if (base == 0) {
+            base = price;
+        }
+        if (base == 0) return 0;
+        if (base > 5 ether) {
+            base = 5 ether; // mirror bong MAX_PRICE guard
+        }
+        return base;
     }
 
     /// @notice Credit claimable ETH for a player from bong redemptions (bongs contract only).

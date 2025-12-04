@@ -18,8 +18,6 @@ contract Purgecoin {
     // Lightweight ERC20 events plus gameplay signals used by off-chain indexers/clients.
     event Transfer(address indexed from, address indexed to, uint256 amount);
     event Approval(address indexed owner, address indexed spender, uint256 amount);
-    event StakeCreated(address indexed player, uint24 targetLevel, uint8 risk, uint256 principal);
-    event StakeClaimed(address indexed player, uint24 targetLevel, uint8 risk, uint256 payout, bool won);
     event CoinflipDeposit(address indexed player, uint256 creditedFlip);
     event DecimatorBurn(address indexed player, uint256 amountBurned, uint8 bucket);
     event CoinflipFinished(bool result);
@@ -33,6 +31,7 @@ contract Purgecoin {
     // ---------------------------------------------------------------------
     // Short, custom errors to save gas and keep branch intent explicit.
     error OnlyGame();
+    error OnlyVault();
     error BettingPaused();
     error Zero();
     error Insufficient();
@@ -71,31 +70,6 @@ contract Purgecoin {
         bool win;
     }
 
-    // Individual stake placed by a player on a target level and risk band.
-    struct StakePosition {
-        uint256 principal;
-        uint256 modifiedAmount;
-        uint24 distance;
-        uint8 risk;
-        bool claimed;
-    }
-
-    // Aggregated resolution data for a level, cached when finalized.
-    struct StakeResolution {
-        uint8 winningRiskLevels;
-        uint256 winningModifiedTotal;
-        uint256 stakeFreeMoney;
-        address topStakeWinner;
-        uint256 topStakeAmount;
-        bool resolved;
-    }
-
-    // Tracks the best stake within a risk bucket for a specific level.
-    struct StakeTop {
-        address player;
-        uint256 modifiedAmount;
-    }
-
     // ---------------------------------------------------------------------
     // Game wiring & session state
     // ---------------------------------------------------------------------
@@ -105,9 +79,7 @@ contract Purgecoin {
     IPurgeQuestModule internal questModule;
     PurgeAffiliate public immutable affiliateProgram;
     address public jackpots;
-
-    // Highest level whose stakes have been marked as resolved by the game.
-    uint24 internal stakeLevelComplete;
+    address public vault;
 
     // Coinflip accounting keyed by day window (auto daily flips; distinct from long-horizon stakes below).
     mapping(uint48 => mapping(address => uint256)) internal coinflipBalance;
@@ -116,29 +88,20 @@ contract Purgecoin {
     mapping(address => uint256) public playerLuckbox;
     uint48 internal flipsClaimableDay; // Last day that has been opened for claims (active day = flipsClaimableDay)
 
+    // Vault escrow: tracks coin reserved for the vault; minted only when vault pays out.
+    uint256 public vaultMintAllowance;
+
     // Track whether the top-flip bonus has been paid for a given level (once per level).
     mapping(uint24 => bool) internal topFlipRewardPaid;
 
     // Live per-level leaderboard for biggest pending flip.
     mapping(uint24 => PlayerScore) internal coinflipTopByLevel;
 
-    /// @notice View-only helper to estimate claimable coin (flips + stakes) for the caller.
+    /// @notice View-only helper to estimate claimable coin (flips only; staking removed) for the caller.
     function claimableCoin() external view returns (uint256) {
         address player = msg.sender;
         return _viewClaimableCoin(player);
     }
-
-    // Player stakes keyed by player -> target level (explicit "stake" != auto coinflip).
-    mapping(address => mapping(uint24 => StakePosition[])) internal stakePositions;
-    // Sum of modified stake amounts per level+risk (used to split free-money bonus).
-    mapping(uint24 => mapping(uint8 => uint256)) internal stakeModifiedTotals;
-    // Level/risk leaderboard (highest modified stake).
-    mapping(uint24 => mapping(uint8 => StakeTop)) internal stakeTopByLevelAndRisk;
-    // Cached stake resolution for a level once computed.
-    mapping(uint24 => StakeResolution) internal stakeResolutionInfo;
-    // Cursors used to bound per-player stake scans.
-    mapping(address => uint24) internal lastStakeScanLevel;
-    mapping(address => uint48) internal lastStakeScanDay;
     // Tracks remaining presale claim allocation minted to this contract.
     uint256 public presaleClaimableRemaining;
 
@@ -146,8 +109,6 @@ contract Purgecoin {
     uint128 public currentBounty = 1_000_000_000;
     uint128 public biggestFlipEver = 1_000_000_000;
     address internal bountyOwedTo;
-    // stakeResolutionDay[level] stores the coinflip day used to resolve that level's stakes.
-    mapping(uint24 => uint48) internal stakeResolutionDay;
     address public immutable bongs;
     address public immutable regularRenderer;
 
@@ -204,11 +165,9 @@ contract Purgecoin {
     // ---------------------------------------------------------------------
     uint256 private constant MILLION = 1e6; // token has 6 decimals
     uint256 private constant MIN = 100 * MILLION; // min burn / min flip (100 PURGED)
-    uint8 private constant MAX_RISK = 25; // staking risk 1..25
     uint16 private constant COINFLIP_EXTRA_MIN_PERCENT = 78; // base % on non-extreme flips
     uint16 private constant COINFLIP_EXTRA_RANGE = 38; // roll range (add to min) => [78..115]
     uint16 private constant BPS_DENOMINATOR = 10_000; // basis point math helper
-    uint256 private constant STAKE_PRINCIPAL_FACTOR = MILLION; // round stake weights to whole coins
     uint24 private constant DECIMATOR_SPECIAL_LEVEL = 100; // special bucket rules every 100 levels
     uint48 private constant JACKPOT_RESET_TIME = 82620; // anchor timestamp for day indexing
     uint8 private constant COIN_CLAIM_DAYS = 30; // claim window for flips/stakes
@@ -240,6 +199,11 @@ contract Purgecoin {
         _;
     }
 
+    modifier onlyVault() {
+        if (msg.sender != vault) revert OnlyVault();
+        _;
+    }
+
     // ---------------------------------------------------------------------
     // Constructor
     // ---------------------------------------------------------------------
@@ -250,6 +214,16 @@ contract Purgecoin {
         regularRenderer = regularRenderer_;
         uint256 bongSeed = 2_000_000 * MILLION;
         _mint(bongs_, bongSeed);
+    }
+
+    function setVault(address vault_) external {
+        address sender = msg.sender;
+        if (sender != address(purgeGame) && sender != bongs && sender != vault_) revert OnlyGame();
+        if (vault == address(0)) {
+            vault = vault_;
+        } else if (vault_ != vault) {
+            revert AlreadyWired();
+        }
     }
 
     /// @notice Burn PURGE to increase the caller’s coinflip stake, applying streak bonuses when eligible.
@@ -339,254 +313,33 @@ contract Purgecoin {
         emit DecimatorBurn(caller, amount, bucketUsed);
     }
 
-    function _stakeFreeMoneyView() private view returns (uint256) {
-        uint256 priceWei = purgeGame.mintPrice();
-        uint256 prizePoolTarget = purgeGame.prizePoolTargetView();
-        uint256 priceCoinUnit = purgeGame.coinPriceUnit();
-        if (priceWei == 0 || priceCoinUnit == 0) return 0;
-        // "Free money" is 10% of the ETH prize pool converted into PURGE at the current unit price.
-        uint256 tenPercentEth = prizePoolTarget / 10;
-        if (tenPercentEth == 0) return 0;
-        return (tenPercentEth * priceCoinUnit) / priceWei;
-    }
-
-    function _winningRiskLevels(uint24 level) private view returns (uint8 winningRisk) {
-        if (level == 0) return 0;
-        uint8 maxRisk = level < MAX_RISK ? uint8(level) : MAX_RISK;
-        // Walk backwards from the level's resolution day to count consecutive winning days (each unlocks a higher risk).
-        for (uint8 step; step < maxRisk; ) {
-            uint24 checkLevel = level - uint24(step);
-            uint48 day = stakeResolutionDay[checkLevel];
-            if (day == 0) break;
-            CoinflipDayResult storage result = coinflipDayResult[day];
-            if (result.rewardPercent == 0 && !result.win) break;
-            if (!result.win) break;
-            unchecked {
-                ++winningRisk;
-                ++step;
-            }
-        }
-    }
-
-    function _stakeResolutionView(uint24 level) private view returns (StakeResolution memory res) {
-        StakeResolution storage stored = stakeResolutionInfo[level];
-        if (stored.resolved) {
-            res = stored;
-            return res;
-        }
-
-        // Derive winning risk range and top stake data from live totals.
-        res.winningRiskLevels = _winningRiskLevels(level);
-        if (res.winningRiskLevels != 0) {
-            uint8 maxRisk = res.winningRiskLevels;
-            address bestPlayer;
-            uint256 bestModified;
-            for (uint8 r = 1; r <= maxRisk; ) {
-                // Aggregate modified totals for bonus splitting.
-                res.winningModifiedTotal += stakeModifiedTotals[level][r];
-                StakeTop storage top = stakeTopByLevelAndRisk[level][r];
-                if (top.player != address(0) && top.modifiedAmount > bestModified) {
-                    bestModified = top.modifiedAmount;
-                    bestPlayer = top.player;
-                }
-                unchecked {
-                    ++r;
-                }
-            }
-            res.topStakeWinner = bestPlayer;
-            res.topStakeAmount = bestModified;
-        }
-        res.stakeFreeMoney = _stakeFreeMoneyView();
-    }
-
-    function _finalizeStakeResolution(uint24 level) internal returns (StakeResolution memory res) {
-        StakeResolution storage stored = stakeResolutionInfo[level];
-        if (stored.resolved) {
-            return stored;
-        }
-
-        // Cannot finalize until a resolution day and coinflip result are recorded.
-        uint48 resDay = stakeResolutionDay[level];
-        if (resDay == 0) {
-            return stored;
-        }
-        CoinflipDayResult storage dayResult = coinflipDayResult[resDay];
-        if (dayResult.rewardPercent == 0 && !dayResult.win) {
-            return stored;
-        }
-
-        res = _stakeResolutionView(level);
-        stored.winningRiskLevels = res.winningRiskLevels;
-        stored.winningModifiedTotal = res.winningModifiedTotal;
-        stored.stakeFreeMoney = res.stakeFreeMoney;
-        stored.topStakeWinner = res.topStakeWinner;
-        stored.topStakeAmount = res.topStakeAmount;
-        stored.resolved = true;
-        return stored;
-    }
-
     function _viewClaimableCoin(address player) internal view returns (uint256 total) {
-        // Pending flip winnings since last claim (up to 30 days)
+        // Pending flip winnings since last claim (up to 30 days); staking removed.
         uint48 latestDay = flipsClaimableDay;
         uint48 startDay = lastCoinflipClaim[player];
+        if (startDay >= latestDay) return 0;
+
         uint8 remaining = COIN_CLAIM_DAYS;
-        if (startDay < latestDay) {
-            uint48 cursor = startDay + 1;
-            while (remaining != 0 && cursor <= latestDay) {
-                CoinflipDayResult storage result = coinflipDayResult[cursor];
-                if (result.rewardPercent == 0 && !result.win) break;
+        uint48 cursor = startDay + 1;
+        while (remaining != 0 && cursor <= latestDay) {
+            CoinflipDayResult storage result = coinflipDayResult[cursor];
+            if (result.rewardPercent == 0 && !result.win) break;
 
-                // Only pay flip stakes on winning days; losing days zero the stake.
-                uint256 flipStake = coinflipBalance[cursor][player];
-                if (flipStake != 0 && result.win) {
-                    uint256 payout = flipStake + (flipStake * uint256(result.rewardPercent) * 100) / BPS_DENOMINATOR;
-                    total += payout;
-                }
-                unchecked {
-                    ++cursor;
-                    --remaining;
-                }
+            uint256 flipStake = coinflipBalance[cursor][player];
+            if (flipStake != 0 && result.win) {
+                uint256 payout = flipStake + (flipStake * uint256(result.rewardPercent) * 100) / BPS_DENOMINATOR;
+                total += payout;
             }
-        }
-
-        // Pending stakes in the last 30 days of resolved levels
-        uint48 currentDay = _currentDay();
-        uint48 windowStart = currentDay > COIN_CLAIM_DAYS ? currentDay - COIN_CLAIM_DAYS : 0;
-        uint24 lvl = stakeLevelComplete;
-        uint24 scanned;
-
-        // Only reuse the prior scan boundary when the window start hasn't shifted.
-        uint24 lowerBound;
-        if (lastStakeScanDay[player] == windowStart) {
-            lowerBound = lastStakeScanLevel[player];
-            if (lowerBound >= lvl) {
-                lowerBound = 0;
-            }
-        }
-        while (lvl != 0 && lvl > lowerBound && scanned < 400) {
-            uint48 resDay = stakeResolutionDay[lvl];
-            if (resDay == 0 || resDay < windowStart) {
-                break;
-            }
-
-            CoinflipDayResult storage dayResult = coinflipDayResult[resDay];
-            if (dayResult.rewardPercent == 0 && !dayResult.win) {
-                break;
-            }
-
-            // Include unclaimed winning stakes within the window.
-            StakeResolution memory res = _stakeResolutionView(lvl);
-            if (res.winningRiskLevels != 0) {
-                StakePosition[] storage positions = stakePositions[player][lvl];
-                uint256 len = positions.length;
-                for (uint256 i; i < len; ) {
-                    StakePosition storage position = positions[i];
-                    if (!position.claimed && position.risk <= res.winningRiskLevels) {
-                        uint256 base = position.principal * (uint256(1) << position.risk);
-                        uint256 bonus;
-                        if (res.stakeFreeMoney != 0 && res.winningModifiedTotal != 0) {
-                            bonus = (position.modifiedAmount * res.stakeFreeMoney) / res.winningModifiedTotal;
-                        }
-                        total += base + bonus;
-                    }
-                    unchecked {
-                        ++i;
-                    }
-                }
-            }
-
             unchecked {
-                --lvl;
-                ++scanned;
+                ++cursor;
+                --remaining;
             }
         }
-    }
-
-    function _claimStakePosition(
-        address player,
-        uint24 targetLevel,
-        StakePosition storage position,
-        StakeResolution memory res
-    ) private returns (uint256 payout) {
-        if (player == address(0)) revert ZeroAddress();
-        if (position.claimed) revert StakeInvalid();
-        if (position.risk == 0 || position.risk > MAX_RISK) revert StakeInvalid();
-
-        // Determine whether the risk band fell inside the winning window.
-        bool won = res.winningRiskLevels != 0 && position.risk <= res.winningRiskLevels;
-        position.claimed = true;
-        if (!won) {
-            emit StakeClaimed(player, targetLevel, position.risk, 0, false);
-            return 0;
-        }
-
-        uint256 base = position.principal * (uint256(1) << position.risk);
-        uint256 bonus;
-        // Bonus splits any free-money pot proportionally to modified stake weights.
-        if (res.stakeFreeMoney != 0 && res.winningModifiedTotal != 0) {
-            bonus = (position.modifiedAmount * res.stakeFreeMoney) / res.winningModifiedTotal;
-        }
-        payout = base + bonus;
-
-        emit StakeClaimed(player, targetLevel, position.risk, payout, true);
-    }
-
-    function _claimRecentStakes(address player, uint48 windowStartDay) internal returns (uint256 total) {
-        uint24 lvl = stakeLevelComplete;
-        if (lvl == 0) return 0;
-
-        // Only reuse the prior scan boundary when the window start hasn't shifted.
-        uint24 lowerBound;
-        if (lastStakeScanDay[player] == windowStartDay) {
-            lowerBound = lastStakeScanLevel[player];
-            if (lowerBound >= lvl) {
-                lowerBound = 0;
-            }
-        }
-
-        uint24 scanned;
-        while (lvl != 0 && lvl > lowerBound && scanned < 400) {
-            uint48 resDay = stakeResolutionDay[lvl];
-            if (resDay == 0 || resDay < windowStartDay) {
-                break;
-            }
-
-            CoinflipDayResult storage dayResult = coinflipDayResult[resDay];
-            if (dayResult.rewardPercent == 0 && !dayResult.win) {
-                break;
-            }
-
-            // Lock in the resolution snapshot before marking positions as claimed.
-            StakeResolution memory res = _finalizeStakeResolution(lvl);
-            StakePosition[] storage positions = stakePositions[player][lvl];
-            uint256 len = positions.length;
-            for (uint256 i; i < len; ) {
-                StakePosition storage position = positions[i];
-                if (!position.claimed) {
-                    total += _claimStakePosition(player, lvl, position, res);
-                }
-                unchecked {
-                    ++i;
-                }
-            }
-
-            unchecked {
-                --lvl;
-                ++scanned;
-            }
-        }
-
-        // Cache the scan state for this window start.
-        lastStakeScanDay[player] = windowStartDay;
-        lastStakeScanLevel[player] = lvl;
     }
 
     function _claimFlipsAndStakes(address player) internal returns (uint256) {
-        uint256 claimedFlips = _claimCoinflipsInternal(player);
-        uint48 currentDay = _currentDay();
-        uint48 windowStart = currentDay > COIN_CLAIM_DAYS ? currentDay - COIN_CLAIM_DAYS : 0;
-        uint256 claimedStakes = _claimRecentStakes(player, windowStart);
-        return claimedFlips + claimedStakes;
+        // Stakes removed; only process coinflip claims.
+        return _claimCoinflipsInternal(player);
     }
 
     /// @notice Burn PURGED to open a future stake targeting `targetLevel` with a risk radius.
@@ -595,119 +348,11 @@ contract Purgecoin {
     /// - `targetLevel` must be ahead of the current effective game level.
     /// - `risk` must be between 1 and `MAX_RISK` and cannot exceed the distance to `targetLevel`.
     /// - Records the stake with its distance, risk, original principal, and modified weighting used for prize splits.
-    function stake(uint256 burnAmt, uint24 targetLevel, uint8 risk) external {
-        if (burnAmt < 250 * MILLION) revert AmountLTMin();
-        address sender = msg.sender;
-        uint24 currLevel = purgeGame.level();
-        if (targetLevel < currLevel) revert StakeInvalid();
-
-        uint8 stakeGameState = purgeGame.gameState();
-
-        uint24 effectiveLevel;
-        // effectiveLevel determines how far into the future the stake must be (during state 3 it matches currLevel).
-        if (stakeGameState == 3) {
-            effectiveLevel = currLevel;
-        } else if (currLevel == 0) {
-            effectiveLevel = 0;
-        } else {
-            unchecked {
-                effectiveLevel = uint24(currLevel - 1);
-            }
-        }
-
-        if (targetLevel <= effectiveLevel) revert StakeInvalid();
-
-        uint24 distance = targetLevel - effectiveLevel;
-        if (distance > 500) revert Insufficient();
-        uint24 minDistance = currLevel > 20 ? 20 : currLevel;
-        if (distance < minDistance) revert StakeInvalid();
-
-        if (risk == 0 || risk > MAX_RISK) revert Insufficient();
-        if (risk > targetLevel) revert StakeInvalid();
-
-        uint256 maxRiskForTarget = uint256(targetLevel) + 1 - uint256(effectiveLevel);
-        if (risk > maxRiskForTarget) revert Insufficient();
-
-        // Burn principal
-        _burn(sender, burnAmt);
-
-        // Base credit and compounded boost factors
-        uint256 cappedDist = distance > 200 ? 200 : distance;
-        uint256 levelBps = 100 + cappedDist;
-        uint256 riskBps = 12 * uint256(risk - 1);
-        uint256 stepBps = levelBps + riskBps; // per-level growth in bps
-        if (stepBps > 250) {
-            stepBps = 250;
-        }
-
-        uint256 boostedPrincipal = burnAmt;
-        if (distance != 0) {
-            uint256 factor = 10_000 + stepBps;
-            uint24 remaining = distance;
-
-            // Compound in batches of 4 to reduce loop overhead.
-            while (remaining >= 4) {
-                boostedPrincipal = (boostedPrincipal * factor) / 10_000;
-                boostedPrincipal = (boostedPrincipal * factor) / 10_000;
-                boostedPrincipal = (boostedPrincipal * factor) / 10_000;
-                boostedPrincipal = (boostedPrincipal * factor) / 10_000;
-                unchecked {
-                    remaining -= 4;
-                }
-            }
-
-            while (remaining != 0) {
-                boostedPrincipal = (boostedPrincipal * factor) / 10_000;
-                unchecked {
-                    --remaining;
-                }
-            }
-        }
-
-        // Early-game promotion: boost stakes during level 1 state 1.
-        if (currLevel == 1 && stakeGameState == 1) {
-            boostedPrincipal = distance >= 10 ? (boostedPrincipal * 3) / 2 : (boostedPrincipal * 6) / 5;
-        }
-
-        // Encode and place the stake lane
-        uint256 modifiedStake = boostedPrincipal - (boostedPrincipal % STAKE_PRINCIPAL_FACTOR);
-        if (modifiedStake == 0) modifiedStake = STAKE_PRINCIPAL_FACTOR;
-        IPurgeQuestModule module = questModule;
-        // Quest system can inject extra stake weight on successful quest progress.
-        (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleStake(
-            sender,
-            modifiedStake,
-            distance,
-            risk
-        );
-        uint256 questReward = _questApplyReward(sender, reward, hardMode, questType, streak, completed);
-        if (questReward != 0) {
-            uint256 bonus = questReward - (questReward % STAKE_PRINCIPAL_FACTOR);
-            if (bonus != 0) {
-                uint256 updated = modifiedStake + bonus;
-                modifiedStake = updated;
-            }
-        }
-
-        // Track leaderboard for the target level+risk.
-        StakeTop storage top = stakeTopByLevelAndRisk[targetLevel][risk];
-        if (modifiedStake > top.modifiedAmount) {
-            top.modifiedAmount = modifiedStake;
-            top.player = sender;
-        }
-
-        stakePositions[sender][targetLevel].push(
-            StakePosition({
-                principal: burnAmt,
-                modifiedAmount: modifiedStake,
-                distance: distance,
-                risk: risk,
-                claimed: false
-            })
-        );
-        stakeModifiedTotals[targetLevel][risk] += modifiedStake;
-
-        emit StakeCreated(sender, targetLevel, risk, burnAmt);
+    function stake(uint256 burnAmt, uint24 targetLevel, uint8 risk) external pure {
+        burnAmt;
+        targetLevel;
+        risk;
+        revert BettingPaused(); // staking removed
     }
 
     /// @notice Wire game, NFT, quest module, and jackpots using an address array.
@@ -778,6 +423,22 @@ contract Purgecoin {
         address sender = msg.sender;
         if (sender != bongs) revert OnlyGame();
         _mint(bongs, amount);
+    }
+
+    /// @notice Escrow coin to the vault without minting (burns sender, credits vault allowance).
+    function vaultEscrowFrom(address from, uint256 amount) external onlyVault {
+        if (amount == 0) return;
+        _burn(from, amount);
+        vaultMintAllowance += amount;
+    }
+
+    /// @notice Mint coin out of the vault allowance to a recipient (only the vault can call).
+    function vaultMintTo(address to, uint256 amount) external onlyVault {
+        if (amount == 0) return;
+        uint256 allowanceVault = vaultMintAllowance;
+        if (amount > allowanceVault) revert Insufficient();
+        vaultMintAllowance = allowanceVault - amount;
+        _mint(to, amount);
     }
 
     /// @notice Credit a coinflip stake from authorized contracts (game, NFT, affiliate).
@@ -939,15 +600,10 @@ contract Purgecoin {
 
     /// @notice Record the stake resolution day for a level (invoked by PurgeGame at end of state 1).
     /// @dev The first call at the start of level 2 is considered the level-1 resolution.
-    function recordStakeResolution(uint24 level, uint48 day) external onlyPurgeGameContract returns (address topStakeWinner) {
-        if (level == 0) return address(0);
-        uint48 setDay = day == 0 ? _currentDay() : day;
-        if (setDay == 0) return address(0);
-        // Cache the day used for this level's resolution and compute winning risk ranges.
-        stakeResolutionDay[level] = setDay;
-        stakeLevelComplete = level;
-        StakeResolution memory res = _finalizeStakeResolution(level);
-        return res.topStakeWinner;
+    function recordStakeResolution(uint24 level, uint48 day) external view onlyPurgeGameContract returns (address topStakeWinner) {
+        level;
+        day;
+        return address(0); // staking removed
     }
 
     function _claimCoinflipsInternal(address player) internal returns (uint256 claimed) {

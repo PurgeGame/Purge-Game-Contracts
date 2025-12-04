@@ -14,6 +14,12 @@ interface IStETH {
     function transferFrom(address from, address to, uint256 amount) external returns (bool);
 }
 
+interface IVaultCoin {
+    function vaultEscrowFrom(address from, uint256 amount) external;
+    function vaultMintTo(address to, uint256 amount) external;
+    function vaultMintAllowance() external view returns (uint256);
+}
+
 /// @notice Minimal ERC20 used for vault share classes (coin-only and eth-only).
 contract PurgeVaultShare {
     error Unauthorized();
@@ -158,6 +164,7 @@ contract PurgeStonkNFT {
     address public immutable coin; // PURGE coin (or compatible)
     IStETH public immutable steth; // stETH token
     address public immutable bongs; // trusted bong contract for deposits
+    uint256 public coinReserve; // coin escrowed for future mint (not yet minted)
 
     // ---------------------------------------------------------------------
     // Constructor
@@ -171,6 +178,7 @@ contract PurgeStonkNFT {
 
         coinShare = new PurgeVaultShare("Purge Vault Coin", "PGVCOIN", address(this), INITIAL_SUPPLY, msg.sender);
         ethShare = new PurgeVaultShare("Purge Vault Eth", "PGVETH", address(this), INITIAL_SUPPLY, msg.sender);
+        IVaultCoin(coin_).setVault(address(this));
     }
 
     // ---------------------------------------------------------------------
@@ -178,7 +186,10 @@ contract PurgeStonkNFT {
     // ---------------------------------------------------------------------
     /// @notice Pull ETH (msg.value), stETH, and/or coin from the caller (caller must approve this contract).
     function deposit(uint256 coinAmount, uint256 stEthAmount) external payable {
-        _pullToken(coin, msg.sender, coinAmount);
+        if (coinAmount != 0) {
+            IVaultCoin(coin).vaultEscrowFrom(msg.sender, coinAmount);
+            coinReserve += coinAmount;
+        }
         _pullToken(address(steth), msg.sender, stEthAmount);
         emit Deposit(msg.sender, msg.value, stEthAmount, coinAmount);
     }
@@ -221,8 +232,9 @@ contract PurgeStonkNFT {
         if (amount == 0 || amount > bal) revert Insufficient();
 
         uint256 supplyBefore = share.totalSupply();
-        uint256 coinBal = _tokenBalance(coin);
+        uint256 coinBal = coinReserve;
         coinOut = (coinBal * amount) / supplyBefore;
+        if (coinOut > coinBal) revert Insufficient();
 
         // Burn caller shares; if caller is burning the entire supply, refill to keep token alive.
         share.vaultBurn(msg.sender, amount);
@@ -231,7 +243,10 @@ contract PurgeStonkNFT {
         }
 
         emit Claim(msg.sender, to, amount, 0, 0, coinOut);
-        if (coinOut != 0) _payToken(coin, to, coinOut);
+        if (coinOut != 0) {
+            coinReserve = coinBal - coinOut;
+            IVaultCoin(coin).vaultMintTo(to, coinOut);
+        }
     }
 
     /// @notice Burn eth-share tokens to redeem the proportional slice of ETH and stETH.
@@ -269,7 +284,7 @@ contract PurgeStonkNFT {
     function previewCoin(uint256 amount) external view returns (uint256 coinOut) {
         uint256 supply = coinShare.totalSupply();
         if (amount == 0 || amount > supply) revert Insufficient();
-        uint256 coinBal = _tokenBalance(coin);
+        uint256 coinBal = coinReserve;
         coinOut = (coinBal * amount) / supply;
     }
 
