@@ -47,26 +47,22 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
     ) external returns (bool readyForPurchase) {
         uint24 prevLevel = lvl == 0 ? 0 : lvl - 1;
         uint16 traitRaw = lastExterminatedTrait;
-        if (traitRaw == TRAIT_ID_TIMEOUT) {
-            _runRewardJackpots(prevLevel, rngWord, jackpotsAddr);
-            return true;
-        }
-
-        uint8 traitId = uint8(traitRaw);
-        if (!levelExterminatorPaid[prevLevel]) {
-            _primeTraitPayouts(prevLevel, traitId, rngWord);
-            return false;
-        }
-
-        uint256 participantPool = currentPrizePool;
-        if (participantPool != 0) {
-            // Finalize the participant slice from `_primeTraitPayouts` in a gas-bounded manner.
-            _payoutParticipants(cap, prevLevel, participantPool, traitId);
-            if (currentPrizePool != 0) {
+        if (traitRaw != TRAIT_ID_TIMEOUT) {
+            uint8 traitId = uint8(traitRaw);
+            if (!levelExterminatorPaid[prevLevel]) {
+                _primeTraitPayouts(prevLevel, traitId, rngWord);
                 return false;
             }
-        }
 
+            uint256 participantPool = currentPrizePool;
+            if (participantPool != 0) {
+                // Finalize the participant slice from `_primeTraitPayouts` in a gas-bounded manner.
+                _payoutParticipants(cap, prevLevel, participantPool, traitId);
+                if (currentPrizePool != 0) {
+                    return false;
+                }
+            }
+        }
         _runRewardJackpots(prevLevel, rngWord, jackpotsAddr);
         return true;
     }
@@ -173,7 +169,6 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
 
     function _maybeMintAffiliateTop(uint24 prevLevel) private {
         address affiliateAddr = affiliateProgramAddr;
-        if (affiliateAddr == address(0)) return;
         (address top, ) = IPurgeAffiliate(affiliateAddr).affiliateTop(prevLevel);
         if (top == address(0)) return;
         address trophyAddr = trophies;
@@ -283,7 +278,11 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         uint16 offset = uint16(entropy % winnersLen);
         uint96 base96 = uint96(basePerBond);
         _creditClaimableBonds(winners, uint16(quantity), base96, offset);
-        _fundBonds(spend);
+        if (spend != 0) {
+            unchecked {
+                bondCreditEscrow += spend;
+            }
+        }
 
         return amount - spend;
     }
@@ -352,13 +351,6 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
 
     function _payoutRecipient(address player) private view returns (address recipient) {
         (recipient, ) = IPurgeGameAffiliatePayout(address(this)).affiliatePayoutAddress(player);
-    }
-
-    function _fundBonds(uint256 amount) private {
-        if (amount == 0) return;
-        unchecked {
-            bondCreditEscrow += amount;
-        }
     }
 
     function _addClaimableBond(address player, uint256 weiAmount, uint96 basePerBond, bool stake) private {
