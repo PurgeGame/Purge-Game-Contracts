@@ -14,6 +14,10 @@ interface IPurgeGameLike {
     function level() external view returns (uint24);
 }
 
+interface IPurgeGameMintStreakLike is IPurgeGameLike {
+    function ethMintStreakCount(address player) external view returns (uint24);
+}
+
 interface IPurgeBong1155Renderer {
     function bongURI(
         uint256 id,
@@ -78,6 +82,12 @@ contract PurgeBongs {
     error TransferFailed();
     error InvalidCoin();
     error InsufficientBalance();
+    error GateNotEligible();
+    error GatePerWalletExceeded();
+    error GateExhausted();
+    error GateRequiresGame();
+    error StageDisabled();
+    error AlreadyWired();
 
     // ---------------------------------------------------------------------
     // Events
@@ -98,6 +108,7 @@ contract PurgeBongs {
     event EarlyLiquidation(address indexed player, uint24 indexed levelId, uint256 basePerBondWei, uint256 units, uint256 payoutEth);
     event Funded(uint256 ethAmount, uint256 stEthAmount, uint256 coinAmount);
     event BondIssued(uint24 indexed levelId, address indexed player, uint256 amount, bool large);
+    event BonusIssued(uint24 indexed levelId, address indexed player, uint256 amount, uint256 units, uint8 phase);
     event SystemWired(
         address coin,
         address game,
@@ -117,6 +128,24 @@ contract PurgeBongs {
         address extraToken1,
         address extraToken2
     );
+    event LeafRecorded(
+        uint24 indexed levelId,
+        uint64 indexed leafIndex,
+        address indexed player,
+        uint256 amount,
+        uint8 bucketId,
+        uint256 bucketStart,
+        bool isLarge
+    );
+    event IssuanceGateConfigured(
+        uint24 indexed levelId,
+        uint24 minStreak,
+        uint32 perAddressCap,
+        uint256 totalCap,
+        uint48 endTime,
+        uint64 epoch
+    );
+    event IssuanceGateDisabled(uint64 epoch);
 
     // ---------------------------------------------------------------------
     // Data Structures
@@ -163,6 +192,31 @@ contract PurgeBongs {
         uint256 sideB;
     }
 
+    struct GateMint {
+        uint64 epoch;
+        uint256 minted;
+    }
+
+    struct WireConfig {
+        address coin;
+        address game;
+        address nft;
+        address questModule;
+        address jackpots;
+        address affiliate;
+        address renderer;
+        address trophyRenderer;
+        address vault;
+        address extraToken1;
+        address extraToken2;
+    }
+
+    struct Accumulator {
+        uint256 leafCount;
+        bytes32[32] frontier;
+        uint256[8] bucketTotals; // running totals for small buckets (for proofs + liability)
+    }
+
     // ---------------------------------------------------------------------
     // Constants
     // ---------------------------------------------------------------------
@@ -171,6 +225,7 @@ contract PurgeBongs {
     uint256 private constant FULL_SCALE = 1e18;
     uint256 private constant MAX_PRICE = 5 ether;
     uint16 public constant stakeRateBps = 10_000; // kept for interface compatibility
+    uint16[4] private constant BONUS_PHASE_TARGET_BPS = [uint16(200), uint16(300), uint16(400), uint16(800)]; // cumulative % of snapshot principal (2%, 3%, 4%, 8%)
 
     // ---------------------------------------------------------------------
     // Wiring / Access
@@ -191,6 +246,15 @@ contract PurgeBongs {
     bool public purchasesEnabled = true;
     bool public jackpotRewardsEnabled = true;
     address public renderer;
+    bool public issuanceGateEnabled;
+    uint24 public issuanceGateLevel;
+    uint24 public issuanceGateMinStreak;
+    uint32 public issuanceGatePerAddressCap;
+    uint48 public issuanceGateEndTime;
+    uint256 public issuanceGateTotalCap;
+    uint256 public issuanceGateMinted;
+    uint64 private issuanceGateEpoch;
+    mapping(address => GateMint) private issuanceGateMints;
 
     // levelId => config
     mapping(uint24 => LevelConfig) public levels;
@@ -214,6 +278,13 @@ contract PurgeBongs {
     mapping(uint24 => uint256) public levelLargePrincipal; // running total principal for large entries (>=0.5 ETH)
     mapping(uint24 => uint256) public levelMaxPayoutComputed; // rolling worst-case liability (updated on mint/liquidation)
     mapping(uint24 => mapping(uint64 => PairingBound)) private levelPairingSums; // pairId => side totals (paired funding mode)
+    mapping(uint24 => Accumulator) private levelAccumulators; // on-chain merkle accumulator per level
+    mapping(uint24 => bool) private levelQueued; // true once the level is in levelQueue for resolution ordering
+    mapping(uint24 => uint24) public levelSaleStartLevel; // game level when this bucket first issued a bond
+    mapping(uint24 => uint256) public bonusBasePrincipal; // snapshot principal after one level of sales (before bonuses)
+    mapping(uint24 => uint256) public bonusMintedPrincipal; // total bonus principal minted (all phases)
+    mapping(uint24 => uint256[4]) public bonusMintedByPhase; // bonus principal minted per phase (0-3)
+    mapping<uint24 => uint256) public bonusJackpotMinted; // bonus principal minted to the phase-3 jackpot winner
 
     // simple reentrancy guard
     uint256 private locked = 1;
@@ -264,29 +335,51 @@ contract PurgeBongs {
 
     function wire(address game_) external onlyOwner {
         if (game_ == address(0)) revert ZeroAddress();
-        _wireCore(address(0), game_, address(0));
+        WireConfig memory cfg;
+        cfg.game = game_;
+        _wireSystem(cfg);
     }
 
     function wire(address[] calldata addresses) external onlyOwner {
-        _wireCore(
-            addresses.length > 0 ? addresses[0] : address(0),
-            addresses.length > 1 ? addresses[1] : address(0),
-            addresses.length > 2 ? addresses[2] : address(0)
-        );
+        WireConfig memory cfg;
+        uint256 len = addresses.length;
+
+        // Legacy 3-slot order: [coin, game, vault]
+        if (len <= 3) {
+            cfg.coin = len > 0 ? addresses[0] : address(0);
+            cfg.game = len > 1 ? addresses[1] : address(0);
+            cfg.vault = len > 2 ? addresses[2] : address(0);
+        } else {
+            // Standard order: [coin, game, nft, quest, jackpots, affiliate, renderer, trophyRenderer, vault, extraToken1, extraToken2]
+            cfg.coin = addresses[0];
+            cfg.game = addresses[1];
+            cfg.nft = len > 2 ? addresses[2] : address(0);
+            cfg.questModule = len > 3 ? addresses[3] : address(0);
+            cfg.jackpots = len > 4 ? addresses[4] : address(0);
+            cfg.affiliate = len > 5 ? addresses[5] : address(0);
+            cfg.renderer = len > 6 ? addresses[6] : address(0);
+            cfg.trophyRenderer = len > 7 ? addresses[7] : address(0);
+            cfg.vault = len > 8 ? addresses[8] : address(0);
+            cfg.extraToken1 = len > 9 ? addresses[9] : address(0);
+            cfg.extraToken2 = len > 10 ? addresses[10] : address(0);
+        }
+
+        _wireSystem(cfg);
     }
 
     function setVault(address vault_) external onlyOwner {
         if (vault_ == address(0)) revert ZeroAddress();
-        vault = vault_;
+        _setVault(vault_);
     }
 
     function setCoin(address coin_) external onlyOwner {
         if (coin_ == address(0)) revert ZeroAddress();
-        coinToken = coin_;
+        _setCoin(coin_);
     }
 
     function setRenderer(address renderer_) external onlyOwner {
-        renderer = renderer_;
+        if (renderer_ == address(0)) revert ZeroAddress();
+        _setRenderer(renderer_);
     }
 
     function setPurchasesEnabled(bool enabled) external onlyOwner {
@@ -295,6 +388,42 @@ contract PurgeBongs {
 
     function setJackpotRewardsEnabled(bool enabled) external onlyOwner {
         jackpotRewardsEnabled = enabled;
+    }
+
+    /// @notice Configure a streak-gated early issuance window for a specific bond level.
+    /// @param levelId        Bond level (bucket) the gate applies to.
+    /// @param minStreak      Minimum ETH mint streak required to participate (0 disables streak check).
+    /// @param perAddressCap  Max bonds per address during the gate (0 = no per-address cap).
+    /// @param totalCap       Max bonds that can be issued during the gate (0 = no total cap).
+    /// @param endTime        Optional timestamp cutoff for the gate (0 = no time limit).
+    function configureIssuanceGate(
+        uint24 levelId,
+        uint24 minStreak,
+        uint32 perAddressCap,
+        uint256 totalCap,
+        uint48 endTime
+    ) external onlyOwner {
+        if (levelId == 0 || (levelId % 5 != 0)) revert InvalidLevel();
+        if (minStreak != 0 && game == address(0)) revert GateRequiresGame();
+
+        issuanceGateEnabled = true;
+        issuanceGateLevel = levelId;
+        issuanceGateMinStreak = minStreak;
+        issuanceGatePerAddressCap = perAddressCap;
+        issuanceGateTotalCap = totalCap;
+        issuanceGateEndTime = endTime;
+        issuanceGateMinted = 0;
+        unchecked {
+            issuanceGateEpoch += 1;
+        }
+
+        emit IssuanceGateConfigured(levelId, minStreak, perAddressCap, totalCap, endTime, issuanceGateEpoch);
+    }
+
+    /// @notice Disable the streak-gated issuance window (public purchases remain subject to standard checks).
+    function disableIssuanceGate() external onlyOwner {
+        issuanceGateEnabled = false;
+        emit IssuanceGateDisabled(issuanceGateEpoch);
     }
 
     /// @notice Wire core contracts (coin, game, vault) and propagate wiring to downstream modules.
@@ -314,32 +443,21 @@ contract PurgeBongs {
         address affiliate_,
         address vault_
     ) external onlyOwner {
-        _wireCore(coin_, game_, vault_);
-
-        if (coin_ != address(0)) {
-            address[] memory coinAddrs = new address[](4);
-            coinAddrs[0] = game_;
-            coinAddrs[1] = nft_;
-            coinAddrs[2] = questModule_;
-            coinAddrs[3] = jackpots_;
-            IPurgeCoinWire(coin_).wire(coinAddrs);
-        }
-
-        if (affiliate_ != address(0)) {
-            address[] memory affiliateAddrs = new address[](2);
-            affiliateAddrs[0] = coin_;
-            affiliateAddrs[1] = game_;
-            IPurgeAffiliateWire(affiliate_).wire(affiliateAddrs);
-        }
-
-        if (jackpots_ != address(0)) {
-            address[] memory jackpotAddrs = new address[](2);
-            jackpotAddrs[0] = coin_;
-            jackpotAddrs[1] = game_;
-            IPurgeJackpotsWire(jackpots_).wire(jackpotAddrs);
-        }
-
-        emit SystemWired(coin_, game_, nft_, questModule_, jackpots_, affiliate_, address(0), address(0), vault_);
+        _wireSystem(
+            WireConfig({
+                coin: coin_,
+                game: game_,
+                nft: nft_,
+                questModule: questModule_,
+                jackpots: jackpots_,
+                affiliate: affiliate_,
+                renderer: address(0),
+                trophyRenderer: address(0),
+                vault: vault_,
+                extraToken1: address(0),
+                extraToken2: address(0)
+            })
+        );
     }
 
     /// @notice Wire renderer contracts that require bongs as the caller.
@@ -357,38 +475,131 @@ contract PurgeBongs {
         address extraToken1,
         address extraToken2
     ) external onlyOwner {
-        if (game_ != address(0)) {
-            _wireCore(address(0), game_, address(0));
-        }
-        address gameAddr = game;
-
-        if (renderer_ != address(0)) {
-            address[] memory rendererAddrs = new address[](4);
-            rendererAddrs[0] = gameAddr;
-            rendererAddrs[1] = nft_;
-            rendererAddrs[2] = extraToken1;
-            rendererAddrs[3] = extraToken2;
-            IRendererWire(renderer_).wire(rendererAddrs);
-        }
-
-        if (trophyRenderer_ != address(0)) {
-            address[] memory trophyAddrs = new address[](1);
-            trophyAddrs[0] = nft_;
-            IRendererWire(trophyRenderer_).wire(trophyAddrs);
-        }
-
-        emit RenderersWired(renderer_, trophyRenderer_, gameAddr, nft_, extraToken1, extraToken2);
+        _wireSystem(
+            WireConfig({
+                coin: address(0),
+                game: game_,
+                nft: nft_,
+                questModule: address(0),
+                jackpots: address(0),
+                affiliate: address(0),
+                renderer: renderer_,
+                trophyRenderer: trophyRenderer_,
+                vault: address(0),
+                extraToken1: extraToken1,
+                extraToken2: extraToken2
+            })
+        );
     }
 
-    function _wireCore(address coin_, address game_, address vault_) private {
-        if (coin_ != address(0)) {
+    function _setCoin(address coin_) private returns (address) {
+        if (coin_ == address(0)) return coinToken;
+        address current = coinToken;
+        if (current == address(0)) {
             coinToken = coin_;
+            return coin_;
         }
-        if (game_ != address(0)) {
+        if (current != coin_) revert AlreadyWired();
+        return current;
+    }
+
+    function _setGame(address game_) private returns (address) {
+        if (game_ == address(0)) return game;
+        address current = game;
+        if (current == address(0)) {
             game = game_;
+            return game_;
         }
-        if (vault_ != address(0)) {
+        if (current != game_) revert AlreadyWired();
+        return current;
+    }
+
+    function _setVault(address vault_) private returns (address) {
+        if (vault_ == address(0)) return vault;
+        address current = vault;
+        if (current == address(0)) {
             vault = vault_;
+            return vault_;
+        }
+        if (current != vault_) revert AlreadyWired();
+        return current;
+    }
+
+    function _setRenderer(address renderer_) private returns (address) {
+        if (renderer_ == address(0)) return renderer;
+        address current = renderer;
+        if (current == address(0)) {
+            renderer = renderer_;
+            return renderer_;
+        }
+        if (current != renderer_) revert AlreadyWired();
+        return current;
+    }
+
+    function _wireCore(address coin_, address game_, address vault_) private returns (address, address, address) {
+        return (_setCoin(coin_), _setGame(game_), _setVault(vault_));
+    }
+
+    function _wireSystem(WireConfig memory cfg) private {
+        (address coinAddr, address gameAddr, address vaultAddr) = _wireCore(cfg.coin, cfg.game, cfg.vault);
+        address rendererAddr = _setRenderer(cfg.renderer);
+
+        bool wireCoin = coinAddr != address(0) &&
+            (gameAddr != address(0) || cfg.nft != address(0) || cfg.questModule != address(0) || cfg.jackpots != address(0));
+        if (wireCoin) {
+            address[] memory coinAddrs = new address[](4);
+            coinAddrs[0] = gameAddr;
+            coinAddrs[1] = cfg.nft;
+            coinAddrs[2] = cfg.questModule;
+            coinAddrs[3] = cfg.jackpots;
+            IPurgeCoinWire(coinAddr).wire(coinAddrs);
+        }
+
+        if (cfg.affiliate != address(0) && coinAddr != address(0)) {
+            address[] memory affiliateAddrs = new address[](2);
+            affiliateAddrs[0] = coinAddr;
+            affiliateAddrs[1] = gameAddr;
+            IPurgeAffiliateWire(cfg.affiliate).wire(affiliateAddrs);
+        }
+
+        if (cfg.jackpots != address(0) && coinAddr != address(0)) {
+            address[] memory jackpotAddrs = new address[](2);
+            jackpotAddrs[0] = coinAddr;
+            jackpotAddrs[1] = gameAddr;
+            IPurgeJackpotsWire(cfg.jackpots).wire(jackpotAddrs);
+        }
+
+        bool wireRenderersFlag = rendererAddr != address(0) &&
+            (cfg.renderer != address(0) || cfg.nft != address(0) || cfg.extraToken1 != address(0) || cfg.extraToken2 != address(0) || gameAddr != address(0));
+        if (wireRenderersFlag) {
+            address[] memory rendererAddrs = new address[](4);
+            rendererAddrs[0] = gameAddr;
+            rendererAddrs[1] = cfg.nft;
+            rendererAddrs[2] = cfg.extraToken1;
+            rendererAddrs[3] = cfg.extraToken2;
+            IRendererWire(rendererAddr).wire(rendererAddrs);
+        }
+
+        bool wireTrophy = cfg.trophyRenderer != address(0) && cfg.nft != address(0);
+        if (wireTrophy) {
+            address[] memory trophyAddrs = new address[](1);
+            trophyAddrs[0] = cfg.nft;
+            IRendererWire(cfg.trophyRenderer).wire(trophyAddrs);
+        }
+
+        emit SystemWired(
+            coinAddr,
+            gameAddr,
+            cfg.nft,
+            cfg.questModule,
+            cfg.jackpots,
+            cfg.affiliate,
+            rendererAddr,
+            cfg.trophyRenderer,
+            vaultAddr
+        );
+        if (wireRenderersFlag || wireTrophy) {
+            emit RenderersWired(rendererAddr, cfg.trophyRenderer, gameAddr, cfg.nft, cfg.extraToken1, cfg.extraToken2);
         }
     }
 
@@ -426,7 +637,12 @@ contract PurgeBongs {
         uint256 leafCount,
         uint256[8] calldata bucketTotals
     ) external onlyOwner {
-        _stageLevel(levelId, root, maxPayout, 0, leafCount, bucketTotals, new PairingBound[](0), false, false);
+        levelId;
+        root;
+        maxPayout;
+        leafCount;
+        bucketTotals;
+        revert StageDisabled();
     }
 
     /// @notice Stage a level with an optional EV-style matched payout cap (informational only).
@@ -438,17 +654,13 @@ contract PurgeBongs {
         uint256 leafCount,
         uint256[8] calldata bucketTotals
     ) external onlyOwner {
-        _stageLevel(
-            levelId,
-            root,
-            maxPayout,
-            matchedMaxPayout,
-            leafCount,
-            bucketTotals,
-            new PairingBound[](0),
-            false,
-            false
-        );
+        levelId;
+        root;
+        maxPayout;
+        matchedMaxPayout;
+        leafCount;
+        bucketTotals;
+        revert StageDisabled();
     }
 
     /// @notice Stage a level using pairing metadata to cap large-bucket worst-case payouts.
@@ -461,7 +673,14 @@ contract PurgeBongs {
         uint256[8] calldata bucketTotals,
         PairingBound[] calldata pairings
     ) external onlyOwner {
-        _stageLevel(levelId, root, maxPayout, matchedMaxPayout, leafCount, bucketTotals, pairings, true, false);
+        levelId;
+        root;
+        maxPayout;
+        matchedMaxPayout;
+        leafCount;
+        bucketTotals;
+        pairings;
+        revert StageDisabled();
     }
 
     /// @notice Stage a level aggregating all small buckets (single RNG offset) to keep small-bucket variance under 1 ETH.
@@ -473,7 +692,13 @@ contract PurgeBongs {
         uint256 leafCount,
         uint256[8] calldata bucketTotals
     ) external onlyOwner {
-        _stageLevel(levelId, root, maxPayout, matchedMaxPayout, leafCount, bucketTotals, new PairingBound[](0), false, true);
+        levelId;
+        root;
+        maxPayout;
+        matchedMaxPayout;
+        leafCount;
+        bucketTotals;
+        revert StageDisabled();
     }
 
     /// @notice Stage a level using pairing metadata and aggregated small buckets.
@@ -486,72 +711,82 @@ contract PurgeBongs {
         uint256[8] calldata bucketTotals,
         PairingBound[] calldata pairings
     ) external onlyOwner {
-        _stageLevel(levelId, root, maxPayout, matchedMaxPayout, leafCount, bucketTotals, pairings, true, true);
-    }
-
-    function _stageLevel(
-        uint24 levelId,
-        bytes32 root,
-        uint256 maxPayout,
-        uint256 matchedMaxPayout,
-        uint256 leafCount,
-        uint256[8] calldata bucketTotals,
-        PairingBound[] memory pairings,
-        bool pairedFunding,
-        bool aggregateSmalls
-    ) private {
-        if ((levelId % 5 != 0) || root == bytes32(0) || leafCount == 0) revert InvalidLevel();
-        LevelConfig storage cfg = levels[levelId];
-        if (cfg.staged) revert InvalidLevel();
-        if (matchedMaxPayout != 0 && matchedMaxPayout > maxPayout) revert InvalidLevel();
-
-        bool dynamicFunding = pairedFunding || aggregateSmalls;
-        uint256 computed = dynamicFunding
-            ? _computeDynamicMaxPayout(levelId, cfg, bucketTotals, pairings, aggregateSmalls)
-            : levelMaxPayoutComputed[levelId];
-        if (maxPayout == 0) {
-            maxPayout = computed;
-        } else if (computed != 0 && maxPayout < computed) {
-            revert InvalidLevel();
-        }
-        if (maxPayout == 0) revert InvalidLevel();
-
-        cfg.root = root;
-        cfg.maxPayout = maxPayout;
-        if (dynamicFunding) {
-            cfg.fundingBuffer = maxPayout > computed ? maxPayout - computed : 0;
-        } else {
-            cfg.fundingBuffer = 0;
-        }
-        levelMaxPayoutComputed[levelId] = maxPayout;
-        uint256 matched = matchedMaxPayout;
-        if (matched == 0) {
-            matched = dynamicFunding ? computed : maxPayout;
-        }
-        cfg.matchedMaxPayout = matched;
-        cfg.leafCount = leafCount;
-        cfg.bucketTotals = bucketTotals;
-        cfg.aggregateSmalls = aggregateSmalls;
-        if (!dynamicFunding) {
-            cfg.bucketRunningTotals = [uint256(0), 0, 0, 0, 0, 0, 0, 0];
-            cfg.smallLiability = 0;
-            cfg.largeLiability = 0;
-            cfg.unpairedLarge = 0;
-            cfg.pairedLiability = false;
-        } else {
-            cfg.pairedLiability = true;
-        }
-        cfg.staged = true;
-        levelLocked[levelId] = true; // freeze transfers for this level
-        levelQueue.push(levelId);
-
-        emit LevelStaged(levelId, root, maxPayout, leafCount);
-        emit LevelStageMetadata(levelId, cfg.matchedMaxPayout);
+        levelId;
+        root;
+        maxPayout;
+        matchedMaxPayout;
+        leafCount;
+        bucketTotals;
+        pairings;
+        revert StageDisabled();
     }
 
     function _bucketWorstCase(uint256 total) private pure returns (uint256) {
         if (total == 0) return 0;
         return ((total + ONE - 1) / ONE) * ONE;
+    }
+
+    function _appendLeaf(
+        uint24 levelId,
+        bytes32 leafHash,
+        uint8 bucketId,
+        uint256 amount
+    ) private returns (uint64 leafIndex, uint256 bucketStart) {
+        Accumulator storage acc = levelAccumulators[levelId];
+        uint256 count = acc.leafCount;
+        if (count >= type(uint64).max) revert InvalidAmount();
+        leafIndex = uint64(count);
+
+        if (count == 0 && !levelQueued[levelId]) {
+            levelQueued[levelId] = true;
+            levelQueue.push(levelId);
+        }
+
+        if (bucketId < 8 && amount < SMALL_THRESHOLD) {
+            bucketStart = acc.bucketTotals[bucketId];
+            acc.bucketTotals[bucketId] = bucketStart + amount;
+        }
+
+        bytes32 hash = leafHash;
+        uint256 idx = count;
+        for (uint256 i; i < 32; ) {
+            if ((idx & 1) == 0) {
+                acc.frontier[i] = hash;
+                break;
+            } else {
+                hash = _hashPair(acc.frontier[i], hash);
+            }
+            idx >>= 1;
+            unchecked {
+                ++i;
+            }
+        }
+
+        acc.leafCount = count + 1;
+    }
+
+    function _hashPair(bytes32 a, bytes32 b) private pure returns (bytes32) {
+        return a <= b ? keccak256(abi.encodePacked(a, b)) : keccak256(abi.encodePacked(b, a));
+    }
+
+    function _merkleRoot(Accumulator storage acc) private view returns (bytes32 root) {
+        uint256 count = acc.leafCount;
+        if (count == 0) return bytes32(0);
+
+        root = bytes32(0);
+        for (uint256 i; i < 32; ) {
+            bytes32 h = acc.frontier[i];
+            if (h != bytes32(0)) {
+                if (root == bytes32(0)) {
+                    root = h;
+                } else {
+                    root = _hashPair(h, root);
+                }
+            }
+            unchecked {
+                ++i;
+            }
+        }
     }
 
     function _smallWorstCase(uint256[8] calldata totals) private pure returns (uint256 total) {
@@ -620,6 +855,60 @@ contract PurgeBongs {
         cfg.pairedLiability = true;
         cfg.aggregateSmalls = aggregateSmalls;
         return cfg.smallLiability + cfg.largeLiability;
+    }
+
+    function _stageFromAccumulator(uint24 levelId) private {
+        LevelConfig storage cfg = levels[levelId];
+        if (cfg.staged) return;
+
+        Accumulator storage acc = levelAccumulators[levelId];
+        uint256 leafCount = acc.leafCount;
+        if (leafCount == 0) return; // nothing to stage
+
+        bytes32 root = _merkleRoot(acc);
+        if (root == bytes32(0)) revert InvalidLevel();
+
+        uint256 maxPayout = levelMaxPayoutComputed[levelId];
+        if (maxPayout == 0) revert InvalidLevel();
+
+        cfg.root = root;
+        cfg.maxPayout = maxPayout;
+        cfg.fundingBuffer = 0;
+        cfg.matchedMaxPayout = maxPayout;
+        cfg.leafCount = leafCount;
+        cfg.bucketTotals = acc.bucketTotals;
+        cfg.aggregateSmalls = false;
+        cfg.bucketRunningTotals = [uint256(0), 0, 0, 0, 0, 0, 0, 0];
+        cfg.smallLiability = 0;
+        cfg.largeLiability = 0;
+        cfg.unpairedLarge = 0;
+        cfg.pairedLiability = false;
+        cfg.staged = true;
+        levelLocked[levelId] = true;
+        if (!levelQueued[levelId]) {
+            levelQueued[levelId] = true;
+            levelQueue.push(levelId);
+        }
+
+        emit LevelStaged(levelId, root, maxPayout, leafCount);
+        emit LevelStageMetadata(levelId, cfg.matchedMaxPayout);
+    }
+
+    function _autoStageDueLevels(uint24 currentLevel) private {
+        uint256 len = levelQueue.length;
+        for (uint256 i = resolveCursor; i < len; ) {
+            uint24 lvl = levelQueue[i];
+            if (levels[lvl].staged || currentLevel <= lvl) {
+                unchecked {
+                    ++i;
+                }
+                continue;
+            }
+            _stageFromAccumulator(lvl);
+            unchecked {
+                ++i;
+            }
+        }
     }
 
     function _reduceSmallLiability(LevelConfig storage cfg, uint8 bucketId, uint256 amount) private {
@@ -750,6 +1039,7 @@ contract PurgeBongs {
         }
 
         uint24 currentLevel = _currentLevel();
+        _autoStageDueLevels(currentLevel);
         bool shortfall;
         while (resolveCursor < levelQueue.length) {
             uint24 levelId = levelQueue[resolveCursor];
@@ -897,14 +1187,54 @@ contract PurgeBongs {
         }
     }
 
+    function _bonusPhaseTarget(uint24 levelId) private returns (uint8 phase, uint256 target, uint256 basePrincipal) {
+        uint24 start = levelSaleStartLevel[levelId];
+        if (start == 0) {
+            phase = type(uint8).max;
+            return (phase, 0, 0);
+        }
+
+        uint24 curr = _currentLevel();
+        if (curr == 0 || curr <= start) {
+            phase = type(uint8).max;
+            return (phase, 0, 0);
+        }
+
+        uint24 offset = curr - start - 1;
+        if (offset > 3) offset = 3;
+        phase = uint8(offset);
+
+        basePrincipal = bonusBasePrincipal[levelId];
+        if (basePrincipal == 0) {
+            basePrincipal = levelPrincipal[levelId];
+            bonusBasePrincipal[levelId] = basePrincipal;
+        }
+        if (basePrincipal == 0) {
+            target = 0;
+            return (phase, target, basePrincipal);
+        }
+
+        uint256 bps = BONUS_PHASE_TARGET_BPS[phase];
+        target = (basePrincipal * bps + stakeRateBps - 1) / stakeRateBps; // ceil to avoid shortfalls
+    }
+
+    function _bonusPrevTarget(uint256 basePrincipal, uint8 phase) private pure returns (uint256 prevTarget) {
+        if (phase == 0) return 0;
+        uint256 bps = BONUS_PHASE_TARGET_BPS[phase - 1];
+        prevTarget = (basePrincipal * bps + stakeRateBps - 1) / stakeRateBps;
+    }
+
     function _levelTransfersLocked(uint24 levelId) private view returns (bool) {
+        uint24 curr = _currentLevel();
+        if (curr != 0 && _bondLevelFor(curr) == levelId) {
+            return true; // lock during the active mint window for this bucket
+        }
         LevelConfig storage cfg = levels[levelId];
         if (cfg.resolved) return true; // freeze once resolved
 
         bool fullyFunded = cfg.staged && !cfg.resolved && bondObligations >= cfg.maxPayout;
         if (!fullyFunded) return false;
 
-        uint24 curr = _currentLevel();
         if (curr == 0) return false;
         if (curr >= levelId) return true;
         uint24 delta = levelId - curr;
@@ -942,6 +1272,13 @@ contract PurgeBongs {
         return bucket * 5;
     }
 
+    function _gateActiveFor(uint24 levelId) private view returns (bool) {
+        if (!issuanceGateEnabled || levelId != issuanceGateLevel) return false;
+        if (issuanceGateEndTime != 0 && block.timestamp > issuanceGateEndTime) return false;
+        if (issuanceGateTotalCap != 0 && issuanceGateMinted >= issuanceGateTotalCap) return false;
+        return true;
+    }
+
     /**
      * @notice View helper: reports whether all staged, unresolved levels are fully covered by obligations.
      * @return pendingMaxPayout Sum of worst-case payouts for all pending levels.
@@ -960,6 +1297,32 @@ contract PurgeBongs {
         fullyFunded = obligations >= pendingMaxPayout;
         shortfall = fullyFunded ? 0 : pendingMaxPayout - obligations;
         rngReady = cachedRngWord != 0;
+    }
+
+    /// @notice View helper for the streak-gated issuance window.
+    function issuanceGateStatus()
+        external
+        view
+        returns (
+            bool active,
+            uint24 levelId,
+            uint24 minStreak,
+            uint32 perAddressCap,
+            uint256 totalCap,
+            uint256 totalMinted,
+            uint256 remainingCap,
+            uint48 endTime
+        )
+    {
+        levelId = issuanceGateLevel;
+        minStreak = issuanceGateMinStreak;
+        perAddressCap = issuanceGatePerAddressCap;
+        totalCap = issuanceGateTotalCap;
+        totalMinted = issuanceGateMinted;
+        endTime = issuanceGateEndTime;
+
+        active = _gateActiveFor(levelId);
+        remainingCap = totalCap == 0 || totalMinted >= totalCap ? 0 : (totalCap - totalMinted);
     }
 
     /// @notice Per-level funding metadata including EV-style matched cap (informational) and shutdown coverage.
@@ -993,8 +1356,17 @@ contract PurgeBongs {
         uint256 len = levelQueue.length;
         for (uint256 i = resolveCursor; i < len; ) {
             LevelConfig storage cfg = levels[levelQueue[i]];
-            if (cfg.staged && !cfg.resolved) {
+            if (cfg.resolved) {
+                unchecked {
+                    ++i;
+                }
+                continue;
+            }
+            if (cfg.staged) {
                 total += cfg.maxPayout;
+            } else {
+                uint256 computed = levelMaxPayoutComputed[levelQueue[i]];
+                total += computed;
             }
             unchecked {
                 ++i;
@@ -1007,8 +1379,12 @@ contract PurgeBongs {
         uint256 taken;
         for (uint256 i = resolveCursor; i < len && taken < count; ) {
             LevelConfig storage cfg = levels[levelQueue[i]];
-            if (cfg.staged && !cfg.resolved) {
-                total += cfg.maxPayout;
+            if (!cfg.resolved) {
+                if (cfg.staged) {
+                    total += cfg.maxPayout;
+                } else {
+                    total += levelMaxPayoutComputed[levelQueue[i]];
+                }
                 unchecked {
                     ++taken;
                 }
@@ -1032,9 +1408,12 @@ contract PurgeBongs {
         for (uint256 i = resolveCursor; i < len; ) {
             uint24 lvl = levelQueue[i];
             LevelConfig storage cfg = levels[lvl];
-            if (cfg.staged && !cfg.resolved && bondObligations >= cfg.maxPayout) {
-                if (lvl == firstBucket) firstFound = true;
-                if (lvl == secondBucket) secondFound = true;
+            if (!cfg.resolved) {
+                uint256 need = cfg.staged ? cfg.maxPayout : levelMaxPayoutComputed[lvl];
+                if (need != 0 && bondObligations >= need) {
+                    if (lvl == firstBucket) firstFound = true;
+                    if (lvl == secondBucket) secondFound = true;
+                }
             }
             if (firstFound && secondFound) return true;
             if (lvl > secondBucket + 5) break;
@@ -1454,6 +1833,50 @@ contract PurgeBongs {
         }
     }
 
+    function _bumpGateMint(address player, uint256 amount, uint32 perAddressCap, uint64 epoch) private {
+        GateMint storage gm = issuanceGateMints[player];
+        if (gm.epoch != epoch) {
+            gm.epoch = epoch;
+            gm.minted = 0;
+        }
+        uint256 newMinted = gm.minted + amount;
+        if (perAddressCap != 0 && newMinted > perAddressCap) revert GatePerWalletExceeded();
+        gm.minted = newMinted;
+    }
+
+    function _enforceIssuanceGate(uint24 lvl, address[] calldata recipients, uint256 mintCount) private {
+        if (!_gateActiveFor(lvl)) return;
+
+        uint256 newTotal = issuanceGateMinted + mintCount;
+        uint256 totalCap = issuanceGateTotalCap;
+        if (totalCap != 0 && newTotal > totalCap) revert GateExhausted();
+
+        uint24 minStreak = issuanceGateMinStreak;
+        uint32 perCap = issuanceGatePerAddressCap;
+        uint64 epoch = issuanceGateEpoch;
+        bool checkStreak = minStreak != 0;
+        IPurgeGameMintStreakLike gameContract = IPurgeGameMintStreakLike(game);
+        if (checkStreak && address(gameContract) == address(0)) revert GateRequiresGame();
+
+        uint256 len = recipients.length;
+        if (len == 1) {
+            address to = recipients[0];
+            if (checkStreak && gameContract.ethMintStreakCount(to) < minStreak) revert GateNotEligible();
+            _bumpGateMint(to, mintCount, perCap, epoch);
+        } else {
+            for (uint256 i; i < len; ) {
+                address to = recipients[i];
+                if (checkStreak && gameContract.ethMintStreakCount(to) < minStreak) revert GateNotEligible();
+                _bumpGateMint(to, 1, perCap, epoch);
+                unchecked {
+                    ++i;
+                }
+            }
+        }
+
+        issuanceGateMinted = newTotal;
+    }
+
     // ---------------------------------------------------------------------
     // Issuance (book-keeping only, still fungible/transferable offchain)
     // ---------------------------------------------------------------------
@@ -1500,6 +1923,8 @@ contract PurgeBongs {
 
         startIndex = levelIssuedCount[lvl];
 
+        _enforceIssuanceGate(lvl, recipients, mintCount);
+
         if (len == 1) {
             address to = recipients[0];
             if (to == address(0)) revert ZeroAddress();
@@ -1516,22 +1941,161 @@ contract PurgeBongs {
         }
     }
 
+    /// @notice Admin bonus minting: add bonus bonds for a level within the capped bonus schedule.
+    /// @dev Bonus window opens one game level after the first issuance for the bucket. Phases unlock sequentially (2%, 3%, 4%, 8% cumulative).
+    ///      Selection of recipients is expected to be done offchain; this function only enforces the phase cap and integrates accounting.
+    function distributeBonusBongs(
+        uint24 levelId,
+        address[] calldata recipients,
+        uint256[] calldata basePerBongWei,
+        uint256[] calldata counts
+    ) external onlyOwner {
+        uint256 len = recipients.length;
+        if (len == 0 || len != basePerBongWei.length || len != counts.length) revert InvalidAmount();
+        if (levelLocked[levelId]) revert TransfersLocked();
+
+        (uint8 phase, uint256 target, uint256 basePrincipal) = _bonusPhaseTarget(levelId);
+        if (phase == type(uint8).max || target == 0 || basePrincipal == 0) revert InvalidLevel();
+
+        uint256 minted = bonusMintedPrincipal[levelId];
+        if (minted >= target) revert InvalidAmount();
+
+        uint256 available = target - minted;
+        uint256 basePrincipalPrev = _bonusPrevTarget(basePrincipal, phase);
+
+        if (phase == 3) {
+            // Reserve 1/4 of the phase-3 incremental issuance for the jackpot winner.
+            uint256 phaseCap = target > basePrincipalPrev ? target - basePrincipalPrev : 0;
+            uint256 jackpotReserve = phaseCap / 4;
+            uint256 mintedJackpot = bonusJackpotMinted[levelId];
+            uint256 mintedPhaseTotal = bonusMintedByPhase[levelId][3];
+            uint256 mintedPhaseNonJackpot = mintedPhaseTotal > mintedJackpot ? mintedPhaseTotal - mintedJackpot : 0;
+
+            uint256 nonJackpotCap = phaseCap > jackpotReserve ? phaseCap - jackpotReserve : 0;
+            uint256 remainingNonJackpot = nonJackpotCap > mintedPhaseNonJackpot ? nonJackpotCap - mintedPhaseNonJackpot : 0;
+
+            uint256 earlierShortfall = basePrincipalPrev > minted ? basePrincipalPrev - minted : 0;
+            available = remainingNonJackpot + earlierShortfall;
+            if (available == 0) revert InvalidAmount();
+        }
+
+        for (uint256 i; i < len; ) {
+            address to = recipients[i];
+            if (to == address(0)) revert ZeroAddress();
+            uint256 units = counts[i];
+            uint256 base = basePerBongWei[i];
+            if (units == 0 || base == 0 || base > MAX_PRICE) revert InvalidAmount();
+
+            uint256 addPrincipal = base * units;
+            if (addPrincipal > available || minted + addPrincipal > target) revert InsufficientObligations();
+            _issue(to, levelId, base, units);
+            minted += addPrincipal;
+            available -= addPrincipal;
+            bonusMintedByPhase[levelId][phase] += addPrincipal;
+            emit BonusIssued(levelId, to, base, units, phase);
+            unchecked {
+                ++i;
+            }
+        }
+
+        bonusMintedPrincipal[levelId] = minted;
+    }
+
+    /// @notice Phase-3 jackpot: mint up to 25% of the phase-3 allocation to a single class-A holder (weighted selection done offchain).
+    function distributeBonusJackpot(
+        uint24 levelId,
+        address winner,
+        uint256 basePerBongWei,
+        uint256 units
+    ) external onlyOwner {
+        if (winner == address(0)) revert ZeroAddress();
+        if (units == 0 || basePerBongWei == 0 || basePerBongWei > MAX_PRICE) revert InvalidAmount();
+        if (levelLocked[levelId]) revert TransfersLocked();
+
+        (uint8 phase, uint256 target, uint256 basePrincipal) = _bonusPhaseTarget(levelId);
+        if (phase != 3 || target == 0 || basePrincipal == 0) revert InvalidLevel();
+
+        uint256 prevTarget = _bonusPrevTarget(basePrincipal, phase);
+        uint256 phaseCap = target > prevTarget ? target - prevTarget : 0;
+        uint256 jackpotReserve = phaseCap / 4;
+        if (jackpotReserve == 0) revert InvalidAmount();
+
+        uint256 mintedJackpot = bonusJackpotMinted[levelId];
+        if (mintedJackpot >= jackpotReserve) revert InvalidAmount();
+
+        uint256 remainingJackpot = jackpotReserve - mintedJackpot;
+        uint256 principal = basePerBongWei * units;
+        if (principal == 0 || principal != remainingJackpot) revert InvalidAmount();
+
+        // Require the winner to hold class-A supply to align with "weighted by holdings".
+        uint256 classABalance = balances[uint256(levelId)][winner];
+        if (classABalance == 0) revert GateNotEligible();
+
+        _issue(winner, levelId, basePerBongWei, units);
+
+        bonusJackpotMinted[levelId] = mintedJackpot + principal;
+        bonusMintedByPhase[levelId][phase] += principal;
+        bonusMintedPrincipal[levelId] += principal;
+
+        emit BonusIssued(levelId, winner, basePerBongWei, units, phase);
+    }
+
     function _issue(address to, uint24 levelId, uint256 basePerBongWei, uint256 count) private {
         if (levelLocked[levelId]) revert TransfersLocked();
-        levelIssuedCount[levelId] += count;
-        levelPrincipal[levelId] += basePerBongWei * count;
-        if (basePerBongWei >= SMALL_THRESHOLD) {
-            levelLargePrincipal[levelId] += basePerBongWei * count;
-        } else {
-            levelSmallPrincipal[levelId] += basePerBongWei * count;
+        if (levelIssuedCount[levelId] == 0 && levelSaleStartLevel[levelId] == 0) {
+            uint24 currLvl = _currentLevel();
+            if (currLvl != 0) {
+                levelSaleStartLevel[levelId] = currLvl;
+            }
         }
-        levelSupply[levelId] += basePerBongWei * count;
+        levelIssuedCount[levelId] += count;
+        uint256 principalAdded = basePerBongWei * count;
+        levelPrincipal[levelId] += principalAdded;
+        bool large = basePerBongWei >= SMALL_THRESHOLD;
+        if (large) {
+            levelLargePrincipal[levelId] += principalAdded;
+        } else {
+            levelSmallPrincipal[levelId] += principalAdded;
+        }
+        levelSupply[levelId] += principalAdded;
         levelDenomCount[levelId][basePerBongWei] += count;
         uint256 worst = _worstCase(basePerBongWei);
         levelMaxPayoutComputed[levelId] += worst * count;
-        bool large = basePerBongWei >= SMALL_THRESHOLD;
 
+        Accumulator storage acc = levelAccumulators[levelId];
         for (uint256 i; i < count; ) {
+            uint256 leafIdx = acc.leafCount;
+            uint8 bucketId = large ? 0 : uint8(leafIdx & 7); // round-robin small buckets
+            uint256 bucketStart = bucketId < 8 && !large ? acc.bucketTotals[bucketId] : 0;
+
+            ClaimLeaf memory leaf = ClaimLeaf({
+                levelId: levelId,
+                leafIndex: uint64(leafIdx),
+                player: to,
+                amount: basePerBongWei,
+                bucketId: bucketId,
+                pairId: 0,
+                pairSide: false,
+                isLarge: large,
+                bucketStart: bucketStart
+            });
+
+            bytes32 leafHash = keccak256(
+                abi.encode(
+                    leaf.levelId,
+                    leaf.leafIndex,
+                    leaf.player,
+                    leaf.amount,
+                    leaf.bucketId,
+                    leaf.bucketStart,
+                    leaf.pairId,
+                    leaf.pairSide,
+                    leaf.isLarge
+                )
+            );
+
+            (uint64 storedIndex, uint256 start) = _appendLeaf(levelId, leafHash, bucketId, basePerBongWei);
+            emit LeafRecorded(levelId, storedIndex, to, basePerBongWei, bucketId, start, large);
             emit BondIssued(levelId, to, basePerBongWei, large);
             _mint(to, levelId, basePerBongWei);
             unchecked {
@@ -1635,22 +2199,12 @@ contract PurgeBongs {
     }
 
     function _beforeTransfer(uint256[] memory ids) private view {
-        for (uint256 i; i < ids.length; ) {
-            uint256 id = ids[i];
-            if (_levelTransfersLocked(uint24(id))) revert TransfersLocked();
-            unchecked {
-                ++i;
-            }
-        }
+        // Keep transfers globally lockable; per-level locks removed for flexibility.
+        if (transfersLocked) revert TransfersLocked();
     }
 
     function _requireApproval(address from, address operator, uint256[] memory ids) private view {
-        for (uint256 i; i < ids.length; ) {
-            if (_levelTransfersLocked(uint24(ids[i]))) revert Unauthorized();
-            unchecked {
-                ++i;
-            }
-        }
+        if (transfersLocked) revert Unauthorized();
         if (!isApprovedForAll(from, operator)) revert Unauthorized();
     }
 
