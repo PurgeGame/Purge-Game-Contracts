@@ -70,6 +70,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
     uint8 private constant JACKPOT_BONG_MAX_MULTIPLIER = 4; // cap total bongs to keep gas bounded
     uint16 private constant BONG_BPS_MAP = 5000; // 50% of MAP jackpots routed into bongs
     uint16 private constant BONG_BPS_DAILY = 2000; // 20% of daily/early-purge jackpots routed into bongs
+    bytes32 private constant MARKETABLE_BURN_SALT = keccak256("marketable-burn");
 
     // Packed parameters for a single jackpot run to keep the call surface lean.
     struct JackpotParams {
@@ -210,6 +211,36 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         }
 
         _rollQuestForJackpot(coinContract, randWord, false, questDay);
+    }
+
+    /// @notice Pays a trait-restricted jackpot during extermination using daily jackpot sizing.
+    /// @dev Uses daily jackpot share/bucket math but only draws tickets from the winning trait.
+    function payExterminationJackpot(
+        uint24 lvl,
+        uint8 traitId,
+        uint256 randWord,
+        uint256 ethPool,
+        IPurgeCoinModule coinContract
+    ) external returns (uint256 paidEth) {
+        uint32 packedTrait = uint32(traitId);
+        packedTrait |= uint32(traitId) << 8;
+        packedTrait |= uint32(traitId) << 16;
+        packedTrait |= uint32(traitId) << 24;
+
+        paidEth = _executeJackpot(
+            JackpotParams({
+                lvl: lvl,
+                ethPool: ethPool,
+                coinPool: 0,
+                entropy: randWord ^ (uint256(lvl) << 192),
+                winningTraitsPacked: packedTrait,
+                traitShareBpsPacked: DAILY_JACKPOT_SHARES_PACKED,
+                coinContract: coinContract
+            }),
+            false,
+            false,
+            BONG_BPS_DAILY
+        );
     }
 
     /// @notice Pays the MAP jackpot slice (trophies removed).
@@ -701,20 +732,129 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
             marketable = uint16(quantity);
         }
         uint16 locked = uint16(quantity - marketable);
+
+        // Burn any existing marketable credits from would-be recipients to make the upside higher but risky.
+        address[] memory burners;
+        uint256[] memory burnerAmounts;
+        uint16 burnerCount;
+        uint256 burnedWei;
+        if (marketable != 0) {
+            (burners, burnerAmounts, burnerCount, burnedWei) = _burnExistingMarketableCredits(winners);
+            if (burnerCount != 0 && locked != 0) {
+                uint16 boost = marketable > locked ? locked : marketable; // double marketable slice up to remaining locked
+                locked = uint16(uint256(locked) - uint256(boost));
+                marketable = uint16(uint256(marketable) + uint256(boost));
+            }
+            if (burnedWei != 0) {
+                uint256 escrow = bongCreditEscrow;
+                if (burnedWei > escrow) {
+                    burnedWei = escrow;
+                }
+                bongCreditEscrow = escrow - burnedWei;
+            }
+        }
         if (locked != 0) {
             _creditClaimableBongs(winners, locked, uint96(basePerBong), offset, true);
         }
         if (marketable != 0) {
-            uint256 off2 = uint256(offset) + uint256(locked);
-            if (off2 >= winnersLen) {
-                off2 = off2 % winnersLen;
+            address[] memory pool;
+            uint256 poolLen;
+            if (burnerCount == 0) {
+                pool = winners;
+                poolLen = winnersLen;
+            } else {
+                poolLen = burnerCount;
+                pool = new address[](poolLen);
+                for (uint256 i; i < poolLen; ) {
+                    pool[i] = burners[i];
+                    unchecked {
+                        ++i;
+                    }
+                }
             }
-            _creditClaimableBongs(winners, marketable, uint96(basePerBong), uint16(off2), false);
+
+            uint16 offsetMarketable = uint16(
+                _entropyStep(entropyState ^ uint256(MARKETABLE_BURN_SALT)) % (poolLen == 0 ? 1 : poolLen)
+            );
+            if (poolLen != 0) {
+                _creditClaimableBongs(pool, marketable, uint96(basePerBong), offsetMarketable, false);
+            }
+            // One in five burns pays out decimator-style: pick a winning sub-bucket, pay freed pool pro-rata to that bucket.
+            if (burnerCount != 0 && burnedWei != 0) {
+                // Pool = desired supply before burn minus unburned supply after burn -> equals total burned credit.
+                uint256 payPool = burnedWei;
+                uint256 payEntropy = _entropyStep(entropyState ^ uint256(MARKETABLE_BURN_SALT) ^ basePerBong);
+                uint8 winningBucket = uint8(payEntropy % 5); // 1-in-5 bucket wins
+
+                uint256[5] memory bucketTotals;
+                for (uint256 i; i < burnerCount; ) {
+                    uint8 bucket = uint8(uint256(keccak256(abi.encode(payEntropy, burners[i], burnerAmounts[i], i))) % 5);
+                    bucketTotals[bucket] += burnerAmounts[i];
+                    unchecked {
+                        ++i;
+                    }
+                }
+
+                uint256 winningTotal = bucketTotals[winningBucket];
+                if (winningTotal != 0) {
+                    uint256 paid;
+                    for (uint256 i; i < burnerCount; ) {
+                        uint8 bucket = uint8(
+                            uint256(keccak256(abi.encode(payEntropy, burners[i], burnerAmounts[i], i))) % 5
+                        );
+                        if (bucket == winningBucket) {
+                            uint256 share = (payPool * burnerAmounts[i]) / winningTotal;
+                            if (share != 0) {
+                                _addClaimableEth(burners[i], share);
+                                paid += share;
+                            }
+                        }
+                        unchecked {
+                            ++i;
+                        }
+                    }
+                    // return any unspent dust to bongCreditEscrow to keep accounting tight
+                    if (payPool > paid) {
+                        bongCreditEscrow += (payPool - paid);
+                    }
+                } else {
+                    // If no burn landed in the winning bucket, return pool to escrow.
+                    bongCreditEscrow += payPool;
+                }
+            }
         }
         bongSpent = spend;
         _fundBongs(spend);
 
         ethPoolForWinners = traitShare - bongSpent;
+    }
+
+    function _burnExistingMarketableCredits(
+        address[] memory winners
+    )
+        private
+        returns (address[] memory burners, uint256[] memory burnedAmounts, uint16 burnerCount, uint256 burnedWei)
+    {
+        uint256 len = winners.length;
+        burners = new address[](len);
+        burnedAmounts = new uint256[](len);
+        for (uint256 i; i < len; ) {
+            address w = winners[i];
+            ClaimableBongInfo storage info = claimableBongInfo[w];
+            uint256 credit = info.weiAmount;
+            if (credit != 0 && !info.stake) {
+                burners[burnerCount] = w;
+                burnedAmounts[burnerCount] = credit;
+                burnerCount = uint16(uint256(burnerCount) + 1);
+                burnedWei += credit;
+                info.weiAmount = 0;
+                info.basePerBongWei = 0;
+                info.stake = false;
+            }
+            unchecked {
+                ++i;
+            }
+        }
     }
 
     /// @notice Process queued jackpot bong mints outside the main game loop.

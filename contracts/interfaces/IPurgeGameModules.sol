@@ -20,6 +20,14 @@ interface IPurgeGameJackpotModule {
         IPurgeCoinModule coinContract
     ) external;
 
+    function payExterminationJackpot(
+        uint24 lvl,
+        uint8 traitId,
+        uint256 randWord,
+        uint256 ethPool,
+        IPurgeCoinModule coinContract
+    ) external returns (uint256 paidEth);
+
     function payMapJackpot(
         uint24 lvl,
         uint256 rngWord,

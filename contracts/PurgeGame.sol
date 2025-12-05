@@ -718,10 +718,8 @@ contract PurgeGame is PurgeGameStorage {
     /// @dev
     /// When a trait is exterminated (<256):
     /// - Lock the exterminated trait in the current level’s storage.
-    /// - Split prize pool: 90% to participants (including the exterminator slice below) and 10% as a bonus
-    ///   split across three winning tickets weighted by ETH mint streaks (even split if all streaks are zero).
-    ///   From within the 90%, the “exterminator” gets 30% (or 40% on levels where `prevLevel % 10 == 4` and `prevLevel > 4`),
-    ///   and the rest is divided evenly per ticket for the exterminated trait.
+    /// - Pay the exterminator slice immediately (30%, or 40% on levels where `prevLevel % 10 == 4` and `prevLevel > 4`).
+    /// - Route the remaining prize pool into a trait-only daily-style jackpot during endgame settlement (no equal-split bonus path).
     ///
     /// When a non-trait end occurs (>=256, e.g. daily jackpots path):
     /// - Carry the remainder forward and reset leaderboards.
@@ -1089,6 +1087,7 @@ contract PurgeGame is PurgeGameStorage {
         bool stake = info.stake || info.basePerBongWei == 0; // default to staked when unset
         info.weiAmount = uint128(creditWei - spend);
         bongCreditEscrow = escrow - spend;
+        _rewardAffiliateForBongs(player, spend);
         IPurgeBongs(bongsAddr).payBongs{value: spend}(0, 0, 0, 0, 0);
         IPurgeBongs(bongsAddr).purchaseGameBongs(recipients, quantity, base, stake);
     }
@@ -1103,6 +1102,29 @@ contract PurgeGame is PurgeGameStorage {
             base = 5 ether; // mirror bong MAX_PRICE guard
         }
         return base;
+    }
+
+    function _rewardAffiliateForBongs(address buyer, uint256 spendWei) private {
+        if (spendWei == 0) return;
+        address affiliateAddr = affiliateProgram;
+        if (affiliateAddr == address(0)) return;
+
+        uint256 priceWei = price;
+        uint256 priceCoinUnit = priceCoin;
+        if (priceWei == 0 || priceCoinUnit == 0) return;
+
+        uint256 coinBase = (spendWei * priceCoinUnit) / priceWei;
+        if (coinBase == 0) return;
+
+        // 10% during presale (pre-start), 2% once the game has begun.
+        uint256 rateBps = levelStartTime == LEVEL_START_SENTINEL ? 1000 : 200;
+        uint256 reward = (coinBase * rateBps) / 10_000;
+        if (reward == 0) return;
+
+        uint256 rakeback = IPurgeAffiliate(affiliateAddr).payAffiliate(reward, bytes32(0), buyer, level);
+        if (rakeback != 0) {
+            coin.creditFlip(buyer, rakeback);
+        }
     }
 
     /// @notice Credit claimable ETH for a player from bong redemptions (bongs contract only).
@@ -1255,6 +1277,27 @@ contract PurgeGame is PurgeGameStorage {
             )
         );
         if (!ok) return;
+    }
+
+    function payExterminationJackpot(
+        uint24 lvl,
+        uint8 traitId,
+        uint256 randWord,
+        uint256 ethPool
+    ) external returns (uint256 paidEth) {
+        if (msg.sender != address(this)) revert E();
+        (bool ok, bytes memory data) = jackpotModule.delegatecall(
+            abi.encodeWithSelector(
+                IPurgeGameJackpotModule.payExterminationJackpot.selector,
+                lvl,
+                traitId,
+                randWord,
+                ethPool,
+                IPurgeCoinModule(address(coin))
+            )
+        );
+        if (!ok || data.length == 0) return 0;
+        return abi.decode(data, (uint256));
     }
 
     function _handleJackpotLevelCap() internal returns (bool) {

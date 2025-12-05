@@ -4,10 +4,19 @@ pragma solidity ^0.8.26;
 import {IPurgeJackpots} from "../interfaces/IPurgeJackpots.sol";
 import {IPurgeTrophies} from "../interfaces/IPurgeTrophies.sol";
 import {IPurgeAffiliate} from "../interfaces/IPurgeAffiliate.sol";
-import {PurgeGameStorage, PendingJackpotBongMint, ClaimableBongInfo} from "../storage/PurgeGameStorage.sol";
+import {PurgeGameStorage, ClaimableBongInfo} from "../storage/PurgeGameStorage.sol";
 
 interface IPurgeGameAffiliatePayout {
     function affiliatePayoutAddress(address player) external view returns (address recipient, address affiliateOwner);
+}
+
+interface IPurgeGameTraitJackpot {
+    function payExterminationJackpot(
+        uint24 lvl,
+        uint8 traitId,
+        uint256 rngWord,
+        uint256 ethPool
+    ) external returns (uint256 paidEth);
 }
 
 /**
@@ -21,21 +30,18 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
     // -----------------------
     event PlayerCredited(address indexed player, address indexed recipient, uint256 amount);
 
-    uint32 private constant DEFAULT_PAYOUTS_PER_TX = 420;
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
-    uint256 private constant MINT_MASK_24 = (uint256(1) << 24) - 1;
-    uint256 private constant ETH_LEVEL_STREAK_SHIFT = 48;
     uint256 private constant JACKPOT_BONG_MIN_BASE = 0.02 ether;
     uint256 private constant JACKPOT_BONG_MAX_BASE = 0.5 ether;
     uint8 private constant JACKPOT_BONG_MAX_MULTIPLIER = 4;
     uint16 private constant BONG_BPS_HALF = 5000;
 
     /**
-     * @notice Settles a completed level by paying trait-related slices, jackpots, and participant airdrops.
+     * @notice Settles a completed level by paying the exterminator, a trait-only jackpot, and reward jackpots.
      * @dev Called by the core game contract via `delegatecall` so state mutations land on the parent.
      *      Returns true once all endgame work for the previous level is finished so the core can advance.
      * @param lvl Current level index (1-based) that just completed.
-     * @param cap Optional cap for batched payouts; zero falls back to DEFAULT_PAYOUTS_PER_TX.
+     * @param cap Reserved for legacy batching; retained for ABI compatibility.
      * @param rngWord Randomness used for jackpot and ticket selection.
      * @param jackpotsAddr Address of the jackpots contract to invoke.
      */
@@ -45,63 +51,18 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         uint256 rngWord,
         address jackpotsAddr
     ) external returns (bool readyForPurchase) {
+        cap; // unused (legacy batching placeholder)
+
         uint24 prevLevel = lvl == 0 ? 0 : lvl - 1;
         uint16 traitRaw = lastExterminatedTrait;
         if (traitRaw != TRAIT_ID_TIMEOUT) {
             uint8 traitId = uint8(traitRaw);
             if (!levelExterminatorPaid[prevLevel]) {
                 _primeTraitPayouts(prevLevel, traitId, rngWord);
-                return false;
-            }
-
-            uint256 participantPool = currentPrizePool;
-            if (participantPool != 0) {
-                // Finalize the participant slice from `_primeTraitPayouts` in a gas-bounded manner.
-                _payoutParticipants(cap, prevLevel, participantPool, traitId);
-                if (currentPrizePool != 0) {
-                    return false;
-                }
             }
         }
         _runRewardJackpots(prevLevel, rngWord, jackpotsAddr);
         return true;
-    }
-
-    /**
-     * @notice Pays the participant slice of the prize pool evenly across trait purge tickets for the level.
-     * @dev Uses `airdropIndex` to batch work across transactions and coalesces consecutive identical winners.
-     * @param capHint Optional per-call cap to keep gas bounded; zero uses DEFAULT_PAYOUTS_PER_TX.
-     * @param prevLevel Level that just ended (level indexes are 1-based).
-     * @param participantPool Value of `currentPrizePool` cached by the caller to avoid extra SLOADs.
-     */
-    function _payoutParticipants(uint32 capHint, uint24 prevLevel, uint256 participantPool, uint8 traitId) private {
-        address[] storage arr = traitPurgeTicket[prevLevel][traitId];
-        uint256 len = arr.length;
-        uint256 unitPayout = participantPool / len;
-
-        uint256 cap = (capHint == 0) ? DEFAULT_PAYOUTS_PER_TX : capHint;
-        uint256 i = airdropIndex;
-        uint256 end = i + cap;
-        if (end > len) end = len;
-
-        while (i < end) {
-            address w = arr[i];
-            uint256 run = 1;
-            unchecked {
-                while (i + run < end && arr[i + run] == w) ++run;
-            }
-            _addClaimableEth(w, unitPayout * run);
-            unchecked {
-                i += run;
-            }
-        }
-
-        if (end == len) {
-            currentPrizePool = 0;
-        }
-
-        uint32 nextIdx = i == len ? 0 : uint32(i);
-        airdropIndex = nextIdx;
     }
 
     function _exterminatorForLevel(uint24 lvl) private view returns (address ex) {
@@ -141,8 +102,8 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
     }
 
     /**
-     * @notice Splits the current prize pool into exterminator, ticket, and participant slices for a trait win.
-     * @dev Handles exterminator and participant splits without any trophy accounting.
+     * @notice Splits the current prize pool between the exterminator and a trait-only jackpot for the winning trait.
+     * @dev Removes the equal-split/bonus path in favor of a daily-style jackpot scoped to the exterminated trait.
      */
     function _primeTraitPayouts(uint24 prevLevel, uint8 traitId, uint256 rngWord) private {
         address ex = _exterminatorForLevel(prevLevel);
@@ -157,13 +118,17 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
 
         _payExterminatorShare(ex, exterminatorShare, rngWord);
 
-        // Bonus slice: 10% split across three tickets using their ETH mint streaks as weights
-        // (even split if all streaks are zero).
-        uint256 ticketBonus = (poolValue * 10) / 100;
-        _distributeTicketBonus(prevLevel, traitId, ticketBonus, rngWord);
+        uint256 jackpotPool = poolValue > exterminatorShare ? poolValue - exterminatorShare : 0;
+        if (jackpotPool != 0) {
+            IPurgeGameTraitJackpot(address(this)).payExterminationJackpot(
+                prevLevel,
+                traitId,
+                rngWord,
+                jackpotPool
+            );
+        }
 
-        uint256 participantShare = ((poolValue * 90) / 100) - exterminatorShare;
-        currentPrizePool = participantShare;
+        currentPrizePool = 0;
         airdropIndex = 0;
     }
 
@@ -180,50 +145,6 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         exArr[0] = ex;
         uint256 ethPortion = _splitEthWithBongs(exArr, exterminatorShare, BONG_BPS_HALF, rngWord);
         _addClaimableEth(ex, ethPortion);
-    }
-
-    function _distributeTicketBonus(uint24 prevLevel, uint8 traitId, uint256 ticketBonus, uint256 rngWord) private {
-        address[] storage arr = traitPurgeTicket[prevLevel][traitId];
-        uint256 arrLen = arr.length;
-        address[3] memory winners;
-        uint256[3] memory streaks;
-        for (uint8 i; i < 3; ) {
-            // Pick three winners with replacement using disjoint slices of the VRF word; weighting is applied later via streaks.
-            address w = arr[(rngWord >> (uint256(i) * 64)) % arrLen];
-            winners[i] = w;
-            streaks[i] = (mintPacked_[w] >> ETH_LEVEL_STREAK_SHIFT) & MINT_MASK_24;
-            unchecked {
-                ++i;
-            }
-        }
-
-        uint256 totalWeight = streaks[0] + streaks[1] + streaks[2];
-        uint256 share0 = totalWeight == 0 ? ticketBonus / 3 : (ticketBonus * streaks[0]) / totalWeight;
-        uint256 share1 = totalWeight == 0 ? ticketBonus / 3 : (ticketBonus * streaks[1]) / totalWeight;
-        uint256 share2 = totalWeight == 0 ? ticketBonus / 3 : (ticketBonus * streaks[2]) / totalWeight;
-        uint256 paid = share0 + share1 + share2;
-        if (paid < ticketBonus) {
-            share0 += (ticketBonus - paid);
-        }
-
-        uint256 amt0 = share0;
-        uint256 amt1 = share1;
-        uint256 amt2 = share2;
-        if (winners[1] == winners[0]) {
-            amt0 += amt1;
-            amt1 = 0;
-        }
-        if (winners[2] == winners[0]) {
-            amt0 += amt2;
-            amt2 = 0;
-        } else if (winners[2] == winners[1]) {
-            amt1 += amt2;
-            amt2 = 0;
-        }
-
-        if (amt0 != 0) _addClaimableEth(winners[0], amt0);
-        if (amt1 != 0) _addClaimableEth(winners[1], amt1);
-        if (amt2 != 0) _addClaimableEth(winners[2], amt2);
     }
 
     function _splitEthWithBongs(

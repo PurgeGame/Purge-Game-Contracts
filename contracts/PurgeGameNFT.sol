@@ -339,6 +339,9 @@ contract PurgeGameNFT {
         }
 
         uint32 qty32 = uint32(quantity);
+        if (!payInCoin && state == 3) {
+            game.enqueueMap(buyer, qty32);
+        }
         unchecked {
             _purchaseCount += qty32;
         }
@@ -486,16 +489,6 @@ contract PurgeGameNFT {
         address affiliateAddr = affiliateProgram;
         if (affiliateAddr != address(0)) {
             rakebackMint = IPurgeAffiliate(affiliateAddr).payAffiliate(affiliateAmount, affiliateCode, payer, lvl);
-        }
-
-        if (!mapPurchase && gameState == 3) {
-            uint256 coinCost = (scaledQty * priceUnit) / 100;
-            uint256 earlyBonus = (coinCost * 20) / 100;
-            if (earlyBonus != 0) {
-                unchecked {
-                    bonusMint += earlyBonus;
-                }
-            }
         }
 
         if (rakebackMint != 0) {
