@@ -48,6 +48,99 @@ interface IRendererWire {
     function wire(address[] calldata addresses) external;
 }
 
+interface IPurgeGameVRFSub {
+    function wire(address game_) external;
+    function shutdownAndRefund(address target) external;
+}
+
+/**
+ * @title PurgeBondLiquidityToken
+ * @notice Minimal ERC20 used as the transferable/liquid wrapper for bong positions.
+ *         Minting/burning is restricted to the parent bongs contract.
+ */
+contract PurgeBondLiquidityToken {
+    // Standard ERC20 surface
+    string public name;
+    string public symbol;
+    uint8 public immutable decimals;
+    uint256 public totalSupply;
+    mapping(address => uint256) public balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
+
+    address public immutable controller;
+    uint24 public immutable levelId;
+
+    error Unauthorized();
+    error InvalidAmount();
+    error InsufficientBalance();
+
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+
+    constructor(string memory name_, string memory symbol_, uint8 decimals_, uint24 levelId_) {
+        name = name_;
+        symbol = symbol_;
+        decimals = decimals_;
+        controller = msg.sender;
+        levelId = levelId_;
+    }
+
+    modifier onlyController() {
+        if (msg.sender != controller) revert Unauthorized();
+        _;
+    }
+
+    function approve(address spender, uint256 amount) external returns (bool) {
+        allowance[msg.sender][spender] = amount;
+        emit Approval(msg.sender, spender, amount);
+        return true;
+    }
+
+    function transfer(address to, uint256 amount) external returns (bool) {
+        _transfer(msg.sender, to, amount);
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
+        uint256 allowed = allowance[from][msg.sender];
+        if (allowed != type(uint256).max) {
+            if (allowed < amount) revert InsufficientBalance();
+            allowance[from][msg.sender] = allowed - amount;
+        }
+        _transfer(from, to, amount);
+        return true;
+    }
+
+    function mint(address to, uint256 amount) external onlyController {
+        if (to == address(0) || amount == 0) revert InvalidAmount();
+        totalSupply += amount;
+        balanceOf[to] += amount;
+        emit Transfer(address(0), to, amount);
+    }
+
+    function burn(address from, uint256 amount) external onlyController {
+        if (from == address(0) || amount == 0) revert InvalidAmount();
+        uint256 bal = balanceOf[from];
+        if (bal < amount) revert InsufficientBalance();
+        unchecked {
+            balanceOf[from] = bal - amount;
+            totalSupply -= amount;
+        }
+        emit Transfer(from, address(0), amount);
+    }
+
+    function _transfer(address from, address to, uint256 amount) private {
+        if (to == address(0) || from == address(0) || amount == 0) revert InvalidAmount();
+        uint256 bal = balanceOf[from];
+        if (bal < amount) revert InsufficientBalance();
+        unchecked {
+            balanceOf[from] = bal - amount;
+            balanceOf[to] += amount;
+        }
+        emit Transfer(from, to, amount);
+    }
+}
+
 /**
  * @title PurgeBongs (bond pool)
  * @notice Level-based bond system with pull-claims and upfront solvency checks.
@@ -104,6 +197,7 @@ contract PurgeBongs {
     event LevelStaged(uint24 indexed levelId, bytes32 root, uint256 maxPayout, uint256 leafCount);
     event LevelStageMetadata(uint24 indexed levelId, uint256 matchedMaxPayout);
     event LevelResolved(uint24 indexed levelId, uint256 seed, uint256 reserved, uint256 coinReserved);
+    // payoutCoin kept for ABI compatibility; coin claims are disabled and emit 0.
     event Claim(address indexed player, uint24 indexed levelId, uint256 leafIndex, uint256 payoutEth, uint256 payoutCoin);
     event EarlyLiquidation(address indexed player, uint24 indexed levelId, uint256 basePerBondWei, uint256 units, uint256 payoutEth);
     event Funded(uint256 ethAmount, uint256 stEthAmount, uint256 coinAmount);
@@ -146,6 +240,9 @@ contract PurgeBongs {
         uint64 epoch
     );
     event IssuanceGateDisabled(uint64 epoch);
+    event LiquidTokenCreated(uint24 indexed levelId, address token);
+    event LiquidBondWrapped(uint24 indexed levelId, address indexed player, uint256 basePerBondWei, uint256 units, address token);
+    event LiquidBondRedeemed(uint24 indexed levelId, address indexed player, uint256 basePerBondWei, uint256 units);
 
     // ---------------------------------------------------------------------
     // Data Structures
@@ -166,8 +263,6 @@ contract PurgeBongs {
         uint256 largeLiability; // running paired/unpaired exposure for larges (paired funding mode)
         uint256 unpairedLarge; // remaining large principal with pairId=0 (paired funding mode)
         uint256 fundingBuffer; // optional additive buffer above computed liability (paired funding mode)
-        uint256 coinPerBond; // PURGE amount per bond at resolution (floored)
-        uint256 coinRemaining; // remaining PURGE reserved for this level
         bool resolved;
         bool staged;
         bool pairedLiability; // true when staged with pairing/aggregated small metadata
@@ -224,8 +319,12 @@ contract PurgeBongs {
     uint256 private constant ONE = 1 ether;
     uint256 private constant FULL_SCALE = 1e18;
     uint256 private constant MAX_PRICE = 5 ether;
+    uint256 private constant DRIP_SCALE = 1e18;
     uint16 public constant stakeRateBps = 10_000; // kept for interface compatibility
-    uint16[4] private constant BONUS_PHASE_TARGET_BPS = [uint16(200), uint16(300), uint16(400), uint16(800)]; // cumulative % of snapshot principal (2%, 3%, 4%, 8%)
+    uint16 private constant BONUS_PHASE_TARGET_BPS_0 = 200; // 2%
+    uint16 private constant BONUS_PHASE_TARGET_BPS_1 = 300; // 3%
+    uint16 private constant BONUS_PHASE_TARGET_BPS_2 = 400; // 4%
+    uint16 private constant BONUS_PHASE_TARGET_BPS_3 = 800; // 8%
 
     // ---------------------------------------------------------------------
     // Wiring / Access
@@ -240,12 +339,13 @@ contract PurgeBongs {
     // State
     // ---------------------------------------------------------------------
     uint256 public bondObligations; // unreserved pool (ETH + stETH units)
-    uint256 public coinUnreserved; // PURGE available to assign to future levels
+    uint256 public coinUnreserved; // PURGE available to assign to future level jackpots
     bool public gameOver;
     bool public transfersLocked; // only used for shutdown
     bool public purchasesEnabled = true;
     bool public jackpotRewardsEnabled = true;
     address public renderer;
+    address public vrfSub;
     bool public issuanceGateEnabled;
     uint24 public issuanceGateLevel;
     uint24 public issuanceGateMinStreak;
@@ -270,6 +370,8 @@ contract PurgeBongs {
     mapping(uint24 => uint256) public levelPrincipal;
     mapping(uint24 => uint256) public levelIssuedCount;
     mapping(uint24 => uint256) public levelSupply;
+    mapping(uint24 => uint256) public levelCoinJackpot; // PURGE earmarked for per-level jackpots
+    mapping(uint24 => mapping(uint256 => uint256)) private coinJackpotPrizeByLeaf; // levelId => leafIndex => PURGE prize
     mapping(uint256 => mapping(address => uint256)) private balances; // ERC1155 balances
     mapping(address => mapping(address => bool)) private operatorApproval;
     mapping(uint24 => bool) public levelLocked;
@@ -284,7 +386,19 @@ contract PurgeBongs {
     mapping(uint24 => uint256) public bonusBasePrincipal; // snapshot principal after one level of sales (before bonuses)
     mapping(uint24 => uint256) public bonusMintedPrincipal; // total bonus principal minted (all phases)
     mapping(uint24 => uint256[4]) public bonusMintedByPhase; // bonus principal minted per phase (0-3)
-    mapping<uint24 => uint256) public bonusJackpotMinted; // bonus principal minted to the phase-3 jackpot winner
+    mapping(uint24 => uint256) public bonusJackpotMinted; // bonus principal minted to the phase-3 jackpot winner
+    mapping(uint24 => address) public liquidToken; // ERC20 wrapper for transferable/liquid bonds per level
+    mapping(uint24 => uint256) public liquidEscrowPrincipal; // principal currently wrapped into the ERC20 for a level
+    mapping(uint24 => uint24) public dripStartLevel; // game level when drip schedule starts (first issuance level)
+    mapping(uint24 => uint8) public dripStepCompleted; // how many drip steps executed (0-4)
+    mapping(uint24 => uint256) public dripBaseline; // baseline principal captured after first level
+    mapping(uint24 => bool) public dripBaselineCaptured;
+    mapping(uint24 => uint256) public dripTokenCarry;
+    mapping(uint24 => uint256) public dripAccTokenPerShare;
+    mapping(uint24 => mapping(address => uint256)) public dripTokenDebt;
+    mapping(uint24 => mapping(address => uint256)) public dripTokenOwed;
+    uint24[] private dripQueue;
+    mapping(uint24 => bool) private dripQueued;
 
     // simple reentrancy guard
     uint256 private locked = 1;
@@ -325,6 +439,33 @@ contract PurgeBongs {
         }
     }
 
+    // ---------------------------------------------------------------------
+    // Drip helpers (holder sets, reward tracking)
+    // ---------------------------------------------------------------------
+    function _syncTokenRewards(uint24 levelId, address account) private {
+        uint256 acc = dripAccTokenPerShare[levelId];
+        uint256 debt = dripTokenDebt[levelId][account];
+        if (acc == 0) {
+            return;
+        }
+        uint256 bal = _tokenRewardBalance(levelId, account);
+        uint256 pending = (bal * acc) / DRIP_SCALE;
+        if (pending > debt) {
+            dripTokenOwed[levelId][account] += pending - debt;
+        }
+        dripTokenDebt[levelId][account] = (bal * acc) / DRIP_SCALE;
+    }
+
+    function _tokenRewardBalance(uint24 levelId, address account) private view returns (uint256) {
+        if (account == address(this)) return 0;
+        return balances[levelId][account];
+    }
+
+    function _tokenHolderSupply(uint24 levelId) private view returns (uint256) {
+        uint256 supply = levelSupply[levelId];
+        uint256 escrow = balances[levelId][address(this)];
+        return supply > escrow ? supply - escrow : 0;
+    }
     // ---------------------------------------------------------------------
     // Admin / Wiring
     // ---------------------------------------------------------------------
@@ -380,6 +521,11 @@ contract PurgeBongs {
     function setRenderer(address renderer_) external onlyOwner {
         if (renderer_ == address(0)) revert ZeroAddress();
         _setRenderer(renderer_);
+    }
+
+    function setVrfSub(address vrfSub_) external onlyOwner {
+        if (vrfSub_ == address(0)) revert ZeroAddress();
+        vrfSub = vrfSub_;
     }
 
     function setPurchasesEnabled(bool enabled) external onlyOwner {
@@ -995,7 +1141,8 @@ contract PurgeBongs {
 
         if (coinAmount != 0) {
             if (coinToken == address(0)) revert InvalidCoin();
-            coinUnreserved += coinAmount; // treat as a bookkeeping credit; actual mint happens at claim time
+            // Stash coin for per-level jackpots (no direct bond claims).
+            coinUnreserved += coinAmount; // bookkeeping credit; minting deferred to future jackpot payouts
         }
 
         uint256 inbound = msg.value + stEthAmount;
@@ -1015,6 +1162,8 @@ contract PurgeBongs {
             cachedRngWord = seedWord;
         }
 
+        uint24 currentLvlForDrip = _currentLevel();
+        _processDrips(currentLvlForDrip, seedWord);
         _resolveReadyLevels(seedWord);
     }
 
@@ -1022,6 +1171,9 @@ contract PurgeBongs {
      * @notice Attempt to resolve using cached RNG (or freshly available RNG via game day fetch).
      */
     function resolvePendingBongs(uint256 /*maxBongs*/) external {
+        uint256 seedWord = cachedRngWord;
+        uint24 currentLvlForDrip = _currentLevel();
+        _processDrips(currentLvlForDrip, seedWord);
         _resolveReadyLevels(0);
     }
 
@@ -1092,8 +1244,13 @@ contract PurgeBongs {
 
         bondObligations -= cfg.maxPayout;
 
-        // Snapshot coin share for this level (proportional to live unresolved bonds).
-        uint256 coinReserved = _reserveCoinForLevel(cfg, liveBefore);
+        // Snapshot coin stash for this level (proportional to live unresolved bonds) and fan it out to random bong holders.
+        uint256 coinReserved = _allocateCoinJackpot(levelId, cfg.leafCount, liveBefore);
+        uint256 coinPot = levelCoinJackpot[levelId];
+        if (coinPot != 0) {
+            _seedCoinJackpotWinners(levelId, cfg.leafCount, cfg.claimedCount, coinPot, seed);
+            levelCoinJackpot[levelId] = 0;
+        }
 
         emit LevelResolved(levelId, seed, cfg.maxPayout, coinReserved);
     }
@@ -1113,25 +1270,114 @@ contract PurgeBongs {
         uint256 obligations = bondObligations;
         bondObligations = obligations > budget ? obligations - budget : 0;
 
-        uint256 coinReserved = _reserveCoinForLevel(cfg, liveBefore);
+        uint256 coinReserved = _allocateCoinJackpot(levelId, cfg.leafCount, liveBefore);
+        uint256 coinPot = levelCoinJackpot[levelId];
+        if (coinPot != 0) {
+            _seedCoinJackpotWinners(levelId, cfg.leafCount, cfg.claimedCount, coinPot, cfg.seed);
+            levelCoinJackpot[levelId] = 0;
+        }
         emit LevelResolved(levelId, cfg.seed, budget, coinReserved);
     }
 
-    function _reserveCoinForLevel(LevelConfig storage cfg, uint256 liveBefore) private returns (uint256 coinReserved) {
-        if (coinToken == address(0) || coinUnreserved == 0 || liveBefore == 0) {
+    function _allocateCoinJackpot(
+        uint24 levelId,
+        uint256 leafCount,
+        uint256 liveBefore
+    ) private returns (uint256 coinReserved) {
+        if (coinToken == address(0) || coinUnreserved == 0 || liveBefore == 0 || leafCount == 0) {
             return 0;
         }
 
-        uint256 coinForLevel = (coinUnreserved * cfg.leafCount) / liveBefore;
-        uint256 perBond = coinForLevel / cfg.leafCount;
-        if (perBond == 0) {
+        coinReserved = (coinUnreserved * leafCount) / liveBefore;
+        if (coinReserved == 0) {
             return 0;
         }
 
-        coinReserved = perBond * cfg.leafCount;
         coinUnreserved -= coinReserved;
-        cfg.coinPerBond = perBond;
-        cfg.coinRemaining = coinReserved;
+        levelCoinJackpot[levelId] += coinReserved;
+    }
+
+    function _seedCoinJackpotWinners(
+        uint24 levelId,
+        uint256 leafCount,
+        uint256 claimedCount,
+        uint256 coinPot,
+        uint256 seed
+    ) private {
+        if (coinPot == 0 || leafCount == 0) return;
+        if (leafCount <= claimedCount) return;
+
+        uint256 available = leafCount - claimedCount;
+        uint256 winnerCount = available < 100 ? available : 100;
+        if (winnerCount == 0) return;
+
+        uint256[100] memory picks;
+        uint256 picked;
+        uint256 entropy = seed;
+        uint256 attempts;
+        uint256 maxAttempts = leafCount * 5;
+        if (maxAttempts < winnerCount * 2) {
+            maxAttempts = winnerCount * 2;
+        }
+
+        while (picked < winnerCount && attempts < maxAttempts) {
+            uint256 idx = uint256(keccak256(abi.encode(entropy, levelId, picked, attempts))) % leafCount;
+            entropy = uint256(keccak256(abi.encode(entropy, idx)));
+            unchecked {
+                ++attempts;
+            }
+
+            if (_isClaimed(levelId, idx)) continue;
+
+            bool dup;
+            for (uint256 j; j < picked; ) {
+                if (picks[j] == idx) {
+                    dup = true;
+                    break;
+                }
+                unchecked {
+                    ++j;
+                }
+            }
+            if (dup) continue;
+
+            picks[picked] = idx;
+            unchecked {
+                ++picked;
+            }
+        }
+
+        if (picked == 0) return;
+        winnerCount = picked;
+
+        uint256 firstShare = coinPot / 5; // 20%
+        if (firstShare > coinPot) firstShare = coinPot;
+
+        uint256 secondShare = winnerCount > 1 ? coinPot / 10 : 0; // 10% if a second winner exists
+        if (firstShare + secondShare > coinPot) {
+            secondShare = coinPot - firstShare;
+        }
+
+        uint256 remaining = coinPot - firstShare - secondShare;
+        uint256 tailWinners = winnerCount > 2 ? winnerCount - 2 : 0;
+        uint256 perTail = tailWinners == 0 ? 0 : remaining / tailWinners;
+        uint256 dust = remaining - (perTail * tailWinners);
+
+        mapping(uint256 => uint256) storage prizes = coinJackpotPrizeByLeaf[levelId];
+        if (winnerCount >= 1) {
+            prizes[picks[0]] = firstShare + dust; // dust to the largest slice
+        }
+        if (winnerCount >= 2) {
+            prizes[picks[1]] = secondShare;
+        }
+        if (tailWinners != 0 && perTail != 0) {
+            for (uint256 i = 2; i < winnerCount; ) {
+                prizes[picks[i]] = perTail;
+                unchecked {
+                    ++i;
+                }
+            }
+        }
     }
 
     function _hasResolvableLevel(uint24 currentLevel) private view returns (bool) {
@@ -1214,14 +1460,22 @@ contract PurgeBongs {
             return (phase, target, basePrincipal);
         }
 
-        uint256 bps = BONUS_PHASE_TARGET_BPS[phase];
+        uint256 bps = _bonusPhaseBps(phase);
         target = (basePrincipal * bps + stakeRateBps - 1) / stakeRateBps; // ceil to avoid shortfalls
     }
 
     function _bonusPrevTarget(uint256 basePrincipal, uint8 phase) private pure returns (uint256 prevTarget) {
         if (phase == 0) return 0;
-        uint256 bps = BONUS_PHASE_TARGET_BPS[phase - 1];
+        uint256 bps = _bonusPhaseBps(phase - 1);
         prevTarget = (basePrincipal * bps + stakeRateBps - 1) / stakeRateBps;
+    }
+
+    function _bonusPhaseBps(uint8 phase) private pure returns (uint256) {
+        if (phase == 0) return BONUS_PHASE_TARGET_BPS_0;
+        if (phase == 1) return BONUS_PHASE_TARGET_BPS_1;
+        if (phase == 2) return BONUS_PHASE_TARGET_BPS_2;
+        if (phase == 3) return BONUS_PHASE_TARGET_BPS_3;
+        return 0;
     }
 
     function _levelTransfersLocked(uint24 levelId) private view returns (bool) {
@@ -1434,9 +1688,12 @@ contract PurgeBongs {
                 cfg.seed = seedWord == 0 ? 0 : uint256(keccak256(abi.encode(seedWord, levelId, "wipe")));
                 cfg.remainingPayout = 0;
                 cfg.payoutScale = 0;
-                cfg.coinPerBond = 0;
-                cfg.coinRemaining = 0;
                 emit LevelResolved(levelId, cfg.seed, 0, 0);
+            }
+            uint256 coinPot = levelCoinJackpot[levelId];
+            if (coinPot != 0) {
+                coinUnreserved += coinPot;
+                levelCoinJackpot[levelId] = 0;
             }
             unchecked {
                 ++i;
@@ -1464,6 +1721,8 @@ contract PurgeBongs {
             if (currentLevel <= levelId) {
                 _wipeRemainingLevels(cursor, seedWord);
                 resolveCursor = len;
+                _drainAllToVault();
+                _shutdownVrfSub();
                 return;
             }
 
@@ -1483,13 +1742,16 @@ contract PurgeBongs {
             }
             _wipeRemainingLevels(cursor, seedWord);
             resolveCursor = len;
+            _drainAllToVault();
+            _shutdownVrfSub();
             return;
         }
 
         resolveCursor = cursor;
         uint24 currentLvlView = _currentLevel();
         if (!_hasResolvableLevel(currentLvlView) && !_hasPassedPendingLevel(currentLvlView)) {
-            _drainSurplusToVault();
+            _drainAllToVault();
+            _shutdownVrfSub();
         }
     }
 
@@ -1522,26 +1784,13 @@ contract PurgeBongs {
         _consumeBondUnits(leaf.player, leaf.levelId, leaf.amount, 1);
 
         _payout(leaf.player, payout);
-        uint256 coinOut;
-        if (cfg.coinPerBond != 0 && cfg.coinRemaining != 0) {
-            coinOut = cfg.coinPerBond;
-            if (coinOut > cfg.coinRemaining) {
-                coinOut = cfg.coinRemaining;
-            }
-            cfg.coinRemaining -= coinOut;
-            _payoutCoin(leaf.player, coinOut);
-        }
-
+        uint256 coinOut = _claimCoinJackpot(leaf.levelId, leaf.leafIndex, leaf.player);
         emit Claim(leaf.player, leaf.levelId, leaf.leafIndex, payout, coinOut);
 
         // return surplus to the pool once every claim is done
         if (cfg.claimedCount == cfg.leafCount && cfg.remainingPayout != 0) {
             bondObligations += cfg.remainingPayout;
             cfg.remainingPayout = 0;
-        }
-        if (cfg.claimedCount == cfg.leafCount && cfg.coinRemaining != 0) {
-            coinUnreserved += cfg.coinRemaining;
-            cfg.coinRemaining = 0;
         }
     }
 
@@ -1756,6 +2005,13 @@ contract PurgeBongs {
         claimedBitmap[levelId][word] |= mask;
     }
 
+    function _claimCoinJackpot(uint24 levelId, uint256 leafIndex, address to) private returns (uint256 coinOut) {
+        coinOut = coinJackpotPrizeByLeaf[levelId][leafIndex];
+        if (coinOut == 0 || to == address(0)) return 0;
+        coinJackpotPrizeByLeaf[levelId][leafIndex] = 0;
+        _payoutCoin(to, coinOut);
+    }
+
     function _payout(address to, uint256 amount) private {
         if (amount == 0 || to == address(0)) return;
 
@@ -1833,6 +2089,41 @@ contract PurgeBongs {
         }
     }
 
+    function _drainAllToVault() private {
+        address vault_ = vault;
+        if (vault_ == address(0)) return;
+
+        uint256 obligations = bondObligations;
+        if (obligations == 0) return;
+
+        uint256 ethBal = address(this).balance;
+        uint256 stBal = IERC20Minimal(stEthToken).balanceOf(address(this));
+        uint256 available = ethBal + stBal;
+        if (available == 0) return;
+
+        uint256 sendCap = obligations <= available ? obligations : available;
+        if (sendCap == 0) return;
+
+        uint256 sendEth = sendCap <= ethBal ? sendCap : ethBal;
+        uint256 sendSt = sendCap - sendEth;
+
+        bondObligations = obligations > sendCap ? obligations - sendCap : 0;
+
+        if (sendEth != 0) {
+            (bool ok, ) = vault_.call{value: sendEth}("");
+            if (!ok) revert TransferFailed();
+        }
+        if (sendSt != 0) {
+            if (!IERC20Minimal(stEthToken).transfer(vault_, sendSt)) revert TransferFailed();
+        }
+    }
+
+    function _shutdownVrfSub() private {
+        address sub = vrfSub;
+        if (sub == address(0)) return;
+        try IPurgeGameVRFSub(sub).shutdownAndRefund(address(this)) {} catch {}
+    }
+
     function _bumpGateMint(address player, uint256 amount, uint32 perAddressCap, uint64 epoch) private {
         GateMint storage gm = issuanceGateMints[player];
         if (gm.epoch != epoch) {
@@ -1875,6 +2166,94 @@ contract PurgeBongs {
         }
 
         issuanceGateMinted = newTotal;
+    }
+
+    // ---------------------------------------------------------------------
+    // Drip schedule (per-level, 5-level window)
+    // ---------------------------------------------------------------------
+    function _processDrips(uint24 currentLevel, uint256 rngWord) private {
+        uint256 len = dripQueue.length;
+        for (uint256 i; i < len; ) {
+            uint24 levelId = dripQueue[i];
+            uint24 startLvl = dripStartLevel[levelId];
+            if (startLvl == 0) {
+                unchecked {
+                    ++i;
+                }
+                continue;
+            }
+
+            if (!dripBaselineCaptured[levelId]) {
+                if (currentLevel > startLvl) {
+                    dripBaseline[levelId] = levelPrincipal[levelId];
+                    dripBaselineCaptured[levelId] = true;
+                } else {
+                    unchecked {
+                        ++i;
+                    }
+                    continue;
+                }
+            }
+
+            uint8 step = dripStepCompleted[levelId];
+            bool progressed;
+            while (step < 4 && currentLevel > startLvl + step) {
+                uint256 base = dripBaseline[levelId];
+                if (base == 0) break;
+                if (step == 0) {
+                    _distributeTokenProRata(levelId, base / 100); // +1% to base holders
+                } else if (step == 1) {
+                    _distributeTokenProRata(levelId, (base * 2) / 100);
+                } else if (step == 2) {
+                    _distributeTokenProRata(levelId, base / 100);
+                    _distributeTokenProRata(levelId, base / 100);
+                } else if (step == 3) {
+                    _distributeTokenProRata(levelId, (base * 3) / 100);
+                }
+                step += 1;
+                progressed = true;
+            }
+            if (progressed) {
+                dripStepCompleted[levelId] = step;
+            }
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    function _distributeTokenProRata(uint24 levelId, uint256 amount) private {
+        if (amount == 0) return;
+        amount += dripTokenCarry[levelId];
+        uint256 supply = _tokenHolderSupply(levelId);
+        if (supply == 0) {
+            dripTokenCarry[levelId] = amount;
+            return;
+        }
+        uint256 acc = dripAccTokenPerShare[levelId];
+        acc += (amount * DRIP_SCALE) / supply;
+        dripAccTokenPerShare[levelId] = acc;
+        dripTokenCarry[levelId] = 0;
+    }
+    function _mintTokenReward(uint24 levelId, address to, uint256 principal) private {
+        if (principal == 0 || to == address(0)) return;
+        _syncTokenRewards(levelId, to);
+        _mintPrincipalSplit(levelId, to, principal);
+        _syncTokenRewards(levelId, to);
+    }
+
+    function _mintPrincipalSplit(uint24 levelId, address to, uint256 principal) private {
+        uint256 remaining = principal;
+        while (remaining != 0) {
+            uint256 base = remaining > MAX_PRICE ? MAX_PRICE : remaining;
+            uint256 units = remaining / base;
+            if (units > 128) {
+                units = 128;
+            }
+            uint256 chunk = base * units;
+            _issue(to, levelId, base, units);
+            remaining -= chunk;
+        }
     }
 
     // ---------------------------------------------------------------------
@@ -1939,6 +2318,105 @@ contract PurgeBongs {
                 }
             }
         }
+    }
+
+    // ---------------------------------------------------------------------
+    // Liquid wrapper (ERC20, must redeem back before resolution)
+    // ---------------------------------------------------------------------
+    function wrapToLiquidBond(
+        uint24 levelId,
+        uint256 basePerBondWei,
+        uint256 units
+    ) external nonReentrant returns (address token) {
+        if (transfersLocked) revert TransfersLocked();
+        if (units == 0 || basePerBondWei == 0) revert InvalidAmount();
+        if (levelId == 0) revert InvalidLevel();
+
+        LevelConfig storage cfg = levels[levelId];
+        if (cfg.resolved) revert InvalidLevel();
+
+        uint256 amount = basePerBondWei * units;
+        uint256 bal = balances[levelId][msg.sender];
+        if (bal < amount) revert InsufficientBalance();
+
+        token = _ensureLiquidToken(levelId);
+
+        // Move illiquid bonds into escrow on this contract.
+        balances[levelId][msg.sender] = bal - amount;
+        balances[levelId][address(this)] += amount;
+        emit TransferSingle(msg.sender, msg.sender, address(this), levelId, amount);
+
+        liquidEscrowPrincipal[levelId] += amount;
+        PurgeBondLiquidityToken(token).mint(msg.sender, amount);
+        emit LiquidBondWrapped(levelId, msg.sender, basePerBondWei, units, token);
+    }
+
+    function redeemLiquidBond(uint24 levelId, uint256 basePerBondWei, uint256 units) external nonReentrant {
+        if (transfersLocked) revert TransfersLocked();
+        if (units == 0 || basePerBondWei == 0) revert InvalidAmount();
+        if (levelId == 0) revert InvalidLevel();
+
+        LevelConfig storage cfg = levels[levelId];
+        if (cfg.resolved) revert InvalidLevel();
+
+        address token = liquidToken[levelId];
+        if (token == address(0)) revert InvalidLevel();
+
+        uint256 amount = basePerBondWei * units;
+        uint256 escrow = liquidEscrowPrincipal[levelId];
+        if (escrow < amount) revert InsufficientBalance();
+
+        PurgeBondLiquidityToken(token).burn(msg.sender, amount);
+        liquidEscrowPrincipal[levelId] = escrow - amount;
+
+        uint256 contractBal = balances[levelId][address(this)];
+        if (contractBal < amount) revert InsufficientBalance();
+        balances[levelId][address(this)] = contractBal - amount;
+        balances[levelId][msg.sender] += amount;
+        emit TransferSingle(msg.sender, address(this), msg.sender, levelId, amount);
+        emit LiquidBondRedeemed(levelId, msg.sender, basePerBondWei, units);
+    }
+
+    function liquidTokenFor(uint24 levelId) external view returns (address) {
+        return liquidToken[levelId];
+    }
+
+    /// @notice Claim any owed drip mint allocations for the caller on a specific level.
+    function claimDrip(uint24 levelId) external nonReentrant {
+        _syncTokenRewards(levelId, msg.sender);
+        _mintDripOwed(levelId, msg.sender);
+    }
+
+    function _ensureLiquidToken(uint24 levelId) private returns (address token) {
+        token = liquidToken[levelId];
+        if (token != address(0)) {
+            return token;
+        }
+
+        string memory idStr = _toString(levelId);
+        token = address(new PurgeBondLiquidityToken(
+            string(abi.encodePacked("Purge Liquid Bond L", idStr)),
+            string(abi.encodePacked("PLB", idStr)),
+            18,
+            levelId
+        ));
+        liquidToken[levelId] = token;
+        emit LiquidTokenCreated(levelId, token);
+    }
+
+    function _mintDripOwed(uint24 levelId, address to) private {
+        uint256 tokenOwed = dripTokenOwed[levelId][to];
+        if (tokenOwed != 0) {
+            dripTokenOwed[levelId][to] = 0;
+            _mintTokenReward(levelId, to, tokenOwed);
+            _syncTokenRewards(levelId, to);
+        }
+    }
+
+    function _refreshTokenDebt(uint24 levelId, address account) private {
+        dripTokenDebt[levelId][account] =
+            (_tokenRewardBalance(levelId, account) * dripAccTokenPerShare[levelId]) /
+            DRIP_SCALE;
     }
 
     /// @notice Admin bonus minting: add bonus bonds for a level within the capped bonus schedule.
@@ -2046,6 +2524,13 @@ contract PurgeBongs {
             uint24 currLvl = _currentLevel();
             if (currLvl != 0) {
                 levelSaleStartLevel[levelId] = currLvl;
+                if (dripStartLevel[levelId] == 0) {
+                    dripStartLevel[levelId] = currLvl;
+                    if (!dripQueued[levelId]) {
+                        dripQueued[levelId] = true;
+                        dripQueue.push(levelId);
+                    }
+                }
             }
         }
         levelIssuedCount[levelId] += count;
@@ -2161,11 +2646,19 @@ contract PurgeBongs {
         for (uint256 i; i < len; ) {
             uint256 id = ids[i];
             uint256 amount = amounts[i];
+            _syncTokenRewards(uint24(id), from);
+            _syncTokenRewards(uint24(id), to);
             uint256 bal = balances[id][from];
             if (amount == 0 || bal < amount) revert InsufficientBalance();
             unchecked {
                 balances[id][from] = bal - amount;
                 balances[id][to] += amount;
+                dripTokenDebt[uint24(id)][from] =
+                    (_tokenRewardBalance(uint24(id), from) * dripAccTokenPerShare[uint24(id)]) /
+                    DRIP_SCALE;
+                dripTokenDebt[uint24(id)][to] =
+                    (_tokenRewardBalance(uint24(id), to) * dripAccTokenPerShare[uint24(id)]) /
+                    DRIP_SCALE;
                 ++i;
             }
         }
@@ -2183,11 +2676,19 @@ contract PurgeBongs {
     ) private {
         if (to == address(0)) revert ZeroAddress();
         if (from != operator) _requireApproval(from, operator, _singleIdArray(id));
+        _syncTokenRewards(uint24(id), from);
+        _syncTokenRewards(uint24(id), to);
         _beforeTransfer(_singleIdArray(id));
         uint256 bal = balances[id][from];
         if (amount == 0 || bal < amount) revert InsufficientBalance();
         balances[id][from] = bal - amount;
         balances[id][to] += amount;
+        dripTokenDebt[uint24(id)][from] =
+            (_tokenRewardBalance(uint24(id), from) * dripAccTokenPerShare[uint24(id)]) /
+            DRIP_SCALE;
+        dripTokenDebt[uint24(id)][to] =
+            (_tokenRewardBalance(uint24(id), to) * dripAccTokenPerShare[uint24(id)]) /
+            DRIP_SCALE;
         emit TransferSingle(operator, from, to, id, amount);
         _doSafeTransferAcceptanceCheck(operator, from, to, id, amount, data);
     }
@@ -2212,7 +2713,11 @@ contract PurgeBongs {
         if (to == address(0)) revert ZeroAddress();
         if (amount == 0) revert InvalidAmount();
         if (transfersLocked || levelLocked[uint24(id)]) revert TransfersLocked();
+        _syncTokenRewards(uint24(id), to);
         balances[id][to] += amount;
+        dripTokenDebt[uint24(id)][to] =
+            (_tokenRewardBalance(uint24(id), to) * dripAccTokenPerShare[uint24(id)]) /
+            DRIP_SCALE;
         emit TransferSingle(msg.sender, address(0), to, id, amount);
     }
 
@@ -2220,7 +2725,11 @@ contract PurgeBongs {
         if (from == address(0)) revert ZeroAddress();
         uint256 bal = balances[id][from];
         if (amount == 0 || bal < amount) revert InsufficientBalance();
+        _syncTokenRewards(uint24(id), from);
         balances[id][from] = bal - amount;
+        dripTokenDebt[uint24(id)][from] =
+            (_tokenRewardBalance(uint24(id), from) * dripAccTokenPerShare[uint24(id)]) /
+            DRIP_SCALE;
         levelSupply[uint24(id)] -= amount;
         emit TransferSingle(msg.sender, from, address(0), id, amount);
     }
@@ -2257,6 +2766,23 @@ contract PurgeBongs {
                 revert TransferFailed();
             }
         }
+    }
+
+    function _toString(uint256 value) private pure returns (string memory) {
+        if (value == 0) return "0";
+        uint256 temp = value;
+        uint256 digits;
+        while (temp != 0) {
+            digits += 1;
+            temp /= 10;
+        }
+        bytes memory buffer = new bytes(digits);
+        while (value != 0) {
+            digits -= 1;
+            buffer[digits] = bytes1(uint8(48 + uint256(value % 10)));
+            value /= 10;
+        }
+        return string(buffer);
     }
     // Shutdown placeholders (interface compatibility)
     // ---------------------------------------------------------------------

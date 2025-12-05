@@ -44,6 +44,7 @@ contract PurgeGameVRFSub {
     error AlreadyWired();
     error NotWired();
     error NoSubscription();
+    error NoVault();
 
     // -----------------------
     // Events
@@ -53,6 +54,7 @@ contract PurgeGameVRFSub {
     event SubscriptionCreated(uint256 indexed subId);
     event SubscriptionCancelled(uint256 indexed subId, address indexed to);
     event EmergencyRecovered(address indexed newCoordinator, uint256 indexed newSubId, uint256 fundedAmount);
+    event SubscriptionShutdown(uint256 indexed subId, address indexed to, uint256 sweptAmount);
 
     // -----------------------
     // Storage
@@ -156,5 +158,31 @@ contract PurgeGameVRFSub {
         }
 
         emit EmergencyRecovered(newCoordinator, newSubId, funded);
+    }
+
+    /// @notice Cancel the VRF subscription and sweep any LINK to the provided target (best-effort).
+    /// @dev Callable by bongs once endgame is complete to refund unused LINK. No RNG stall required.
+    function shutdownAndRefund(address target) external onlyBongs {
+        if (target == address(0)) revert NoVault();
+        uint256 subId = subscriptionId;
+        if (subId == 0) revert NoSubscription();
+
+        // Cancel the subscription; LINK refunds go to the provided target.
+        try IVRFCoordinatorV2_5Owner(coordinator).cancelSubscription(subId, target) {
+            emit SubscriptionCancelled(subId, target);
+        } catch {}
+
+        subscriptionId = 0;
+
+        // Sweep any LINK already sitting on this contract to the target.
+        uint256 bal = ILinkTokenLike(linkToken).balanceOf(address(this));
+        if (bal != 0) {
+            try ILinkTokenLike(linkToken).transferAndCall(target, bal, "") {
+                emit SubscriptionShutdown(subId, target, bal);
+                return;
+            } catch {}
+        }
+
+        emit SubscriptionShutdown(subId, target, 0);
     }
 }
