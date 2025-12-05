@@ -101,7 +101,6 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg {
         bool isDec = params.isDec;
         uint24 lvl = params.lvl;
         uint32 statusFlags = params.statusFlags;
-        uint16 bongChanceBps = params.bongChanceBps;
         bool bongMatured = params.bongMatured;
         bool isBong = params.isBong;
 
@@ -176,7 +175,7 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg {
                 );
 
             string memory centerGlyph = isBong
-                ? _bongCenterGlyph(placeholderFlameColor, diamondPath, rIn)
+                ? _bongCenterGlyph(placeholderFlameColor, diamondPath)
                 : _centerGlyph(isMap, isAffiliate, isStake, placeholderFlameColor, ringColor, diamondPath);
             string memory progress = "";
             if (showProgress) {
@@ -468,11 +467,7 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg {
             );
     }
 
-    function _bongCenterGlyph(
-        string memory defaultFillColor,
-        string memory flamePath,
-        uint32 rIn
-    ) private view returns (string memory) {
+    function _bongCenterGlyph(string memory defaultFillColor, string memory flamePath) private view returns (string memory) {
         // Fixed layout matching eth_trophy.svg badge.
         string memory ethIcon = string(
             abi.encodePacked(

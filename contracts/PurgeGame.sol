@@ -129,16 +129,14 @@ contract PurgeGame is PurgeGameStorage {
     address private immutable mintModule; // Delegate module for mint packing + trait rebuild helpers
     address private immutable bongModule; // Delegate module for bong upkeep and staking
     IVRFCoordinator private vrfCoordinator; // Chainlink VRF coordinator (mutable for emergencies)
-    bytes32 private immutable vrfKeyHash; // VRF key hash
+    bytes32 private vrfKeyHash; // VRF key hash (rotatable with coordinator/sub)
     uint256 private vrfSubscriptionId; // VRF subscription identifier (mutable for coordinator swaps)
     address private immutable linkToken; // LINK token contract for top-ups
     address private immutable vrfAdmin; // VRF subscription owner contract allowed to rotate/wire VRF config
-    bool private vrfConfigWired; // true once the initial VRF coordinator/subscription are set
     // Trusted collaborators: coin/nft/jackpots/modules are expected to be non-reentrant and non-malicious.
 
     uint256 private constant DEPLOY_IDLE_TIMEOUT = (365 days * 5) / 2; // 2.5 years
     uint48 private constant LEVEL_START_SENTINEL = type(uint48).max;
-    uint16 private constant BONG_LIQUIDATION_DISCOUNT_BPS = 6500; // 65% of face value when liquidating bong credit to coin
 
     // -----------------------
     // Game Constants
@@ -187,12 +185,12 @@ contract PurgeGame is PurgeGameStorage {
      * @param bongModule_       Delegate module handling bong upkeep, staking, and shutdown drains
      * @param vrfCoordinator_   Chainlink VRF coordinator
      * @param vrfKeyHash_       VRF key hash
-     * @param vrfSubscriptionId_ VRF subscription identifier
      * @param linkToken_        LINK token contract (ERC677) for VRF billing
      * @param stEthToken_       stETH token address
      * @param jackpots_         PurgeJackpots contract address (wires Decimator/BAF jackpots)
      * @param bongs_            Bongs contract address
      * @param trophies_         Standalone trophy ERC721 contract (cosmetic only)
+     * @param affiliateProgram_ Affiliate program contract address (for payouts/trophies)
      * @param vrfAdmin_         VRF owner/admin contract authorized to rotate the coordinator/subscription on stalls
      */
     constructor(
@@ -205,12 +203,12 @@ contract PurgeGame is PurgeGameStorage {
         address bongModule_,
         address vrfCoordinator_,
         bytes32 vrfKeyHash_,
-        uint256 vrfSubscriptionId_,
         address linkToken_,
         address stEthToken_,
         address jackpots_,
         address bongs_,
         address trophies_,
+        address affiliateProgram_,
         address vrfAdmin_
     ) {
         coin = IPurgeCoin(purgeCoinContract);
@@ -221,18 +219,14 @@ contract PurgeGame is PurgeGameStorage {
         mintModule = mintModule_;
         bongModule = bongModule_;
         vrfCoordinator = IVRFCoordinator(vrfCoordinator_);
-        affiliateProgram = coin.affiliateProgram();
-        affiliateProgramAddr = affiliateProgram;
+        affiliateProgram = affiliateProgram_;
         vrfKeyHash = vrfKeyHash_;
-        vrfSubscriptionId = vrfSubscriptionId_;
         linkToken = linkToken_;
         vrfAdmin = vrfAdmin_;
         steth = IStETH(stEthToken_);
         jackpots = jackpots_;
         bongs = bongs_;
         trophies = trophies_;
-        if (vrfAdmin_ == address(0)) revert E();
-        vrfConfigWired = (vrfCoordinator_ != address(0) && vrfSubscriptionId_ != 0);
         if (!steth.approve(bongs_, type(uint256).max)) revert E();
         deployTimestamp = uint48(block.timestamp);
     }
@@ -294,12 +288,9 @@ contract PurgeGame is PurgeGameStorage {
 
     /// @notice One-time wiring of VRF config from the VRF admin contract (on deployment).
     function wireInitialVrf(address coordinator_, uint256 subId) external {
-        if (msg.sender != vrfAdmin || vrfConfigWired) revert E();
-        if (coordinator_ == address(0) || subId == 0) revert E();
         address current = address(vrfCoordinator);
         vrfCoordinator = IVRFCoordinator(coordinator_);
         vrfSubscriptionId = subId;
-        vrfConfigWired = true;
         emit VrfCoordinatorUpdated(current, coordinator_);
     }
 
@@ -1030,36 +1021,6 @@ contract PurgeGame is PurgeGameStorage {
         return bongCredit[player];
     }
 
-    /// @notice Convert bong credit (earmarked for bongs) into PURGE at a discounted rate.
-    /// @param minCoinOut Slippage guard on credited coin.
-    function liquidateBongCreditForCoin(uint256 minCoinOut) external {
-        ClaimableBongInfo storage info = claimableBongInfo[msg.sender];
-        uint256 creditWei = info.weiAmount;
-        if (creditWei == 0) revert E();
-        uint256 escrow = bongCreditEscrow;
-        if (escrow < creditWei) revert E();
-        uint256 priceWei = price;
-        if (priceWei == 0) revert E();
-
-        uint256 coinOut = (creditWei * priceCoin) / priceWei;
-        coinOut = (coinOut * BONG_LIQUIDATION_DISCOUNT_BPS) / 10_000; // apply poor rate
-        if (coinOut == 0 || coinOut < minCoinOut) revert E();
-
-        uint256 paidValueWei = (coinOut * priceWei) / priceCoin;
-        uint256 profitWei = creditWei > paidValueWei ? (creditWei - paidValueWei) : 0;
-
-        info.weiAmount = 0;
-        bongCreditEscrow = escrow - creditWei;
-        if (profitWei != 0) {
-            uint256 toReward = profitWei / 2;
-            rewardPool += toReward;
-            unchecked {
-                bongCreditEscrow += profitWei - toReward; // bongholder share stays in escrow
-            }
-        }
-        coin.creditFlip(msg.sender, coinOut);
-    }
-
     /// @notice Mint any claimable bongs owed to `player` before paying ETH winnings.
     /// @param maxBatches Ignored (kept for interface parity; single bucket model).
     function _mintClaimableBongs(address player, uint32 maxBatches) private {
@@ -1087,7 +1048,6 @@ contract PurgeGame is PurgeGameStorage {
         bool stake = info.stake || info.basePerBongWei == 0; // default to staked when unset
         info.weiAmount = uint128(creditWei - spend);
         bongCreditEscrow = escrow - spend;
-        _rewardAffiliateForBongs(player, spend);
         IPurgeBongs(bongsAddr).payBongs{value: spend}(0, 0, 0, 0, 0);
         IPurgeBongs(bongsAddr).purchaseGameBongs(recipients, quantity, base, stake);
     }
@@ -1102,29 +1062,6 @@ contract PurgeGame is PurgeGameStorage {
             base = 5 ether; // mirror bong MAX_PRICE guard
         }
         return base;
-    }
-
-    function _rewardAffiliateForBongs(address buyer, uint256 spendWei) private {
-        if (spendWei == 0) return;
-        address affiliateAddr = affiliateProgram;
-        if (affiliateAddr == address(0)) return;
-
-        uint256 priceWei = price;
-        uint256 priceCoinUnit = priceCoin;
-        if (priceWei == 0 || priceCoinUnit == 0) return;
-
-        uint256 coinBase = (spendWei * priceCoinUnit) / priceWei;
-        if (coinBase == 0) return;
-
-        // 10% during presale (pre-start), 2% once the game has begun.
-        uint256 rateBps = levelStartTime == LEVEL_START_SENTINEL ? 1000 : 200;
-        uint256 reward = (coinBase * rateBps) / 10_000;
-        if (reward == 0) return;
-
-        uint256 rakeback = IPurgeAffiliate(affiliateAddr).payAffiliate(reward, bytes32(0), buyer, level);
-        if (rakeback != 0) {
-            coin.creditFlip(buyer, rakeback);
-        }
     }
 
     /// @notice Credit claimable ETH for a player from bong redemptions (bongs contract only).
@@ -1421,22 +1358,11 @@ contract PurgeGame is PurgeGameStorage {
     /// @return processedIds Token ids scanned.
     /// @return burned Bongs burned.
     /// @return complete True if shutdown burning is finished.
-    function finalizeBongShutdown(
-        uint256 maxIds
-    ) public returns (uint256 processedIds, uint256 burned, bool complete) {
-        return _finalizeBongShutdown(maxIds);
-    }
-
-    function _finalizeBongShutdown(
-        uint256 maxIds
-    ) private returns (uint256 processedIds, uint256 burned, bool complete) {
-        address bongsAddr = bongs;
-        if (bongsAddr == address(0)) revert E();
-        return IPurgeBongs(bongsAddr).finalizeShutdown(maxIds);
+    function finalizeBongShutdown(uint256 maxIds) public returns (uint256 processedIds, uint256 burned, bool complete) {
+        return IPurgeBongs(bongs).finalizeShutdown(maxIds);
     }
 
     function _requestRngBestEffort(uint48 day) private returns (bool requested) {
-        if (!vrfConfigWired) revert E();
         // Best-effort request that swallows VRF failures (used during idle shutdown).
         try
             vrfCoordinator.requestRandomWords(
@@ -1464,7 +1390,6 @@ contract PurgeGame is PurgeGameStorage {
     }
 
     function _requestRng(uint8 gameState_, bool isMapJackpotDay, uint24 lvl, uint48 day) private {
-        if (!vrfConfigWired) revert E();
         bool shouldLockBongs = (gameState_ == 2 && isMapJackpotDay) || (gameState_ == 0);
         if (shouldLockBongs) {
             IPurgeBongs(bongs).setTransfersLocked(true, day);
@@ -1494,18 +1419,18 @@ contract PurgeGame is PurgeGameStorage {
 
     /// @notice Rotate VRF coordinator + subscription id after a 3-day RNG stall.
     /// @dev Access: vrfAdmin (VRF owner contract).
-    function updateVrfCoordinatorAndSub(address newCoordinator, uint256 newSubId) external {
+    function updateVrfCoordinatorAndSub(address newCoordinator, uint256 newSubId, bytes32 newKeyHash) external {
         if (msg.sender != vrfAdmin) revert E();
         if (!_threeDayRngGap(_currentDayIndex())) revert VrfUpdateNotReady();
-        _setVrfConfig(newCoordinator, newSubId, address(vrfCoordinator));
+        _setVrfConfig(newCoordinator, newSubId, newKeyHash, address(vrfCoordinator));
     }
 
-    function _setVrfConfig(address newCoordinator, uint256 newSubId, address current) private {
-        if (newCoordinator == address(0)) revert E();
+    function _setVrfConfig(address newCoordinator, uint256 newSubId, bytes32 newKeyHash, address current) private {
+        if (newCoordinator == address(0) || newKeyHash == bytes32(0)) revert E();
 
         vrfCoordinator = IVRFCoordinator(newCoordinator);
         vrfSubscriptionId = newSubId;
-        vrfConfigWired = true;
+        vrfKeyHash = newKeyHash;
 
         rngLockedFlag = false;
         rngFulfilled = true;

@@ -179,7 +179,6 @@ contract PurgeBongs {
     error GatePerWalletExceeded();
     error GateExhausted();
     error GateRequiresGame();
-    error StageDisabled();
     error AlreadyWired();
 
     // ---------------------------------------------------------------------
@@ -258,15 +257,8 @@ contract PurgeBongs {
         uint256 claimedCount;
         uint256 paidOut;
         uint256[8] bucketTotals; // aggregate small bucket weights (for sanity bounds)
-        uint256[8] bucketRunningTotals; // mutable copy used for liability tracking (paired funding mode)
-        uint256 smallLiability; // running ceil(bucket) exposure for smalls (paired funding mode)
-        uint256 largeLiability; // running paired/unpaired exposure for larges (paired funding mode)
-        uint256 unpairedLarge; // remaining large principal with pairId=0 (paired funding mode)
-        uint256 fundingBuffer; // optional additive buffer above computed liability (paired funding mode)
         bool resolved;
         bool staged;
-        bool pairedLiability; // true when staged with pairing/aggregated small metadata
-        bool aggregateSmalls; // true when small buckets are aggregated for liability + payout
     }
 
     struct ClaimLeaf {
@@ -279,12 +271,6 @@ contract PurgeBongs {
         bool pairSide; // side selector for paired large
         bool isLarge; // true for >=0.5 ETH entries
         uint256 bucketStart; // prefix sum within the bucket (for smalls)
-    }
-
-    struct PairingBound {
-        uint64 pairId;
-        uint256 sideA;
-        uint256 sideB;
     }
 
     struct GateMint {
@@ -379,7 +365,6 @@ contract PurgeBongs {
     mapping(uint24 => uint256) public levelSmallPrincipal; // running total principal for small entries (<0.5 ETH)
     mapping(uint24 => uint256) public levelLargePrincipal; // running total principal for large entries (>=0.5 ETH)
     mapping(uint24 => uint256) public levelMaxPayoutComputed; // rolling worst-case liability (updated on mint/liquidation)
-    mapping(uint24 => mapping(uint64 => PairingBound)) private levelPairingSums; // pairId => side totals (paired funding mode)
     mapping(uint24 => Accumulator) private levelAccumulators; // on-chain merkle accumulator per level
     mapping(uint24 => bool) private levelQueued; // true once the level is in levelQueue for resolution ordering
     mapping(uint24 => uint24) public levelSaleStartLevel; // game level when this bucket first issued a bond
@@ -767,111 +752,6 @@ contract PurgeBongs {
     // ---------------------------------------------------------------------
     // Level lifecycle
     // ---------------------------------------------------------------------
-    /**
-     * @notice Stage a level with its merkle root and worst-case payout.
-     * @dev Root covers leaves shaped by `ClaimLeaf` (see `_leafHash`).
-     * @param levelId Game level this snapshot belongs to.
-     * @param root Merkle root of all bond entries for the level.
-     * @param maxPayout Worst-case payout requirement for solvency gating.
-     * @param leafCount Number of leaves in the tree (used for claim bitmaps / completion).
-     * @param bucketTotals Aggregate bucket weights for small entries (sanity checks).
-     */
-    function stageLevel(
-        uint24 levelId,
-        bytes32 root,
-        uint256 maxPayout,
-        uint256 leafCount,
-        uint256[8] calldata bucketTotals
-    ) external onlyOwner {
-        levelId;
-        root;
-        maxPayout;
-        leafCount;
-        bucketTotals;
-        revert StageDisabled();
-    }
-
-    /// @notice Stage a level with an optional EV-style matched payout cap (informational only).
-    function stageLevelWithMatch(
-        uint24 levelId,
-        bytes32 root,
-        uint256 maxPayout,
-        uint256 matchedMaxPayout,
-        uint256 leafCount,
-        uint256[8] calldata bucketTotals
-    ) external onlyOwner {
-        levelId;
-        root;
-        maxPayout;
-        matchedMaxPayout;
-        leafCount;
-        bucketTotals;
-        revert StageDisabled();
-    }
-
-    /// @notice Stage a level using pairing metadata to cap large-bucket worst-case payouts.
-    function stageLevelWithPairing(
-        uint24 levelId,
-        bytes32 root,
-        uint256 maxPayout,
-        uint256 matchedMaxPayout,
-        uint256 leafCount,
-        uint256[8] calldata bucketTotals,
-        PairingBound[] calldata pairings
-    ) external onlyOwner {
-        levelId;
-        root;
-        maxPayout;
-        matchedMaxPayout;
-        leafCount;
-        bucketTotals;
-        pairings;
-        revert StageDisabled();
-    }
-
-    /// @notice Stage a level aggregating all small buckets (single RNG offset) to keep small-bucket variance under 1 ETH.
-    function stageLevelAggregatedSmalls(
-        uint24 levelId,
-        bytes32 root,
-        uint256 maxPayout,
-        uint256 matchedMaxPayout,
-        uint256 leafCount,
-        uint256[8] calldata bucketTotals
-    ) external onlyOwner {
-        levelId;
-        root;
-        maxPayout;
-        matchedMaxPayout;
-        leafCount;
-        bucketTotals;
-        revert StageDisabled();
-    }
-
-    /// @notice Stage a level using pairing metadata and aggregated small buckets.
-    function stageLevelWithPairingAggregatedSmalls(
-        uint24 levelId,
-        bytes32 root,
-        uint256 maxPayout,
-        uint256 matchedMaxPayout,
-        uint256 leafCount,
-        uint256[8] calldata bucketTotals,
-        PairingBound[] calldata pairings
-    ) external onlyOwner {
-        levelId;
-        root;
-        maxPayout;
-        matchedMaxPayout;
-        leafCount;
-        bucketTotals;
-        pairings;
-        revert StageDisabled();
-    }
-
-    function _bucketWorstCase(uint256 total) private pure returns (uint256) {
-        if (total == 0) return 0;
-        return ((total + ONE - 1) / ONE) * ONE;
-    }
-
     function _appendLeaf(
         uint24 levelId,
         bytes32 leafHash,
@@ -935,74 +815,6 @@ contract PurgeBongs {
         }
     }
 
-    function _smallWorstCase(uint256[8] calldata totals) private pure returns (uint256 total) {
-        for (uint256 i; i < 8; ) {
-            total += _bucketWorstCase(totals[i]);
-            unchecked {
-                ++i;
-            }
-        }
-    }
-
-    function _computeDynamicMaxPayout(
-        uint24 levelId,
-        LevelConfig storage cfg,
-        uint256[8] calldata bucketTotals,
-        PairingBound[] memory pairings,
-        bool aggregateSmalls
-    ) private returns (uint256) {
-        uint256 smallPrincipal = levelSmallPrincipal[levelId];
-        uint256 largePrincipal = levelLargePrincipal[levelId];
-
-        uint256 bucketSum;
-        for (uint256 i; i < 8; ) {
-            uint256 t = bucketTotals[i];
-            bucketSum += t;
-            cfg.bucketRunningTotals[i] = t;
-            unchecked {
-                ++i;
-            }
-        }
-        if (bucketSum != smallPrincipal) revert InvalidLevel();
-
-        uint256 smallLiability = aggregateSmalls ? _bucketWorstCase(bucketSum) : _smallWorstCase(bucketTotals);
-        cfg.smallLiability = smallLiability;
-
-        uint256 pairPrincipal;
-        uint256 largeLiability;
-        uint256 len = pairings.length;
-        if (len == 0) {
-            largeLiability = largePrincipal * 2;
-        } else {
-            for (uint256 i; i < len; ) {
-                PairingBound memory p = pairings[i];
-                if (p.pairId == 0) revert InvalidLevel();
-                PairingBound storage sums = levelPairingSums[levelId][p.pairId];
-                if (sums.pairId != 0) revert InvalidLevel(); // duplicate pair id
-                sums.pairId = p.pairId;
-                sums.sideA = p.sideA;
-                sums.sideB = p.sideB;
-
-                uint256 larger = p.sideA >= p.sideB ? p.sideA : p.sideB;
-                if (larger != 0) {
-                    largeLiability += larger * 2;
-                }
-                pairPrincipal += p.sideA + p.sideB;
-                unchecked {
-                    ++i;
-                }
-            }
-        }
-        if (pairPrincipal > largePrincipal) revert InvalidLevel();
-
-        uint256 unpaired = largePrincipal - pairPrincipal;
-        cfg.unpairedLarge = unpaired;
-        cfg.largeLiability = largeLiability + unpaired * 2;
-        cfg.pairedLiability = true;
-        cfg.aggregateSmalls = aggregateSmalls;
-        return cfg.smallLiability + cfg.largeLiability;
-    }
-
     function _stageFromAccumulator(uint24 levelId) private {
         LevelConfig storage cfg = levels[levelId];
         if (cfg.staged) return;
@@ -1019,16 +831,9 @@ contract PurgeBongs {
 
         cfg.root = root;
         cfg.maxPayout = maxPayout;
-        cfg.fundingBuffer = 0;
         cfg.matchedMaxPayout = maxPayout;
         cfg.leafCount = leafCount;
         cfg.bucketTotals = acc.bucketTotals;
-        cfg.aggregateSmalls = false;
-        cfg.bucketRunningTotals = [uint256(0), 0, 0, 0, 0, 0, 0, 0];
-        cfg.smallLiability = 0;
-        cfg.largeLiability = 0;
-        cfg.unpairedLarge = 0;
-        cfg.pairedLiability = false;
         cfg.staged = true;
         levelLocked[levelId] = true;
         if (!levelQueued[levelId]) {
@@ -1057,66 +862,6 @@ contract PurgeBongs {
         }
     }
 
-    function _reduceSmallLiability(LevelConfig storage cfg, uint8 bucketId, uint256 amount) private {
-        if (bucketId > 7) revert InvalidLevel();
-        uint256 prev = cfg.bucketRunningTotals[bucketId];
-        if (prev < amount) revert InvalidAmount();
-        uint256 before;
-        uint256 afterTotal;
-        if (cfg.aggregateSmalls) {
-            uint256 totalBefore;
-            for (uint256 i; i < 8; ) {
-                totalBefore += cfg.bucketRunningTotals[i];
-                unchecked {
-                    ++i;
-                }
-            }
-            before = _bucketWorstCase(totalBefore);
-            uint256 newTotal = prev - amount;
-            cfg.bucketRunningTotals[bucketId] = newTotal;
-            uint256 totalAfter = totalBefore - amount;
-            afterTotal = _bucketWorstCase(totalAfter);
-        } else {
-            before = _bucketWorstCase(prev);
-            uint256 newTotal = prev - amount;
-            afterTotal = _bucketWorstCase(newTotal);
-            cfg.bucketRunningTotals[bucketId] = newTotal;
-        }
-        cfg.smallLiability = cfg.smallLiability + afterTotal - before;
-    }
-
-    function _reduceLargeLiability(
-        LevelConfig storage cfg,
-        uint24 levelId,
-        uint64 pairId,
-        bool pairSide,
-        uint256 amount
-    ) private {
-        if (pairId == 0) {
-            uint256 unpaired = cfg.unpairedLarge;
-            if (unpaired < amount) revert InvalidAmount();
-            cfg.unpairedLarge = unpaired - amount;
-            uint256 delta = amount * 2;
-            if (cfg.largeLiability < delta) revert InvalidLevel();
-            cfg.largeLiability -= delta;
-            return;
-        }
-
-        PairingBound storage sums = levelPairingSums[levelId][pairId];
-        if (sums.sideA == 0 && sums.sideB == 0) revert InvalidLevel();
-        uint256 before = (sums.sideA >= sums.sideB ? sums.sideA : sums.sideB) * 2;
-        if (pairSide) {
-            if (sums.sideB < amount) revert InvalidAmount();
-            sums.sideB -= amount;
-        } else {
-            if (sums.sideA < amount) revert InvalidAmount();
-            sums.sideA -= amount;
-        }
-        uint256 afterMax = (sums.sideA >= sums.sideB ? sums.sideA : sums.sideB) * 2;
-        if (cfg.largeLiability < before) revert InvalidLevel();
-        cfg.largeLiability = cfg.largeLiability - before + afterMax;
-    }
-
     /**
      * @notice Returns true if there is any staged level that hasn't been resolved yet.
      */
@@ -1132,7 +877,7 @@ contract PurgeBongs {
         uint256 stEthAmount,
         uint48 rngDay,
         uint256 rngWord,
-        uint256 /*maxBongs*/
+        uint256 maxBongs
     ) external payable onlyGame {
         // ingest stETH
         if (stEthAmount != 0) {
@@ -1164,20 +909,20 @@ contract PurgeBongs {
 
         uint24 currentLvlForDrip = _currentLevel();
         _processDrips(currentLvlForDrip, seedWord);
-        _resolveReadyLevels(seedWord);
+        _resolveReadyLevels(seedWord, maxBongs);
     }
 
     /**
      * @notice Attempt to resolve using cached RNG (or freshly available RNG via game day fetch).
      */
-    function resolvePendingBongs(uint256 /*maxBongs*/) external {
+    function resolvePendingBongs(uint256 maxBongs) external {
         uint256 seedWord = cachedRngWord;
         uint24 currentLvlForDrip = _currentLevel();
         _processDrips(currentLvlForDrip, seedWord);
-        _resolveReadyLevels(0);
+        _resolveReadyLevels(0, maxBongs);
     }
 
-    function _resolveReadyLevels(uint256 rngWord) private {
+    function _resolveReadyLevels(uint256 rngWord, uint256 maxLevels) private {
         uint256 seedWord = rngWord;
         if (seedWord == 0) {
             seedWord = cachedRngWord;
@@ -1193,6 +938,7 @@ contract PurgeBongs {
         uint24 currentLevel = _currentLevel();
         _autoStageDueLevels(currentLevel);
         bool shortfall;
+        uint256 remaining = maxLevels == 0 ? type(uint256).max : maxLevels;
         while (resolveCursor < levelQueue.length) {
             uint24 levelId = levelQueue[resolveCursor];
             LevelConfig storage cfg = levels[levelId];
@@ -1221,6 +967,9 @@ contract PurgeBongs {
 
             _resolveLevel(cfg, levelId, seedWord);
             resolveCursor++;
+            if (--remaining == 0) {
+                break;
+            }
         }
 
         if (gameOver && seedWord != 0) {
@@ -1794,73 +1543,12 @@ contract PurgeBongs {
         }
     }
 
-    /**
-     * @notice Liquidate a fully funded, unresolved bond for a fixed percentage of principal (starts at 90%, -5% per bond-resolution step early).
-     * @dev Only allowed for the next scheduled resolution bucket (ceil to next multiple of 5 from the current game level) when fully funded.
-     */
-    function liquidate(ClaimLeaf calldata leaf, bytes32[] calldata proof) external nonReentrant {
-        LevelConfig storage cfg = levels[leaf.levelId];
-        if (!cfg.staged || leaf.leafIndex >= cfg.leafCount) revert InvalidLevel();
-        if (cfg.resolved) revert NotResolved();
-        if (_isClaimed(leaf.levelId, leaf.leafIndex)) revert AlreadyClaimed();
-
-        bytes32 leafHash = _leafHash(leaf);
-        if (!_verify(proof, cfg.root, leafHash)) revert InvalidProof();
-
-        uint24 currentLvl = _currentLevel();
-        uint24 eligible = _bondLevelFor(currentLvl);
-        if (leaf.levelId != eligible) revert InvalidLevel(); // only the next resolution bucket can be liquidated early
-
-        if (bondObligations < cfg.maxPayout) revert InsufficientObligations(); // must be fully funded
-        uint256 pendingMax = _pendingMaxPayout();
-        if (bondObligations < pendingMax) revert InsufficientObligations(); // keep all staged levels covered
-
-        uint256 bps = _liquidationBps(currentLvl, leaf.levelId);
-        if (bps == 0) revert InsufficientObligations();
-
-        uint256 payout = (leaf.amount * bps) / 10_000;
-        if (payout == 0 || payout > bondObligations) revert InsufficientObligations();
-
-        // Adjust max payout to reflect removal of this leaf's worst-case liability.
-        if (leaf.isLarge && leaf.amount < SMALL_THRESHOLD) revert InvalidAmount();
-        if (!leaf.isLarge && leaf.amount >= SMALL_THRESHOLD) revert InvalidAmount();
-        uint256 oldMaxPayout = cfg.maxPayout;
-        if (cfg.pairedLiability) {
-            if (leaf.isLarge) {
-                _reduceLargeLiability(cfg, leaf.levelId, leaf.pairId, leaf.pairSide, leaf.amount);
-            } else {
-                _reduceSmallLiability(cfg, leaf.bucketId, leaf.amount);
-            }
-            uint256 baseLiability = cfg.smallLiability + cfg.largeLiability;
-            cfg.maxPayout = baseLiability + cfg.fundingBuffer;
-            levelMaxPayoutComputed[leaf.levelId] = cfg.maxPayout;
-        } else {
-            uint256 worstCase = leaf.isLarge ? leaf.amount * 2 : ONE;
-            if (cfg.maxPayout >= worstCase) {
-                cfg.maxPayout -= worstCase;
-            } else {
-                cfg.maxPayout = 0;
-            }
-            uint256 comp = levelMaxPayoutComputed[leaf.levelId];
-            levelMaxPayoutComputed[leaf.levelId] = comp >= worstCase ? comp - worstCase : 0;
-        }
-
-        uint256 newPendingMax = pendingMax - oldMaxPayout + cfg.maxPayout;
-        uint256 obligationsAfter = bondObligations - payout;
-        if (obligationsAfter < newPendingMax) revert InsufficientObligations();
-
-        _setClaimed(leaf.levelId, leaf.leafIndex);
-        cfg.claimedCount += 1;
-        cfg.paidOut += payout;
-        bondObligations = obligationsAfter;
-
-        _consumeBondUnits(leaf.player, leaf.levelId, leaf.amount, 1);
-        _payout(leaf.player, payout);
-
-        emit Claim(leaf.player, leaf.levelId, leaf.leafIndex, payout, 0);
+    /// @notice Staged bonds must be claimed via the merkle tree; liquidation after staging is disabled.
+    function liquidate(ClaimLeaf calldata /*leaf*/, bytes32[] calldata /*proof*/) external pure {
+        revert InvalidLevel();
     }
 
-    /// @notice Early liquidation without a merkle proof for unstaged, fully funded levels (next resolution bucket only).
+    /// @notice Early liquidation without a merkle proof for unstaged levels (next resolution bucket only; requires at least half funding).
     /// @param levelId Target level bucket (must be the current liquidation window).
     /// @param basePerBondWei Face value per bond (must match a minted denomination).
     /// @param units Number of bonds of this denomination to liquidate.
@@ -1874,7 +1562,8 @@ contract PurgeBongs {
         if (levelId != eligible) revert InvalidLevel(); // only the next resolution bucket can be liquidated early
 
         uint256 maxPayout = levelMaxPayoutComputed[levelId];
-        if (maxPayout == 0 || bondObligations < maxPayout) revert InsufficientObligations();
+        uint256 halfMax = (maxPayout + 1) / 2;
+        if (maxPayout == 0 || bondObligations < halfMax) revert InsufficientObligations();
 
         uint256 availableUnits = levelDenomCount[levelId][basePerBondWei];
         if (availableUnits < units) revert InvalidAmount();
@@ -1909,19 +1598,6 @@ contract PurgeBongs {
         if (leaf.amount >= SMALL_THRESHOLD || leaf.bucketId > 7) revert InvalidAmount();
         uint256 bucketTotal = cfg.bucketTotals[leaf.bucketId];
         if (bucketTotal != 0 && leaf.bucketStart + leaf.amount > bucketTotal) revert InvalidAmount();
-
-        if (cfg.aggregateSmalls) {
-            uint256 prefix;
-            for (uint256 i; i < leaf.bucketId; ) {
-                prefix += cfg.bucketTotals[i];
-                unchecked {
-                    ++i;
-                }
-            }
-            uint256 offsetAgg = uint256(keccak256(abi.encode(cfg.seed, "aggSmall"))) % ONE;
-            uint256 startAgg = prefix + leaf.bucketStart + offsetAgg;
-            return (startAgg / ONE != (startAgg + leaf.amount) / ONE) ? ONE : 0;
-        }
 
         uint256 offset = uint256(keccak256(abi.encode(cfg.seed, leaf.bucketId))) % ONE;
         uint256 start = leaf.bucketStart + offset;
@@ -2171,7 +1847,7 @@ contract PurgeBongs {
     // ---------------------------------------------------------------------
     // Drip schedule (per-level, 5-level window)
     // ---------------------------------------------------------------------
-    function _processDrips(uint24 currentLevel, uint256 rngWord) private {
+    function _processDrips(uint24 currentLevel, uint256 /*rngWord*/) private {
         uint256 len = dripQueue.length;
         for (uint256 i; i < len; ) {
             uint24 levelId = dripQueue[i];
@@ -2699,12 +2375,12 @@ contract PurgeBongs {
         return arr;
     }
 
-    function _beforeTransfer(uint256[] memory ids) private view {
+    function _beforeTransfer(uint256[] memory /*ids*/) private view {
         // Keep transfers globally lockable; per-level locks removed for flexibility.
         if (transfersLocked) revert TransfersLocked();
     }
 
-    function _requireApproval(address from, address operator, uint256[] memory ids) private view {
+    function _requireApproval(address from, address operator, uint256[] memory /*ids*/) private view {
         if (transfersLocked) revert Unauthorized();
         if (!isApprovedForAll(from, operator)) revert Unauthorized();
     }
@@ -2795,7 +2471,7 @@ contract PurgeBongs {
             }
         }
 
-        _resolveReadyLevels(seedWord);
+        _resolveReadyLevels(seedWord, 0);
 
         uint24 currentLevel = _currentLevel();
         processedIds = resolveCursor;

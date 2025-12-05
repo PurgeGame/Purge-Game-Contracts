@@ -18,7 +18,7 @@ interface IVRFCoordinatorV2_5Owner {
 
 interface IPurgeGameVrf is IPurgeGameCore {
     function rngStalledForThreeDays() external view returns (bool);
-    function updateVrfCoordinatorAndSub(address newCoordinator, uint256 newSubId) external;
+    function updateVrfCoordinatorAndSub(address newCoordinator, uint256 newSubId, bytes32 newKeyHash) external;
     function wireInitialVrf(address coordinator_, uint256 subId) external;
 }
 
@@ -71,10 +71,8 @@ contract PurgeGameVRFSub {
     // Constructor
     // -----------------------
 
-    constructor(address coordinator_, address bongs_, address linkToken_) {
-        if (coordinator_ == address(0) || bongs_ == address(0) || linkToken_ == address(0)) revert ZeroAddress();
+    constructor(address bongs_, address linkToken_) {
         bongs = bongs_;
-        coordinator = coordinator_;
         linkToken = linkToken_;
     }
 
@@ -93,34 +91,38 @@ contract PurgeGameVRFSub {
 
     /// @notice Wire the game address, create the subscription, add consumer, and push VRF config into the game.
     /// @dev Callable by the bond contract once; sets the game address immutably for this owner contract.
-    function wire(address game_) external onlyBongs {
+    function wire(address game_, address coordinator_) external onlyBongs {
         if (wired) revert AlreadyWired();
         if (game_ == address(0)) revert ZeroAddress();
         if (subscriptionId != 0) revert AlreadyWired();
 
-        uint256 subId = IVRFCoordinatorV2_5Owner(coordinator).createSubscription();
+        uint256 subId = IVRFCoordinatorV2_5Owner(coordinator_).createSubscription();
+        coordinator = coordinator_;
         subscriptionId = subId;
         game = game_;
         wired = true;
 
-        emit CoordinatorUpdated(coordinator, subId);
+        emit CoordinatorUpdated(coordinator_, subId);
         emit SubscriptionCreated(subId);
 
-        IVRFCoordinatorV2_5Owner(coordinator).addConsumer(subId, game_);
+        IVRFCoordinatorV2_5Owner(coordinator_).addConsumer(subId, game_);
         emit ConsumerAdded(game_);
 
-        IPurgeGameVrf(game_).wireInitialVrf(coordinator, subId);
+        IPurgeGameVrf(game_).wireInitialVrf(coordinator_, subId);
     }
 
     // -----------------------
     // Subscription management (stall-gated)
     // -----------------------
 
-    /// @notice On a 3-day VRF stall, migrate to a new coordinator/subscription. Best-effort cancel + LINK top-up.
-    function emergencyRecover(address newCoordinator) external onlyBongs returns (uint256 newSubId) {
+    /// @notice On a 3-day VRF stall, migrate to a new coordinator/subscription/key hash. Best-effort cancel + LINK top-up.
+    function emergencyRecover(
+        address newCoordinator,
+        bytes32 newKeyHash
+    ) external onlyBongs returns (uint256 newSubId) {
         if (!wired) revert NotWired();
         if (!IPurgeGameVrf(game).rngStalledForThreeDays()) revert NotStalled();
-        if (newCoordinator == address(0)) revert ZeroAddress();
+        if (newCoordinator == address(0) || newKeyHash == bytes32(0)) revert ZeroAddress();
 
         uint256 oldSub = subscriptionId;
         address oldCoord = coordinator;
@@ -142,9 +144,8 @@ contract PurgeGameVRFSub {
         try IVRFCoordinatorV2_5Owner(newCoordinator).addConsumer(newSubId, game) {
             emit ConsumerAdded(game);
         } catch {}
-
         // Push new config into the game; must succeed to keep contracts in sync.
-        IPurgeGameVrf(game).updateVrfCoordinatorAndSub(newCoordinator, newSubId);
+        IPurgeGameVrf(game).updateVrfCoordinatorAndSub(newCoordinator, newSubId, newKeyHash);
 
         // Best-effort fund the new subscription with any LINK held here.
         uint256 bal = ILinkTokenLike(linkToken).balanceOf(address(this));
@@ -171,7 +172,6 @@ contract PurgeGameVRFSub {
         try IVRFCoordinatorV2_5Owner(coordinator).cancelSubscription(subId, target) {
             emit SubscriptionCancelled(subId, target);
         } catch {}
-
         subscriptionId = 0;
 
         // Sweep any LINK already sitting on this contract to the target.
