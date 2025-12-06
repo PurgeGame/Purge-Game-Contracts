@@ -40,7 +40,7 @@ interface IPurgeGameNFT {
     function tokenTraitsPacked(uint256 tokenId) external view returns (uint32);
     function purchaseCount() external view returns (uint32);
     function finalizePurchasePhase(uint32 minted, uint256 rngWord) external;
-    function advanceBase(uint256 newBaseTokenId) external;
+    function advanceBase() external;
     function nextTokenId() external view returns (uint256);
     function purge(address owner, uint256[] calldata tokenIds) external;
     function currentBaseTokenId() external view returns (uint256);
@@ -934,7 +934,8 @@ contract PurgeGameNFT {
     }
 
     /// @notice Retire all tokens below `newBaseTokenId` (except token 0) at level transition.
-    function advanceBase(uint256 newBaseTokenId) external onlyGame {
+    function advanceBase() external onlyGame {
+        uint256 newBaseTokenId = _currentIndex;
         uint256 currentBase = _baseTokenId;
         if (newBaseTokenId <= currentBase || newBaseTokenId > _currentIndex) revert E();
         uint256 delta = newBaseTokenId - currentBase;

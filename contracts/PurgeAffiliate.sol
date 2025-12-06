@@ -573,6 +573,15 @@ contract PurgeAffiliate {
         }
     }
 
+    /// @notice Credit presale coin from LINK funding (VRF sub); callable by coin/bonds.
+    function addPresaleLinkCredit(address player, uint256 amount) external {
+        address caller = msg.sender;
+        if (caller != address(coin) && caller != bongs) revert OnlyAuthorized();
+        if (player == address(0) || amount == 0) return;
+        presaleCoinEarned[player] += amount;
+        presaleClaimableTotal += amount;
+    }
+
     // ---------------------------------------------------------------------
     // Views
     // ---------------------------------------------------------------------

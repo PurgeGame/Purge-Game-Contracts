@@ -22,17 +22,34 @@ interface IPurgeGameVrf is IPurgeGameCore {
     function wireInitialVrf(address coordinator_, uint256 subId) external;
 }
 
+interface IPurgeBondsVrf {
+    function wireBondVrf(address coordinator_, uint256 subId, bytes32 keyHash_) external;
+}
+
 interface ILinkTokenLike {
     function balanceOf(address account) external view returns (uint256);
     function transferAndCall(address to, uint256 value, bytes calldata data) external returns (bool);
 }
 
+interface IPurgeCoinPresaleLink {
+    function creditPresaleFromLink(address player, uint256 amount) external;
+}
+
+/// @notice Minimal Chainlink price feed surface (used for LINK/ETH conversion).
+interface IAggregatorV3 {
+    function latestRoundData()
+        external
+        view
+        returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound);
+    function decimals() external view returns (uint8);
+}
+
 /**
  * @title PurgeGameVRFSub
  * @notice Holds ownership of the Chainlink VRF subscription and gates sensitive actions behind the game contract.
- *         The bond contract triggers `wire` to create the subscription, add the game as consumer, and push VRF config
- *         into the game. After wiring, no actions are available unless the game reports a 3-day RNG stall, in which
- *         case `emergencyRecover` can migrate to a new coordinator/subscription (best-effort LINK refund + top-up).
+ *         A single `wire` call always boots bonds and optionally the game (if provided), each exactly once.
+ *         After wiring, no actions are available unless the game reports a 3-day RNG stall, in which case
+ *         `emergencyRecover` can migrate to a new coordinator/subscription (best-effort LINK refund + top-up).
  */
 contract PurgeGameVRFSub {
     // -----------------------
@@ -45,6 +62,7 @@ contract PurgeGameVRFSub {
     error NotWired();
     error NoSubscription();
     error NoVault();
+    error InvalidAmount();
 
     // -----------------------
     // Events
@@ -55,24 +73,34 @@ contract PurgeGameVRFSub {
     event SubscriptionCancelled(uint256 indexed subId, address indexed to);
     event EmergencyRecovered(address indexed newCoordinator, uint256 indexed newSubId, uint256 fundedAmount);
     event SubscriptionShutdown(uint256 indexed subId, address indexed to, uint256 sweptAmount);
+    event CoinWired(address indexed coin, uint256 priceCoinUnit);
+    event LinkCreditRecorded(address indexed player, uint256 amount, bool minted);
+    event LinkEthFeedUpdated(address indexed feed);
 
     // -----------------------
     // Storage
     // -----------------------
-    address public immutable bongs;
+    address public immutable bonds;
     address public immutable linkToken;
+    address public coin;
 
     address public coordinator;
     address public game;
     uint256 public subscriptionId;
-    bool public wired;
+    bool public wired; // true once a subscription exists
+    bool public bondsWired; // true once bonds are added as consumer + configured
+    bool public gameWired; // true once the game consumer has been added + configured
+    bool public coinWired; // true once the coin contract is set
+    uint256 public linkRewardPriceCoin = 1_000_000_000; // default to game priceCoin unit
+    mapping(address => uint256) public pendingLinkCredit;
+    address public linkEthPriceFeed; // Chainlink LINK/ETH price feed (optional; zero address disables)
 
     // -----------------------
     // Constructor
     // -----------------------
 
-    constructor(address bongs_, address linkToken_) {
-        bongs = bongs_;
+    constructor(address bonds_, address linkToken_) {
+        bonds = bonds_;
         linkToken = linkToken_;
     }
 
@@ -80,8 +108,8 @@ contract PurgeGameVRFSub {
     // Modifiers
     // -----------------------
 
-    modifier onlyBongs() {
-        if (msg.sender != bongs) revert NotBonds();
+    modifier onlyBonds() {
+        if (msg.sender != bonds) revert NotBonds();
         _;
     }
 
@@ -89,26 +117,77 @@ contract PurgeGameVRFSub {
     // Wiring
     // -----------------------
 
-    /// @notice Wire the game address, create the subscription, add consumer, and push VRF config into the game.
-    /// @dev Callable by the bond contract once; sets the game address immutably for this owner contract.
-    function wire(address game_, address coordinator_) external onlyBongs {
-        if (wired) revert AlreadyWired();
+    /// @notice Single entrypoint: create the subscription (if needed), wire bonds (always), and wire game if provided.
+    /// @dev Bonds are always wired on the first call. If `game_` is nonzero and the game is not yet wired, it will be added as a consumer.
+    function wire(address game_, address coordinator_, bytes32 bondKeyHash) external onlyBonds {
+        // Create subscription on first call.
+        if (!wired) {
+            if (coordinator_ == address(0) || bondKeyHash == bytes32(0)) revert ZeroAddress();
+            uint256 subId = IVRFCoordinatorV2_5Owner(coordinator_).createSubscription();
+            coordinator = coordinator_;
+            subscriptionId = subId;
+            wired = true;
+            emit CoordinatorUpdated(coordinator_, subId);
+            emit SubscriptionCreated(subId);
+        } else {
+            // Prevent accidental re-pointing via a different coordinator.
+            if (coordinator_ != address(0) && coordinator_ != coordinator) revert AlreadyWired();
+            // Reuse bondKeyHash from first wire; require nonzero only if bonds not wired yet.
+            if (!bondsWired && bondKeyHash == bytes32(0)) revert ZeroAddress();
+        }
+
+        // Wire bonds exactly once.
+        if (!bondsWired) {
+            IVRFCoordinatorV2_5Owner(coordinator).addConsumer(subscriptionId, bonds);
+            emit ConsumerAdded(bonds);
+            IPurgeBondsVrf(bonds).wireBondVrf(coordinator, subscriptionId, bondKeyHash);
+            bondsWired = true;
+        }
+
+        // Wire game if provided and not yet wired.
+        if (game_ != address(0) && !gameWired) {
+            game = game_;
+            IVRFCoordinatorV2_5Owner(coordinator).addConsumer(subscriptionId, game_);
+            emit ConsumerAdded(game_);
+            IPurgeGameVrf(game_).wireInitialVrf(coordinator, subscriptionId);
+            gameWired = true;
+        } else if (gameWired && game_ != address(0) && game != game_) {
+            revert AlreadyWired(); // game already set; ignore mismatched wiring attempts
+        }
+    }
+
+    /// @notice Wire the coin contract for link-based minting/claiming and optionally update the price unit.
+    function wireCoin(address coin_, uint256 priceCoinUnit) external onlyBonds {
+        if (coinWired && coin_ != coin) revert AlreadyWired();
+        if (coin_ != address(0)) {
+            coin = coin_;
+            coinWired = true;
+        }
+        if (priceCoinUnit != 0) {
+            linkRewardPriceCoin = priceCoinUnit;
+        }
+        emit CoinWired(coin, linkRewardPriceCoin);
+    }
+
+    /// @notice Configure the LINK/ETH price feed used to value LINK donations (zero disables the oracle).
+    function setLinkEthPriceFeed(address feed) external onlyBonds {
+        linkEthPriceFeed = feed;
+        emit LinkEthFeedUpdated(feed);
+    }
+
+    /// @notice Add the game as a consumer after bonds have already been wired (via wireBondsOnly).
+    function wireGame(address game_) external onlyBonds {
+        if (!wired) revert NotWired();
+        if (gameWired) revert AlreadyWired();
         if (game_ == address(0)) revert ZeroAddress();
-        if (subscriptionId != 0) revert AlreadyWired();
 
-        uint256 subId = IVRFCoordinatorV2_5Owner(coordinator_).createSubscription();
-        coordinator = coordinator_;
-        subscriptionId = subId;
         game = game_;
-        wired = true;
+        gameWired = true;
 
-        emit CoordinatorUpdated(coordinator_, subId);
-        emit SubscriptionCreated(subId);
-
-        IVRFCoordinatorV2_5Owner(coordinator_).addConsumer(subId, game_);
+        IVRFCoordinatorV2_5Owner(coordinator).addConsumer(subscriptionId, game_);
         emit ConsumerAdded(game_);
 
-        IPurgeGameVrf(game_).wireInitialVrf(coordinator_, subId);
+        IPurgeGameVrf(game_).wireInitialVrf(coordinator, subscriptionId);
     }
 
     // -----------------------
@@ -119,9 +198,9 @@ contract PurgeGameVRFSub {
     function emergencyRecover(
         address newCoordinator,
         bytes32 newKeyHash
-    ) external onlyBongs returns (uint256 newSubId) {
+    ) external onlyBonds returns (uint256 newSubId) {
         if (!wired) revert NotWired();
-        if (!IPurgeGameVrf(game).rngStalledForThreeDays()) revert NotStalled();
+        if (gameWired && game != address(0) && !IPurgeGameVrf(game).rngStalledForThreeDays()) revert NotStalled();
         if (newCoordinator == address(0) || newKeyHash == bytes32(0)) revert ZeroAddress();
 
         uint256 oldSub = subscriptionId;
@@ -140,12 +219,20 @@ contract PurgeGameVRFSub {
         emit CoordinatorUpdated(newCoordinator, newSubId);
         emit SubscriptionCreated(newSubId);
 
-        // Add the game as consumer; ignore failure to avoid blocking recovery.
-        try IVRFCoordinatorV2_5Owner(newCoordinator).addConsumer(newSubId, game) {
-            emit ConsumerAdded(game);
-        } catch {}
-        // Push new config into the game; must succeed to keep contracts in sync.
-        IPurgeGameVrf(game).updateVrfCoordinatorAndSub(newCoordinator, newSubId, newKeyHash);
+        if (bondsWired) {
+            try IVRFCoordinatorV2_5Owner(newCoordinator).addConsumer(newSubId, bonds) {
+                emit ConsumerAdded(bonds);
+            } catch {}
+            IPurgeBondsVrf(bonds).wireBondVrf(newCoordinator, newSubId, newKeyHash);
+        }
+        if (gameWired && game != address(0)) {
+            // Add the game as consumer; ignore failure to avoid blocking recovery.
+            try IVRFCoordinatorV2_5Owner(newCoordinator).addConsumer(newSubId, game) {
+                emit ConsumerAdded(game);
+            } catch {}
+            // Push new config into the game; must succeed to keep contracts in sync once wired.
+            IPurgeGameVrf(game).updateVrfCoordinatorAndSub(newCoordinator, newSubId, newKeyHash);
+        }
 
         // Best-effort fund the new subscription with any LINK held here.
         uint256 bal = ILinkTokenLike(linkToken).balanceOf(address(this));
@@ -162,8 +249,8 @@ contract PurgeGameVRFSub {
     }
 
     /// @notice Cancel the VRF subscription and sweep any LINK to the provided target (best-effort).
-    /// @dev Callable by bongs once endgame is complete to refund unused LINK. No RNG stall required.
-    function shutdownAndRefund(address target) external onlyBongs {
+    /// @dev Callable by bonds once endgame is complete to refund unused LINK. No RNG stall required.
+    function shutdownAndRefund(address target) external onlyBonds {
         if (target == address(0)) revert NoVault();
         uint256 subId = subscriptionId;
         if (subId == 0) revert NoSubscription();
@@ -184,5 +271,88 @@ contract PurgeGameVRFSub {
         }
 
         emit SubscriptionShutdown(subId, target, 0);
+    }
+
+    // -----------------------
+    // LINK funding + rewards
+    // -----------------------
+
+    function onTokenTransfer(address from, uint256 amount, bytes calldata) external {
+        if (msg.sender != linkToken) revert NotBonds();
+        if (amount == 0) revert InvalidAmount();
+        if (!wired) revert NotWired();
+
+        // Top up subscription.
+        try ILinkTokenLike(linkToken).transferAndCall(address(coordinator), amount, abi.encode(subscriptionId)) returns (bool ok) {
+            if (!ok) revert InvalidAmount();
+        } catch {
+            revert InvalidAmount();
+        }
+
+        // Compute credit using the same tier logic as the game.
+        (uint96 bal, , , , ) = IVRFCoordinatorV2_5Owner(coordinator).getSubscription(subscriptionId);
+        uint16 mult = _tierMultPermille(uint256(bal));
+        if (mult == 0) return;
+
+        uint256 ethEquivalent = _linkAmountToEth(amount);
+        if (ethEquivalent == 0) {
+            ethEquivalent = amount; // fallback to legacy behavior if oracle unavailable or invalid
+        }
+
+        uint256 luckPerEth = (linkRewardPriceCoin * 22) / 100; // LUCK_PER_LINK_PERCENT = 22
+        uint256 baseCredit = (ethEquivalent * luckPerEth) / 1 ether;
+        uint256 credit = (baseCredit * mult) / 1000;
+        if (credit == 0) return;
+
+        if (coinWired && coin != address(0)) {
+            IPurgeCoinPresaleLink(coin).creditPresaleFromLink(from, credit);
+            emit LinkCreditRecorded(from, credit, true);
+        } else {
+            pendingLinkCredit[from] += credit;
+            emit LinkCreditRecorded(from, credit, false);
+        }
+    }
+
+    /// @notice Claim any pending LINK-based credit recorded before the coin was wired.
+    function claimPendingLinkCredit() external {
+        if (!coinWired || coin == address(0)) revert NotWired();
+        address player = msg.sender;
+        uint256 credit = pendingLinkCredit[player];
+        if (credit == 0) return;
+        pendingLinkCredit[player] = 0;
+        IPurgeCoinPresaleLink(coin).creditPresaleFromLink(player, credit);
+        emit LinkCreditRecorded(player, credit, true);
+    }
+
+    /// @dev Convert LINK amount to equivalent ETH using the configured price feed. Returns 0 on missing/invalid feed.
+    function _linkAmountToEth(uint256 amount) private view returns (uint256 ethAmount) {
+        address feed = linkEthPriceFeed;
+        if (feed == address(0) || amount == 0) return 0;
+
+        (, int256 answer, , , ) = IAggregatorV3(feed).latestRoundData();
+        if (answer <= 0) return 0;
+
+        uint256 price = uint256(answer);
+        uint8 dec = IAggregatorV3(feed).decimals();
+
+        uint256 priceWei;
+        if (dec < 18) {
+            priceWei = price * (10 ** (18 - dec));
+        } else if (dec > 18) {
+            priceWei = price / (10 ** (dec - 18));
+        } else {
+            priceWei = price;
+        }
+
+        if (priceWei == 0) return 0;
+        ethAmount = (amount * priceWei) / 1 ether;
+    }
+
+    function _tierMultPermille(uint256 subBal) private pure returns (uint16) {
+        if (subBal < 100 ether) return 2000;
+        if (subBal < 200 ether) return 1500;
+        if (subBal < 400 ether) return 1000;
+        if (subBal < 600 ether) return 200;
+        return 0;
     }
 }

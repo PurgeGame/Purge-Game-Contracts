@@ -469,9 +469,8 @@ contract PurgeGame is PurgeGameStorage {
                 if (gameState == 2) {
                     if (lvl != 0) {
                         address topStake = coinContract.recordStakeResolution(lvl, day);
-                        address trophyAddr = trophies;
                         if (topStake != address(0)) {
-                            IPurgeTrophies(trophyAddr).mintStake(topStake, lvl);
+                            IPurgeTrophies(trophies).mintStake(topStake, lvl);
                         }
                     }
                     if (lastExterminatedTrait != TRAIT_ID_TIMEOUT) {
@@ -739,17 +738,12 @@ contract PurgeGame is PurgeGameStorage {
             currentPrizePool = pool;
             _setExterminatorForLevel(levelSnapshot, callerExterminator);
 
-            address trophyAddr = trophies;
-            if (trophyAddr != address(0)) {
-                try
-                    IPurgeTrophies(trophyAddr).mintExterminator(
-                        callerExterminator,
-                        levelSnapshot,
-                        exTrait,
-                        exterminationInvertFlag
-                    )
-                {} catch {}
-            }
+            IPurgeTrophies(trophies).mintExterminator(
+                callerExterminator,
+                levelSnapshot,
+                exTrait,
+                exterminationInvertFlag
+            );
 
             lastExterminatedTrait = exTrait;
         } else {
@@ -793,11 +787,7 @@ contract PurgeGame is PurgeGameStorage {
             coin.normalizeActivePurgeQuests();
         }
 
-        uint256 nextId = nft.nextTokenId();
-        uint256 base = nft.currentBaseTokenId();
-        if (nextId > base) {
-            nft.advanceBase(nextId);
-        }
+        nft.advanceBase(); // let NFT pull its own nextTokenId to avoid redundant calls here
     }
 
     /// @notice Delegatecall into the endgame module to resolve slow settlement paths.
@@ -1553,36 +1543,6 @@ contract PurgeGame is PurgeGameStorage {
         }
 
         coin.creditFlip(caller, flipCredit);
-    }
-
-    function onTokenTransfer(address from, uint256 amount, bytes calldata) external {
-        if (msg.sender != linkToken) revert E();
-        if (amount == 0) revert E();
-
-        try
-            ILinkToken(linkToken).transferAndCall(address(vrfCoordinator), amount, abi.encode(vrfSubscriptionId))
-        returns (bool ok) {
-            if (!ok) revert E();
-        } catch {
-            revert E();
-        }
-        (uint96 bal, , , , ) = vrfCoordinator.getSubscription(vrfSubscriptionId);
-        uint16 mult = _tierMultPermille(uint256(bal));
-        if (mult == 0) return;
-        uint256 luckPerLink = (priceCoin * LUCK_PER_LINK_PERCENT) / 100;
-        uint256 baseCredit = (amount * luckPerLink) / 1 ether;
-        uint256 credit = (baseCredit * mult) / 1000;
-        if (credit != 0) {
-            coin.creditFlip(from, credit);
-        }
-    }
-
-    function _tierMultPermille(uint256 subBal) private pure returns (uint16) {
-        if (subBal < 100 ether) return 2000;
-        if (subBal < 200 ether) return 1500;
-        if (subBal < 400 ether) return 1000;
-        if (subBal < 600 ether) return 200;
-        return 0;
     }
 
     function _traitWeight(uint32 rnd) private pure returns (uint8) {

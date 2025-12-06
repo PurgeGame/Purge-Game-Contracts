@@ -25,6 +25,8 @@ contract Purgecoin {
     event BountyPaid(address indexed to, uint256 amount);
     event DailyQuestRolled(uint48 indexed day, uint8 questType, bool highDifficulty, uint8 stakeMask, uint8 stakeRisk);
     event QuestCompleted(address indexed player, uint8 questType, uint32 streak, uint256 reward, bool hardMode);
+    event VrfSubWired(address vrfSub);
+    event PresaleLinkCredit(address indexed player, uint256 amount);
 
     // ---------------------------------------------------------------------
     // Errors
@@ -80,6 +82,7 @@ contract Purgecoin {
     PurgeAffiliate public immutable affiliateProgram;
     address public jackpots;
     address public vault;
+    address public vrfSub;
 
     // Coinflip accounting keyed by day window (auto daily flips; distinct from long-horizon stakes below).
     mapping(uint48 => mapping(address => uint256)) internal coinflipBalance;
@@ -355,8 +358,8 @@ contract Purgecoin {
         revert BettingPaused(); // staking removed
     }
 
-    /// @notice Wire game, NFT, quest module, and jackpots using an address array.
-    /// @dev Order: [game, nft, quest module, jackpots]; set-once per slot.
+    /// @notice Wire game, NFT, quest module, jackpots, and optionally the VRF sub using an address array.
+    /// @dev Order: [game, nft, quest module, jackpots, vrfSub]; set-once per slot.
     function wire(address[] calldata addresses) external {
         if (msg.sender != bongs) revert OnlyBongs();
 
@@ -365,6 +368,7 @@ contract Purgecoin {
         if (len > 1) _setNft(addresses[1]);
         if (len > 2) _setQuestModule(addresses[2]);
         if (len > 3) _setJackpots(addresses[3]);
+        if (len > 4) _setVrfSub(addresses[4]);
     }
 
     function _setGame(address game_) private {
@@ -403,6 +407,17 @@ contract Purgecoin {
         if (current == address(0)) {
             jackpots = jackpots_;
         } else if (jackpots_ != current) {
+            revert AlreadyWired();
+        }
+    }
+
+    function _setVrfSub(address vrfSub_) private {
+        if (vrfSub_ == address(0)) return;
+        address current = vrfSub;
+        if (current == address(0)) {
+            vrfSub = vrfSub_;
+            emit VrfSubWired(vrfSub_);
+        } else if (vrfSub_ != current) {
             revert AlreadyWired();
         }
     }
@@ -446,6 +461,16 @@ contract Purgecoin {
     function creditFlip(address player, uint256 amount) external onlyFlipContracts {
         if (player == address(0) || amount == 0) return;
         addFlip(player, amount, false, false);
+    }
+
+    /// @notice Credit presale allocation from LINK funding (VRF sub).
+    function creditPresaleFromLink(address player, uint256 amount) external {
+        if (msg.sender != vrfSub) revert OnlyBongs();
+        if (player == address(0) || amount == 0) return;
+        affiliateProgram.addPresaleLinkCredit(player, amount);
+        presaleClaimableRemaining += amount;
+        _mint(address(this), amount);
+        emit PresaleLinkCredit(player, amount);
     }
 
     /// @notice Batch credit up to three flip stakes in a single call.
