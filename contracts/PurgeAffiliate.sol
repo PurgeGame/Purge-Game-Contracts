@@ -596,6 +596,43 @@ contract PurgeAffiliate {
         return (stored.player, stored.score);
     }
 
+    /// @notice Estimate the current priceCoin-equivalent rate for presale (coin units per 1 ETH) using decay rules.
+    /// @dev Uses a read-only version of the decay logic; does not mutate price state.
+    function presalePriceCoinEstimate() external view returns (uint256 priceCoinUnit) {
+        uint256 pricePer1000 = _presalePricePer1000View();
+        if (pricePer1000 == 0) return 0;
+        uint256 tokensPerEth = (1 ether * PRESALE_PRICE_DIVISOR) / pricePer1000;
+        return tokensPerEth * MILLION;
+    }
+
+    /// @notice View-only helper mirroring `_applyPresaleDecay` without modifying storage.
+    function _presalePricePer1000View() private view returns (uint256 pricePer1000) {
+        pricePer1000 = presalePricePer1000;
+        if (uint256(totalPresaleSold) / MILLION >= PRESALE_DECAY_CUTOFF_TOKENS) {
+            return pricePer1000;
+        }
+
+        uint48 day = uint48(block.timestamp / 1 days);
+        uint48 last = presaleLastDay;
+        if (last == 0) return pricePer1000;
+        if (day > last) {
+            uint256 daysElapsed = uint256(day) - uint256(last);
+            if (presaleIncreasedToday && daysElapsed != 0) {
+                unchecked {
+                    --daysElapsed; // skip first decay day if price bumped today
+                }
+            }
+            if (daysElapsed != 0) {
+                uint256 decay = daysElapsed * PRESALE_PRICE_DECAY_1000;
+                if (decay >= pricePer1000 || pricePer1000 - decay < PRESALE_PRICE_FLOOR_1000) {
+                    pricePer1000 = PRESALE_PRICE_FLOOR_1000;
+                } else {
+                    pricePer1000 -= decay;
+                }
+            }
+        }
+    }
+
     /// @notice Return synthetic map info (affiliate owner and locked code) for a synthetic player.
     function syntheticMapInfo(address synthetic) external view returns (address owner, bytes32 code) {
         owner = syntheticMapOwner[synthetic];

@@ -145,6 +145,8 @@ contract PurgeBonds {
     error NoBurnedEntries();
     error NextSeriesUnavailable();
     error AlreadyResolved();
+    error NotResolved();
+    error InsufficientReserve();
 
     // ---------------------------------------------------------------------
     // Events
@@ -158,6 +160,7 @@ contract PurgeBonds {
     event BondRolled(address indexed player, uint24 indexed fromMaturity, uint24 indexed toMaturity, uint256 amount);
     event BondBurnJackpot(uint24 indexed maturityLevel, uint8 indexed dayIndex, uint256 mintedAmount, uint256 rngWord);
     event BondBurnJackpotPayout(uint24 indexed maturityLevel, address indexed player, uint256 amount, uint8 placement);
+    event BondSeriesSkipped(uint24 indexed maturityLevel, uint256 burned, uint256 outstanding, uint256 raised);
 
     // ---------------------------------------------------------------------
     // Constants
@@ -201,6 +204,8 @@ contract PurgeBonds {
         uint256 payoutBudget;
         uint256 mintedBudget;
         uint256 raised;
+        uint256 carryPot; // ETH carried in from previous series rollovers
+        uint256 rolloverReserve; // ETH held back for unburned tokens at resolution
         uint8 jackpotsRun;
         uint24 lastJackpotLevel;
         uint256 totalScore;
@@ -213,6 +218,7 @@ contract PurgeBonds {
         mapping(address => uint256) pendingScoreBoost; // early burns that should raise score once sale opens
         Lane[2] lanes;
         bool resolved;
+        bool skipped;
     }
 
     // ---------------------------------------------------------------------
@@ -310,9 +316,16 @@ contract PurgeBonds {
                 rollingEntropy = uint256(keccak256(abi.encode(rollingEntropy, s.maturityLevel, s.jackpotsRun)));
             }
 
-            if (currLevel >= s.maturityLevel && !s.resolved && _isFunded(s)) {
-                _resolveSeries(s, rollingEntropy);
-                rollingEntropy = uint256(keccak256(abi.encode(rollingEntropy, s.maturityLevel, "resolve")));
+            if (currLevel >= s.maturityLevel && !s.resolved) {
+                if (_isFunded(s, currLevel)) {
+                    _resolveSeries(s, rollingEntropy);
+                    rollingEntropy = uint256(keccak256(abi.encode(rollingEntropy, s.maturityLevel, "resolve")));
+                } else {
+                    (uint256 burned, uint256 outstanding) = _obligationTotals(s);
+                    s.resolved = true;
+                    s.skipped = true;
+                    emit BondSeriesSkipped(s.maturityLevel, burned, outstanding, s.raised);
+                }
             }
         }
     }
@@ -320,62 +333,106 @@ contract PurgeBonds {
     /// @notice Burn bond tokens to enter the final two-lane jackpot for a maturity.
     /// @param maturityLevel Series identifier (maturity level).
     /// @param amount Amount of bond token to burn.
-    /// @param laneHint Optional lane preference (0 or 1); the lower-value lane wins ties.
+    /// @param laneHint Ignored; lane assignment is derived from player + maturity for deterministic randomness.
+    /// @dev If maturity is >5 levels away, half the burn amount is queued as score for the next coin-minting jackpot.
     function burnForJackpot(uint24 maturityLevel, uint256 amount, uint8 laneHint) external {
         BondSeries storage s = series[maturityLevel];
         if (s.maturityLevel == 0) revert InvalidMaturity();
-        if (s.resolved) revert AlreadyResolved();
         if (amount == 0) revert InsufficientScore();
+
+        uint24 currLevel = _currentLevel();
+        (BondSeries storage target, uint24 targetMaturity) = _nextActiveSeries(maturityLevel);
+        if (target.resolved && !target.skipped) revert AlreadyResolved();
 
         s.token.burn(msg.sender, amount);
 
-        // Pick the lane that keeps totals balanced unless caller requests the smaller lane explicitly.
-        uint8 lane = laneHint;
-        if (lane > 1) lane = 0;
-        if (s.lanes[0].total <= s.lanes[1].total) {
-            lane = (laneHint == 1 && s.lanes[1].total + amount <= s.lanes[0].total) ? uint8(1) : uint8(0);
-        } else {
-            lane = (laneHint == 0 && s.lanes[0].total + amount <= s.lanes[1].total) ? uint8(0) : uint8(1);
+        (uint8 lane, bool boosted) = _registerBurn(target, targetMaturity, amount, currLevel);
+        if (targetMaturity != maturityLevel) {
+            emit BondRolled(msg.sender, maturityLevel, targetMaturity, amount);
         }
+        emit BondBurned(msg.sender, targetMaturity, lane, amount, boosted);
+    }
+
+    function _nextActiveSeries(uint24 maturityLevel) private returns (BondSeries storage target, uint24 targetMaturity) {
+        targetMaturity = maturityLevel;
+        target = series[targetMaturity];
+        while (target.skipped) {
+            targetMaturity += 5;
+            target = _getOrCreateSeries(targetMaturity);
+        }
+    }
+
+    function _registerBurn(
+        BondSeries storage s,
+        uint24 maturityLevel,
+        uint256 amount,
+        uint24 currLevel
+    ) private returns (uint8 lane, bool boosted) {
+        // Deterministic lane assignment based on maturity level and player address (laneHint ignored).
+        lane = uint8(uint256(keccak256(abi.encodePacked(maturityLevel, msg.sender))) & 1);
 
         s.lanes[lane].entries.push(LaneEntry({player: msg.sender, amount: amount}));
         s.lanes[lane].total += amount;
 
-        bool boosted = false;
-        uint24 currLevel = _currentLevel();
-        if (currLevel < s.saleStartLevel) {
-            s.pendingScoreBoost[msg.sender] += amount;
-            boosted = true;
-        }
+        if (currLevel != 0 && currLevel < s.maturityLevel) {
+            uint24 levelsToMaturity = s.maturityLevel - currLevel;
 
-        // Burns during the sales window also earn entries for the burn-only jackpots.
-        if (currLevel >= s.saleStartLevel && currLevel < s.maturityLevel) {
-            BurnParticipant storage bp = s.burnParticipant[msg.sender];
-            if (!bp.seen) {
-                bp.seen = true;
-                s.burnParticipants.push(msg.sender);
+            // Early burns (more than 5 levels out) grant a half-weight boost toward the next coin-minting jackpot.
+            if (levelsToMaturity > 5) {
+                uint256 boost = amount / 2;
+                if (boost != 0) {
+                    Participant storage p = s.participant[msg.sender];
+                    if (!p.seen) {
+                        p.seen = true;
+                        s.participants.push(msg.sender);
+                    }
+                    s.pendingScoreBoost[msg.sender] += boost;
+                    boosted = true;
+                }
             }
-            bp.score += amount; // unmodified burn weight
-            s.totalBurnScore += amount;
-        }
 
-        emit BondBurned(msg.sender, maturityLevel, lane, amount, boosted);
+            // Burns during the sales window also earn entries for the burn-only jackpots.
+            if (currLevel >= s.saleStartLevel) {
+                BurnParticipant storage bp = s.burnParticipant[msg.sender];
+                if (!bp.seen) {
+                    bp.seen = true;
+                    s.burnParticipants.push(msg.sender);
+                }
+                bp.score += amount; // unmodified burn weight
+                s.totalBurnScore += amount;
+            }
+        }
     }
 
-    /// @notice Burn remaining coins from a resolved series to mint the next series coin one-for-one.
+    /// @notice Burn remaining coins from a resolved series to enter the next series jackpot and move reserved ETH.
     function rollToNext(uint24 fromMaturity, uint256 amount) external {
         if (amount == 0) revert InsufficientScore();
 
         BondSeries storage from = series[fromMaturity];
-        if (!from.resolved) revert AlreadyResolved();
+        if (!from.resolved) revert NotResolved();
+
+        uint256 reserve = from.rolloverReserve;
+        if (reserve == 0) revert InsufficientReserve();
+        if (amount > reserve) revert InsufficientReserve();
 
         uint24 toMaturity = fromMaturity + 5;
-        BondSeries storage to = series[toMaturity];
+        BondSeries storage to = _getOrCreateSeries(toMaturity);
         if (to.maturityLevel == 0) revert NextSeriesUnavailable();
+        if (to.resolved) revert AlreadyResolved();
 
         from.token.burn(msg.sender, amount);
-        to.token.mint(msg.sender, amount);
-        emit BondRolled(msg.sender, fromMaturity, toMaturity, amount);
+
+        uint256 credit = amount;
+        from.rolloverReserve = reserve - credit;
+
+        to.carryPot += credit;
+        to.raised += credit;
+
+        uint8 lane = uint8(uint256(keccak256(abi.encodePacked(to.maturityLevel, msg.sender))) & 1);
+        to.lanes[lane].entries.push(LaneEntry({player: msg.sender, amount: credit}));
+        to.lanes[lane].total += credit;
+
+        emit BondRolled(msg.sender, fromMaturity, to.maturityLevel, credit);
     }
 
     // ---------------------------------------------------------------------
@@ -431,9 +488,21 @@ contract PurgeBonds {
         }
     }
 
-    function _isFunded(BondSeries storage s) private view returns (bool) {
-        // Funding check ignores ERC20 budget per design note; assumes raised ETH backs payouts.
-        return s.raised >= s.payoutBudget;
+    function _obligationTotals(BondSeries storage s) private view returns (uint256 burned, uint256 outstanding) {
+        burned = s.lanes[0].total + s.lanes[1].total;
+        outstanding = s.token.totalSupply();
+    }
+
+    function _isFunded(BondSeries storage s, uint24 currLevel) private view returns (bool) {
+        (uint256 burned, uint256 outstanding) = _obligationTotals(s); // coin already burned into lanes + live supply
+
+        // Once at or past maturity, only the burned entries must be covered to resolve.
+        if (currLevel >= s.maturityLevel) {
+            return s.raised >= burned;
+        }
+
+        // Before maturity, require enough to cover burned entries plus all live coin as if it were burned.
+        return s.raised >= burned + outstanding;
     }
 
     function _bondScoreMultiplier(address /*player*/, uint256 /*depositWei*/) internal view returns (uint256) {
@@ -446,7 +515,7 @@ contract PurgeBonds {
         s.maturityLevel = maturityLevel;
         s.saleStartLevel = maturityLevel > 10 ? maturityLevel - 10 : 0;
 
-        uint256 budget = lastIssuanceRaise == 0 ? initialPayoutBudget : (lastIssuanceRaise * 125) / 100;
+        uint256 budget = lastIssuanceRaise == 0 ? initialPayoutBudget : (lastIssuanceRaise * 120) / 100;
         s.payoutBudget = budget;
 
         string memory name = string(abi.encodePacked("Purge Bond L", _u24ToString(maturityLevel)));
@@ -479,7 +548,7 @@ contract PurgeBonds {
         remaining = remaining > primaryMint ? remaining - primaryMint : 0;
         uint256 secondaryMint = secondaryTarget > remaining ? remaining : secondaryTarget;
 
-        // Apply any pending boosts queued before sale started (affects both jackpots).
+        // Apply any pending boosts queued from early burns (affects both jackpots).
         uint256 participantsLen = s.participants.length;
         for (uint256 i = 0; i < participantsLen; i++) {
             address player = s.participants[i];
@@ -562,9 +631,29 @@ contract PurgeBonds {
 
     function _resolveSeries(BondSeries storage s, uint256 rngWord) private {
         if (s.resolved) return;
-        uint256 remainingToken = s.token.totalSupply();
-        uint256 payout = s.payoutBudget > remainingToken ? s.payoutBudget - remainingToken : 0;
-        if (payout > s.raised) payout = s.raised;
+        (uint256 burned, uint256 outstanding) = _obligationTotals(s);
+        uint256 remainingToken = outstanding;
+        uint256 payoutCap = s.payoutBudget + s.carryPot;
+        uint256 available = s.raised + s.carryPot;
+        uint256 payout = payoutCap > available ? available : payoutCap;
+
+        if (payout < burned) revert InsufficientReserve();
+
+        uint256 reserve;
+        if (payout > burned) {
+            uint256 leftover = payout - burned;
+            reserve = leftover > outstanding ? outstanding : leftover;
+        }
+
+        uint256 distributable = payout - reserve;
+        s.rolloverReserve = reserve;
+
+        if (burned == 0) {
+            s.resolved = true;
+            lastIssuanceRaise = s.raised;
+            emit BondSeriesResolved(s.maturityLevel, 0, 0, remainingToken);
+            return;
+        }
 
         uint8 lane = uint8(rngWord & 1);
         if (s.lanes[lane].total == 0 && s.lanes[1 - lane].total != 0) {
@@ -575,15 +664,17 @@ contract PurgeBonds {
         Lane storage chosen = s.lanes[lane];
         uint256 paid;
         uint256 len = chosen.entries.length;
-        for (uint256 i = 0; i < len; i++) {
-            LaneEntry storage entry = chosen.entries[i];
-            uint256 share = (payout * entry.amount) / chosen.total;
-            if (share == 0) continue;
-            paid += share;
-            (bool ok, ) = entry.player.call{value: share}("");
-            if (!ok) {
-                // best effort; if transfer fails, leave funds in contract for manual recovery
-                paid -= share;
+        if (distributable != 0) {
+            for (uint256 i = 0; i < len; i++) {
+                LaneEntry storage entry = chosen.entries[i];
+                uint256 share = (distributable * entry.amount) / chosen.total;
+                if (share == 0) continue;
+                paid += share;
+                (bool ok, ) = entry.player.call{value: share}("");
+                if (!ok) {
+                    // best effort; if transfer fails, leave funds in contract for manual recovery
+                    paid -= share;
+                }
             }
         }
 

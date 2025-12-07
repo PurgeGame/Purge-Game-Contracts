@@ -35,6 +35,10 @@ interface IPurgeCoinPresaleLink {
     function creditPresaleFromLink(address player, uint256 amount) external;
 }
 
+interface IPurgeAffiliatePresalePrice {
+    function presalePriceCoinEstimate() external view returns (uint256);
+}
+
 /// @notice Minimal Chainlink price feed surface (used for LINK/ETH conversion).
 interface IAggregatorV3 {
     function latestRoundData()
@@ -76,6 +80,7 @@ contract PurgeGameVRFSub {
     event CoinWired(address indexed coin, uint256 priceCoinUnit);
     event LinkCreditRecorded(address indexed player, uint256 amount, bool minted);
     event LinkEthFeedUpdated(address indexed feed);
+    event AffiliateWired(address indexed affiliate);
 
     // -----------------------
     // Storage
@@ -83,6 +88,7 @@ contract PurgeGameVRFSub {
     address public immutable bonds;
     address public immutable linkToken;
     address public coin;
+    address public affiliate;
 
     address public coordinator;
     address public game;
@@ -167,6 +173,14 @@ contract PurgeGameVRFSub {
             linkRewardPriceCoin = priceCoinUnit;
         }
         emit CoinWired(coin, linkRewardPriceCoin);
+    }
+
+    /// @notice Wire the affiliate contract used to estimate presale priceCoin before the game is live.
+    function wireAffiliate(address affiliate_) external onlyBonds {
+        if (affiliate != address(0) && affiliate_ != affiliate) revert AlreadyWired();
+        if (affiliate_ == address(0)) revert ZeroAddress();
+        affiliate = affiliate_;
+        emit AffiliateWired(affiliate_);
     }
 
     /// @notice Configure the LINK/ETH price feed used to value LINK donations (zero disables the oracle).
@@ -291,17 +305,21 @@ contract PurgeGameVRFSub {
 
         // Compute credit using the same tier logic as the game.
         (uint96 bal, , , , ) = IVRFCoordinatorV2_5Owner(coordinator).getSubscription(subscriptionId);
-        uint16 mult = _tierMultPermille(uint256(bal));
+        uint256 mult = _linkRewardMultiplier(uint256(bal));
         if (mult == 0) return;
+
+        uint256 priceCoinUnit = _presalePriceCoin();
+        if (priceCoinUnit == 0) {
+            priceCoinUnit = linkRewardPriceCoin;
+        }
 
         uint256 ethEquivalent = _linkAmountToEth(amount);
         if (ethEquivalent == 0) {
             ethEquivalent = amount; // fallback to legacy behavior if oracle unavailable or invalid
         }
 
-        uint256 luckPerEth = (linkRewardPriceCoin * 22) / 100; // LUCK_PER_LINK_PERCENT = 22
-        uint256 baseCredit = (ethEquivalent * luckPerEth) / 1 ether;
-        uint256 credit = (baseCredit * mult) / 1000;
+        uint256 baseCredit = (ethEquivalent * priceCoinUnit) / 1 ether;
+        uint256 credit = (baseCredit * mult) / 1e18;
         if (credit == 0) return;
 
         if (coinWired && coin != address(0)) {
@@ -348,11 +366,28 @@ contract PurgeGameVRFSub {
         ethAmount = (amount * priceWei) / 1 ether;
     }
 
-    function _tierMultPermille(uint256 subBal) private pure returns (uint16) {
-        if (subBal < 100 ether) return 2000;
-        if (subBal < 200 ether) return 1500;
-        if (subBal < 400 ether) return 1000;
-        if (subBal < 600 ether) return 200;
-        return 0;
+    /// @dev If the game is not yet wired, try to use the affiliate's presale priceCoin estimate for LINK rewards.
+    function _presalePriceCoin() private view returns (uint256 priceCoinUnit) {
+        if (gameWired) return 0;
+        address aff = affiliate;
+        if (aff == address(0)) return 0;
+        try IPurgeAffiliatePresalePrice(aff).presalePriceCoinEstimate() returns (uint256 p) {
+            return p;
+        } catch {
+            return 0;
+        }
+    }
+
+    function _linkRewardMultiplier(uint256 subBal) private pure returns (uint256 mult) {
+        if (subBal >= 1000 ether) return 0; // zero reward once fully funded
+        if (subBal <= 200 ether) {
+            // Linear from 3x at 0 LINK down to 1x at 200 LINK.
+            uint256 delta = (subBal * 2e18) / 200 ether;
+            return 3e18 - delta;
+        }
+        // Between 200 and 1000 LINK: decay from 1x at 200 LINK to 0 at 1000 LINK.
+        uint256 excess = subBal - 200 ether;
+        uint256 delta2 = (excess * 1e18) / 800 ether;
+        return delta2 >= 1e18 ? 0 : 1e18 - delta2;
     }
 }
