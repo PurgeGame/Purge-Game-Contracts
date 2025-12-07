@@ -1,7 +1,7 @@
 const hre = require("hardhat");
 
 async function main() {
-  const RendererFactory = await hre.ethers.getContractFactory("IconRendererBongTrophy");
+  const RendererFactory = await hre.ethers.getContractFactory("IconRendererBondTrophy");
   // Deploy with null addresses to trigger random fallback
   const renderer = await RendererFactory.deploy(hre.ethers.ZeroAddress, hre.ethers.ZeroAddress);
   await renderer.waitForDeployment();
@@ -11,7 +11,7 @@ async function main() {
   const tokens = [1n, 2n, 3n, 12345n];
   
   for (const tokenId of tokens) {
-    const uri = await renderer.bongTokenURI(tokenId, 1000, 500, 500, false, 0n);
+    const uri = await renderer.bondTokenURI(tokenId, 1000, 500, 500, false, 0n);
     const json = JSON.parse(Buffer.from(uri.split(",")[1], "base64").toString());
     const svg = Buffer.from(json.image.split(",")[1], "base64").toString();
     

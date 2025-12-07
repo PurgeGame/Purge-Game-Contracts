@@ -37,7 +37,7 @@ interface IDegenerusCoin {
 
     function notifyQuestMint(address player, uint32 quantity, bool paidWithEth) external;
 
-    function notifyQuestBong(address player, uint256 basePerBongWei) external;
+    function notifyQuestBond(address player, uint256 basePerBondWei) external;
 
     function notifyQuestBurn(address player, uint32 quantity) external;
 
@@ -55,5 +55,5 @@ interface IDegenerusCoin {
 
     function getPlayerQuestView(address player) external view returns (PlayerQuestView memory viewData);
 
-    function bongPayment(uint256 amount) external;
+    function bondPayment(uint256 amount) external;
 }

@@ -43,14 +43,14 @@ interface IDegenerusGameJackpotModule {
 
     function processMapBatch(uint32 writesBudget) external returns (bool finished);
 
-    function processPendingJackpotBongs(
+    function processPendingJackpotBonds(
         uint256 maxMints
     ) external returns (bool finished, uint256 processed);
 }
 
-interface IDegenerusGameBongModule {
-    function bongMaintenanceForMap(
-        address bongsAddr,
+interface IDegenerusGameBondModule {
+    function bondMaintenanceForMap(
+        address bondsAddr,
         address coinAddr,
         address stethAddr,
         uint48 day,
@@ -58,8 +58,8 @@ interface IDegenerusGameBongModule {
         uint256 rngWord,
         uint32 cap
     ) external returns (bool worked);
-    function stakeForTargetRatio(address bongsAddr, address stethAddr, uint24 lvl) external;
-    function drainToBongs(address bongsAddr, address stethAddr, uint48 day) external;
+    function stakeForTargetRatio(address bondsAddr, address stethAddr, uint24 lvl) external;
+    function drainToBonds(address bondsAddr, address stethAddr, uint48 day) external;
 }
 
 interface IDegenerusGameMintModule {

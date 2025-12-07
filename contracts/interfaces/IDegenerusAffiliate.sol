@@ -12,18 +12,18 @@ interface IDegenerusAffiliate {
     function getReferrer(address player) external view returns (address);
     function syntheticMapInfo(address synthetic) external view returns (address owner, bytes32 code);
 
-    function claimAffiliateBong(uint24 lvl, uint8 tierIdx) external;
+    function claimAffiliateBond(uint24 lvl, uint8 tierIdx) external;
 
-    function claimableAffiliateBongTiers(
+    function claimableAffiliateBondTiers(
         address player,
         uint24 lvl
     ) external view returns (uint16 claimable, uint256 claimedMask);
 
-    function affiliateBongRewardsLength() external view returns (uint256);
+    function affiliateBondRewardsLength() external view returns (uint256);
 
-    function affiliateBongReward(
+    function affiliateBondReward(
         uint256 idx
-    ) external view returns (uint96 scoreRequired, uint96 baseWeiPerBong, uint8 bongs, bool stake);
+    ) external view returns (uint96 scoreRequired, uint96 baseWeiPerBond, uint8 bonds, bool stake);
 
-    function affiliateBongClaimed(uint24 lvl, address player) external view returns (uint256);
+    function affiliateBondClaimed(uint24 lvl, address player) external view returns (uint256);
 }

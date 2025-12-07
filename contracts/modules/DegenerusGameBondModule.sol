@@ -4,9 +4,9 @@ pragma solidity ^0.8.26;
 import {DegenerusGameStorage} from "../storage/DegenerusGameStorage.sol";
 import {IDegenerusCoin} from "../interfaces/IDegenerusCoin.sol";
 
-interface IDegenerusBongsLite {
-    function payBongs(uint256 coinAmount, uint256 stEthAmount, uint48 rngDay, uint256 rngWord, uint256 maxBongs) external payable;
-    function resolvePendingBongs(uint256 maxBongs) external;
+interface IDegenerusBondsLite {
+    function payBonds(uint256 coinAmount, uint256 stEthAmount, uint48 rngDay, uint256 rngWord, uint256 maxBonds) external payable;
+    function resolvePendingBonds(uint256 maxBonds) external;
     function resolvePending() external view returns (bool);
     function notifyGameOver() external;
     function stakeRateBps() external view returns (uint16);
@@ -22,19 +22,19 @@ interface IDegenerusGameVaultLike {
 }
 
 /**
- * @title DegenerusGameBongModule
- * @notice Delegate-called module for bong upkeep, staking, and shutdown flows.
+ * @title DegenerusGameBondModule
+ * @notice Delegate-called module for bond upkeep, staking, and shutdown flows.
  *         The storage layout mirrors the core contract so writes land in the parent via `delegatecall`.
  */
-contract DegenerusGameBongModule is DegenerusGameStorage {
+contract DegenerusGameBondModule is DegenerusGameStorage {
     error E();
-    error BongsNotResolved();
+    error BondsNotResolved();
 
     uint256 private constant REWARD_POOL_MIN_STAKE = 0.5 ether;
 
-    /// @notice Handle bong funding/resolve work during map jackpot prep.
-    function bongMaintenanceForMap(
-        address bongsAddr,
+    /// @notice Handle bond funding/resolve work during map jackpot prep.
+    function bondMaintenanceForMap(
+        address bondsAddr,
         address coinAddr,
         address stethAddr,
         uint48 day,
@@ -42,25 +42,25 @@ contract DegenerusGameBongModule is DegenerusGameStorage {
         uint256 rngWord,
         uint32 cap
     ) external returns (bool worked) {
-        IDegenerusBongsLite bongContract = IDegenerusBongsLite(bongsAddr);
+        IDegenerusBondsLite bondContract = IDegenerusBondsLite(bondsAddr);
 
-        uint256 maxBongs = cap == 0 ? 100 : uint256(cap);
+        uint256 maxBonds = cap == 0 ? 100 : uint256(cap);
         // If a batch is already pending, just resolve more and skip new funding.
-        if (bongContract.resolvePending()) {
-            bongContract.payBongs{value: 0}(0, 0, day, rngWord, maxBongs);
-            lastBongResolutionDay = day;
+        if (bondContract.resolvePending()) {
+            bondContract.payBonds{value: 0}(0, 0, day, rngWord, maxBonds);
+            lastBondResolutionDay = day;
             return true;
         }
 
         // Only fund once per level; subsequent calls act as resolve-only.
-        if (lastBongFundingLevel == level) {
+        if (lastBondFundingLevel == level) {
             return false;
         }
 
         uint256 stBal = IStETHLite(stethAddr).balanceOf(address(this));
         uint256 stYield = stBal > principalStEth ? (stBal - principalStEth) : 0;
         uint256 ethBal = address(this).balance;
-        uint256 tracked = currentPrizePool + nextPrizePool + rewardPool + bongCreditEscrow;
+        uint256 tracked = currentPrizePool + nextPrizePool + rewardPool + bondCreditEscrow;
         uint256 ethYield = ethBal > tracked ? ethBal - tracked : 0;
         uint256 yieldPool = stYield + ethYield;
 
@@ -69,18 +69,18 @@ contract DegenerusGameBongModule is DegenerusGameStorage {
         uint256 bondCoin = (mintableCoin * 40) / 100;
         uint256 vaultCoin = mintableCoin - bondCoin;
 
-        uint256 bongSkim = yieldPool / 4; // 25% to bongs
+        uint256 bondSkim = yieldPool / 4; // 25% to bonds
         uint256 rewardTopUp = yieldPool / 20; // 5% to reward pool
 
-        uint256 ethForBongs = bongSkim <= ethYield ? bongSkim : ethYield;
-        uint256 stForBongs = bongSkim > ethForBongs ? bongSkim - ethForBongs : 0;
-        if (stForBongs > stYield) {
-            stForBongs = stYield;
-            bongSkim = ethForBongs + stForBongs;
+        uint256 ethForBonds = bondSkim <= ethYield ? bondSkim : ethYield;
+        uint256 stForBonds = bondSkim > ethForBonds ? bondSkim - ethForBonds : 0;
+        if (stForBonds > stYield) {
+            stForBonds = stYield;
+            bondSkim = ethForBonds + stForBonds;
         }
 
-        uint256 ethAfterBong = ethYield > ethForBongs ? ethYield - ethForBongs : 0;
-        uint256 rewardFromEth = rewardTopUp <= ethAfterBong ? rewardTopUp : ethAfterBong;
+        uint256 ethAfterBond = ethYield > ethForBonds ? ethYield - ethForBonds : 0;
+        uint256 rewardFromEth = rewardTopUp <= ethAfterBond ? rewardTopUp : ethAfterBond;
         if (rewardFromEth != 0) {
             rewardPool += rewardFromEth;
         }
@@ -93,13 +93,13 @@ contract DegenerusGameBongModule is DegenerusGameStorage {
             }
         }
 
-        bongContract.payBongs{value: ethForBongs}(bondCoin, stForBongs, day, rngWord, maxBongs);
-        lastBongFundingLevel = level;
-        return (bongSkim != 0 || mintableCoin != 0 || rewardFromEth != 0);
+        bondContract.payBonds{value: ethForBonds}(bondCoin, stForBonds, day, rngWord, maxBonds);
+        lastBondFundingLevel = level;
+        return (bondSkim != 0 || mintableCoin != 0 || rewardFromEth != 0);
     }
 
-    /// @notice Stake excess reward pool into stETH based on bongs-configured ratio.
-    function stakeForTargetRatio(address bongsAddr, address stethAddr, uint24 lvl) external {
+    /// @notice Stake excess reward pool into stETH based on bonds-configured ratio.
+    function stakeForTargetRatio(address bondsAddr, address stethAddr, uint24 lvl) external {
         // Skip only for levels ending in 99 or 00 to avoid endgame edge cases.
         uint24 cycle = lvl % 100;
         if (cycle == 99 || cycle == 0) return;
@@ -108,8 +108,8 @@ contract DegenerusGameBongModule is DegenerusGameStorage {
         if (pool == 0) return;
 
         uint256 rateBps = 10_000;
-        if (bongsAddr != address(0)) {
-            rateBps = IDegenerusBongsLite(bongsAddr).stakeRateBps();
+        if (bondsAddr != address(0)) {
+            rateBps = IDegenerusBondsLite(bondsAddr).stakeRateBps();
         }
         if (rateBps == 0) return;
 
@@ -123,12 +123,12 @@ contract DegenerusGameBongModule is DegenerusGameStorage {
         _stakeEth(stethAddr, stakeAmount);
     }
 
-    /// @notice Inform bongs of shutdown and transfer all assets to it.
-    function drainToBongs(address bongsAddr, address stethAddr, uint48 day) external {
-        if (bongsAddr == address(0)) return;
+    /// @notice Inform bonds of shutdown and transfer all assets to it.
+    function drainToBonds(address bondsAddr, address stethAddr, uint48 day) external {
+        if (bondsAddr == address(0)) return;
 
-        IDegenerusBongsLite bongContract = IDegenerusBongsLite(bongsAddr);
-        bongContract.notifyGameOver();
+        IDegenerusBondsLite bondContract = IDegenerusBondsLite(bondsAddr);
+        bondContract.notifyGameOver();
 
         uint256 stBal = IStETHLite(stethAddr).balanceOf(address(this));
         if (stBal != 0) {
@@ -136,7 +136,7 @@ contract DegenerusGameBongModule is DegenerusGameStorage {
         }
 
         uint256 ethBal = address(this).balance;
-        bongContract.payBongs{value: ethBal}(0, stBal, day, 0, 0);
+        bondContract.payBonds{value: ethBal}(0, stBal, day, 0, 0);
     }
 
     function _stakeEth(address stethAddr, uint256 amount) private {

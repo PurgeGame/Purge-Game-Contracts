@@ -293,31 +293,61 @@ contract DegenerusBonds {
 
     /// @notice Player deposit flow during an active sale window.
     function deposit(uint24 maturityLevel) external payable returns (uint256 scoreAwarded) {
-        if (msg.value == 0) revert SaleClosed();
-        if (!bankedInGame) revert BankCallFailed();
+        return _depositFor(msg.sender, msg.sender, maturityLevel, msg.value);
+    }
 
-        BondSeries storage s = _getOrCreateSeries(maturityLevel);
-        uint24 currLevel = _currentLevel();
-        if (currLevel < s.saleStartLevel || currLevel >= s.maturityLevel) revert SaleClosed();
+    /// @notice Deposit on behalf of a player into the current active maturity (game compatibility shim).
+    /// @dev Caller is expected to be the game when using credit on behalf of a player.
+    function depositCurrentFor(address beneficiary) external payable returns (uint256 scoreAwarded) {
+        uint24 maturityLevel = _activeMaturity();
+        return _depositFor(beneficiary, beneficiary, maturityLevel, msg.value);
+    }
 
-        try IDegenerusGameBondBank(address(game)).bondDeposit{value: msg.value}() {} catch {
-            revert BankCallFailed();
+    /// @notice Compatibility shim for legacy bond entrypoints; treats payments as bond deposits into the active series.
+    function payBonds(
+        uint256 /*coinAmount*/,
+        uint256 /*stEthAmount*/,
+        uint48 /*rngDay*/,
+        uint256 /*rngWord*/,
+        uint256 /*maxBonds*/
+    ) external payable {
+        if (msg.value == 0) return;
+        _depositFor(msg.sender, msg.sender, _activeMaturity(), msg.value);
+    }
+
+    function purchaseGameBonds(
+        address[] calldata recipients,
+        uint256 /*quantity*/,
+        uint256 /*basePerBondWei*/,
+        bool /*stake*/
+    ) external returns (uint256 startTokenId) {
+        if (recipients.length != 0) {
+            // No tokens minted; return a dummy start id.
+            return 1;
         }
+        return 0;
+    }
 
-        uint256 multiplier = _bondScoreMultiplier(msg.sender, msg.value);
-        scoreAwarded = (msg.value * multiplier) / ONE;
-        if (scoreAwarded == 0) revert InsufficientScore();
+    function resolvePendingBonds(uint256 /*maxBonds*/) external {}
 
-        Participant storage p = s.participant[msg.sender];
-        if (!p.seen) {
-            p.seen = true;
-            s.participants.push(msg.sender);
-        }
-        p.score += scoreAwarded;
-        s.totalScore += scoreAwarded;
-        s.raised += msg.value;
+    function resolvePending() external pure returns (bool) {
+        return false;
+    }
 
-        emit BondDeposit(msg.sender, maturityLevel, msg.value, scoreAwarded);
+    function notifyGameOver() external {}
+
+    function finalizeShutdown(uint256 /*maxIds*/) external pure returns (uint256 processedIds, uint256 burned, bool complete) {
+        return (0, 0, true);
+    }
+
+    function setTransfersLocked(bool /*locked*/, uint48 /*rngDay*/) external {}
+
+    function stakeRateBps() external pure returns (uint16) {
+        return 0;
+    }
+
+    function purchasesEnabled() external view returns (bool) {
+        return bankedInGame;
     }
 
     /// @notice Emergency shutdown path: consume all ETH and resolve maturities in order, partially paying the last one.
@@ -384,6 +414,48 @@ contract DegenerusBonds {
         }
 
         emit BondGameOver(spent, partialMaturity);
+    }
+
+    function _activeMaturity() private view returns (uint24 maturityLevel) {
+        uint24 currLevel = _currentLevel();
+        // choose the next multiple of 5 that is at most 10 levels ahead
+        maturityLevel = ((currLevel / 5) + 1) * 5;
+        while (currLevel < maturityLevel - 10) {
+            maturityLevel += 5;
+        }
+    }
+
+    function _depositFor(
+        address buyer,
+        address beneficiary,
+        uint24 maturityLevel,
+        uint256 amount
+    ) private returns (uint256 scoreAwarded) {
+        if (amount == 0) revert SaleClosed();
+        if (!bankedInGame) revert BankCallFailed();
+
+        BondSeries storage s = _getOrCreateSeries(maturityLevel);
+        uint24 currLevel = _currentLevel();
+        if (currLevel < s.saleStartLevel || currLevel >= s.maturityLevel) revert SaleClosed();
+
+        try IDegenerusGameBondBank(address(game)).bondDeposit{value: amount}() {} catch {
+            revert BankCallFailed();
+        }
+
+        uint256 multiplier = _bondScoreMultiplier(buyer, amount);
+        scoreAwarded = (amount * multiplier) / ONE;
+        if (scoreAwarded == 0) revert InsufficientScore();
+
+        Participant storage p = s.participant[beneficiary];
+        if (!p.seen) {
+            p.seen = true;
+            s.participants.push(beneficiary);
+        }
+        p.score += scoreAwarded;
+        s.totalScore += scoreAwarded;
+        s.raised += amount;
+
+        emit BondDeposit(beneficiary, maturityLevel, amount, scoreAwarded);
     }
 
     /// @notice Run bond maintenance for the current level (create series, run jackpots, resolve funded maturities).

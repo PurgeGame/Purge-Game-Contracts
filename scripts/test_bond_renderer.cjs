@@ -3,11 +3,11 @@ const fs = require("fs");
 const path = require("path");
 
 async function main() {
-  const RendererFactory = await hre.ethers.getContractFactory("IconRendererBongTrophy");
+  const RendererFactory = await hre.ethers.getContractFactory("IconRendererBondTrophy");
   const renderer = await RendererFactory.deploy(hre.ethers.ZeroAddress, hre.ethers.ZeroAddress);
   await renderer.waitForDeployment();
 
-  const OUTPUT_DIR = path.join(__dirname, "..", "artifacts", "tmp", "bong-renders-new");
+  const OUTPUT_DIR = path.join(__dirname, "..", "artifacts", "tmp", "bond-renders-new");
   fs.rmSync(OUTPUT_DIR, { recursive: true, force: true });
   fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
@@ -26,7 +26,7 @@ async function main() {
   ];
 
   for (const s of scenarios) {
-    const uri = await renderer.bongTokenURI(s.tokenId, 1000, 500, s.chance, false, 0n);
+    const uri = await renderer.bondTokenURI(s.tokenId, 1000, 500, s.chance, false, 0n);
     const json = JSON.parse(Buffer.from(uri.split(",")[1], "base64").toString());
     const svg = Buffer.from(json.image.split(",")[1], "base64").toString();
     

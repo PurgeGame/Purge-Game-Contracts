@@ -6,7 +6,7 @@ import "../interfaces/IDegenerusGame.sol";
 library DegenerusGameCredit {
     function availableCredit(
         mapping(address => uint256) storage claimableWinnings,
-        mapping(address => uint256) storage bongCredit,
+        mapping(address => uint256) storage bondCredit,
         address buyer,
         MintPaymentKind payKind,
         uint256 msgValue
@@ -20,9 +20,9 @@ library DegenerusGameCredit {
             }
             return (true, available, 0);
         }
-        if (payKind == MintPaymentKind.BongCredit) {
+        if (payKind == MintPaymentKind.BondCredit) {
             if (msgValue != 0) return (false, 0, 0);
-            available = bongCredit[buyer];
+            available = bondCredit[buyer];
             if (available == 0) return (false, 0, 0);
             return (true, available, 0);
         }
@@ -34,7 +34,7 @@ library DegenerusGameCredit {
                     claimableAvail = claimable - 1;
                 }
             }
-            uint256 credit = bongCredit[buyer];
+            uint256 credit = bondCredit[buyer];
             ethValue = msgValue;
             available = ethValue + claimableAvail + credit;
             if (available == 0) return (false, 0, 0);
@@ -45,7 +45,7 @@ library DegenerusGameCredit {
 
     function processMintPayment(
         mapping(address => uint256) storage claimableWinnings,
-        mapping(address => uint256) storage bongCredit,
+        mapping(address => uint256) storage bondCredit,
         address player,
         uint256 amount,
         MintPaymentKind payKind,
@@ -64,12 +64,12 @@ library DegenerusGameCredit {
             }
             return (true, amount, 0);
         }
-        if (payKind == MintPaymentKind.BongCredit) {
+        if (payKind == MintPaymentKind.BondCredit) {
             if (msgValue != 0) return (false, 0, 0);
-            uint256 credit = bongCredit[player];
+            uint256 credit = bondCredit[player];
             if (credit < amount) return (false, 0, 0);
             unchecked {
-                bongCredit[player] = credit - amount;
+                bondCredit[player] = credit - amount;
             }
             return (true, 0, amount);
         }
@@ -91,10 +91,10 @@ library DegenerusGameCredit {
                 }
             }
             if (remaining != 0) {
-                uint256 credit = bongCredit[player];
+                uint256 credit = bondCredit[player];
                 if (credit < remaining) return (false, 0, 0);
                 unchecked {
-                    bongCredit[player] = credit - remaining;
+                    bondCredit[player] = credit - remaining;
                 }
                 creditUsed = remaining;
                 remaining = 0;

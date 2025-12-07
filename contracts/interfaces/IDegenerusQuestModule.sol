@@ -3,17 +3,13 @@ pragma solidity ^0.8.26;
 
 struct QuestRequirements {
     uint32 mints; // Number of mints/burns required (whole NFTs)
-    uint256 tokenAmount; // DEGEN base units (6 decimals) for token-denominated quests or stake principal; wei for bong size quests
-    uint16 stakeDistance; // Minimum stake distance when required
-    uint8 stakeRisk; // Minimum stake risk when required
+    uint256 tokenAmount; // DEGEN base units (6 decimals) for token-denominated quests; wei for bond size quests
 }
 
 struct QuestInfo {
     uint48 day;
     uint8 questType;
     bool highDifficulty;
-    uint8 stakeMask;
-    uint8 stakeRisk;
     QuestRequirements requirements;
 }
 
@@ -30,10 +26,10 @@ interface IDegenerusQuestModule {
 
     function rollDailyQuest(uint48 day, uint256 entropy)
         external
-        returns (bool rolled, uint8 questType, bool highDifficulty, uint8 stakeMask, uint8 stakeRisk);
+        returns (bool rolled, uint8 questType, bool highDifficulty);
     function rollDailyQuestWithOverrides(uint48 day, uint256 entropy, bool forceMintEth, bool forceBurn)
         external
-        returns (bool rolled, uint8 questType, bool highDifficulty, uint8 stakeMask, uint8 stakeRisk);
+        returns (bool rolled, uint8 questType, bool highDifficulty);
 
     function normalizeActiveBurnQuests() external;
 
@@ -49,11 +45,7 @@ interface IDegenerusQuestModule {
         external
         returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed);
 
-    function handleBongPurchase(address player, uint256 basePerBongWei)
-        external
-        returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed);
-
-    function handleStake(address player, uint256 principal, uint24 distance, uint8 risk)
+    function handleBondPurchase(address player, uint256 basePerBondWei)
         external
         returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed);
 

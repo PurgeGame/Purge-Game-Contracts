@@ -5,8 +5,8 @@ import "@openzeppelin/contracts/utils/Base64.sol";
 import "@openzeppelin/contracts/utils/Strings.sol";
 import "./interfaces/IconRendererTypes.sol"; // For IColorRegistry, IERC721Lite
 
-interface IDegenerusBongRenderer {
-    function bongTokenURI(
+interface IDegenerusBondRenderer {
+    function bondTokenURI(
         uint256 tokenId,
         uint32 createdDistance,
         uint32 currentDistance,
@@ -16,10 +16,10 @@ interface IDegenerusBongRenderer {
     ) external view returns (string memory);
 }
 
-contract IconRendererBongTrophy is IDegenerusBongRenderer {
+contract IconRendererBondTrophy is IDegenerusBondRenderer {
     using Strings for uint256;
 
-    address public immutable bongs;
+    address public immutable bonds;
     IColorRegistry public immutable registry;
 
     string private constant _ETH_PATH = 
@@ -34,12 +34,12 @@ contract IconRendererBongTrophy is IDegenerusBongRenderer {
 
     string private constant _FLAME_D = "M431.48,504.54c-5.24-10.41-12.36-18.75-21.62-24.98-6.91-4.65-14.21-8.76-21.56-12.69-12.95-6.93-26.54-12.66-38.78-20.91-19.24-12.96-31.77-30.57-36.56-53.37-3.66-17.46-2.13-34.69,2.89-51.71,4.01-13.6,10.35-26.15,16.95-38.6,7.71-14.54,15.86-28.87,21.81-44.28,3.39-8.77,5.94-17.76,7.2-27.11,0,3.69,.24,7.4-.04,11.07-1.48,19.17-7.44,37.4-11.94,55.94-3.57,14.72-6.92,29.46-6.53,44.78,.46,18.05,6.14,34.08,19.02,46.86,9.15,9.09,19.11,17.38,28.83,25.89,8.46,7.41,17.32,14.37,24.28,23.36,7.48,9.66,11.24,20.77,13.22,32.63,.32,1.93,.63,3.86,1.02,6.22,4.22-6.71,8.24-12.99,12.15-19.34,2.97-4.81,5.94-9.63,8.66-14.58,8.98-16.34,8-31.83-4.22-46.28-6.7-7.92-13.41-15.82-20.01-23.82-4.83-5.86-9.23-12.01-10.54-19.77-1.49-8.9,.02-17.43,3.25-25.74,3.45-8.89,7.2-17.67,10.28-26.69,3.52-10.29,5.13-21.02,5.5-31.89,.14-4.19-.28-8.39-.74-12.61-3.91,16.79-14.43,29.92-23.51,43.8-7.15,10.93-14.4,21.79-19.47,33.9-3.78,9.03-6.23,18.4-6.71,28.2-.59,11.95,2.26,23.17,8.54,33.28,3.76,6.07,8.44,11.56,12.72,17.31,.36,.49,.75,.96,1.13,1.44l-.39,.49c-2.78-2-5.65-3.89-8.33-6.02-12.9-10.23-23.86-22.09-30.76-37.27-5.35-11.77-6.76-24.15-5.31-36.9,2.41-21.24,11.63-39.66,23.7-56.9,7.63-10.9,15.43-21.7,22.75-32.81,7.31-11.11,11.78-23.44,13.48-36.65,1.58-12.32,.38-24.49-2.45-36.55-2.43-10.38-6-20.36-10.24-30.13l.47-.43c3.18,3.14,6.6,6.08,9.51,9.45,16.8,19.42,27.96,41.68,33.29,66.83,3.12,14.73,3.44,29.56,1.84,44.51-1.06,9.89-2.25,19.82-2.49,29.75-.27,11.05,3.86,21.06,9.7,30.3,5.19,8.22,10.8,16.18,15.83,24.48,7.27,12.01,11.77,25.09,13,39.09,1.06,12.19-1.32,23.97-5.7,35.33-4.68,12.14-11.42,23.07-19.75,33.04-.28,.34-.5,.73-.98,1.42,.58-.2,.81-.21,.94-.33,13.86-12.66,25.56-26.91,32.56-44.59,4.2-10.61,4.64-21.64,2.92-32.71-1.55-9.97-3.84-19.83-5.69-29.75-1.3-6.98-1.62-14.03-.96-21.16,2.41,11.44,9.46,20.38,15.71,29.77,4.45,6.69,8.7,13.49,10.95,21.34l.78-.11c-.52-5.46-.86-10.95-1.6-16.38-1.57-11.65-6.36-22.27-10.97-32.92-5.36-12.4-10.87-24.73-14.2-37.9-4.6-18.21-6.04-36.6-3.4-55.24,.17-1.22,.27-2.44,.62-3.65,3.31,18.57,10.98,35.38,19.91,51.69,5.97,10.9,12.18,21.66,18.06,32.61,7.08,13.2,12.26,27.14,14.41,42.02,4.35,30.04-2.87,56.63-24.51,78.55-9.21,9.33-20.5,15.79-31.95,21.98-9.44,5.1-18.91,10.16-28.11,15.67-11.91,7.14-21.38,16.78-27.83,29.82Z";
 
-    constructor(address bongs_, address registry_) {
-        bongs = bongs_;
+    constructor(address bonds_, address registry_) {
+        bonds = bonds_;
         registry = IColorRegistry(registry_);
     }
 
-    function bongTokenURI(
+    function bondTokenURI(
         uint256 tokenId,
         uint32 createdDistance,
         uint32 currentDistance,
@@ -50,15 +50,15 @@ contract IconRendererBongTrophy is IDegenerusBongRenderer {
         bool matured = (currentDistance == 0);
         
         string memory name_ = matured
-            ? string.concat("Matured DegenerusBong #", tokenId.toString())
+            ? string.concat("Matured DegenerusBond #", tokenId.toString())
             : string.concat(
                 _formatBpsPercent(chanceBps),
-                " DegenerusBong #",
+                " DegenerusBond #",
                 tokenId.toString()
             );
 
         string memory desc = "A sequential claim on the revenue derived from Degenerus.";
-        string memory attributes = _bongAttributes(
+        string memory attributes = _bondAttributes(
             matured,
             staked,
             createdDistance,
@@ -74,7 +74,7 @@ contract IconRendererBongTrophy is IDegenerusBongRenderer {
     }
 
     /// @notice Legacy circular badge used by the former 1155s; kept here for reuse if needed.
-    function legacyBongBadge(uint256 tokenId, uint256 chanceBps) external view returns (string memory) {
+    function legacyBondBadge(uint256 tokenId, uint256 chanceBps) external view returns (string memory) {
         (string memory outline, string memory diamond, string[3] memory flames) = _legacyColors(tokenId);
         return _legacyBadgeSvg(chanceBps, outline, diamond, flames);
     }
@@ -86,27 +86,27 @@ contract IconRendererBongTrophy is IDegenerusBongRenderer {
         colors[2] = _greenShade(tokenId);   // Outer Circle / ETH (green family)
         colors[3] = "#cccccc";               // Background / Square (fixed neutral)
 
-        // Only honor explicit per-bong overrides; defaults stay fixed so bongs do not
+        // Only honor explicit per-bond overrides; defaults stay fixed so bonds do not
         // inherit random owner color prefs.
-        if (bongs == address(0)) return colors;
+        if (bonds == address(0)) return colors;
 
-        string memory c = registry.tokenColor(bongs, tokenId, 0);
+        string memory c = registry.tokenColor(bonds, tokenId, 0);
         if (bytes(c).length != 0) colors[0] = c;
 
-        c = registry.tokenColor(bongs, tokenId, 1);
+        c = registry.tokenColor(bonds, tokenId, 1);
         if (bytes(c).length != 0) colors[1] = c;
 
-        c = registry.tokenColor(bongs, tokenId, 2);
+        c = registry.tokenColor(bonds, tokenId, 2);
         if (bytes(c).length != 0) colors[2] = c;
 
-        c = registry.tokenColor(bongs, tokenId, 3);
+        c = registry.tokenColor(bonds, tokenId, 3);
         if (bytes(c).length != 0) colors[3] = c;
     }
 
     function _outlineColor(uint256 tokenId) private pure returns (string memory) {
         // Hue buckets that avoid greens: 0 (red), 25 (orange), 300 (magenta),
         // 260 (purple), 210 (blue), 340 (pink).
-        uint256 h = _rand(tokenId, "bong-outline");
+        uint256 h = _rand(tokenId, "bond-outline");
         uint8 bucket = uint8(h % 6);
         uint16 baseHue = bucket == 0
             ? 0
@@ -126,7 +126,7 @@ contract IconRendererBongTrophy is IDegenerusBongRenderer {
     }
 
     function _greenShade(uint256 tokenId) private pure returns (string memory) {
-        uint256 h = _rand(tokenId, "bong-green");
+        uint256 h = _rand(tokenId, "bond-green");
         uint16 hue = 105 + uint16(h % 70); // 105-174 (greens)
         uint8 sat = 180 + uint8((h >> 8) % 70); // 180-249
         uint8 val = 170 + uint8((h >> 16) % 70); // 170-239
@@ -148,7 +148,7 @@ contract IconRendererBongTrophy is IDegenerusBongRenderer {
     }
 
     function _redShade(uint256 tokenId) private pure returns (string memory) {
-        uint256 h = _rand(tokenId, "bong-red");
+        uint256 h = _rand(tokenId, "bond-red");
         uint16 hue = uint16(h % 2 == 0 ? (uint16(h % 25)) : uint16(330 + (h % 30))); // 0-24 or 330-359
         uint8 sat = 200 + uint8((h >> 8) % 55); // 200-254
         uint8 val = 190 + uint8((h >> 16) % 60); // 190-249
@@ -164,17 +164,17 @@ contract IconRendererBongTrophy is IDegenerusBongRenderer {
         flames[1] = _flamePalette(baseIdx);
         flames[2] = _flamePalette((baseIdx + 1) % 10);
 
-        if (bongs == address(0)) return (outline, diamond, flames);
+        if (bonds == address(0)) return (outline, diamond, flames);
 
-        string memory c = registry.tokenColor(bongs, tokenId, 0);
+        string memory c = registry.tokenColor(bonds, tokenId, 0);
         if (bytes(c).length != 0) outline = c;
-        c = registry.tokenColor(bongs, tokenId, 1);
+        c = registry.tokenColor(bonds, tokenId, 1);
         if (bytes(c).length != 0) {
             flames[0] = c;
             flames[1] = c;
             flames[2] = c;
         }
-        c = registry.tokenColor(bongs, tokenId, 2);
+        c = registry.tokenColor(bonds, tokenId, 2);
         if (bytes(c).length != 0) diamond = c;
 
         return (outline, diamond, flames);
@@ -314,7 +314,7 @@ contract IconRendererBongTrophy is IDegenerusBongRenderer {
         );
     }
 
-    function _bongAttributes(
+    function _bondAttributes(
         bool matured,
         bool staked,
         uint32 created,

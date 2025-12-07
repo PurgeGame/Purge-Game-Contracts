@@ -23,7 +23,7 @@ contract DegenerusCoin {
     event CoinflipFinished(bool result);
     event BountyOwed(address indexed to, uint256 bountyAmount, uint256 newRecordFlip);
     event BountyPaid(address indexed to, uint256 amount);
-    event DailyQuestRolled(uint48 indexed day, uint8 questType, bool highDifficulty, uint8 stakeMask, uint8 stakeRisk);
+    event DailyQuestRolled(uint48 indexed day, uint8 questType, bool highDifficulty);
     event QuestCompleted(address indexed player, uint8 questType, uint32 streak, uint256 reward, bool hardMode);
     event VrfSubWired(address vrfSub);
     event PresaleLinkCredit(address indexed player, uint256 amount);
@@ -43,7 +43,7 @@ contract DegenerusCoin {
     error StakeInvalid();
     error ZeroAddress();
     error NotDecimatorWindow();
-    error OnlyBongs();
+    error OnlyBonds();
     error OnlyAffiliate();
     error AlreadyWired();
 
@@ -112,7 +112,7 @@ contract DegenerusCoin {
     uint128 public currentBounty = 1_000_000_000;
     uint128 public biggestFlipEver = 1_000_000_000;
     address internal bountyOwedTo;
-    address public immutable bongs;
+    address public immutable bonds;
     address public immutable regularRenderer;
 
     // ---------------------------------------------------------------------
@@ -210,18 +210,18 @@ contract DegenerusCoin {
     // ---------------------------------------------------------------------
     // Constructor
     // ---------------------------------------------------------------------
-    constructor(address bongs_, address affiliate_, address regularRenderer_) {
-        if (bongs_ == address(0) || affiliate_ == address(0)) revert ZeroAddress();
-        bongs = bongs_;
+    constructor(address bonds_, address affiliate_, address regularRenderer_) {
+        if (bonds_ == address(0) || affiliate_ == address(0)) revert ZeroAddress();
+        bonds = bonds_;
         affiliateProgram = DegenerusAffiliate(affiliate_);
         regularRenderer = regularRenderer_;
-        uint256 bongSeed = 2_000_000 * MILLION;
-        _mint(bongs_, bongSeed);
+        uint256 bondSeed = 2_000_000 * MILLION;
+        _mint(bonds_, bondSeed);
     }
 
     function setVault(address vault_) external {
         address sender = msg.sender;
-        if (sender != address(degenerusGame) && sender != bongs && sender != vault_) revert OnlyGame();
+        if (sender != address(degenerusGame) && sender != bonds && sender != vault_) revert OnlyGame();
         if (vault == address(0)) {
             vault = vault_;
         } else if (vault_ != vault) {
@@ -361,7 +361,7 @@ contract DegenerusCoin {
     /// @notice Wire game, NFT, quest module, jackpots, and optionally the VRF sub using an address array.
     /// @dev Order: [game, nft, quest module, jackpots, vrfSub]; set-once per slot.
     function wire(address[] calldata addresses) external {
-        if (msg.sender != bongs) revert OnlyBongs();
+        if (msg.sender != bonds) revert OnlyBonds();
 
         uint256 len = addresses.length;
         if (len > 0) _setGame(addresses[0]);
@@ -433,11 +433,11 @@ contract DegenerusCoin {
         _mint(address(this), presaleTotal);
     }
 
-    /// @notice Mint DEGEN to the bongs contract for bong payouts (game or bongs caller).
-    function bongPayment(uint256 amount) external {
+    /// @notice Mint DEGEN to the bonds contract for bond payouts (game or bonds caller).
+    function bondPayment(uint256 amount) external {
         address sender = msg.sender;
-        if (sender != bongs) revert OnlyGame();
-        _mint(bongs, amount);
+        if (sender != bonds) revert OnlyGame();
+        _mint(bonds, amount);
     }
 
     /// @notice Escrow virtual coin to the vault (no token movement); increases mint allowance.
@@ -465,7 +465,7 @@ contract DegenerusCoin {
 
     /// @notice Credit presale allocation from LINK funding (VRF sub).
     function creditPresaleFromLink(address player, uint256 amount) external {
-        if (msg.sender != vrfSub) revert OnlyBongs();
+        if (msg.sender != vrfSub) revert OnlyBonds();
         if (player == address(0) || amount == 0) return;
         affiliateProgram.addPresaleLinkCredit(player, amount);
         presaleClaimableRemaining += amount;
@@ -506,13 +506,13 @@ contract DegenerusCoin {
 
     function rollDailyQuest(uint48 day, uint256 entropy) external onlyDegenerusGameContract {
         IDegenerusQuestModule module = questModule;
-        (bool rolled, , , , ) = module.rollDailyQuest(day, entropy);
+        (bool rolled, , ) = module.rollDailyQuest(day, entropy);
         if (rolled) {
             QuestInfo[2] memory quests = module.getActiveQuests();
             for (uint256 i; i < 2; ) {
                 QuestInfo memory info = quests[i];
                 if (info.day == day) {
-                    emit DailyQuestRolled(day, info.questType, info.highDifficulty, info.stakeMask, info.stakeRisk);
+                    emit DailyQuestRolled(day, info.questType, info.highDifficulty);
                     break;
                 }
                 unchecked {
@@ -529,13 +529,13 @@ contract DegenerusCoin {
         bool forceBurn
     ) external onlyDegenerusGameContract {
         IDegenerusQuestModule module = questModule;
-        (bool rolled, , , , ) = module.rollDailyQuestWithOverrides(day, entropy, forceMintEth, forceBurn);
+        (bool rolled, , ) = module.rollDailyQuestWithOverrides(day, entropy, forceMintEth, forceBurn);
         if (rolled) {
             QuestInfo[2] memory quests = module.getActiveQuests();
             for (uint256 i; i < 2; ) {
                 QuestInfo memory info = quests[i];
                 if (info.day == day) {
-                    emit DailyQuestRolled(day, info.questType, info.highDifficulty, info.stakeMask, info.stakeRisk);
+                    emit DailyQuestRolled(day, info.questType, info.highDifficulty);
                     break;
                 }
                 unchecked {
@@ -565,13 +565,13 @@ contract DegenerusCoin {
         }
     }
 
-    function notifyQuestBong(address player, uint256 basePerBongWei) external {
-        if (msg.sender != bongs) revert OnlyBongs();
+    function notifyQuestBond(address player, uint256 basePerBondWei) external {
+        if (msg.sender != bonds) revert OnlyBonds();
         IDegenerusQuestModule module = questModule;
-        if (address(module) == address(0) || player == address(0) || basePerBongWei == 0) return;
-        (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleBongPurchase(
+        if (address(module) == address(0) || player == address(0) || basePerBondWei == 0) return;
+        (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleBondPurchase(
             player,
-            basePerBongWei
+            basePerBondWei
         );
         uint256 questReward = _questApplyReward(player, reward, hardMode, questType, streak, completed);
         if (questReward != 0) {

@@ -164,18 +164,18 @@ contract DegenerusStonkNFT {
     // ---------------------------------------------------------------------
     address public immutable coin; // DEGEN coin (or compatible)
     IStETH public immutable steth; // stETH token
-    address public immutable bongs; // trusted bong contract for deposits
+    address public immutable bonds; // trusted bond contract for deposits
     uint256 public coinReserve; // coin escrowed for future mint (not yet minted)
 
     // ---------------------------------------------------------------------
     // Constructor
     // ---------------------------------------------------------------------
-    constructor(address coin_, address stEth_, address bongs_) {
-        if (coin_ == address(0) || stEth_ == address(0) || bongs_ == address(0)) revert ZeroAddress();
+    constructor(address coin_, address stEth_, address bonds_) {
+        if (coin_ == address(0) || stEth_ == address(0) || bonds_ == address(0)) revert ZeroAddress();
 
         coin = coin_;
         steth = IStETH(stEth_);
-        bongs = bongs_;
+        bonds = bonds_;
 
         coinShare = new DegenerusVaultShare("Degenerus Vault Coin", "PGVCOIN", address(this), INITIAL_SUPPLY, msg.sender);
         ethShare = new DegenerusVaultShare("Degenerus Vault Eth", "PGVETH", address(this), INITIAL_SUPPLY, msg.sender);
@@ -183,7 +183,7 @@ contract DegenerusStonkNFT {
     }
 
     // ---------------------------------------------------------------------
-    // Deposits (bong-only)
+    // Deposits (bond-only)
     // ---------------------------------------------------------------------
     /// @notice Pull ETH (msg.value), stETH, and/or coin from the caller (caller must approve this contract).
     function deposit(uint256 coinAmount, uint256 stEthAmount) external payable {
@@ -199,10 +199,10 @@ contract DegenerusStonkNFT {
         emit Deposit(msg.sender, msg.value, 0, 0);
     }
 
-    /// @notice Swap ETH <-> stETH with the bong contract to rebalance liquidity.
-    /// @dev stEthForEth=true pulls stETH from bongs and sends back ETH. Otherwise stakes inbound ETH and returns minted stETH.
-    function swapWithBongs(bool stEthForEth, uint256 amount) external payable {
-        if (msg.sender != bongs) revert Unauthorized();
+    /// @notice Swap ETH <-> stETH with the bond contract to rebalance liquidity.
+    /// @dev stEthForEth=true pulls stETH from bonds and sends back ETH. Otherwise stakes inbound ETH and returns minted stETH.
+    function swapWithBonds(bool stEthForEth, uint256 amount) external payable {
+        if (msg.sender != bonds) revert Unauthorized();
         if (amount == 0) revert Insufficient();
 
         if (stEthForEth) {

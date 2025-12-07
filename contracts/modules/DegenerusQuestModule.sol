@@ -19,22 +19,16 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
     uint8 private constant QUEST_TYPE_MINT_ANY = 0;
     uint8 private constant QUEST_TYPE_MINT_ETH = 1;
     uint8 private constant QUEST_TYPE_FLIP = 2;
-    uint8 private constant QUEST_TYPE_STAKE = 3;
-    uint8 private constant QUEST_TYPE_AFFILIATE = 4;
-    uint8 private constant QUEST_TYPE_BURN = 5;
-    uint8 private constant QUEST_TYPE_DECIMATOR = 6;
-    uint8 private constant QUEST_TYPE_BONG = 7;
-    uint8 private constant QUEST_TYPE_COUNT = 8;
+    uint8 private constant QUEST_TYPE_AFFILIATE = 3;
+    uint8 private constant QUEST_TYPE_BURN = 4;
+    uint8 private constant QUEST_TYPE_DECIMATOR = 5;
+    uint8 private constant QUEST_TYPE_BOND = 6;
+    uint8 private constant QUEST_TYPE_COUNT = 7;
 
     // Quest flags for difficulty and forced behavior
     uint8 private constant QUEST_FLAG_HIGH_DIFFICULTY = 1 << 0;
     uint8 private constant QUEST_FLAG_VERY_HIGH_DIFFICULTY = 1 << 1;
     uint8 private constant QUEST_FLAG_FORCE_BURN = 1 << 2;
-
-    // Stake-specific requirements (bitmask)
-    uint8 private constant QUEST_STAKE_REQUIRE_PRINCIPAL = 1 << 0;
-    uint8 private constant QUEST_STAKE_REQUIRE_DISTANCE = 1 << 1;
-    uint8 private constant QUEST_STAKE_REQUIRE_RISK = 1 << 2;
 
     // Tiering and streak accounting
     uint8 private constant QUEST_TIER_MAX_INDEX = 10;
@@ -48,8 +42,8 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
     uint16 private constant QUEST_MIN_FLIP_STAKE_TOKEN = 1_000;
     uint16 private constant QUEST_MIN_MINT = 1;
     uint24 private constant DECIMATOR_SPECIAL_LEVEL = 100;
-    uint256 private constant QUEST_BONG_MIN_WEI = 25e15; // 0.025 ETH
-    uint256 private constant QUEST_BONG_MAX_WEI = 0.5 ether;
+    uint256 private constant QUEST_BOND_MIN_WEI = 25e15; // 0.025 ETH
+    uint256 private constant QUEST_BOND_MAX_WEI = 0.5 ether;
 
     address public immutable coin;
     IDegenerusGame private questGame;
@@ -58,16 +52,14 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
     struct DailyQuest {
         uint48 day; // Quest day identifier (derived by caller, not block timestamp)
         uint8 questType; // One of the QUEST_TYPE_* constants
-        uint8 stakeMask; // Bitmask of stake constraints when questType == STAKE
-        uint8 stakeRisk; // Minimum risk when QUEST_STAKE_REQUIRE_RISK is set
         uint8 flags; // Difficulty and forced burn flags
         uint32 version; // Bumped when quest mutates mid-day to reset stale player progress
-        uint256 entropy; // VRF-derived entropy used for targets and stake config
+        uint256 entropy; // VRF-derived entropy used for targets and difficulty flags
     }
 
     /// @notice Progress and streak bookkeeping per player.
     struct PlayerQuestState {
-        uint32 lastCompletedDay; // Last day where both slots were completed
+        uint32 lastCompletedDay; // Last day where the primary quest was completed
         uint32 streak; // Current streak of days with full completion
         uint32 baseStreak; // Snapshot of streak at start of day (used for rewards)
         uint32 lastSyncDay; // Day we last reset progress/completionMask
@@ -86,14 +78,8 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
     uint256 private constant QUEST_MINT_ANY_PACKED = 0x0000000000000000000000080008000800080008000700060005000400030002;
     uint256 private constant QUEST_MINT_ETH_PACKED = 0x0000000000000000000000050005000400040004000300030002000200020001;
     uint256 private constant QUEST_FLIP_PACKED = 0x000000000000000000000dac0ce40c1c0b540a8c09c408fc0834076c06a405dc;
-    uint256 private constant QUEST_STAKE_PRINCIPAL_PACKED =
-        0x000000000000000000000dac0ce40c1c0b540a8c09c408fc0834076c06a405dc;
     uint256 private constant QUEST_AFFILIATE_PACKED =
         0x00000000000000000000060e060e060e060e060e060e04e203e80320028a01f4;
-    uint256 private constant QUEST_STAKE_DISTANCE_MIN_PACKED =
-        0x00000000000000000000001900190019001900190019001900190014000f000a;
-    uint256 private constant QUEST_STAKE_DISTANCE_MAX_PACKED =
-        0x00000000000000000000004b004b004b004b00460041003c00370032002d0028;
 
     uint32 private questVersionCounter = 1;
     /// @param coin_ Coin contract that is authorized to drive quest logic.
@@ -127,7 +113,7 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
     function rollDailyQuest(
         uint48 day,
         uint256 entropy
-    ) external onlyCoin returns (bool rolled, uint8 questType, bool highDifficulty, uint8 stakeMask, uint8 stakeRisk) {
+    ) external onlyCoin returns (bool rolled, uint8 questType, bool highDifficulty) {
         return _rollDailyQuest(day, entropy, false, false);
     }
 
@@ -137,7 +123,7 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         uint256 entropy,
         bool forceMintEth,
         bool forceBurn
-    ) external onlyCoin returns (bool rolled, uint8 questType, bool highDifficulty, uint8 stakeMask, uint8 stakeRisk) {
+    ) external onlyCoin returns (bool rolled, uint8 questType, bool highDifficulty) {
         return _rollDailyQuest(day, entropy, forceMintEth, forceBurn);
     }
 
@@ -162,51 +148,31 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         uint256 entropy,
         bool forceMintEth,
         bool forceBurn
-    ) private returns (bool rolled, uint8 questType, bool highDifficulty, uint8 stakeMask, uint8 stakeRisk) {
+    ) private returns (bool rolled, uint8 questType, bool highDifficulty) {
         DailyQuest[QUEST_SLOT_COUNT] storage quests = activeQuests;
         bool burnAllowed = _canRollBurnQuest(day) || forceBurn;
         bool decAllowed = _canRollDecimatorQuest();
-        for (uint8 slot; slot < QUEST_SLOT_COUNT; ) {
-            uint8 exclude = slot == 0 ? type(uint8).max : quests[0].questType;
-            uint256 slotEntropy = entropy;
-            if (slot == 1) {
-                // Re-use the other half of the VRF word instead of hashing again.
-                slotEntropy = (entropy >> 128) | (entropy << 128);
-            }
-            _seedQuest(quests[slot], day, slotEntropy, exclude);
-            bool forceMintSlot = slot == 0 && forceMintEth;
-            bool forceBurnSlot = slot == 1 && forceBurn;
-            if (forceMintSlot) {
-                quests[slot].questType = QUEST_TYPE_MINT_ETH;
-                quests[slot].stakeMask = 0;
-                quests[slot].stakeRisk = 0;
-            } else if (forceBurnSlot) {
-                quests[slot].questType = QUEST_TYPE_BURN;
-                quests[slot].stakeMask = 0;
-                quests[slot].stakeRisk = 0;
-                quests[slot].flags |= QUEST_FLAG_FORCE_BURN;
-            } else {
-                _applyQuestTypeConstraints(quests, slot, burnAllowed, decAllowed);
-                quests[slot].flags &= ~QUEST_FLAG_FORCE_BURN;
-            }
-            unchecked {
-                ++slot;
-            }
-        }
-        // Force both slots to bong purchase quests (distinct enforcement skipped).
-        for (uint8 slot; slot < QUEST_SLOT_COUNT; ) {
-            DailyQuest storage quest = quests[slot];
-            quest.questType = QUEST_TYPE_BONG;
-            quest.stakeMask = 0;
-            quest.stakeRisk = 0;
-            unchecked {
-                ++slot;
-            }
+
+        uint256 primaryEntropy = entropy;
+        uint256 bonusEntropy = (entropy >> 128) | (entropy << 128); // swap halves for slot1
+
+        uint8 primaryType = forceMintEth ? QUEST_TYPE_MINT_ETH : _primaryQuestType(primaryEntropy);
+        uint8 bonusType = forceBurn
+            ? QUEST_TYPE_BURN
+            : _bonusQuestType(bonusEntropy, primaryType, burnAllowed, decAllowed, _canRollBafQuest());
+
+        _seedQuestType(quests[0], day, primaryEntropy, primaryType);
+        quests[0].flags &= ~QUEST_FLAG_FORCE_BURN;
+
+        _seedQuestType(quests[1], day, bonusEntropy, bonusType);
+        if (forceBurn) {
+            quests[1].flags |= QUEST_FLAG_FORCE_BURN;
+        } else {
+            quests[1].flags &= ~QUEST_FLAG_FORCE_BURN;
         }
 
-        DailyQuest storage primary = quests[0];
-        bool hardMode = (primary.flags & QUEST_FLAG_HIGH_DIFFICULTY) != 0;
-        return (true, primary.questType, hardMode, primary.stakeMask, primary.stakeRisk);
+        bool hardMode = (quests[0].flags & QUEST_FLAG_HIGH_DIFFICULTY) != 0;
+        return (true, quests[0].questType, hardMode);
     }
 
     /// @notice Handle mint progress for a player; covers both coin and ETH paid mints.
@@ -353,15 +319,15 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         return (0, false, quest.questType, state.streak, false);
     }
 
-    /// @notice Handle bong purchases tracked by the base-per-bong size (wei).
-    function handleBongPurchase(
+    /// @notice Handle bond purchases tracked by the base-per-bond size (wei).
+    function handleBondPurchase(
         address player,
-        uint256 basePerBongWei
+        uint256 basePerBondWei
     ) external onlyCoin returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) {
         DailyQuest[QUEST_SLOT_COUNT] memory quests = activeQuests;
         uint48 currentDay = _currentQuestDay(quests);
         PlayerQuestState storage state = questPlayerState[player];
-        if (player == address(0) || basePerBongWei == 0 || currentDay == 0) {
+        if (player == address(0) || basePerBondWei == 0 || currentDay == 0) {
             return (0, false, quests[0].questType, state.streak, false);
         }
         _questSyncState(state, currentDay);
@@ -369,9 +335,9 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
             return (0, false, QUEST_TYPE_MINT_ETH, state.streak, false);
         }
 
-        (DailyQuest memory quest, uint8 slotIndex) = _currentDayQuestOfType(quests, currentDay, QUEST_TYPE_BONG);
+        (DailyQuest memory quest, uint8 slotIndex) = _currentDayQuestOfType(quests, currentDay, QUEST_TYPE_BOND);
         if (slotIndex == type(uint8).max) {
-            return (0, false, QUEST_TYPE_BONG, state.streak, false);
+            return (0, false, QUEST_TYPE_BOND, state.streak, false);
         }
 
         _questSyncProgress(state, slotIndex, currentDay, quest.version);
@@ -382,70 +348,16 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
             return (0, false, quest.questType, state.streak, false);
         }
 
-        uint256 coinEquivalent = (basePerBongWei * priceUnit) / priceWei;
+        uint256 coinEquivalent = (basePerBondWei * priceUnit) / priceWei;
         if (coinEquivalent == 0) {
             return (0, false, quest.questType, state.streak, false);
         }
         state.progress[slotIndex] = _clampedAdd128(state.progress[slotIndex], coinEquivalent);
-        uint256 target = _questBongTargetCoin(tier, quest.entropy, priceUnit);
+        uint256 target = _questBondTargetCoin(tier, quest.entropy, priceUnit);
         if (state.progress[slotIndex] < target) {
             return (0, false, quest.questType, state.streak, false);
         }
         return _questComplete(state, slotIndex, quest, priceUnit);
-    }
-
-    /// @notice Handle a staking action (principal, distance, risk) against stake quests.
-    function handleStake(
-        address player,
-        uint256 principal,
-        uint24 distance,
-        uint8 risk
-    ) external onlyCoin returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) {
-        DailyQuest[QUEST_SLOT_COUNT] memory quests = activeQuests;
-        uint48 currentDay = _currentQuestDay(quests);
-        if (player == address(0) || currentDay == 0) {
-            return (0, false, quests[0].questType, questPlayerState[player].streak, false);
-        }
-        PlayerQuestState storage state = questPlayerState[player];
-        _questSyncState(state, currentDay);
-        if (!_ethMintReady(state, player)) {
-            return (0, false, QUEST_TYPE_MINT_ETH, state.streak, false);
-        }
-        uint8 tier = _questTier(state.baseStreak);
-        uint256 priceUnit = questGame.coinPriceUnit();
-
-        bool matched;
-        uint8 fallbackType = quests[0].questType;
-        for (uint8 slot; slot < QUEST_SLOT_COUNT; ) {
-            DailyQuest memory quest = quests[slot];
-            if (quest.day != currentDay || quest.questType != QUEST_TYPE_STAKE) {
-                unchecked {
-                    ++slot;
-                }
-                continue;
-            }
-            matched = true;
-            fallbackType = quest.questType;
-            bool meets = true;
-            if ((quest.stakeMask & QUEST_STAKE_REQUIRE_PRINCIPAL) != 0) {
-                uint256 requiredPrincipal = uint256(_questStakePrincipalTarget(tier, quest.entropy)) * MILLION;
-                meets = principal >= requiredPrincipal;
-            }
-            if (meets && (quest.stakeMask & QUEST_STAKE_REQUIRE_DISTANCE) != 0) {
-                uint16 requiredDistance = _questStakeDistanceTarget(tier, quest.entropy);
-                meets = distance >= requiredDistance;
-            }
-            if (meets && (quest.stakeMask & QUEST_STAKE_REQUIRE_RISK) != 0) {
-                meets = risk >= quest.stakeRisk;
-            }
-            if (meets) {
-                return _questComplete(state, slot, quest, priceUnit);
-            }
-            unchecked {
-                ++slot;
-            }
-        }
-        return (0, false, matched ? fallbackType : QUEST_TYPE_STAKE, state.streak, false);
     }
 
     /// @notice Handle affiliate earnings credited in DEGEN base units (6 decimals).
@@ -547,8 +459,6 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
                 uint8 otherSlot = slot == 0 ? uint8(1) : uint8(0);
                 bool otherMintEth = local[otherSlot].questType == QUEST_TYPE_MINT_ETH;
                 local[slot].questType = otherMintEth ? QUEST_TYPE_AFFILIATE : QUEST_TYPE_MINT_ETH;
-                local[slot].stakeMask = 0;
-                local[slot].stakeRisk = 0;
                 local[slot].flags &= ~QUEST_FLAG_FORCE_BURN;
             }
             unchecked {
@@ -625,8 +535,6 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
             day: quest.day,
             questType: quest.questType,
             highDifficulty: (quest.flags & QUEST_FLAG_HIGH_DIFFICULTY) != 0,
-            stakeMask: quest.stakeMask,
-            stakeRisk: quest.stakeRisk,
             requirements: _questRequirementsForTier(quest, tier)
         });
         if (_questProgressValid(state, quest, slot, currentDay)) {
@@ -641,7 +549,6 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         uint8 tier
     ) private view returns (QuestRequirements memory req) {
         uint8 qType = quest.questType;
-        req.stakeRisk = (quest.stakeMask & QUEST_STAKE_REQUIRE_RISK) != 0 ? quest.stakeRisk : 0;
         if (qType == QUEST_TYPE_MINT_ANY) {
             req.mints = _questMintAnyTarget(tier, quest.entropy);
         } else if (qType == QUEST_TYPE_MINT_ETH) {
@@ -654,19 +561,9 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
             req.tokenAmount = uint256(_questDecimatorTargetTokens(tier, quest.entropy)) * MILLION;
         } else if (qType == QUEST_TYPE_AFFILIATE) {
             req.tokenAmount = uint256(_questAffiliateTargetTokens(tier, quest.entropy)) * MILLION;
-        } else if (qType == QUEST_TYPE_BONG) {
+        } else if (qType == QUEST_TYPE_BOND) {
             uint256 priceUnit = questGame.coinPriceUnit();
-            req.tokenAmount = _questBongTargetCoin(tier, quest.entropy, priceUnit);
-        } else if (qType == QUEST_TYPE_STAKE) {
-            if ((quest.stakeMask & QUEST_STAKE_REQUIRE_PRINCIPAL) != 0) {
-                req.tokenAmount = uint256(_questStakePrincipalTarget(tier, quest.entropy)) * MILLION;
-            }
-            if ((quest.stakeMask & QUEST_STAKE_REQUIRE_DISTANCE) != 0) {
-                req.stakeDistance = _questStakeDistanceTarget(tier, quest.entropy);
-            }
-            if ((quest.stakeMask & QUEST_STAKE_REQUIRE_RISK) == 0) {
-                req.stakeRisk = 0;
-            }
+            req.tokenAmount = _questBondTargetCoin(tier, quest.entropy, priceUnit);
         }
     }
 
@@ -677,8 +574,6 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         DailyQuest storage other = quests[otherSlot];
         bool otherMintEth = other.questType == QUEST_TYPE_MINT_ETH;
         quest.questType = otherMintEth ? QUEST_TYPE_AFFILIATE : QUEST_TYPE_MINT_ETH;
-        quest.stakeMask = 0;
-        quest.stakeRisk = 0;
         quest.flags &= ~QUEST_FLAG_FORCE_BURN;
         quest.version = _nextQuestVersion();
     }
@@ -710,6 +605,16 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
             return false;
         }
         return game_.gameState() == 3;
+    }
+
+    /// @dev BAF quests map to flip quest at BAF levels (level milestones, multiples of 100).
+    function _canRollBafQuest() private view returns (bool) {
+        IDegenerusGame game_ = questGame;
+        if (address(game_) == address(0)) {
+            return false;
+        }
+        uint24 lvl = game_.level();
+        return lvl != 0 && (lvl % 100) == 0;
     }
 
     /// @dev Decimator quests are unlocked at specific level boundaries.
@@ -883,26 +788,13 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         return doubled;
     }
 
-    function _questStakePrincipalTarget(uint8 tier, uint256 entropy) private pure returns (uint32) {
-        uint16 maxVal = _questPackedValue(QUEST_STAKE_PRINCIPAL_PACKED, tier);
-        uint16 difficulty = uint16(entropy & 0x3FF);
-        return _questLinearTarget(QUEST_MIN_FLIP_STAKE_TOKEN, uint32(maxVal), difficulty);
-    }
-
-    function _questStakeDistanceTarget(uint8 tier, uint256 entropy) private pure returns (uint16) {
-        uint16 minVal = _questPackedValue(QUEST_STAKE_DISTANCE_MIN_PACKED, tier);
-        uint16 maxVal = _questPackedValue(QUEST_STAKE_DISTANCE_MAX_PACKED, tier);
-        uint16 difficulty = uint16(entropy & 0x3FF);
-        return uint16(_questLinearTarget(minVal, uint32(maxVal), difficulty));
-    }
-
     function _questAffiliateTargetTokens(uint8 tier, uint256 entropy) private pure returns (uint32) {
         uint16 maxVal = _questPackedValue(QUEST_AFFILIATE_PACKED, tier);
         uint16 difficulty = uint16(entropy & 0x3FF);
         return _questLinearTarget(QUEST_MIN_TOKEN, uint32(maxVal), difficulty);
     }
 
-    function _questBongTargetCoin(uint8 tier, uint256 entropy, uint256 priceUnit) private pure returns (uint256) {
+    function _questBondTargetCoin(uint8 tier, uint256 entropy, uint256 priceUnit) private pure returns (uint256) {
         if (priceUnit == 0) return 0;
         if (tier == 0) return priceUnit; // tier0 always 1 price unit
 
@@ -918,66 +810,65 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         return target;
     }
 
-    /// @dev Enforces game-state constraints on a freshly seeded quest type.
-    function _applyQuestTypeConstraints(
-        DailyQuest[QUEST_SLOT_COUNT] storage quests,
-        uint8 slot,
-        bool burnAllowed,
-        bool decAllowed
-    ) private {
-        DailyQuest storage quest = quests[slot];
-        if (quest.questType == QUEST_TYPE_BURN && !burnAllowed) {
-            _convertBurnQuest(quests, slot);
-        } else if (quest.questType == QUEST_TYPE_DECIMATOR && !decAllowed) {
-            quest.questType = QUEST_TYPE_FLIP;
+    /// @dev Map entropy to difficulty flags.
+    function _difficultyFlags(uint16 difficulty) private pure returns (uint8 flags) {
+        if (difficulty >= 900) {
+            return QUEST_FLAG_HIGH_DIFFICULTY | QUEST_FLAG_VERY_HIGH_DIFFICULTY;
         }
+        if (difficulty >= 800) {
+            return QUEST_FLAG_HIGH_DIFFICULTY;
+        }
+        return 0;
     }
 
-    /// @dev Ensures two slots never share the same quest type unless explicitly forced.
-    function _ensureDistinctQuestTypes(
-        DailyQuest[QUEST_SLOT_COUNT] storage quests,
+    /// @dev Select the primary quest type (daily quest) from the limited pool.
+    function _primaryQuestType(uint256 entropy) private pure returns (uint8) {
+        uint8 roll = uint8(entropy % 3); // {mintEth, affiliate, bond}
+        if (roll == 0) return QUEST_TYPE_MINT_ETH;
+        if (roll == 1) return QUEST_TYPE_AFFILIATE;
+        return QUEST_TYPE_BOND;
+    }
+
+    /// @dev Select the bonus quest type (distinct from primary) respecting burn/decimator availability.
+    function _bonusQuestType(
+        uint256 entropy,
+        uint8 primaryType,
         bool burnAllowed,
         bool decAllowed,
-        uint48 day,
-        uint256 entropy
-    ) private {
-        if (QUEST_SLOT_COUNT < 2) return;
-        if ((quests[1].flags & QUEST_FLAG_FORCE_BURN) != 0 || (quests[0].flags & QUEST_FLAG_FORCE_BURN) != 0) {
-            return;
+        bool bafAllowed
+    ) private pure returns (uint8) {
+        if (decAllowed) {
+            return QUEST_TYPE_DECIMATOR;
         }
-        uint8 referenceType = quests[0].questType;
-        if (quests[1].questType != referenceType) return;
+        if (bafAllowed) {
+            return QUEST_TYPE_FLIP;
+        }
         for (uint8 attempt; attempt < QUEST_TYPE_COUNT * 2; ) {
-            uint256 attemptEntropy = uint256(keccak256(abi.encode(entropy, day, attempt + 1)));
-            _seedQuest(quests[1], day, attemptEntropy, referenceType);
-            _applyQuestTypeConstraints(quests, 1, burnAllowed, decAllowed);
-            if (quests[1].questType != referenceType) {
-                return;
+            uint8 candidate = uint8((entropy + attempt) % QUEST_TYPE_COUNT);
+            if (candidate == primaryType) {
+                unchecked {
+                    ++attempt;
+                }
+                continue;
             }
-            unchecked {
-                ++attempt;
+            if (!burnAllowed && candidate == QUEST_TYPE_BURN) {
+                unchecked {
+                    ++attempt;
+                }
+                continue;
             }
-        }
-        quests[1].questType = _fallbackQuestType(referenceType, burnAllowed, decAllowed);
-    }
-
-    /// @dev Deterministic fallback used when repeated attempts fail to diversify quest types.
-    function _fallbackQuestType(uint8 exclude, bool burnAllowed, bool decAllowed) private pure returns (uint8) {
-        for (uint8 offset = 1; offset < QUEST_TYPE_COUNT; ) {
-            uint8 candidate = uint8((uint256(exclude) + offset) % QUEST_TYPE_COUNT);
-            if (candidate == QUEST_TYPE_BURN && !burnAllowed) {
-                candidate = (exclude == QUEST_TYPE_MINT_ETH) ? QUEST_TYPE_STAKE : QUEST_TYPE_MINT_ETH;
-            } else if (candidate == QUEST_TYPE_DECIMATOR && !decAllowed) {
+            if (!decAllowed && candidate == QUEST_TYPE_DECIMATOR) {
                 candidate = QUEST_TYPE_FLIP;
+                if (candidate == primaryType) {
+                    unchecked {
+                        ++attempt;
+                    }
+                    continue;
+                }
             }
-            if (candidate != exclude) {
-                return candidate;
-            }
-            unchecked {
-                ++offset;
-            }
+            return candidate;
         }
-        return QUEST_TYPE_MINT_ETH;
+        return primaryType == QUEST_TYPE_MINT_ETH ? QUEST_TYPE_AFFILIATE : QUEST_TYPE_MINT_ETH;
     }
 
     /// @dev Marks ETH mint priming complete without granting a reward.
@@ -1004,15 +895,12 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         state.completionMask |= slotMask;
         uint32 newStreak = state.streak;
         bool streakJustUpdated;
-        if ((state.completionMask & QUEST_STATE_STREAK_CREDITED) == 0) {
-            uint8 completedSlots = state.completionMask & QUEST_STATE_COMPLETED_SLOTS_MASK;
-            if (completedSlots == QUEST_STATE_COMPLETED_SLOTS_MASK) {
-                state.completionMask |= QUEST_STATE_STREAK_CREDITED;
-                newStreak = state.streak + 1;
-                state.streak = newStreak;
-                state.lastCompletedDay = uint32(quest.day);
-                streakJustUpdated = true;
-            }
+        if ((state.completionMask & QUEST_STATE_STREAK_CREDITED) == 0 && slot == 0) {
+            state.completionMask |= QUEST_STATE_STREAK_CREDITED;
+            newStreak = state.streak + 1;
+            state.streak = newStreak;
+            state.lastCompletedDay = uint32(quest.day);
+            streakJustUpdated = true;
         }
         bool isHard = (quest.flags & QUEST_FLAG_HIGH_DIFFICULTY) != 0;
         uint32 rewardStreak = streakJustUpdated ? newStreak : state.baseStreak;
@@ -1050,43 +938,12 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         return bonus;
     }
 
-    /// @dev Derive stake quest requirements from entropy to keep selection reproducible.
-    function _stakeQuestMaskAndRisk(uint256 entropy) private pure returns (uint8 mask, uint8 risk) {
-        mask = QUEST_STAKE_REQUIRE_DISTANCE;
-        bool requirePrincipal = ((entropy >> 16) & 1) == 0;
-        if (requirePrincipal) {
-            mask |= QUEST_STAKE_REQUIRE_PRINCIPAL;
-        } else {
-            mask |= QUEST_STAKE_REQUIRE_RISK;
-            risk = uint8(2 + uint8((entropy >> 40) % 10));
-        }
-    }
-
-    /// @dev Seeds a quest slot with a type, difficulty flags, and stake configuration.
-    function _seedQuest(DailyQuest storage quest, uint48 day, uint256 entropy, uint8 excludeType) private {
-        uint8 qType = uint8(entropy % QUEST_TYPE_COUNT);
-        if (excludeType != type(uint8).max && qType == excludeType) {
-            qType = uint8((qType + 1 + uint8(entropy % (QUEST_TYPE_COUNT - 1))) % QUEST_TYPE_COUNT);
-        }
+    /// @dev Seeds a quest slot with a given type and difficulty flags.
+    function _seedQuestType(DailyQuest storage quest, uint48 day, uint256 entropy, uint8 questType) private {
         uint16 difficulty = uint16(entropy & 0x3FF);
-        uint8 flags;
-        if (difficulty >= 900) {
-            flags = QUEST_FLAG_HIGH_DIFFICULTY | QUEST_FLAG_VERY_HIGH_DIFFICULTY;
-        } else if (difficulty >= 800) {
-            flags = QUEST_FLAG_HIGH_DIFFICULTY;
-        } else {
-            flags = 0;
-        }
-        uint8 mask;
-        uint8 risk;
-        if (qType == QUEST_TYPE_STAKE) {
-            (mask, risk) = _stakeQuestMaskAndRisk(entropy);
-        }
         quest.day = day;
-        quest.questType = qType;
-        quest.stakeMask = mask;
-        quest.stakeRisk = risk;
-        quest.flags = flags;
+        quest.questType = questType;
+        quest.flags = _difficultyFlags(difficulty);
         quest.entropy = entropy;
         quest.version = _nextQuestVersion();
     }

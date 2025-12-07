@@ -4,7 +4,7 @@ async function main() {
   const [deployer] = await ethers.getSigners();
   console.log("Deploying with:", deployer.address);
 
-  const bongsAddr = deployer.address;
+  const bondsAddr = deployer.address;
 
   console.log("1. Deploying MockLinkToken...");
   const MockLinkToken = await ethers.getContractFactory("MockLinkToken");
@@ -32,13 +32,13 @@ async function main() {
 
   console.log("5. Deploying DegenerusAffiliate...");
   const DegenerusAffiliate = await ethers.getContractFactory("DegenerusAffiliate");
-  const affiliate = await DegenerusAffiliate.deploy(bongsAddr);
+  const affiliate = await DegenerusAffiliate.deploy(bondsAddr);
   await affiliate.waitForDeployment();
   console.log("   DegenerusAffiliate deployed at:", await affiliate.getAddress());
 
   console.log("6. Deploying DegenerusCoin...");
   const DegenerusCoin = await ethers.getContractFactory("DegenerusCoin");
-  const degeneruscoin = await DegenerusCoin.deploy(bongsAddr, await affiliate.getAddress(), await renderer.getAddress());
+  const degeneruscoin = await DegenerusCoin.deploy(bondsAddr, await affiliate.getAddress(), await renderer.getAddress());
   await degeneruscoin.waitForDeployment();
   console.log("   DegenerusCoin deployed at:", await degeneruscoin.getAddress());
 
@@ -70,10 +70,10 @@ async function main() {
   await mintModule.waitForDeployment();
   console.log("   MintModule deployed.");
 
-  const DegenerusGameBongModule = await ethers.getContractFactory("DegenerusGameBongModule");
-  const bongModule = await DegenerusGameBongModule.deploy();
-  await bongModule.waitForDeployment();
-  console.log("   BongModule deployed.");
+  const DegenerusGameBondModule = await ethers.getContractFactory("DegenerusGameBondModule");
+  const bondModule = await DegenerusGameBondModule.deploy();
+  await bondModule.waitForDeployment();
+  console.log("   BondModule deployed.");
 
   // Check if DegenerusQuestModule exists or use Mock
   try {
@@ -85,10 +85,10 @@ async function main() {
       console.log("   DegenerusQuestModule deployment failed, using Mock?", e.message);
   }
 
-  let jackpotsAddr = bongsAddr;
+  let jackpotsAddr = bondsAddr;
   try {
       const DegenerusJackpots = await ethers.getContractFactory("contracts/DegenerusJackpots.sol:DegenerusJackpots");
-      const jackpots = await DegenerusJackpots.deploy(bongsAddr);
+      const jackpots = await DegenerusJackpots.deploy(bondsAddr);
       await jackpots.waitForDeployment();
       jackpotsAddr = await jackpots.getAddress();
       console.log("   Jackpots module deployed at:", jackpotsAddr);
@@ -105,15 +105,15 @@ async function main() {
     await endgameModule.getAddress(),
     await jackpotModule.getAddress(),
     await mintModule.getAddress(),
-    await bongModule.getAddress(),
+    await bondModule.getAddress(),
     await vrf.getAddress(),
     ethers.ZeroHash,
-    1n,
-    await link.getAddress(),
     await steth.getAddress(),
     jackpotsAddr,
-    bongsAddr,
-    await trophies.getAddress()
+    bondsAddr,
+    await trophies.getAddress(),
+    await affiliate.getAddress(),
+    deployer.address
   );
   await degenerusGame.waitForDeployment();
   console.log("   DegenerusGame deployed at:", await degenerusGame.getAddress());

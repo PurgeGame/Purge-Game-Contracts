@@ -12,15 +12,15 @@ interface IDegenerusCoinAffiliate {
     function affiliatePrimePresale() external;
 }
 
-interface IDegenerusBongsPresale {
+interface IDegenerusBondsPresale {
     function ingestPresaleEth() external payable;
 }
 
-interface IDegenerusBongsAffiliateMint {
+interface IDegenerusBondsAffiliateMint {
     function mintAffiliateReward(
         address to,
         uint256 quantity,
-        uint256 basePerBongWei,
+        uint256 basePerBondWei,
         bool stake
     ) external returns (uint256 startTokenId);
 }
@@ -30,14 +30,14 @@ contract DegenerusAffiliate {
     // Events
     // ---------------------------------------------------------------------
     event Affiliate(uint256 amount, bytes32 indexed code, address sender);
-    event AffiliateBongClaimed(address indexed player, uint24 indexed lvl, uint8 indexed tier, uint8 bongsMinted);
-    event AffiliateBongRewardsUpdated(uint256 count);
+    event AffiliateBondClaimed(address indexed player, uint24 indexed lvl, uint8 indexed tier, uint8 bondsMinted);
+    event AffiliateBondRewardsUpdated(uint256 count);
     event SyntheticMapPlayerCreated(address indexed synthetic, address indexed affiliate, bytes32 code);
 
     // ---------------------------------------------------------------------
     // Errors
     // ---------------------------------------------------------------------
-    error OnlyBongs();
+    error OnlyBonds();
     error OnlyAuthorized();
     error AlreadyConfigured();
     error Zero();
@@ -66,11 +66,11 @@ contract DegenerusAffiliate {
         uint8 rakeback;
     }
 
-    struct AffiliateBongReward {
+    struct AffiliateBondReward {
         uint96 scoreRequired; // affiliate score needed (base units, 6 decimals)
-        uint96 baseWeiPerBong; // base value per bong for win odds (>= min base, capped to 0.5 ETH when minting)
-        uint8 bongs; // number of bongs minted for this tier
-        bool stake; // whether the reward bongs are staked (soulbound)
+        uint96 baseWeiPerBond; // base value per bond for win odds (>= min base, capped to 0.5 ETH when minting)
+        uint8 bonds; // number of bonds minted for this tier
+        bool stake; // whether the reward bonds are staked (soulbound)
     }
 
     // ---------------------------------------------------------------------
@@ -86,14 +86,14 @@ contract DegenerusAffiliate {
     uint256 private constant PRESALE_PRICE_DIVISOR = 1000; // pricePer1000 / 1000 = price per token
     uint256 private constant PRESALE_PRICE_FLOOR_1000 = 0.0075 ether; // minimum price per 1,000 tokens
     uint256 private constant PRESALE_MAX_ETH_PER_TX = 1 ether;
-    uint256 private constant AFFILIATE_BONG_MIN_BASE = 0.02 ether;
-    uint256 private constant AFFILIATE_BONG_MAX_BASE = 0.5 ether;
-    uint256 private constant AFFILIATE_BONG_MAX_TIERS = 256;
+    uint256 private constant AFFILIATE_BOND_MIN_BASE = 0.02 ether;
+    uint256 private constant AFFILIATE_BOND_MAX_BASE = 0.5 ether;
+    uint256 private constant AFFILIATE_BOND_MAX_TIERS = 256;
 
     // ---------------------------------------------------------------------
     // Immutable / wiring
     // ---------------------------------------------------------------------
-    address public immutable bongs;
+    address public immutable bonds;
 
     IDegenerusCoinAffiliate private coin;
     IDegenerusGame private degenerusGame;
@@ -113,14 +113,14 @@ contract DegenerusAffiliate {
     mapping(uint24 => PlayerScore) private affiliateTopByLevel;
     uint256 private presaleInventoryBase = PRESALE_SUPPLY_TOKENS * MILLION; // used before coin is wired
     bool private preCoinActive = true;
-    uint256 private rewardSeedEth; // legacy accumulator (unused while presale forwards directly to bongs)
+    uint256 private rewardSeedEth; // legacy accumulator (unused while presale forwards directly to bonds)
     bool private presaleShutdown; // permanently stops new presale purchases once coin is wired
     uint256 private presalePricePer1000 = PRESALE_PRICE_START_1000;
     uint48 private presaleLastDay;
     bool private presaleIncreasedToday;
     bool private referralLocksActive;
-    AffiliateBongReward[] private affiliateBongRewards;
-    mapping(uint24 => mapping(address => uint256)) public affiliateBongClaimed; // bitmask of claimed tiers per level
+    AffiliateBondReward[] private affiliateBondRewards;
+    mapping(uint24 => mapping(address => uint256)) public affiliateBondClaimed; // bitmask of claimed tiers per level
 
     function _applyPresaleDecay() private returns (uint256 pricePer1000) {
         uint48 day = uint48(block.timestamp / 1 days);
@@ -168,9 +168,9 @@ contract DegenerusAffiliate {
     // ---------------------------------------------------------------------
     // Constructor
     // ---------------------------------------------------------------------
-    constructor(address bongs_) {
-        if (bongs_ == address(0)) revert ZeroAddress();
-        bongs = bongs_;
+    constructor(address bonds_) {
+        if (bonds_ == address(0)) revert ZeroAddress();
+        bonds = bonds_;
     }
 
     // ---------------------------------------------------------------------
@@ -179,7 +179,7 @@ contract DegenerusAffiliate {
     /// @notice Wire coin and game via an address array ([coin, game]).
     /// @dev Each address can be set once; non-zero updates must match the existing value.
     function wire(address[] calldata addresses) external {
-        if (msg.sender != bongs) revert OnlyBongs();
+        if (msg.sender != bonds) revert OnlyBonds();
         _setCoin(addresses.length > 0 ? addresses[0] : address(0));
         _setGame(addresses.length > 1 ? addresses[1] : address(0));
     }
@@ -262,15 +262,15 @@ contract DegenerusAffiliate {
         return _referrerAddress(player);
     }
 
-    /// @notice Allow the bongs contract to permanently close presale sales.
+    /// @notice Allow the bonds contract to permanently close presale sales.
     function shutdownPresale() external {
-        if (msg.sender != bongs) revert OnlyBongs();
+        if (msg.sender != bonds) revert OnlyBonds();
         presaleShutdown = true;
     }
 
     /// @notice Withdraw admin funds (excludes prize-pool-reserved ETH).
     function withdrawAdmin(address payable to, uint256 amount) external {
-        if (msg.sender != bongs) revert OnlyBongs();
+        if (msg.sender != bonds) revert OnlyBonds();
         if (to == address(0)) revert Zero();
         uint256 reserved = rewardSeedEth;
         uint256 bal = address(this).balance;
@@ -312,7 +312,7 @@ contract DegenerusAffiliate {
         presalePrincipal[buyer] += amountBase;
         presaleCoinEarned[buyer] += amountBase;
 
-        IDegenerusBongsPresale(bongs).ingestPresaleEth{value: costWei}(); // bongs routes 90% to prize pool
+        IDegenerusBondsPresale(bonds).ingestPresaleEth{value: costWei}(); // bonds routes 90% to prize pool
 
         if (refund != 0) {
             (bool refundOk, ) = buyer.call{value: refund}("");
@@ -338,7 +338,7 @@ contract DegenerusAffiliate {
     // Gameplay entrypoints (coin only)
     // ---------------------------------------------------------------------
     /// @notice Credit affiliate rewards for a purchase (invoked by trusted gameplay contracts).
-    /// @dev Core payout logic used by gameplay modules; callable only by the coin contract or bongs.
+    /// @dev Core payout logic used by gameplay modules; callable only by the coin contract or bonds.
     function payAffiliate(
         uint256 amount,
         bytes32 code,
@@ -347,7 +347,7 @@ contract DegenerusAffiliate {
     ) external returns (uint256 playerRakeback) {
         address caller = msg.sender;
         address coinAddr = address(coin);
-        if (caller != coinAddr && caller != bongs) revert OnlyAuthorized();
+        if (caller != coinAddr && caller != bonds) revert OnlyAuthorized();
 
         bool coinActive = coinAddr != address(0);
         bytes32 storedCode = playerReferralCode[sender];
@@ -467,70 +467,70 @@ contract DegenerusAffiliate {
     }
 
     // ---------------------------------------------------------------------
-    // Affiliate bong claims (reward mints)
+    // Affiliate bond claims (reward mints)
     // ---------------------------------------------------------------------
-    /// @notice Configure claim tiers that award free bongs to affiliates once they reach a score threshold for a level.
-    /// @dev Access: bongs only. Up to 256 tiers supported (bit-packed claimed flags).
-    function setAffiliateBongRewards(AffiliateBongReward[] calldata rewards) external {
-        if (msg.sender != bongs) revert OnlyBongs();
+    /// @notice Configure claim tiers that award free bonds to affiliates once they reach a score threshold for a level.
+    /// @dev Access: bonds only. Up to 256 tiers supported (bit-packed claimed flags).
+    function setAffiliateBondRewards(AffiliateBondReward[] calldata rewards) external {
+        if (msg.sender != bonds) revert OnlyBonds();
         uint256 len = rewards.length;
-        if (len > AFFILIATE_BONG_MAX_TIERS) revert ClaimConfigTooLarge();
-        delete affiliateBongRewards;
+        if (len > AFFILIATE_BOND_MAX_TIERS) revert ClaimConfigTooLarge();
+        delete affiliateBondRewards;
         for (uint256 i; i < len; ) {
-            AffiliateBongReward calldata reward = rewards[i];
+            AffiliateBondReward calldata reward = rewards[i];
             if (
                 reward.scoreRequired == 0 ||
-                reward.bongs == 0 ||
-                reward.baseWeiPerBong < AFFILIATE_BONG_MIN_BASE ||
-                reward.baseWeiPerBong > AFFILIATE_BONG_MAX_BASE
+                reward.bonds == 0 ||
+                reward.baseWeiPerBond < AFFILIATE_BOND_MIN_BASE ||
+                reward.baseWeiPerBond > AFFILIATE_BOND_MAX_BASE
             ) {
                 revert InvalidClaimConfig();
             }
-            affiliateBongRewards.push(reward);
+            affiliateBondRewards.push(reward);
             unchecked {
                 ++i;
             }
         }
-        emit AffiliateBongRewardsUpdated(len);
+        emit AffiliateBondRewardsUpdated(len);
     }
 
-    /// @notice Claim a bong reward tier for the caller for a given level.
+    /// @notice Claim a bond reward tier for the caller for a given level.
     /// @param lvl Level whose affiliate score is evaluated.
     /// @param tierIdx Reward tier index (0-based).
-    function claimAffiliateBong(uint24 lvl, uint8 tierIdx) external {
-        AffiliateBongReward memory reward = _affiliateBongReward(tierIdx);
+    function claimAffiliateBond(uint24 lvl, uint8 tierIdx) external {
+        AffiliateBondReward memory reward = _affiliateBondReward(tierIdx);
 
-        uint256 claimedMask = affiliateBongClaimed[lvl][msg.sender];
+        uint256 claimedMask = affiliateBondClaimed[lvl][msg.sender];
         uint256 mask = uint256(1) << tierIdx;
         if ((claimedMask & mask) != 0) revert ClaimAlreadyClaimed();
 
         uint256 score = affiliateCoinEarned[lvl][msg.sender];
         if (score < reward.scoreRequired) revert ClaimScoreTooLow();
 
-        affiliateBongClaimed[lvl][msg.sender] = claimedMask | mask;
+        affiliateBondClaimed[lvl][msg.sender] = claimedMask | mask;
 
-        IDegenerusBongsAffiliateMint(bongs).mintAffiliateReward(
+        IDegenerusBondsAffiliateMint(bonds).mintAffiliateReward(
             msg.sender,
-            reward.bongs,
-            reward.baseWeiPerBong,
+            reward.bonds,
+            reward.baseWeiPerBond,
             reward.stake
         );
 
-        emit AffiliateBongClaimed(msg.sender, lvl, tierIdx, reward.bongs);
+        emit AffiliateBondClaimed(msg.sender, lvl, tierIdx, reward.bonds);
     }
 
     /// @notice Return the number of claimable tiers and the claimed bitmask for a player/level pair.
-    function claimableAffiliateBongTiers(
+    function claimableAffiliateBondTiers(
         address player,
         uint24 lvl
     ) external view returns (uint16 claimable, uint256 claimedMask) {
-        claimedMask = affiliateBongClaimed[lvl][player];
-        uint256 len = affiliateBongRewards.length;
+        claimedMask = affiliateBondClaimed[lvl][player];
+        uint256 len = affiliateBondRewards.length;
         if (len == 0) return (0, claimedMask);
 
         uint256 score = affiliateCoinEarned[lvl][player];
         for (uint256 i; i < len; ) {
-            AffiliateBongReward memory reward = affiliateBongRewards[i];
+            AffiliateBondReward memory reward = affiliateBondRewards[i];
             if ((claimedMask & (uint256(1) << i)) == 0 && score >= reward.scoreRequired) {
                 unchecked {
                     ++claimable;
@@ -542,19 +542,19 @@ contract DegenerusAffiliate {
         }
     }
 
-    /// @notice Number of configured affiliate bong reward tiers.
-    function affiliateBongRewardsLength() external view returns (uint256) {
-        return affiliateBongRewards.length;
+    /// @notice Number of configured affiliate bond reward tiers.
+    function affiliateBondRewardsLength() external view returns (uint256) {
+        return affiliateBondRewards.length;
     }
 
-    /// @notice Return a configured affiliate bong reward tier.
-    function affiliateBongReward(uint256 idx) external view returns (AffiliateBongReward memory) {
-        return affiliateBongRewards[idx];
+    /// @notice Return a configured affiliate bond reward tier.
+    function affiliateBondReward(uint256 idx) external view returns (AffiliateBondReward memory) {
+        return affiliateBondRewards[idx];
     }
 
-    function _affiliateBongReward(uint8 idx) private view returns (AffiliateBongReward memory reward) {
-        if (idx >= affiliateBongRewards.length) revert ClaimTierInvalid();
-        reward = affiliateBongRewards[idx];
+    function _affiliateBondReward(uint8 idx) private view returns (AffiliateBondReward memory reward) {
+        if (idx >= affiliateBondRewards.length) revert ClaimTierInvalid();
+        reward = affiliateBondRewards[idx];
     }
 
     /// @notice Consume and return the caller’s accrued presale/early affiliate coin for minting.
@@ -576,7 +576,7 @@ contract DegenerusAffiliate {
     /// @notice Credit presale coin from LINK funding (VRF sub); callable by coin/bonds.
     function addPresaleLinkCredit(address player, uint256 amount) external {
         address caller = msg.sender;
-        if (caller != address(coin) && caller != bongs) revert OnlyAuthorized();
+        if (caller != address(coin) && caller != bonds) revert OnlyAuthorized();
         if (player == address(0) || amount == 0) return;
         presaleCoinEarned[player] += amount;
         presaleClaimableTotal += amount;

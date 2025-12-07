@@ -12,11 +12,11 @@ import {
     IDegenerusGameEndgameModule,
     IDegenerusGameJackpotModule,
     IDegenerusGameMintModule,
-    IDegenerusGameBongModule
+    IDegenerusGameBondModule
 } from "./interfaces/IDegenerusGameModules.sol";
 import {MintPaymentKind} from "./interfaces/IDegenerusGame.sol";
 import {DegenerusGameExternalOp} from "./interfaces/IDegenerusGameExternal.sol";
-import {DegenerusGameStorage, ClaimableBongInfo} from "./storage/DegenerusGameStorage.sol";
+import {DegenerusGameStorage, ClaimableBondInfo} from "./storage/DegenerusGameStorage.sol";
 import {DegenerusGameCredit} from "./utils/DegenerusGameCredit.sol";
 
 interface IStETH {
@@ -27,25 +27,26 @@ interface IStETH {
     function transferFrom(address from, address to, uint256 amount) external returns (bool);
 }
 
-interface IDegenerusBongs {
-    function payBongs(
+interface IDegenerusBonds {
+    function depositCurrentFor(address beneficiary) external payable returns (uint256 scoreAwarded);
+    function payBonds(
         uint256 coinAmount,
         uint256 stEthAmount,
         uint48 rngDay,
         uint256 rngWord,
-        uint256 maxBongs
+        uint256 maxBonds
     ) external payable;
-    function resolvePendingBongs(uint256 maxBongs) external;
+    function resolvePendingBonds(uint256 maxBonds) external;
     function resolvePending() external view returns (bool);
     function notifyGameOver() external;
     function finalizeShutdown(uint256 maxIds) external returns (uint256 processedIds, uint256 burned, bool complete);
     function setTransfersLocked(bool locked, uint48 rngDay) external;
     function stakeRateBps() external view returns (uint16);
     function purchasesEnabled() external view returns (bool);
-    function purchaseGameBongs(
+    function purchaseGameBonds(
         address[] calldata recipients,
         uint256 quantity,
-        uint256 basePerBongWei,
+        uint256 basePerBondWei,
         bool stake
     ) external returns (uint256 startTokenId);
 }
@@ -83,10 +84,6 @@ interface IVRFCoordinator {
         returns (uint96 balance, uint96 premium, uint64 reqCount, address owner, address[] memory consumers);
 }
 
-interface ILinkToken {
-    function transferAndCall(address to, uint256 value, bytes calldata data) external returns (bool);
-}
-
 // ===========================================================================
 // Contract
 // ===========================================================================
@@ -100,23 +97,22 @@ contract DegenerusGame is DegenerusGameStorage {
     error NotTimeYet(); // Called in a phase where the action is not permitted
     error RngNotReady(); // VRF request still pending
     error RngLocked(); // RNG is already locked; nudge not allowed
-    error BongsNotResolved(); // Pending bong resolution must be completed before requesting new RNG
+    error BondsNotResolved(); // Pending bond resolution must be completed before requesting new RNG
     error InvalidQuantity(); // Invalid quantity or token count for the action
-    error CoinPaused(); // LINK top-ups unavailable while RNG is locked
     error VrfUpdateNotReady(); // VRF swap not allowed yet (not stuck long enough or randomness already received)
 
     // -----------------------
     // Events
     // -----------------------
     event PlayerCredited(address indexed player, address indexed recipient, uint256 amount);
-    event BongCreditAdded(address indexed player, uint256 amount);
+    event BondCreditAdded(address indexed player, uint256 amount);
     event Jackpot(uint256 traits); // Encodes jackpot metadata
     event Degenerus(address indexed player, uint256[] tokenIds);
     event Advance(uint8 gameState);
     event ReverseFlip(address indexed caller, uint256 totalQueued, uint256 cost);
     event VrfCoordinatorUpdated(address indexed previous, address indexed current);
-    event PrizePoolBongBuy(uint256 spendWei, uint256 quantity);
-    event BongCreditLiquidated(address indexed player, uint256 amount);
+    event PrizePoolBondBuy(uint256 spendWei, uint256 quantity);
+    event BondCreditLiquidated(address indexed player, uint256 amount);
 
     // -----------------------
     // Immutable Addresses
@@ -124,18 +120,17 @@ contract DegenerusGame is DegenerusGameStorage {
     IDegenerusRendererLike private immutable renderer; // Trusted renderer; used for tokenURI composition
     IDegenerusCoin private immutable coin; // Trusted coin/game-side coordinator (DEGEN ERC20)
     IDegenerusGameNFT private immutable nft; // ERC721 interface for mint/burn/metadata surface
-    address public immutable bongs; // Bong contract for resolution and metadata
+    address public immutable bonds; // Bond contract for resolution and metadata
     address private immutable affiliateProgram; // Cached affiliate program for payout routing
     IStETH private immutable steth; // stETH token held by the game
     address private immutable jackpots; // DegenerusJackpots contract
     address private immutable endgameModule; // Delegate module for endgame settlement
     address private immutable jackpotModule; // Delegate module for jackpot routines
     address private immutable mintModule; // Delegate module for mint packing + trait rebuild helpers
-    address private immutable bongModule; // Delegate module for bong upkeep and staking
+    address private immutable bondModule; // Delegate module for bond upkeep and staking
     IVRFCoordinator private vrfCoordinator; // Chainlink VRF coordinator (mutable for emergencies)
     bytes32 private vrfKeyHash; // VRF key hash (rotatable with coordinator/sub)
     uint256 private vrfSubscriptionId; // VRF subscription identifier (mutable for coordinator swaps)
-    address private immutable linkToken; // LINK token contract for top-ups
     address private immutable vrfAdmin; // VRF subscription owner contract allowed to rotate/wire VRF config
     // Trusted collaborators: coin/nft/jackpots/modules are expected to be non-reentrant and non-malicious.
 
@@ -148,8 +143,6 @@ contract DegenerusGame is DegenerusGameStorage {
     uint48 private constant JACKPOT_RESET_TIME = 82620; // "Day" windows are offset from unix midnight by this anchor
     uint8 private constant JACKPOT_LEVEL_CAP = 10;
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
-    uint24 private constant DECIMATOR_SPECIAL_LEVEL = 100;
-    uint16 private constant LUCK_PER_LINK_PERCENT = 22; // flip credit per LINK before multiplier (as % of priceCoin)
     uint32 private constant VRF_CALLBACK_GAS_LIMIT = 200_000;
     uint16 private constant VRF_REQUEST_CONFIRMATIONS = 10;
     uint256 private constant RNG_NUDGE_BASE_COST = 100 * 1e6; // DEGEN has 6 decimals
@@ -186,13 +179,12 @@ contract DegenerusGame is DegenerusGameStorage {
      * @param endgameModule_    Delegate module handling endgame settlement
      * @param jackpotModule_    Delegate module handling jackpot distribution
      * @param mintModule_       Delegate module handling mint packing and trait rebuild helpers
-     * @param bongModule_       Delegate module handling bong upkeep, staking, and shutdown drains
+     * @param bondModule_       Delegate module handling bond upkeep, staking, and shutdown drains
      * @param vrfCoordinator_   Chainlink VRF coordinator
      * @param vrfKeyHash_       VRF key hash
-     * @param linkToken_        LINK token contract (ERC677) for VRF billing
      * @param stEthToken_       stETH token address
      * @param jackpots_         DegenerusJackpots contract address (wires Decimator/BAF jackpots)
-     * @param bongs_            Bongs contract address
+     * @param bonds_            Bonds contract address
      * @param trophies_         Standalone trophy ERC721 contract (cosmetic only)
      * @param affiliateProgram_ Affiliate program contract address (for payouts/trophies)
      * @param vrfAdmin_         VRF owner/admin contract authorized to rotate the coordinator/subscription on stalls
@@ -204,13 +196,12 @@ contract DegenerusGame is DegenerusGameStorage {
         address endgameModule_,
         address jackpotModule_,
         address mintModule_,
-        address bongModule_,
+        address bondModule_,
         address vrfCoordinator_,
         bytes32 vrfKeyHash_,
-        address linkToken_,
         address stEthToken_,
         address jackpots_,
-        address bongs_,
+        address bonds_,
         address trophies_,
         address affiliateProgram_,
         address vrfAdmin_
@@ -221,17 +212,17 @@ contract DegenerusGame is DegenerusGameStorage {
         endgameModule = endgameModule_;
         jackpotModule = jackpotModule_;
         mintModule = mintModule_;
-        bongModule = bongModule_;
+        bondModule = bondModule_;
         vrfCoordinator = IVRFCoordinator(vrfCoordinator_);
         affiliateProgram = affiliateProgram_;
         vrfKeyHash = vrfKeyHash_;
-        linkToken = linkToken_;
         vrfAdmin = vrfAdmin_;
         steth = IStETH(stEthToken_);
         jackpots = jackpots_;
-        bongs = bongs_;
+        bonds = bonds_;
         trophies = trophies_;
-        if (!steth.approve(bongs_, type(uint256).max)) revert E();
+        affiliateProgramAddr = affiliateProgram_;
+        if (!steth.approve(bonds_, type(uint256).max)) revert E();
         deployTimestamp = uint48(block.timestamp);
     }
 
@@ -415,10 +406,10 @@ contract DegenerusGame is DegenerusGameStorage {
         return uint24((mintPacked_[player] >> ETH_LEVEL_STREAK_SHIFT) & MINT_MASK_24);
     }
 
-    /// @notice Record a mint, funded by ETH (`msg.value`), claimable winnings, or bong credit.
+    /// @notice Record a mint, funded by ETH (`msg.value`), claimable winnings, or bond credit.
     /// @dev ETH paths require `msg.value == costWei`. Claimable paths deduct from `claimableWinnings` and fund prize pools.
-    ///      Bong credit uses the same `costWei` accounting but does not increase prize pools and must send zero ETH.
-    ///      Combined allows any mix of ETH, claimable, and bong credit (in that order) to cover `costWei`.
+    ///      Bond credit uses the same `costWei` accounting but does not increase prize pools and must send zero ETH.
+    ///      Combined allows any mix of ETH, claimable, and bond credit (in that order) to cover `costWei`.
     function recordMint(
         address player,
         uint24 lvl,
@@ -458,7 +449,7 @@ contract DegenerusGame is DegenerusGameStorage {
     ) private returns (uint256 prizeContribution) {
         (bool ok, uint256 prize, uint256 creditUsed) = DegenerusGameCredit.processMintPayment(
             claimableWinnings,
-            bongCredit,
+            bondCredit,
             player,
             amount,
             payKind,
@@ -466,12 +457,12 @@ contract DegenerusGame is DegenerusGameStorage {
         );
         if (!ok) revert E();
         if (creditUsed != 0) {
-            uint256 escrow = bongCreditEscrow;
+            uint256 escrow = bondCreditEscrow;
             if (escrow != 0) {
                 uint256 applied = creditUsed < escrow ? creditUsed : escrow;
                 unchecked {
                     prize += applied;
-                    bongCreditEscrow = escrow - applied;
+                    bondCreditEscrow = escrow - applied;
                 }
             }
         }
@@ -494,14 +485,14 @@ contract DegenerusGame is DegenerusGameStorage {
             if (
                 deployTs != 0 && uint256(ts) >= uint256(deployTs) + DEPLOY_IDLE_TIMEOUT // uint256 to avoid uint48 overflow
             ) {
-                drainToBongs(day);
+                drainToBonds(day);
                 return;
             }
         }
         uint8 _gameState = gameState;
         // Liveness drain
         if (ts - 365 days > lst && _gameState != 0) {
-            drainToBongs(day);
+            drainToBonds(day);
             return;
         }
         uint24 lvl = level;
@@ -587,9 +578,9 @@ contract DegenerusGame is DegenerusGameStorage {
                         }
                     }
 
-                    uint256 totalWeiForBong = rewardPool + currentPrizePool;
-                    if (_bongMaintenanceForMapModule(day, totalWeiForBong, rngWord, cap)) {
-                        break; // bong batch consumed this tick; rerun advanceGame to continue
+                    uint256 totalWeiForBond = rewardPool + currentPrizePool;
+                    if (_bondMaintenanceForMapModule(day, totalWeiForBond, rngWord, cap)) {
+                        break; // bond batch consumed this tick; rerun advanceGame to continue
                     }
                     uint256 mapEffectiveWei = _calcPrizePoolForJackpot(lvl, rngWord);
                     payMapJackpot(lvl, rngWord, mapEffectiveWei);
@@ -791,6 +782,7 @@ contract DegenerusGame is DegenerusGameStorage {
     function _endLevel(uint16 exterminated) private {
         address callerExterminator = msg.sender;
         uint24 levelSnapshot = level;
+        gameState = 1;
         bool traitExterminated = exterminated < 256;
         if (traitExterminated) {
             uint8 exTrait = uint8(exterminated);
@@ -817,6 +809,7 @@ contract DegenerusGame is DegenerusGameStorage {
             );
 
             lastExterminatedTrait = exTrait;
+            coin.normalizeActiveBurnQuests();
         } else {
             exterminationInvertFlag = false;
             _setExterminatorForLevel(levelSnapshot, address(0));
@@ -826,15 +819,16 @@ contract DegenerusGame is DegenerusGameStorage {
         }
 
         if (levelSnapshot % 100 == 0) {
-            price = 0.05 ether;
-            priceCoin >>= 1;
             lastPrizePool = rewardPool;
+            price = 0.05 ether;
+            priceCoin = 1_000_000_000;
         }
 
         unchecked {
             levelSnapshot++;
             level++;
         }
+
         traitRebuildCursor = 0;
         jackpotCounter = 0;
         // Reset daily burn counters so the next level's jackpots start fresh.
@@ -845,17 +839,20 @@ contract DegenerusGame is DegenerusGameStorage {
             }
         }
 
-        uint256 mod100 = levelSnapshot % 100;
-        uint256 mod20 = levelSnapshot % 20;
-        if (mod100 == 10 || mod100 == 0) {
-            price <<= 1;
-        } else if (mod20 == 0) {
-            price += (levelSnapshot < 100) ? 0.05 ether : 0.1 ether;
-        }
+        uint256 cycleOffset = levelSnapshot % 100; // position within the 100-level schedule (0 == 100)
 
-        gameState = 1;
-        if (traitExterminated) {
-            coin.normalizeActiveBurnQuests();
+        if (cycleOffset == 10) {
+            price = 0.05 ether;
+        } else if (cycleOffset == 30) {
+            price = 0.1 ether;
+        } else if (cycleOffset == 50) {
+            priceCoin = 800_000_000;
+        } else if (cycleOffset == 70) {
+            priceCoin = 700_000_000;
+        } else if (cycleOffset == 90) {
+            priceCoin = 600_000_000;
+        } else if (cycleOffset == 0) {
+            price = 0.25 ether;
         }
 
         nft.advanceBase(); // let NFT pull its own nextTokenId to avoid redundant calls here
@@ -908,21 +905,26 @@ contract DegenerusGame is DegenerusGameStorage {
 
     function _rebuildTraitCountsModule(uint32 tokenBudget, uint32 target, uint256 baseTokenId) private {
         (bool ok, ) = mintModule.delegatecall(
-            abi.encodeWithSelector(IDegenerusGameMintModule.rebuildTraitCounts.selector, tokenBudget, target, baseTokenId)
+            abi.encodeWithSelector(
+                IDegenerusGameMintModule.rebuildTraitCounts.selector,
+                tokenBudget,
+                target,
+                baseTokenId
+            )
         );
         if (!ok) revert E();
     }
 
-    function _bongMaintenanceForMapModule(
+    function _bondMaintenanceForMapModule(
         uint48 day,
         uint256 totalWei,
         uint256 rngWord,
         uint32 cap
     ) private returns (bool worked) {
-        (bool ok, bytes memory data) = bongModule.delegatecall(
+        (bool ok, bytes memory data) = bondModule.delegatecall(
             abi.encodeWithSelector(
-                IDegenerusGameBongModule.bongMaintenanceForMap.selector,
-                bongs,
+                IDegenerusGameBondModule.bondMaintenanceForMap.selector,
+                bonds,
                 address(coin),
                 address(steth),
                 day,
@@ -936,17 +938,17 @@ contract DegenerusGame is DegenerusGameStorage {
     }
 
     function _stakeForTargetRatioModule(uint24 lvl) private {
-        (bool ok, bytes memory data) = bongModule.delegatecall(
-            abi.encodeWithSelector(IDegenerusGameBongModule.stakeForTargetRatio.selector, bongs, address(steth), lvl)
+        (bool ok, bytes memory data) = bondModule.delegatecall(
+            abi.encodeWithSelector(IDegenerusGameBondModule.stakeForTargetRatio.selector, bonds, address(steth), lvl)
         );
         if (!ok) {
             _revertWith(data);
         }
     }
 
-    function _drainToBongsModule(uint48 day) private {
-        (bool ok, bytes memory data) = bongModule.delegatecall(
-            abi.encodeWithSelector(IDegenerusGameBongModule.drainToBongs.selector, bongs, address(steth), day)
+    function _drainToBondsModule(uint48 day) private {
+        (bool ok, bytes memory data) = bondModule.delegatecall(
+            abi.encodeWithSelector(IDegenerusGameBondModule.drainToBonds.selector, bonds, address(steth), day)
         );
         if (!ok) {
             _revertWith(data);
@@ -986,7 +988,7 @@ contract DegenerusGame is DegenerusGameStorage {
         uint256 amount = claimableWinnings[player];
         if (amount <= 1) revert E();
         coin.burnCoin(player, priceCoin / 10); // Burn cost = 10% of current coin unit price
-        _mintClaimableBongs(player, 0);
+        _applyBondCredit(player, 0);
         uint256 payout;
         unchecked {
             claimableWinnings[player] = 1;
@@ -1001,133 +1003,83 @@ contract DegenerusGame is DegenerusGameStorage {
         return stored - 1;
     }
 
-    /// @notice Toggle auto-liquidation of bong credits into claimable winnings (tax applies on withdrawal).
-    /// @dev When enabled, any existing bong credit is immediately converted if escrowed funds are available.
-    function setAutoBongLiquidate(bool enabled) external {
-        autoBongLiquidate[msg.sender] = enabled;
+    /// @notice Toggle auto-liquidation of bond credits into claimable winnings (tax applies on withdrawal).
+    /// @dev When enabled, any existing bond credit is immediately converted if escrowed funds are available.
+    function setAutoBondLiquidate(bool enabled) external {
+        autoBondLiquidate[msg.sender] = enabled;
         if (enabled) {
-            _autoLiquidateBongCredit(msg.sender);
+            _autoLiquidateBondCredit(msg.sender);
         }
     }
 
-    function _autoLiquidateBongCredit(address player) private returns (bool converted) {
-        if (!autoBongLiquidate[player]) return false;
-        ClaimableBongInfo storage info = claimableBongInfo[player];
+    function _autoLiquidateBondCredit(address player) private returns (bool converted) {
+        if (!autoBondLiquidate[player]) return false;
+        ClaimableBondInfo storage info = claimableBondInfo[player];
         uint256 creditWei = info.weiAmount;
         if (creditWei == 0) return false;
 
         info.weiAmount = 0;
-        info.basePerBongWei = 0;
+        info.basePerBondWei = 0;
         info.stake = false;
-        bongCreditEscrow = bongCreditEscrow - creditWei;
+        bondCreditEscrow = bondCreditEscrow - creditWei;
         _addClaimableEth(player, creditWei);
-        emit BongCreditLiquidated(player, creditWei);
+        emit BondCreditLiquidated(player, creditWei);
         return true;
     }
 
-    /// @notice Mint any claimable bong credits without claiming ETH winnings.
-    /// @param maxBatches Optional cap on batches processed this call (0 = all).
-    function claimBongCredits(uint32 maxBatches) external {
-        _mintClaimableBongs(msg.sender, maxBatches);
+    /// @notice Spend any claimable bond credits without claiming ETH winnings.
+    /// @param amountWei Optional cap on spend this call (0 = all).
+    function claimBondCredits(uint256 amountWei) external {
+        _applyBondCredit(msg.sender, amountWei);
     }
 
-    /// @notice Cash out bong credits: valued at current bong price, player receives 50% of that value in ETH; remaining face minus payout is split between bongs and rewardPool.
-    /// @param amountWei Optional face amount to cash out; 0 means use full credit.
-    function cashoutBongCredits(uint256 amountWei) external {
-        ClaimableBongInfo storage info = claimableBongInfo[msg.sender];
-        uint256 creditWei = info.weiAmount;
-        if (creditWei == 0) revert E();
+    /// @notice Spend bond credits into the active bond series; falls back to crediting ETH if bonds are unavailable.
+    /// @param amountWei Optional face amount to spend; 0 means use full credit.
+    function cashoutBondCredits(uint256 amountWei) external {
+        _applyBondCredit(msg.sender, amountWei);
+    }
 
+    function bondCreditOf(address player) external view returns (uint256) {
+        return bondCredit[player];
+    }
+
+    /// @notice Spend any claimable bond credits owed to `player` before paying ETH winnings.
+    /// @param amountWei Optional cap on spend this call (0 = spend all).
+    function _applyBondCredit(address player, uint256 amountWei) private {
+        if (_autoLiquidateBondCredit(player)) return;
+        ClaimableBondInfo storage info = claimableBondInfo[player];
+        uint256 creditWei = info.weiAmount;
+        if (creditWei == 0) return;
         if (amountWei == 0 || amountWei > creditWei) {
             amountWei = creditWei;
         }
-
-        uint256 escrow = bongCreditEscrow;
-        if (escrow < amountWei) revert E();
-
-        uint256 marketBase = _bongMarketPrice(info.basePerBongWei);
-        if (marketBase == 0) revert E();
-
-        // Value the credit at the current bong price (amountWei face units * price per unit).
-        uint256 marketValue = (amountWei * marketBase) / 1 ether;
-        if (marketValue == 0) revert E();
-
-        uint256 toPlayer = marketValue / 2;
-        uint256 profit = amountWei > toPlayer ? amountWei - toPlayer : 0; // capture market discount upside
-
-        info.weiAmount = uint128(creditWei - amountWei);
-        bongCreditEscrow = escrow - amountWei;
-
-        _addClaimableEth(msg.sender, toPlayer);
-
-        uint256 toBongs = profit / 2;
-        uint256 toReward = profit - toBongs;
-
-        if (toBongs != 0) {
-            address bongsAddr = bongs;
-            if (bongsAddr == address(0)) {
-                toReward += toBongs; // fallback to reward pool if bongs not wired
-            } else {
-                (bool ok, ) = bongsAddr.call{value: toBongs}("");
-                if (!ok) revert E();
-            }
+        uint256 spend = amountWei;
+        uint256 escrow = bondCreditEscrow;
+        if (spend > escrow) {
+            spend = escrow;
         }
+        if (spend == 0) return;
 
-        if (toReward != 0) {
-            rewardPool += toReward;
-        }
-    }
-
-    function bongCreditOf(address player) external view returns (uint256) {
-        return bongCredit[player];
-    }
-
-    /// @notice Mint any claimable bongs owed to `player` before paying ETH winnings.
-    /// @param maxBatches Ignored (kept for interface parity; single bucket model).
-    function _mintClaimableBongs(address player, uint32 maxBatches) private {
-        maxBatches; // unused
-        if (_autoLiquidateBongCredit(player)) return;
-        ClaimableBongInfo storage info = claimableBongInfo[player];
-        uint256 creditWei = info.weiAmount;
-        if (creditWei == 0) return;
-        address bongsAddr = bongs;
-        if (bongsAddr == address(0)) return;
-        if (!IDegenerusBongs(bongsAddr).purchasesEnabled()) return;
-
-        uint256 base = _bongMarketPrice(info.basePerBongWei);
-        if (base == 0) return;
-        uint256 maxQuantity = creditWei / base;
-        uint256 escrow = bongCreditEscrow;
-        if (maxQuantity == 0 || escrow < base) return;
-        uint256 maxEscrowQty = escrow / base;
-        uint256 quantity = maxQuantity < maxEscrowQty ? maxQuantity : maxEscrowQty;
-        if (quantity == 0) return;
-
-        address[] memory recipients = new address[](1);
-        recipients[0] = player;
-        uint256 spend = quantity * base;
-        bool stake = info.stake || info.basePerBongWei == 0; // default to staked when unset
         info.weiAmount = uint128(creditWei - spend);
-        bongCreditEscrow = escrow - spend;
-        IDegenerusBongs(bongsAddr).payBongs{value: spend}(0, 0, 0, 0, 0);
-        IDegenerusBongs(bongsAddr).purchaseGameBongs(recipients, quantity, base, stake);
+        bondCreditEscrow = escrow - spend;
+
+        address bondsAddr = bonds;
+        if (bondsAddr == address(0)) {
+            _addClaimableEth(player, spend);
+            return;
+        }
+
+        try IDegenerusBonds(bondsAddr).depositCurrentFor{value: spend}(player) {
+            // bond purchase succeeded
+        } catch {
+            // fallback to crediting winnings if bond deposit fails
+            _addClaimableEth(player, spend);
+        }
     }
 
-    function _bongMarketPrice(uint256 preferredBase) private view returns (uint256) {
-        uint256 base = preferredBase;
-        if (base == 0) {
-            base = price;
-        }
-        if (base == 0) return 0;
-        if (base > 5 ether) {
-            base = 5 ether; // mirror bong MAX_PRICE guard
-        }
-        return base;
-    }
-
-    /// @notice Credit claimable ETH for a player from bong redemptions (bongs contract only).
-    function creditBongWinnings(address player) external payable {
-        if (msg.sender != bongs || player == address(0) || msg.value == 0) revert E();
+    /// @notice Credit claimable ETH for a player from bond redemptions (bonds contract only).
+    function creditBondWinnings(address player) external payable {
+        if (msg.sender != bonds || player == address(0) || msg.value == 0) revert E();
         if (player == address(this)) {
             currentPrizePool += msg.value;
             return;
@@ -1135,15 +1087,15 @@ contract DegenerusGame is DegenerusGameStorage {
         _addClaimableEth(player, msg.value);
     }
 
-    /// @notice Deposit bong purchase reward share into the tracked reward pool (bongs only).
-    function bongRewardDeposit() external payable {
-        if (msg.sender != bongs || msg.value == 0) revert E();
+    /// @notice Deposit bond purchase reward share into the tracked reward pool (bonds only).
+    function bondRewardDeposit() external payable {
+        if (msg.sender != bonds || msg.value == 0) revert E();
         rewardPool += msg.value;
     }
 
-    /// @notice Deposit bong purchase yield share without touching tracked pools (bongs only).
-    function bongYieldDeposit() external payable {
-        if (msg.sender != bongs || msg.value == 0) revert E();
+    /// @notice Deposit bond purchase yield share without touching tracked pools (bonds only).
+    function bondYieldDeposit() external payable {
+        if (msg.sender != bonds || msg.value == 0) revert E();
         // Intentionally left untracked; balance stays on contract.
     }
 
@@ -1186,13 +1138,13 @@ contract DegenerusGame is DegenerusGameStorage {
 
     // --- Credits & jackpot helpers ------------------------------------------------------------------
 
-    /// @notice Credit non-withdrawable bong proceeds to a player; callable only by the bongs contract.
-    function addBongCredit(address player, uint256 amount) external {
-        if (msg.sender != bongs || player == address(0) || amount == 0) revert E();
+    /// @notice Credit non-withdrawable bond proceeds to a player; callable only by the bonds contract.
+    function addBondCredit(address player, uint256 amount) external {
+        if (msg.sender != bonds || player == address(0) || amount == 0) revert E();
         unchecked {
-            bongCredit[player] += amount;
+            bondCredit[player] += amount;
         }
-        emit BongCreditAdded(player, amount);
+        emit BondCreditAdded(player, amount);
     }
 
     /// @notice Credit ETH winnings to a player’s claimable balance and emit an accounting event.
@@ -1306,18 +1258,18 @@ contract DegenerusGame is DegenerusGameStorage {
         return true;
     }
 
-    function drainToBongs(uint48 day) private {
-        _drainToBongsModule(day);
+    function drainToBonds(uint48 day) private {
+        _drainToBondsModule(day);
         gameState = 0;
         _requestRngBestEffort(day);
     }
 
     // --- Reward vault & liquidity -----------------------------------------------------
 
-    /// @notice Swap ETH <-> stETH with the bongs contract to rebalance liquidity.
-    /// @dev Access: bongs only. stEthForEth=true pulls stETH from bongs and sends back ETH; false stakes incoming ETH and forwards minted stETH.
-    function swapWithBongs(bool stEthForEth, uint256 amount) external payable {
-        if (msg.sender != bongs || amount == 0) revert E();
+    /// @notice Swap ETH <-> stETH with the bonds contract to rebalance liquidity.
+    /// @dev Access: bonds only. stEthForEth=true pulls stETH from bonds and sends back ETH; false stakes incoming ETH and forwards minted stETH.
+    function swapWithBonds(bool stEthForEth, uint256 amount) external payable {
+        if (msg.sender != bonds || amount == 0) revert E();
 
         if (stEthForEth) {
             if (msg.value != 0) revert E();
@@ -1400,11 +1352,11 @@ contract DegenerusGame is DegenerusGameStorage {
         return abi.decode(data, (bool));
     }
 
-    /// @notice Process pending jackpot bong mints outside the main game tick.
-    /// @param maxMints Max bongs to mint this call (0 = default chunk size).
-    function workJackpotBongMints(uint256 maxMints) external {
+    /// @notice Process pending jackpot bond mints outside the main game tick.
+    /// @param maxMints Max bonds to mint this call (0 = default chunk size).
+    function workJackpotBondMints(uint256 maxMints) external {
         (bool ok, bytes memory data) = jackpotModule.delegatecall(
-            abi.encodeWithSelector(IDegenerusGameJackpotModule.processPendingJackpotBongs.selector, maxMints)
+            abi.encodeWithSelector(IDegenerusGameJackpotModule.processPendingJackpotBonds.selector, maxMints)
         );
         if (!ok || data.length == 0) return;
 
@@ -1414,13 +1366,13 @@ contract DegenerusGame is DegenerusGameStorage {
         }
     }
 
-    /// @notice After the liveness drain has notified the bongs contract, permissionlessly burn remaining unmatured bongs.
-    /// @param maxIds Number of token ids to scan in this call (0 = default chunk size in bongs).
+    /// @notice After the liveness drain has notified the bonds contract, permissionlessly burn remaining unmatured bonds.
+    /// @param maxIds Number of token ids to scan in this call (0 = default chunk size in bonds).
     /// @return processedIds Token ids scanned.
-    /// @return burned Bongs burned.
+    /// @return burned Bonds burned.
     /// @return complete True if shutdown burning is finished.
-    function finalizeBongShutdown(uint256 maxIds) public returns (uint256 processedIds, uint256 burned, bool complete) {
-        return IDegenerusBongs(bongs).finalizeShutdown(maxIds);
+    function finalizeBondShutdown(uint256 maxIds) public returns (uint256 processedIds, uint256 burned, bool complete) {
+        return IDegenerusBonds(bonds).finalizeShutdown(maxIds);
     }
 
     function _requestRngBestEffort(uint48 day) private returns (bool requested) {
@@ -1437,7 +1389,7 @@ contract DegenerusGame is DegenerusGameStorage {
                 })
             )
         returns (uint256 id) {
-            IDegenerusBongs(bongs).setTransfersLocked(true, day);
+            IDegenerusBonds(bonds).setTransfersLocked(true, day);
             vrfRequestId = id;
             rngFulfilled = false;
             rngWordCurrent = 0;
@@ -1451,9 +1403,9 @@ contract DegenerusGame is DegenerusGameStorage {
     }
 
     function _requestRng(uint8 gameState_, bool isMapJackpotDay, uint24 lvl, uint48 day) private {
-        bool shouldLockBongs = (gameState_ == 2 && isMapJackpotDay) || (gameState_ == 0);
-        if (shouldLockBongs) {
-            IDegenerusBongs(bongs).setTransfersLocked(true, day);
+        bool shouldLockBonds = (gameState_ == 2 && isMapJackpotDay) || (gameState_ == 0);
+        if (shouldLockBonds) {
+            IDegenerusBonds(bonds).setTransfersLocked(true, day);
         }
 
         // Hard revert if Chainlink request fails; this intentionally halts game progress until VRF funding/config is fixed.
