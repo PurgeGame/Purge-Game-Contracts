@@ -441,15 +441,13 @@ contract DegenerusBonds {
     /// @notice Burn bond tokens to enter the final two-lane jackpot for a maturity.
     /// @param maturityLevel Series identifier (maturity level).
     /// @param amount Amount of bond token to burn.
-    /// @param laneHint Ignored; lane assignment is derived from player + maturity for deterministic randomness.
     /// @dev Once a maturity has arrived, its lanes are locked and new burns are routed to the +10 maturity.
     ///      If maturity is >5 levels away, half the burn amount is queued as score for the next coin-minting jackpot.
-    function burnForJackpot(uint24 maturityLevel, uint256 amount, uint8 laneHint) external {
+    function burnForJackpot(uint24 maturityLevel, uint256 amount) external {
         BondSeries storage s = series[maturityLevel];
         if (s.maturityLevel == 0) revert InvalidMaturity();
         if (amount == 0) revert InsufficientScore();
 
-        laneHint; // reserved for future lane selection tweaks; currently deterministic by player+maturity
         uint24 currLevel = _currentLevel();
         (BondSeries storage target, uint24 targetMaturity) = _nextActiveSeries(maturityLevel, currLevel);
         if (target.resolved) revert AlreadyResolved();
