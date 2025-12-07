@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-/// @title Purgecoin
+/// @title DegenerusCoin
 /// @notice ERC20-style game token that doubles as accounting for coinflip wagers, stakes, quests, and jackpots.
 /// @dev Acts as the hub for gameplay modules (game, NFTs, quests, jackpots). Mint/burn only occurs
 ///      through explicit gameplay flows; there is intentionally no public mint.
-import {PurgeGameNFT} from "./PurgeGameNFT.sol";
-import {PurgeAffiliate} from "./PurgeAffiliate.sol";
-import {IPurgeGame} from "./interfaces/IPurgeGame.sol";
-import {IPurgeQuestModule, QuestInfo, PlayerQuestView} from "./interfaces/IPurgeQuestModule.sol";
-import {IPurgeJackpots} from "./interfaces/IPurgeJackpots.sol";
+import {DegenerusGameNFT} from "./DegenerusGameNFT.sol";
+import {DegenerusAffiliate} from "./DegenerusAffiliate.sol";
+import {IDegenerusGame} from "./interfaces/IDegenerusGame.sol";
+import {IDegenerusQuestModule, QuestInfo, PlayerQuestView} from "./interfaces/IDegenerusQuestModule.sol";
+import {IDegenerusJackpots} from "./interfaces/IDegenerusJackpots.sol";
 
-contract Purgecoin {
+contract DegenerusCoin {
     // ---------------------------------------------------------------------
     // Events
     // ---------------------------------------------------------------------
@@ -51,8 +51,8 @@ contract Purgecoin {
     // ERC20 state
     // ---------------------------------------------------------------------
     // Minimal ERC20 metadata/state; transfers are unchecked beyond underflow protection in Solidity 0.8.
-    string public name = "Purgecoin";
-    string public symbol = "PURGE";
+    string public name = "DegenerusCoin";
+    string public symbol = "DEGEN";
     uint256 public totalSupply;
     mapping(address => uint256) public balanceOf;
     mapping(address => mapping(address => uint256)) public allowance;
@@ -76,10 +76,10 @@ contract Purgecoin {
     // Game wiring & session state
     // ---------------------------------------------------------------------
     // Core modules; set once via `wire`.
-    IPurgeGame internal purgeGame;
-    PurgeGameNFT internal purgeGameNFT;
-    IPurgeQuestModule internal questModule;
-    PurgeAffiliate public immutable affiliateProgram;
+    IDegenerusGame internal degenerusGame;
+    DegenerusGameNFT internal degenerusGameNFT;
+    IDegenerusQuestModule internal questModule;
+    DegenerusAffiliate public immutable affiliateProgram;
     address public jackpots;
     address public vault;
     address public vrfSub;
@@ -167,7 +167,7 @@ contract Purgecoin {
     // Constants (units & limits)
     // ---------------------------------------------------------------------
     uint256 private constant MILLION = 1e6; // token has 6 decimals
-    uint256 private constant MIN = 100 * MILLION; // min burn / min flip (100 PURGED)
+    uint256 private constant MIN = 100 * MILLION; // min burn / min flip (100 DEGEND)
     uint16 private constant COINFLIP_EXTRA_MIN_PERCENT = 78; // base % on non-extreme flips
     uint16 private constant COINFLIP_EXTRA_RANGE = 38; // roll range (add to min) => [78..115]
     uint16 private constant BPS_DENOMINATOR = 10_000; // basis point math helper
@@ -181,22 +181,22 @@ contract Purgecoin {
     // ---------------------------------------------------------------------
     // Modifiers
     // ---------------------------------------------------------------------
-    modifier onlyPurgeGameContract() {
-        if (msg.sender != address(purgeGame)) revert OnlyGame();
+    modifier onlyDegenerusGameContract() {
+        if (msg.sender != address(degenerusGame)) revert OnlyGame();
         _;
     }
 
     modifier onlyGameplayContracts() {
         address sender = msg.sender;
-        if (sender != address(purgeGame) && sender != address(purgeGameNFT)) revert OnlyGame();
+        if (sender != address(degenerusGame) && sender != address(degenerusGameNFT)) revert OnlyGame();
         _;
     }
 
     modifier onlyFlipContracts() {
         address sender = msg.sender;
         if (
-            sender != address(purgeGame) &&
-            sender != address(purgeGameNFT) &&
+            sender != address(degenerusGame) &&
+            sender != address(degenerusGameNFT) &&
             sender != address(affiliateProgram)
         ) revert OnlyGame();
         _;
@@ -213,7 +213,7 @@ contract Purgecoin {
     constructor(address bongs_, address affiliate_, address regularRenderer_) {
         if (bongs_ == address(0) || affiliate_ == address(0)) revert ZeroAddress();
         bongs = bongs_;
-        affiliateProgram = PurgeAffiliate(affiliate_);
+        affiliateProgram = DegenerusAffiliate(affiliate_);
         regularRenderer = regularRenderer_;
         uint256 bongSeed = 2_000_000 * MILLION;
         _mint(bongs_, bongSeed);
@@ -221,7 +221,7 @@ contract Purgecoin {
 
     function setVault(address vault_) external {
         address sender = msg.sender;
-        if (sender != address(purgeGame) && sender != bongs && sender != vault_) revert OnlyGame();
+        if (sender != address(degenerusGame) && sender != bongs && sender != vault_) revert OnlyGame();
         if (vault == address(0)) {
             vault = vault_;
         } else if (vault_ != vault) {
@@ -229,7 +229,7 @@ contract Purgecoin {
         }
     }
 
-    /// @notice Burn PURGE to increase the caller’s coinflip stake, applying streak bonuses when eligible.
+    /// @notice Burn DEGEN to increase the caller’s coinflip stake, applying streak bonuses when eligible.
     /// @param amount Amount (6 decimals) to burn; must satisfy the global minimum, or zero to just cash out.
     function depositCoinflip(uint256 amount) external {
         // Allow zero-amount calls to act as a cash-out of pending winnings without adding a new stake.
@@ -246,7 +246,7 @@ contract Purgecoin {
         _burn(caller, amount);
 
         // Quests can layer on bonus flip credit when the quest is active/completed.
-        IPurgeQuestModule module = questModule;
+        IDegenerusQuestModule module = questModule;
         uint256 questReward;
         (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleFlip(
             caller,
@@ -270,10 +270,10 @@ contract Purgecoin {
         _transfer(address(this), msg.sender, amount);
     }
 
-    /// @notice Burn PURGE during an active Decimator window to accrue weighted participation.
+    /// @notice Burn DEGEN during an active Decimator window to accrue weighted participation.
     /// @param amount Amount (6 decimals) to burn; must satisfy the global minimum.
     function decimatorBurn(uint256 amount) external {
-        (bool decOn, uint24 lvl) = purgeGame.decWindow();
+        (bool decOn, uint24 lvl) = degenerusGame.decWindow();
         if (!decOn) revert NotDecimatorWindow();
         if (amount < MIN) revert AmountLTMin();
 
@@ -289,18 +289,18 @@ contract Purgecoin {
         // Bucket logic selects how many people share a jackpot slice; special every DECIMATOR_SPECIAL_LEVEL.
         bool specialDec = (lvl % DECIMATOR_SPECIAL_LEVEL) == 0;
         uint8 bucket = specialDec
-            ? _decBucketDenominatorFromLevels(purgeGame.ethMintLevelCount(caller))
-            : _decBucketDenominator(purgeGame.ethMintStreakCount(caller));
-        uint8 bucketUsed = IPurgeJackpots(moduleAddr).recordDecBurn(caller, lvl, bucket, effectiveAmount);
+            ? _decBucketDenominatorFromLevels(degenerusGame.ethMintLevelCount(caller))
+            : _decBucketDenominator(degenerusGame.ethMintStreakCount(caller));
+        uint8 bucketUsed = IDegenerusJackpots(moduleAddr).recordDecBurn(caller, lvl, bucket, effectiveAmount);
 
-        IPurgeQuestModule module = questModule;
+        IDegenerusQuestModule module = questModule;
         (uint32 streak, , , ) = module.playerQuestStates(caller);
         if (streak != 0) {
             // Quest streak: bonus contribution capped at 25%.
             uint256 bonusBps = uint256(streak) * 25; // (streak/4)%
             if (bonusBps > 2500) bonusBps = 2500; // cap at 25%
             uint256 streakBonus = (effectiveAmount * bonusBps) / BPS_DENOMINATOR;
-            IPurgeJackpots(moduleAddr).recordDecBurn(caller, lvl, bucketUsed, streakBonus);
+            IDegenerusJackpots(moduleAddr).recordDecBurn(caller, lvl, bucketUsed, streakBonus);
         }
 
         // Quest module can also grant extra flip credit from a decimator burn.
@@ -345,7 +345,7 @@ contract Purgecoin {
         return _claimCoinflipsInternal(player);
     }
 
-    /// @notice Burn PURGED to open a future stake targeting `targetLevel` with a risk radius.
+    /// @notice Burn DEGEND to open a future stake targeting `targetLevel` with a risk radius.
     /// @dev
     /// - `burnAmt` must be at least 250e6 base units (token has 6 decimals).
     /// - `targetLevel` must be ahead of the current effective game level.
@@ -373,9 +373,9 @@ contract Purgecoin {
 
     function _setGame(address game_) private {
         if (game_ == address(0)) return;
-        address current = address(purgeGame);
+        address current = address(degenerusGame);
         if (current == address(0)) {
-            purgeGame = IPurgeGame(game_);
+            degenerusGame = IDegenerusGame(game_);
         } else if (game_ != current) {
             revert AlreadyWired();
         }
@@ -383,9 +383,9 @@ contract Purgecoin {
 
     function _setNft(address nft_) private {
         if (nft_ == address(0)) return;
-        address current = address(purgeGameNFT);
+        address current = address(degenerusGameNFT);
         if (current == address(0)) {
-            purgeGameNFT = PurgeGameNFT(nft_);
+            degenerusGameNFT = DegenerusGameNFT(nft_);
         } else if (nft_ != current) {
             revert AlreadyWired();
         }
@@ -395,7 +395,7 @@ contract Purgecoin {
         if (questModule_ == address(0)) return;
         address current = address(questModule);
         if (current == address(0)) {
-            questModule = IPurgeQuestModule(questModule_);
+            questModule = IDegenerusQuestModule(questModule_);
         } else if (questModule_ != current) {
             revert AlreadyWired();
         }
@@ -433,7 +433,7 @@ contract Purgecoin {
         _mint(address(this), presaleTotal);
     }
 
-    /// @notice Mint PURGE to the bongs contract for bong payouts (game or bongs caller).
+    /// @notice Mint DEGEN to the bongs contract for bong payouts (game or bongs caller).
     function bongPayment(uint256 amount) external {
         address sender = msg.sender;
         if (sender != bongs) revert OnlyGame();
@@ -457,7 +457,7 @@ contract Purgecoin {
     }
 
     /// @notice Credit a coinflip stake from authorized contracts (game, NFT, affiliate).
-    /// @dev Access: PurgeGame, NFT, or affiliate module only. Zero address is ignored.
+    /// @dev Access: DegenerusGame, NFT, or affiliate module only. Zero address is ignored.
     function creditFlip(address player, uint256 amount) external onlyFlipContracts {
         if (player == address(0) || amount == 0) return;
         addFlip(player, amount, false, false);
@@ -491,7 +491,7 @@ contract Purgecoin {
     /// @dev Access: affiliate contract only.
     function affiliateQuestReward(address player, uint256 amount) external returns (uint256 questReward) {
         if (msg.sender != address(affiliateProgram)) revert OnlyGame();
-        IPurgeQuestModule module = questModule;
+        IDegenerusQuestModule module = questModule;
         if (address(module) == address(0) || player == address(0) || amount == 0) return 0;
         (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleAffiliate(
             player,
@@ -504,8 +504,8 @@ contract Purgecoin {
     // Daily quest wiring (delegated to quest module)
     // ---------------------------------------------------------------------
 
-    function rollDailyQuest(uint48 day, uint256 entropy) external onlyPurgeGameContract {
-        IPurgeQuestModule module = questModule;
+    function rollDailyQuest(uint48 day, uint256 entropy) external onlyDegenerusGameContract {
+        IDegenerusQuestModule module = questModule;
         (bool rolled, , , , ) = module.rollDailyQuest(day, entropy);
         if (rolled) {
             QuestInfo[2] memory quests = module.getActiveQuests();
@@ -526,10 +526,10 @@ contract Purgecoin {
         uint48 day,
         uint256 entropy,
         bool forceMintEth,
-        bool forcePurge
-    ) external onlyPurgeGameContract {
-        IPurgeQuestModule module = questModule;
-        (bool rolled, , , , ) = module.rollDailyQuestWithOverrides(day, entropy, forceMintEth, forcePurge);
+        bool forceBurn
+    ) external onlyDegenerusGameContract {
+        IDegenerusQuestModule module = questModule;
+        (bool rolled, , , , ) = module.rollDailyQuestWithOverrides(day, entropy, forceMintEth, forceBurn);
         if (rolled) {
             QuestInfo[2] memory quests = module.getActiveQuests();
             for (uint256 i; i < 2; ) {
@@ -545,15 +545,15 @@ contract Purgecoin {
         }
     }
 
-    /// @notice Normalize purge quests mid-day when extermination ends the purge window.
-    function normalizeActivePurgeQuests() external onlyPurgeGameContract {
-        IPurgeQuestModule module = questModule;
+    /// @notice Normalize burn quests mid-day when extermination ends the burn window.
+    function normalizeActiveBurnQuests() external onlyDegenerusGameContract {
+        IDegenerusQuestModule module = questModule;
         if (address(module) == address(0)) return;
-        module.normalizeActivePurgeQuests();
+        module.normalizeActiveBurnQuests();
     }
 
     function notifyQuestMint(address player, uint32 quantity, bool paidWithEth) external onlyGameplayContracts {
-        IPurgeQuestModule module = questModule;
+        IDegenerusQuestModule module = questModule;
         (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleMint(
             player,
             quantity,
@@ -567,7 +567,7 @@ contract Purgecoin {
 
     function notifyQuestBong(address player, uint256 basePerBongWei) external {
         if (msg.sender != bongs) revert OnlyBongs();
-        IPurgeQuestModule module = questModule;
+        IDegenerusQuestModule module = questModule;
         if (address(module) == address(0) || player == address(0) || basePerBongWei == 0) return;
         (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleBongPurchase(
             player,
@@ -579,9 +579,9 @@ contract Purgecoin {
         }
     }
 
-    function notifyQuestPurge(address player, uint32 quantity) external onlyGameplayContracts {
-        IPurgeQuestModule module = questModule;
-        (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handlePurge(
+    function notifyQuestBurn(address player, uint32 quantity) external onlyGameplayContracts {
+        IDegenerusQuestModule module = questModule;
+        (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleBurn(
             player,
             quantity
         );
@@ -592,7 +592,7 @@ contract Purgecoin {
     }
 
     function getActiveQuests() external view returns (QuestInfo[2] memory quests) {
-        IPurgeQuestModule module = questModule;
+        IDegenerusQuestModule module = questModule;
         return module.getActiveQuests();
     }
 
@@ -603,17 +603,17 @@ contract Purgecoin {
         view
         returns (uint32 streak, uint32 lastCompletedDay, uint128[2] memory progress, bool[2] memory completed)
     {
-        IPurgeQuestModule module = questModule;
+        IDegenerusQuestModule module = questModule;
         return module.playerQuestStates(player);
     }
 
     function getPlayerQuestView(address player) external view returns (PlayerQuestView memory viewData) {
-        IPurgeQuestModule module = questModule;
+        IDegenerusQuestModule module = questModule;
         return module.getPlayerQuestView(player);
     }
 
-    /// @notice Burn PURGE from `target` during gameplay flows (purchases, fees).
-    /// @dev Access: PurgeGame or NFT only. OZ ERC20 `_burn` reverts on zero address or insufficient balance.
+    /// @notice Burn DEGEN from `target` during gameplay flows (purchases, fees).
+    /// @dev Access: DegenerusGame or NFT only. OZ ERC20 `_burn` reverts on zero address or insufficient balance.
     function burnCoin(address target, uint256 amount) external onlyGameplayContracts {
         _burn(target, amount);
     }
@@ -623,9 +623,9 @@ contract Purgecoin {
         return coinflipBalance[day][player];
     }
 
-    /// @notice Record the stake resolution day for a level (invoked by PurgeGame at end of state 1).
+    /// @notice Record the stake resolution day for a level (invoked by DegenerusGame at end of state 1).
     /// @dev The first call at the start of level 2 is considered the level-1 resolution.
-    function recordStakeResolution(uint24 level, uint48 day) external view onlyPurgeGameContract returns (address topStakeWinner) {
+    function recordStakeResolution(uint24 level, uint48 day) external view onlyDegenerusGameContract returns (address topStakeWinner) {
         level;
         day;
         return address(0); // staking removed
@@ -685,11 +685,11 @@ contract Purgecoin {
     }
 
     /// @notice Progress coinflip payouts for the current level in bounded slices.
-    /// @dev Called by PurgeGame; runs in three phases per settlement:
+    /// @dev Called by DegenerusGame; runs in three phases per settlement:
     ///      1. Record the stake resolution day for the level being processed.
     ///      2. Arm bounties on the first payout window.
     ///      3. Perform cleanup and reopen betting (flip claims happen lazily per player).
-    /// @param level Current PurgeGame level (used to gate 1/run and propagate stakes).
+    /// @param level Current DegenerusGame level (used to gate 1/run and propagate stakes).
     /// @param bonusFlip Adds 6 percentage points to the payout roll for the last flip of the purchase phase.
     /// @return finished True when all payouts and cleanup are complete.
     function processCoinflipPayouts(
@@ -698,7 +698,7 @@ contract Purgecoin {
         uint256 rngWord,
         uint48 epoch,
         uint256 priceCoinUnit
-    ) external onlyPurgeGameContract returns (bool finished) {
+    ) external onlyDegenerusGameContract returns (bool finished) {
         uint256 seedWord = rngWord;
         seedWord = uint256(keccak256(abi.encodePacked(rngWord, epoch)));
 
@@ -756,7 +756,7 @@ contract Purgecoin {
         return true;
     }
 
-    function addToBounty(uint256 amount) external onlyPurgeGameContract {
+    function addToBounty(uint256 amount) external onlyDegenerusGameContract {
         if (amount == 0) return;
         _addToBounty(amount);
     }
@@ -798,8 +798,8 @@ contract Purgecoin {
 
         // Determine which future day this stake applies to, skipping locked RNG windows.
         uint48 settleDay = _currentDay();
-        bool rngLocked = purgeGame.rngLocked();
-        uint24 currLevel = purgeGame.level();
+        bool rngLocked = degenerusGame.rngLocked();
+        uint24 currLevel = degenerusGame.level();
         uint48 targetDay = settleDay + (rngLocked ? 2 : 1);
         uint48 currentDay = settleDay;
         if (targetDay <= currentDay) {
@@ -814,11 +814,11 @@ contract Purgecoin {
         coinflipBalance[targetDay][player] = newStake;
 
         // When BAF is active, capture a persistent roster entry + index for scatter.
-        if (purgeGame.isBafLevelActive(currLevel)) {
+        if (degenerusGame.isBafLevelActive(currLevel)) {
             uint24 bafLvl = currLevel;
             address module = jackpots;
             if (module == address(0)) revert ZeroAddress();
-            IPurgeJackpots(module).recordBafFlip(player, bafLvl, coinflipDeposit);
+            IDegenerusJackpots(module).recordBafFlip(player, bafLvl, coinflipDeposit);
         }
 
         // Allow leaderboard churn even while RNG is locked; only freeze global records to avoid post-RNG manipulation.
@@ -843,7 +843,7 @@ contract Purgecoin {
 
     /// @notice Increase the global bounty pool.
     /// @dev Uses unchecked addition; will wrap on overflow.
-    /// @param amount Amount of PURGED to add to the bounty pool.
+    /// @param amount Amount of DEGEND to add to the bounty pool.
     function _addToBounty(uint256 amount) internal {
         unchecked {
             // Gas-optimized: wraps on overflow, which would effectively reset the bounty.

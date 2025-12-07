@@ -30,65 +30,65 @@ async function main() {
   await steth.waitForDeployment();
   console.log("   Mock stETH deployed at:", await steth.getAddress());
 
-  console.log("5. Deploying PurgeAffiliate...");
-  const PurgeAffiliate = await ethers.getContractFactory("PurgeAffiliate");
-  const affiliate = await PurgeAffiliate.deploy(bongsAddr);
+  console.log("5. Deploying DegenerusAffiliate...");
+  const DegenerusAffiliate = await ethers.getContractFactory("DegenerusAffiliate");
+  const affiliate = await DegenerusAffiliate.deploy(bongsAddr);
   await affiliate.waitForDeployment();
-  console.log("   PurgeAffiliate deployed at:", await affiliate.getAddress());
+  console.log("   DegenerusAffiliate deployed at:", await affiliate.getAddress());
 
-  console.log("6. Deploying Purgecoin...");
-  const Purgecoin = await ethers.getContractFactory("Purgecoin");
-  const purgecoin = await Purgecoin.deploy(bongsAddr, await affiliate.getAddress(), await renderer.getAddress());
-  await purgecoin.waitForDeployment();
-  console.log("   Purgecoin deployed at:", await purgecoin.getAddress());
+  console.log("6. Deploying DegenerusCoin...");
+  const DegenerusCoin = await ethers.getContractFactory("DegenerusCoin");
+  const degeneruscoin = await DegenerusCoin.deploy(bongsAddr, await affiliate.getAddress(), await renderer.getAddress());
+  await degeneruscoin.waitForDeployment();
+  console.log("   DegenerusCoin deployed at:", await degeneruscoin.getAddress());
 
-  console.log("7. Deploying PurgeGameNFT...");
-  const PurgeGameNFT = await ethers.getContractFactory("PurgeGameNFT");
-  const purgeNFT = await PurgeGameNFT.deploy(await renderer.getAddress(), await purgecoin.getAddress());
-  await purgeNFT.waitForDeployment();
-  console.log("   PurgeGameNFT deployed at:", await purgeNFT.getAddress());
+  console.log("7. Deploying DegenerusGameNFT...");
+  const DegenerusGameNFT = await ethers.getContractFactory("DegenerusGameNFT");
+  const degenerusNFT = await DegenerusGameNFT.deploy(await renderer.getAddress(), await degeneruscoin.getAddress());
+  await degenerusNFT.waitForDeployment();
+  console.log("   DegenerusGameNFT deployed at:", await degenerusNFT.getAddress());
 
-  console.log("8. Deploying PurgeTrophies...");
-  const PurgeTrophies = await ethers.getContractFactory("PurgeTrophies");
-  const trophies = await PurgeTrophies.deploy(await renderer.getAddress());
+  console.log("8. Deploying DegenerusTrophies...");
+  const DegenerusTrophies = await ethers.getContractFactory("DegenerusTrophies");
+  const trophies = await DegenerusTrophies.deploy(await renderer.getAddress());
   await trophies.waitForDeployment();
-  console.log("   PurgeTrophies deployed at:", await trophies.getAddress());
+  console.log("   DegenerusTrophies deployed at:", await trophies.getAddress());
 
   console.log("9. Deploying Modules...");
-  const PurgeGameEndgameModule = await ethers.getContractFactory("PurgeGameEndgameModule");
-  const endgameModule = await PurgeGameEndgameModule.deploy();
+  const DegenerusGameEndgameModule = await ethers.getContractFactory("DegenerusGameEndgameModule");
+  const endgameModule = await DegenerusGameEndgameModule.deploy();
   await endgameModule.waitForDeployment();
   console.log("   EndgameModule deployed.");
 
-  const PurgeGameJackpotModule = await ethers.getContractFactory("PurgeGameJackpotModule");
-  const jackpotModule = await PurgeGameJackpotModule.deploy();
+  const DegenerusGameJackpotModule = await ethers.getContractFactory("DegenerusGameJackpotModule");
+  const jackpotModule = await DegenerusGameJackpotModule.deploy();
   await jackpotModule.waitForDeployment();
   console.log("   JackpotModule deployed.");
 
-  const PurgeGameMintModule = await ethers.getContractFactory("PurgeGameMintModule");
-  const mintModule = await PurgeGameMintModule.deploy();
+  const DegenerusGameMintModule = await ethers.getContractFactory("DegenerusGameMintModule");
+  const mintModule = await DegenerusGameMintModule.deploy();
   await mintModule.waitForDeployment();
   console.log("   MintModule deployed.");
 
-  const PurgeGameBongModule = await ethers.getContractFactory("PurgeGameBongModule");
-  const bongModule = await PurgeGameBongModule.deploy();
+  const DegenerusGameBongModule = await ethers.getContractFactory("DegenerusGameBongModule");
+  const bongModule = await DegenerusGameBongModule.deploy();
   await bongModule.waitForDeployment();
   console.log("   BongModule deployed.");
 
-  // Check if PurgeQuestModule exists or use Mock
+  // Check if DegenerusQuestModule exists or use Mock
   try {
-      const PurgeQuestModule = await ethers.getContractFactory("contracts/modules/PurgeQuestModule.sol:PurgeQuestModule");
-      const questModule = await PurgeQuestModule.deploy();
+      const DegenerusQuestModule = await ethers.getContractFactory("contracts/modules/DegenerusQuestModule.sol:DegenerusQuestModule");
+      const questModule = await DegenerusQuestModule.deploy();
       await questModule.waitForDeployment();
-      console.log("   PurgeQuestModule deployed.");
+      console.log("   DegenerusQuestModule deployed.");
   } catch (e) {
-      console.log("   PurgeQuestModule deployment failed, using Mock?", e.message);
+      console.log("   DegenerusQuestModule deployment failed, using Mock?", e.message);
   }
 
   let jackpotsAddr = bongsAddr;
   try {
-      const PurgeJackpots = await ethers.getContractFactory("contracts/PurgeJackpots.sol:PurgeJackpots");
-      const jackpots = await PurgeJackpots.deploy(bongsAddr);
+      const DegenerusJackpots = await ethers.getContractFactory("contracts/DegenerusJackpots.sol:DegenerusJackpots");
+      const jackpots = await DegenerusJackpots.deploy(bongsAddr);
       await jackpots.waitForDeployment();
       jackpotsAddr = await jackpots.getAddress();
       console.log("   Jackpots module deployed at:", jackpotsAddr);
@@ -96,12 +96,12 @@ async function main() {
       console.log("   Jackpots module deployment failed.", e.message);
   }
 
-  console.log("10. Deploying PurgeGame...");
-  const PurgeGame = await ethers.getContractFactory("PurgeGame");
-  const purgeGame = await PurgeGame.deploy(
-    await purgecoin.getAddress(),
+  console.log("10. Deploying DegenerusGame...");
+  const DegenerusGame = await ethers.getContractFactory("DegenerusGame");
+  const degenerusGame = await DegenerusGame.deploy(
+    await degeneruscoin.getAddress(),
     await renderer.getAddress(),
-    await purgeNFT.getAddress(),
+    await degenerusNFT.getAddress(),
     await endgameModule.getAddress(),
     await jackpotModule.getAddress(),
     await mintModule.getAddress(),
@@ -115,10 +115,10 @@ async function main() {
     bongsAddr,
     await trophies.getAddress()
   );
-  await purgeGame.waitForDeployment();
-  console.log("   PurgeGame deployed at:", await purgeGame.getAddress());
+  await degenerusGame.waitForDeployment();
+  console.log("   DegenerusGame deployed at:", await degenerusGame.getAddress());
 
-  const setGameTx = await trophies.setGame(await purgeGame.getAddress());
+  const setGameTx = await trophies.setGame(await degenerusGame.getAddress());
   await setGameTx.wait();
   console.log("   Trophies wired to game.");
 }

@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import "../interfaces/IPurgeGame.sol";
+import "../interfaces/IDegenerusGame.sol";
 
-library PurgeGameCredit {
+library DegenerusGameCredit {
     function availableCredit(
         mapping(address => uint256) storage claimableWinnings,
         mapping(address => uint256) storage bongCredit,

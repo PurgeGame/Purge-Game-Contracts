@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {IERC721Lite, IColorRegistry, IPurgedRead} from "../interfaces/IconRendererTypes.sol";
+import {IERC721Lite, IColorRegistry, IDegenerusdRead} from "../interfaces/IconRendererTypes.sol";
 
 /// @dev Minimal mock NFT for renderer tests.
 contract MockNFT is IERC721Lite {
@@ -17,7 +17,7 @@ contract MockNFT is IERC721Lite {
 }
 
 /// @dev Minimal mock coin that only exposes affiliateProgram (unset by default).
-contract MockCoin is IPurgedRead {
+contract MockCoin is IDegenerusdRead {
     address private _affiliate;
 
     function setRendererNft(address renderer, address nft) external {

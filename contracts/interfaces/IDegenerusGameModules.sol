@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {IPurgeCoinModule} from "./PurgeGameModuleInterfaces.sol";
+import {IDegenerusCoinModule} from "./DegenerusGameModuleInterfaces.sol";
 
-interface IPurgeGameEndgameModule {
+interface IDegenerusGameEndgameModule {
     function finalizeEndgame(
         uint24 lvl,
         uint32 cap,
@@ -12,12 +12,12 @@ interface IPurgeGameEndgameModule {
     ) external returns (bool readyForPurchase);
 }
 
-interface IPurgeGameJackpotModule {
+interface IDegenerusGameJackpotModule {
     function payDailyJackpot(
         bool isDaily,
         uint24 lvl,
         uint256 randWord,
-        IPurgeCoinModule coinContract
+        IDegenerusCoinModule coinContract
     ) external;
 
     function payExterminationJackpot(
@@ -25,14 +25,14 @@ interface IPurgeGameJackpotModule {
         uint8 traitId,
         uint256 randWord,
         uint256 ethPool,
-        IPurgeCoinModule coinContract
+        IDegenerusCoinModule coinContract
     ) external returns (uint256 paidEth);
 
     function payMapJackpot(
         uint24 lvl,
         uint256 rngWord,
         uint256 effectiveWei,
-        IPurgeCoinModule coinContract
+        IDegenerusCoinModule coinContract
     ) external;
 
     function calcPrizePoolForJackpot(
@@ -48,7 +48,7 @@ interface IPurgeGameJackpotModule {
     ) external returns (bool finished, uint256 processed);
 }
 
-interface IPurgeGameBongModule {
+interface IDegenerusGameBongModule {
     function bongMaintenanceForMap(
         address bongsAddr,
         address coinAddr,
@@ -62,7 +62,7 @@ interface IPurgeGameBongModule {
     function drainToBongs(address bongsAddr, address stethAddr, uint48 day) external;
 }
 
-interface IPurgeGameMintModule {
+interface IDegenerusGameMintModule {
     function recordMintData(
         address player,
         uint24 lvl,

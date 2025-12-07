@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {QuestInfo, PlayerQuestView} from "./IPurgeQuestModule.sol";
+import {QuestInfo, PlayerQuestView} from "./IDegenerusQuestModule.sol";
 
-interface IPurgeCoin {
+interface IDegenerusCoin {
     function jackpots() external view returns (address);
     function affiliateProgram() external view returns (address);
 
@@ -26,20 +26,20 @@ interface IPurgeCoin {
 
     function addToBounty(uint256 amount) external;
 
-    function normalizeActivePurgeQuests() external;
+    function normalizeActiveBurnQuests() external;
 
     function vault() external view returns (address);
 
     function coinflipTop(uint24 level) external view returns (address player, uint96 score);
 
     function rollDailyQuest(uint48 day, uint256 entropy) external;
-    function rollDailyQuestWithOverrides(uint48 day, uint256 entropy, bool forceMintEth, bool forcePurge) external;
+    function rollDailyQuestWithOverrides(uint48 day, uint256 entropy, bool forceMintEth, bool forceBurn) external;
 
     function notifyQuestMint(address player, uint32 quantity, bool paidWithEth) external;
 
     function notifyQuestBong(address player, uint256 basePerBongWei) external;
 
-    function notifyQuestPurge(address player, uint32 quantity) external;
+    function notifyQuestBurn(address player, uint32 quantity) external;
 
     function getActiveQuests() external view returns (QuestInfo[2] memory quests);
 

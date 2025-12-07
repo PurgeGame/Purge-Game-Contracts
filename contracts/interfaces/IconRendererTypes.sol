@@ -46,6 +46,6 @@ interface IERC721Lite {
     function ownerOf(uint256 tokenId) external view returns (address);
 }
 
-interface IPurgedRead {
+interface IDegenerusdRead {
     function affiliateProgram() external view returns (address);
 }

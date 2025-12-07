@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {IPurgeJackpots} from "../interfaces/IPurgeJackpots.sol";
-import {IPurgeTrophies} from "../interfaces/IPurgeTrophies.sol";
-import {IPurgeAffiliate} from "../interfaces/IPurgeAffiliate.sol";
-import {PurgeGameStorage, ClaimableBongInfo} from "../storage/PurgeGameStorage.sol";
+import {IDegenerusJackpots} from "../interfaces/IDegenerusJackpots.sol";
+import {IDegenerusTrophies} from "../interfaces/IDegenerusTrophies.sol";
+import {IDegenerusAffiliate} from "../interfaces/IDegenerusAffiliate.sol";
+import {DegenerusGameStorage, ClaimableBongInfo} from "../storage/DegenerusGameStorage.sol";
 
-interface IPurgeGameAffiliatePayout {
+interface IDegenerusGameAffiliatePayout {
     function affiliatePayoutAddress(address player) external view returns (address recipient, address affiliateOwner);
 }
 
-interface IPurgeGameTraitJackpot {
+interface IDegenerusGameTraitJackpot {
     function payExterminationJackpot(
         uint24 lvl,
         uint8 traitId,
@@ -20,11 +20,11 @@ interface IPurgeGameTraitJackpot {
 }
 
 /**
- * @title PurgeGameEndgameModule
- * @notice Delegate-called module that hosts the slow-path endgame settlement logic for `PurgeGame`.
+ * @title DegenerusGameEndgameModule
+ * @notice Delegate-called module that hosts the slow-path endgame settlement logic for `DegenerusGame`.
  *         The storage layout mirrors the core contract so writes land in the parent via `delegatecall`.
  */
-contract PurgeGameEndgameModule is PurgeGameStorage {
+contract DegenerusGameEndgameModule is DegenerusGameStorage {
     // -----------------------
     // Custom Errors / Events
     // -----------------------
@@ -120,7 +120,7 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
 
         uint256 jackpotPool = poolValue > exterminatorShare ? poolValue - exterminatorShare : 0;
         if (jackpotPool != 0) {
-            IPurgeGameTraitJackpot(address(this)).payExterminationJackpot(
+            IDegenerusGameTraitJackpot(address(this)).payExterminationJackpot(
                 prevLevel,
                 traitId,
                 rngWord,
@@ -134,10 +134,10 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
 
     function _maybeMintAffiliateTop(uint24 prevLevel) private {
         address affiliateAddr = affiliateProgramAddr;
-        (address top, ) = IPurgeAffiliate(affiliateAddr).affiliateTop(prevLevel);
+        (address top, ) = IDegenerusAffiliate(affiliateAddr).affiliateTop(prevLevel);
         if (top == address(0)) return;
         address trophyAddr = trophies;
-        try IPurgeTrophies(trophyAddr).mintAffiliate(top, prevLevel) {} catch {}
+        try IDegenerusTrophies(trophyAddr).mintAffiliate(top, prevLevel) {} catch {}
     }
 
     function _payExterminatorShare(address ex, uint256 exterminatorShare, uint256 rngWord) private {
@@ -271,7 +271,7 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
     }
 
     function _payoutRecipient(address player) private view returns (address recipient) {
-        (recipient, ) = IPurgeGameAffiliatePayout(address(this)).affiliatePayoutAddress(player);
+        (recipient, ) = IDegenerusGameAffiliatePayout(address(this)).affiliatePayoutAddress(player);
     }
 
     function _addClaimableBong(address player, uint256 weiAmount, uint96 basePerBong, bool stake) private {
@@ -308,7 +308,7 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         address jackpotsAddr
     ) private returns (uint256 netSpend) {
         address trophyAddr = trophies;
-        (address[] memory winnersArr, uint256[] memory amountsArr, uint256 bongMask, uint256 refund) = IPurgeJackpots(
+        (address[] memory winnersArr, uint256[] memory amountsArr, uint256 bongMask, uint256 refund) = IDegenerusJackpots(
             jackpotsAddr
         ).runBafJackpot(poolWei, lvl, rngWord);
         address[] memory single = new address[](1);
@@ -335,7 +335,7 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         }
         if (trophyAddr != address(0) && winnersArr.length != 0) {
             // Top BAF winner gets the cosmetic trophy to keep gas bounded.
-            try IPurgeTrophies(trophyAddr).mintBaf(winnersArr[0], lvl) {} catch {}
+            try IDegenerusTrophies(trophyAddr).mintBaf(winnersArr[0], lvl) {} catch {}
         }
         netSpend = poolWei - refund;
     }
@@ -346,7 +346,7 @@ contract PurgeGameEndgameModule is PurgeGameStorage {
         uint256 rngWord,
         address jackpotsAddr
     ) private returns (uint256 netSpend) {
-        uint256 returnWei = IPurgeJackpots(jackpotsAddr).runDecimatorJackpot(poolWei, lvl, rngWord);
+        uint256 returnWei = IDegenerusJackpots(jackpotsAddr).runDecimatorJackpot(poolWei, lvl, rngWord);
         netSpend = poolWei - returnWei;
     }
 }

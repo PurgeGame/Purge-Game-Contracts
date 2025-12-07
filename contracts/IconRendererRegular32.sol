@@ -3,7 +3,7 @@ pragma solidity ^0.8.26;
 
 import "@openzeppelin/contracts/utils/Base64.sol";
 import "@openzeppelin/contracts/utils/Strings.sol";
-import "./interfaces/IPurgeAffiliate.sol";
+import "./interfaces/IDegenerusAffiliate.sol";
 import "./interfaces/IconRendererTypes.sol";
 
 /**
@@ -19,7 +19,7 @@ contract IconRendererRegular32 {
 
     // ---------------- Storage ----------------
 
-    IPurgedRead private immutable coin; // PURGE ERC20 implementing affiliateProgram()
+    IDegenerusdRead private immutable coin; // DEGEN ERC20 implementing affiliateProgram()
     IIcons32 private immutable icons; // External icon data source
     IColorRegistry private immutable registry; // Color override store
     address public immutable bongs; // admin
@@ -28,7 +28,7 @@ contract IconRendererRegular32 {
     error E();
 
     constructor(address coin_, address icons_, address registry_, address bongs_) {
-        coin = IPurgedRead(coin_);
+        coin = IDegenerusdRead(coin_);
         icons = IIcons32(icons_);
         registry = IColorRegistry(registry_);
         if (bongs_ == address(0)) revert E();
@@ -178,13 +178,13 @@ contract IconRendererRegular32 {
         return defColor;
     }
 
-    function _affiliateProgram() private view returns (IPurgeAffiliate) {
+    function _affiliateProgram() private view returns (IDegenerusAffiliate) {
         address affiliate = coin.affiliateProgram();
-        return affiliate == address(0) ? IPurgeAffiliate(address(0)) : IPurgeAffiliate(affiliate);
+        return affiliate == address(0) ? IDegenerusAffiliate(address(0)) : IDegenerusAffiliate(affiliate);
     }
 
     function _referrer(address user) private view returns (address) {
-        IPurgeAffiliate affiliate = _affiliateProgram();
+        IDegenerusAffiliate affiliate = _affiliateProgram();
         if (address(affiliate) == address(0)) return address(0);
         return affiliate.getReferrer(user);
     }
@@ -222,8 +222,8 @@ contract IconRendererRegular32 {
     uint32[256] private startTR;
 
     // Linked contracts (set once).
-    address private game; // PurgeGame contract (authorised caller)
-    IERC721Lite private nft; // PurgeGameNFT ERC721 contract
+    address private game; // DegenerusGame contract (authorised caller)
+    IERC721Lite private nft; // DegenerusGameNFT ERC721 contract
     // --- Square geometry (for trophy sizing vs inner side) -----------------
     uint32 private constant SQUARE_SIDE_100 = 100; // <rect width/height>
     uint32 private constant BORDER_STROKE_W = 2; // stroke-width in _svgHeader()
@@ -237,7 +237,7 @@ contract IconRendererRegular32 {
     // Game wiring & trait baselines
     // ---------------------------------------------------------------------
 
-    /// @dev Restrict to the PurgeGame contract once linked.
+    /// @dev Restrict to the DegenerusGame contract once linked.
     modifier onlyGame() {
         if (msg.sender != game) revert E();
         _;
@@ -303,7 +303,7 @@ contract IconRendererRegular32 {
     /// @dev Read the exterminated trait from a packed trophy `data` word.
     ///      Bits [167:152] hold: 0xFFFF for placeholder (unwon), else uint8 trait id.
     ///      Bit 200 is reserved for MAP trophies (1 = MAP, 0 = level trophy).
-    /// @notice Render metadata + image for a PURGE token (regular or trophy).
+    /// @notice Render metadata + image for a DEGEN token (regular or trophy).
     /// @param tokenId   NFT id.
     /// @param data      Packed game data:
     ///                  - Trophy: bits [167:152] exterminated trait (0xFFFF = placeholder), bits [151:128] level, bit 200 = MAP flag.
@@ -651,8 +651,8 @@ contract IconRendererRegular32 {
     ) private pure returns (string memory) {
         string memory lvlStr = (level == 0) ? "TBD" : level.toString();
         string memory nm = isTrophy
-            ? string.concat("Purge Game Level ", lvlStr, " ", trophyType, " Trophy")
-            : string.concat("Purge Game Level ", lvlStr, " #", tokenId.toString());
+            ? string.concat("Degenerus Level ", lvlStr, " ", trophyType, " Trophy")
+            : string.concat("Degenerus Level ", lvlStr, " #", tokenId.toString());
 
         // Image: inline SVG → base64 data URL
         string memory imgData = string.concat("data:image/svg+xml;base64,", Base64.encode(bytes(svg)));

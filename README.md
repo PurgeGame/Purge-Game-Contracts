@@ -1,1 +1,1 @@
-Contracts for Purge Game and Purgecoin.
+Contracts for Degenerus and DegenerusCoin.

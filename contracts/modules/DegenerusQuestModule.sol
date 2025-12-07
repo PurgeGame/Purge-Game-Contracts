@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import "../interfaces/IPurgeQuestModule.sol";
-import "../interfaces/IPurgeGame.sol";
+import "../interfaces/IDegenerusQuestModule.sol";
+import "../interfaces/IDegenerusGame.sol";
 
-/// @title PurgeQuestModule
-/// @notice Tracks two rotating daily quests and validates player progress against Purge game actions.
+/// @title DegenerusQuestModule
+/// @notice Tracks two rotating daily quests and validates player progress against Degenerus game actions.
 /// @dev All entry points are coin-gated; randomness is supplied by the coin contract.
-contract PurgeQuestModule is IPurgeQuestModule {
+contract DegenerusQuestModule is IDegenerusQuestModule {
     error OnlyCoin();
     error AlreadyWired();
     error InvalidQuestDay();
@@ -21,7 +21,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
     uint8 private constant QUEST_TYPE_FLIP = 2;
     uint8 private constant QUEST_TYPE_STAKE = 3;
     uint8 private constant QUEST_TYPE_AFFILIATE = 4;
-    uint8 private constant QUEST_TYPE_PURGE = 5;
+    uint8 private constant QUEST_TYPE_BURN = 5;
     uint8 private constant QUEST_TYPE_DECIMATOR = 6;
     uint8 private constant QUEST_TYPE_BONG = 7;
     uint8 private constant QUEST_TYPE_COUNT = 8;
@@ -29,7 +29,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
     // Quest flags for difficulty and forced behavior
     uint8 private constant QUEST_FLAG_HIGH_DIFFICULTY = 1 << 0;
     uint8 private constant QUEST_FLAG_VERY_HIGH_DIFFICULTY = 1 << 1;
-    uint8 private constant QUEST_FLAG_FORCE_PURGE = 1 << 2;
+    uint8 private constant QUEST_FLAG_FORCE_BURN = 1 << 2;
 
     // Stake-specific requirements (bitmask)
     uint8 private constant QUEST_STAKE_REQUIRE_PRINCIPAL = 1 << 0;
@@ -52,7 +52,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
     uint256 private constant QUEST_BONG_MAX_WEI = 0.5 ether;
 
     address public immutable coin;
-    IPurgeGame private questGame;
+    IDegenerusGame private questGame;
 
     /// @notice Definition of a quest that is active for the current day.
     struct DailyQuest {
@@ -60,7 +60,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         uint8 questType; // One of the QUEST_TYPE_* constants
         uint8 stakeMask; // Bitmask of stake constraints when questType == STAKE
         uint8 stakeRisk; // Minimum risk when QUEST_STAKE_REQUIRE_RISK is set
-        uint8 flags; // Difficulty and forced purge flags
+        uint8 flags; // Difficulty and forced burn flags
         uint32 version; // Bumped when quest mutates mid-day to reset stale player progress
         uint256 entropy; // VRF-derived entropy used for targets and stake config
     }
@@ -101,7 +101,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         coin = coin_;
     }
 
-    /// @notice Wire the Purge game contract using an address array ([game]); set-once per slot.
+    /// @notice Wire the Degenerus game contract using an address array ([game]); set-once per slot.
     function wire(address[] calldata addresses) external onlyCoin {
         _setGame(addresses.length > 0 ? addresses[0] : address(0));
     }
@@ -110,7 +110,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         if (gameAddr == address(0)) return;
         address current = address(questGame);
         if (current == address(0)) {
-            questGame = IPurgeGame(gameAddr);
+            questGame = IDegenerusGame(gameAddr);
         } else if (gameAddr != current) {
             revert AlreadyWired();
         }
@@ -136,20 +136,20 @@ contract PurgeQuestModule is IPurgeQuestModule {
         uint48 day,
         uint256 entropy,
         bool forceMintEth,
-        bool forcePurge
+        bool forceBurn
     ) external onlyCoin returns (bool rolled, uint8 questType, bool highDifficulty, uint8 stakeMask, uint8 stakeRisk) {
-        return _rollDailyQuest(day, entropy, forceMintEth, forcePurge);
+        return _rollDailyQuest(day, entropy, forceMintEth, forceBurn);
     }
 
-    /// @notice Normalize active quests when purge becomes disallowed mid-day (extermination to game state 1).
-    function normalizeActivePurgeQuests() external onlyCoin {
+    /// @notice Normalize active quests when burning becomes disallowed mid-day (extermination to game state 1).
+    function normalizeActiveBurnQuests() external onlyCoin {
         DailyQuest[QUEST_SLOT_COUNT] storage quests = activeQuests;
-        bool purgeAllowed = _canRollPurgeQuest(quests[0].day != 0 ? quests[0].day : quests[1].day);
-        if (purgeAllowed) return;
+        bool burnAllowed = _canRollBurnQuest(quests[0].day != 0 ? quests[0].day : quests[1].day);
+        if (burnAllowed) return;
         for (uint8 slot; slot < QUEST_SLOT_COUNT; ) {
             DailyQuest storage quest = quests[slot];
-            if (quest.questType == QUEST_TYPE_PURGE) {
-                _convertPurgeQuest(quests, slot);
+            if (quest.questType == QUEST_TYPE_BURN) {
+                _convertBurnQuest(quests, slot);
             }
             unchecked {
                 ++slot;
@@ -161,10 +161,10 @@ contract PurgeQuestModule is IPurgeQuestModule {
         uint48 day,
         uint256 entropy,
         bool forceMintEth,
-        bool forcePurge
+        bool forceBurn
     ) private returns (bool rolled, uint8 questType, bool highDifficulty, uint8 stakeMask, uint8 stakeRisk) {
         DailyQuest[QUEST_SLOT_COUNT] storage quests = activeQuests;
-        bool purgeAllowed = _canRollPurgeQuest(day) || forcePurge;
+        bool burnAllowed = _canRollBurnQuest(day) || forceBurn;
         bool decAllowed = _canRollDecimatorQuest();
         for (uint8 slot; slot < QUEST_SLOT_COUNT; ) {
             uint8 exclude = slot == 0 ? type(uint8).max : quests[0].questType;
@@ -175,19 +175,19 @@ contract PurgeQuestModule is IPurgeQuestModule {
             }
             _seedQuest(quests[slot], day, slotEntropy, exclude);
             bool forceMintSlot = slot == 0 && forceMintEth;
-            bool forcePurgeSlot = slot == 1 && forcePurge;
+            bool forceBurnSlot = slot == 1 && forceBurn;
             if (forceMintSlot) {
                 quests[slot].questType = QUEST_TYPE_MINT_ETH;
                 quests[slot].stakeMask = 0;
                 quests[slot].stakeRisk = 0;
-            } else if (forcePurgeSlot) {
-                quests[slot].questType = QUEST_TYPE_PURGE;
+            } else if (forceBurnSlot) {
+                quests[slot].questType = QUEST_TYPE_BURN;
                 quests[slot].stakeMask = 0;
                 quests[slot].stakeRisk = 0;
-                quests[slot].flags |= QUEST_FLAG_FORCE_PURGE;
+                quests[slot].flags |= QUEST_FLAG_FORCE_BURN;
             } else {
-                _applyQuestTypeConstraints(quests, slot, purgeAllowed, decAllowed);
-                quests[slot].flags &= ~QUEST_FLAG_FORCE_PURGE;
+                _applyQuestTypeConstraints(quests, slot, burnAllowed, decAllowed);
+                quests[slot].flags &= ~QUEST_FLAG_FORCE_BURN;
             }
             unchecked {
                 ++slot;
@@ -288,7 +288,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         return (0, false, matched ? fallbackType : QUEST_TYPE_MINT_ANY, state.streak, false);
     }
 
-    /// @notice Handle flip/unstake progress credited in PURGE base units (6 decimals).
+    /// @notice Handle flip/unstake progress credited in DEGEN base units (6 decimals).
     function handleFlip(
         address player,
         uint256 flipCredit
@@ -322,7 +322,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         return _questComplete(state, slotIndex, quest, priceUnit);
     }
 
-    /// @notice Handle decimator burns counted in PURGE base units (6 decimals).
+    /// @notice Handle decimator burns counted in DEGEN base units (6 decimals).
     function handleDecimator(
         address player,
         uint256 burnAmount
@@ -448,7 +448,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         return (0, false, matched ? fallbackType : QUEST_TYPE_STAKE, state.streak, false);
     }
 
-    /// @notice Handle affiliate earnings credited in PURGE base units (6 decimals).
+    /// @notice Handle affiliate earnings credited in DEGEN base units (6 decimals).
     function handleAffiliate(
         address player,
         uint256 amount
@@ -479,8 +479,8 @@ contract PurgeQuestModule is IPurgeQuestModule {
         return (0, false, quest.questType, state.streak, false);
     }
 
-    /// @notice Handle purge (burn) quest progress in whole NFTs.
-    function handlePurge(
+    /// @notice Handle burn quest progress in whole NFTs.
+    function handleBurn(
         address player,
         uint32 quantity
     ) external onlyCoin returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) {
@@ -501,7 +501,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         uint8 fallbackType = quests[0].questType;
         for (uint8 slot; slot < QUEST_SLOT_COUNT; ) {
             DailyQuest memory quest = quests[slot];
-            if (quest.day != currentDay || quest.questType != QUEST_TYPE_PURGE) {
+            if (quest.day != currentDay || quest.questType != QUEST_TYPE_BURN) {
                 unchecked {
                     ++slot;
                 }
@@ -511,7 +511,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
             fallbackType = quest.questType;
             _questSyncProgress(state, slot, currentDay, quest.version);
             state.progress[slot] = _clampedAdd128(state.progress[slot], quantity);
-            uint32 target = _questPurgeTarget(tier, quest.entropy);
+            uint32 target = _questBurnTarget(tier, quest.entropy);
             if (state.progress[slot] >= target) {
                 return _questComplete(state, slot, quest, priceUnit);
             }
@@ -519,7 +519,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
                 ++slot;
             }
         }
-        return (0, false, matched ? fallbackType : QUEST_TYPE_PURGE, state.streak, false);
+        return (0, false, matched ? fallbackType : QUEST_TYPE_BURN, state.streak, false);
     }
 
     /// @notice View helper for frontends; returns quest baselines at tier zero.
@@ -536,20 +536,20 @@ contract PurgeQuestModule is IPurgeQuestModule {
         }
     }
 
-    /// @dev Returns active quests, downgrading purge slots in-memory when purge is not allowed.
+    /// @dev Returns active quests, downgrading burn slots in-memory when burning is not allowed.
     /// Only this view-only path performs a downgrade; stateful flows never modify slots here.
     function _materializeActiveQuestsForView() private view returns (DailyQuest[QUEST_SLOT_COUNT] memory local) {
         local = activeQuests;
-        bool purgeAllowed = _canRollPurgeQuest(_currentQuestDay(local));
-        if (purgeAllowed) return local;
+        bool burnAllowed = _canRollBurnQuest(_currentQuestDay(local));
+        if (burnAllowed) return local;
         for (uint8 slot; slot < QUEST_SLOT_COUNT; ) {
-            if (local[slot].questType == QUEST_TYPE_PURGE) {
+            if (local[slot].questType == QUEST_TYPE_BURN) {
                 uint8 otherSlot = slot == 0 ? uint8(1) : uint8(0);
                 bool otherMintEth = local[otherSlot].questType == QUEST_TYPE_MINT_ETH;
                 local[slot].questType = otherMintEth ? QUEST_TYPE_AFFILIATE : QUEST_TYPE_MINT_ETH;
                 local[slot].stakeMask = 0;
                 local[slot].stakeRisk = 0;
-                local[slot].flags &= ~QUEST_FLAG_FORCE_PURGE;
+                local[slot].flags &= ~QUEST_FLAG_FORCE_BURN;
             }
             unchecked {
                 ++slot;
@@ -646,8 +646,8 @@ contract PurgeQuestModule is IPurgeQuestModule {
             req.mints = _questMintAnyTarget(tier, quest.entropy);
         } else if (qType == QUEST_TYPE_MINT_ETH) {
             req.mints = _questMintEthTarget(tier, quest.entropy);
-        } else if (qType == QUEST_TYPE_PURGE) {
-            req.mints = _questPurgeTarget(tier, quest.entropy);
+        } else if (qType == QUEST_TYPE_BURN) {
+            req.mints = _questBurnTarget(tier, quest.entropy);
         } else if (qType == QUEST_TYPE_FLIP) {
             req.tokenAmount = uint256(_questFlipTargetTokens(tier, quest.entropy)) * MILLION;
         } else if (qType == QUEST_TYPE_DECIMATOR) {
@@ -670,8 +670,8 @@ contract PurgeQuestModule is IPurgeQuestModule {
         }
     }
 
-    /// @dev Downgrades purge quests to ETH mint (or affiliate) when purging is paused, bumping version to reset progress.
-    function _convertPurgeQuest(DailyQuest[QUEST_SLOT_COUNT] storage quests, uint8 slot) private {
+    /// @dev Downgrades burn quests to ETH mint (or affiliate) when burning is paused, bumping version to reset progress.
+    function _convertBurnQuest(DailyQuest[QUEST_SLOT_COUNT] storage quests, uint8 slot) private {
         DailyQuest storage quest = quests[slot];
         uint8 otherSlot = slot == 0 ? uint8(1) : uint8(0);
         DailyQuest storage other = quests[otherSlot];
@@ -679,7 +679,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         quest.questType = otherMintEth ? QUEST_TYPE_AFFILIATE : QUEST_TYPE_MINT_ETH;
         quest.stakeMask = 0;
         quest.stakeRisk = 0;
-        quest.flags &= ~QUEST_FLAG_FORCE_PURGE;
+        quest.flags &= ~QUEST_FLAG_FORCE_BURN;
         quest.version = _nextQuestVersion();
     }
 
@@ -703,9 +703,9 @@ contract PurgeQuestModule is IPurgeQuestModule {
         }
     }
 
-    /// @dev Purge quests are only enabled when the core game is in purge state (gameState == 3).
-    function _canRollPurgeQuest(uint48 /*questDay*/) private view returns (bool) {
-        IPurgeGame game_ = questGame;
+    /// @dev Burn quests are only enabled when the core game is in burn state (gameState == 3).
+    function _canRollBurnQuest(uint48 /*questDay*/) private view returns (bool) {
+        IDegenerusGame game_ = questGame;
         if (address(game_) == address(0)) {
             return false;
         }
@@ -714,7 +714,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
 
     /// @dev Decimator quests are unlocked at specific level boundaries.
     function _canRollDecimatorQuest() private view returns (bool) {
-        IPurgeGame game_ = questGame;
+        IDegenerusGame game_ = questGame;
         if (address(game_) == address(0)) {
             return false;
         }
@@ -864,7 +864,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         return _questLinearTarget(QUEST_MIN_MINT, uint32(maxVal), difficulty);
     }
 
-    function _questPurgeTarget(uint8 tier, uint256 entropy) private pure returns (uint32) {
+    function _questBurnTarget(uint8 tier, uint256 entropy) private pure returns (uint32) {
         return _questMintEthTarget(tier, entropy);
     }
 
@@ -922,12 +922,12 @@ contract PurgeQuestModule is IPurgeQuestModule {
     function _applyQuestTypeConstraints(
         DailyQuest[QUEST_SLOT_COUNT] storage quests,
         uint8 slot,
-        bool purgeAllowed,
+        bool burnAllowed,
         bool decAllowed
     ) private {
         DailyQuest storage quest = quests[slot];
-        if (quest.questType == QUEST_TYPE_PURGE && !purgeAllowed) {
-            _convertPurgeQuest(quests, slot);
+        if (quest.questType == QUEST_TYPE_BURN && !burnAllowed) {
+            _convertBurnQuest(quests, slot);
         } else if (quest.questType == QUEST_TYPE_DECIMATOR && !decAllowed) {
             quest.questType = QUEST_TYPE_FLIP;
         }
@@ -936,13 +936,13 @@ contract PurgeQuestModule is IPurgeQuestModule {
     /// @dev Ensures two slots never share the same quest type unless explicitly forced.
     function _ensureDistinctQuestTypes(
         DailyQuest[QUEST_SLOT_COUNT] storage quests,
-        bool purgeAllowed,
+        bool burnAllowed,
         bool decAllowed,
         uint48 day,
         uint256 entropy
     ) private {
         if (QUEST_SLOT_COUNT < 2) return;
-        if ((quests[1].flags & QUEST_FLAG_FORCE_PURGE) != 0 || (quests[0].flags & QUEST_FLAG_FORCE_PURGE) != 0) {
+        if ((quests[1].flags & QUEST_FLAG_FORCE_BURN) != 0 || (quests[0].flags & QUEST_FLAG_FORCE_BURN) != 0) {
             return;
         }
         uint8 referenceType = quests[0].questType;
@@ -950,7 +950,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         for (uint8 attempt; attempt < QUEST_TYPE_COUNT * 2; ) {
             uint256 attemptEntropy = uint256(keccak256(abi.encode(entropy, day, attempt + 1)));
             _seedQuest(quests[1], day, attemptEntropy, referenceType);
-            _applyQuestTypeConstraints(quests, 1, purgeAllowed, decAllowed);
+            _applyQuestTypeConstraints(quests, 1, burnAllowed, decAllowed);
             if (quests[1].questType != referenceType) {
                 return;
             }
@@ -958,14 +958,14 @@ contract PurgeQuestModule is IPurgeQuestModule {
                 ++attempt;
             }
         }
-        quests[1].questType = _fallbackQuestType(referenceType, purgeAllowed, decAllowed);
+        quests[1].questType = _fallbackQuestType(referenceType, burnAllowed, decAllowed);
     }
 
     /// @dev Deterministic fallback used when repeated attempts fail to diversify quest types.
-    function _fallbackQuestType(uint8 exclude, bool purgeAllowed, bool decAllowed) private pure returns (uint8) {
+    function _fallbackQuestType(uint8 exclude, bool burnAllowed, bool decAllowed) private pure returns (uint8) {
         for (uint8 offset = 1; offset < QUEST_TYPE_COUNT; ) {
             uint8 candidate = uint8((uint256(exclude) + offset) % QUEST_TYPE_COUNT);
-            if (candidate == QUEST_TYPE_PURGE && !purgeAllowed) {
+            if (candidate == QUEST_TYPE_BURN && !burnAllowed) {
                 candidate = (exclude == QUEST_TYPE_MINT_ETH) ? QUEST_TYPE_STAKE : QUEST_TYPE_MINT_ETH;
             } else if (candidate == QUEST_TYPE_DECIMATOR && !decAllowed) {
                 candidate = QUEST_TYPE_FLIP;
@@ -1103,7 +1103,7 @@ contract PurgeQuestModule is IPurgeQuestModule {
         if (player == address(0)) {
             return false;
         }
-        IPurgeGame game_ = questGame;
+        IDegenerusGame game_ = questGame;
         if (address(game_) == address(0)) {
             return false;
         }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {IPurgeGameExternal} from "./IPurgeGameExternal.sol";
+import {IDegenerusGameExternal} from "./IDegenerusGameExternal.sol";
 
 enum MintPaymentKind {
     DirectEth,
@@ -10,7 +10,7 @@ enum MintPaymentKind {
     Combined
 }
 
-interface IPurgeGame is IPurgeGameExternal {
+interface IDegenerusGame is IDegenerusGameExternal {
     function getTraitRemainingQuad(
         uint8[4] calldata traitIds
     ) external view returns (uint16 lastExterminated, uint24 currentLevel, uint32[4] memory remaining);
@@ -56,7 +56,9 @@ interface IPurgeGame is IPurgeGameExternal {
     function addBongCredit(address player, uint256 amount) external payable;
     function creditBongWinnings(address player) external payable;
 
-    /// @notice Sample up to 100 trait purge tickets from a random trait and recent level (last 20).
+    function burnTokens(uint256[] calldata tokenIds) external;
+
+    /// @notice Sample up to 100 trait burn tickets from a random trait and recent level (last 20).
     function sampleTraitTickets(uint256 entropy) external view returns (uint24 lvl, uint8 trait, address[] memory tickets);
 
     /// @notice Return the exterminator address for a given level (level index is 1-based).

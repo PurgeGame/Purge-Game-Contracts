@@ -2,8 +2,8 @@
 pragma solidity ^0.8.26;
 
 struct QuestRequirements {
-    uint32 mints; // Number of mints/purges required (whole NFTs)
-    uint256 tokenAmount; // PURGE base units (6 decimals) for token-denominated quests or stake principal; wei for bong size quests
+    uint32 mints; // Number of mints/burns required (whole NFTs)
+    uint256 tokenAmount; // DEGEN base units (6 decimals) for token-denominated quests or stake principal; wei for bong size quests
     uint16 stakeDistance; // Minimum stake distance when required
     uint8 stakeRisk; // Minimum stake risk when required
 }
@@ -25,17 +25,17 @@ struct PlayerQuestView {
     uint32 baseStreak;
 }
 
-interface IPurgeQuestModule {
+interface IDegenerusQuestModule {
     function wire(address[] calldata addresses) external;
 
     function rollDailyQuest(uint48 day, uint256 entropy)
         external
         returns (bool rolled, uint8 questType, bool highDifficulty, uint8 stakeMask, uint8 stakeRisk);
-    function rollDailyQuestWithOverrides(uint48 day, uint256 entropy, bool forceMintEth, bool forcePurge)
+    function rollDailyQuestWithOverrides(uint48 day, uint256 entropy, bool forceMintEth, bool forceBurn)
         external
         returns (bool rolled, uint8 questType, bool highDifficulty, uint8 stakeMask, uint8 stakeRisk);
 
-    function normalizeActivePurgeQuests() external;
+    function normalizeActiveBurnQuests() external;
 
     function handleMint(address player, uint32 quantity, bool paidWithEth)
         external
@@ -61,7 +61,7 @@ interface IPurgeQuestModule {
         external
         returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed);
 
-    function handlePurge(address player, uint32 quantity)
+    function handleBurn(address player, uint32 quantity)
         external
         returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed);
 

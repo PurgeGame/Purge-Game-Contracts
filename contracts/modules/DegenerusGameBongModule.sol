@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {PurgeGameStorage} from "../storage/PurgeGameStorage.sol";
-import {IPurgeCoin} from "../interfaces/IPurgeCoin.sol";
+import {DegenerusGameStorage} from "../storage/DegenerusGameStorage.sol";
+import {IDegenerusCoin} from "../interfaces/IDegenerusCoin.sol";
 
-interface IPurgeBongsLite {
+interface IDegenerusBongsLite {
     function payBongs(uint256 coinAmount, uint256 stEthAmount, uint48 rngDay, uint256 rngWord, uint256 maxBongs) external payable;
     function resolvePendingBongs(uint256 maxBongs) external;
     function resolvePending() external view returns (bool);
@@ -17,16 +17,16 @@ interface IStETHLite {
     function balanceOf(address account) external view returns (uint256);
 }
 
-interface IPurgeGameVaultLike {
+interface IDegenerusGameVaultLike {
     function deposit(uint256 coinAmount, uint256 stEthAmount) external payable;
 }
 
 /**
- * @title PurgeGameBongModule
+ * @title DegenerusGameBongModule
  * @notice Delegate-called module for bong upkeep, staking, and shutdown flows.
  *         The storage layout mirrors the core contract so writes land in the parent via `delegatecall`.
  */
-contract PurgeGameBongModule is PurgeGameStorage {
+contract DegenerusGameBongModule is DegenerusGameStorage {
     error E();
     error BongsNotResolved();
 
@@ -42,7 +42,7 @@ contract PurgeGameBongModule is PurgeGameStorage {
         uint256 rngWord,
         uint32 cap
     ) external returns (bool worked) {
-        IPurgeBongsLite bongContract = IPurgeBongsLite(bongsAddr);
+        IDegenerusBongsLite bongContract = IDegenerusBongsLite(bongsAddr);
 
         uint256 maxBongs = cap == 0 ? 100 : uint256(cap);
         // If a batch is already pending, just resolve more and skip new funding.
@@ -64,7 +64,7 @@ contract PurgeGameBongModule is PurgeGameStorage {
         uint256 ethYield = ethBal > tracked ? ethBal - tracked : 0;
         uint256 yieldPool = stYield + ethYield;
 
-        // Mintable coin from map jackpot: 5% of totalWei (priced in PURGE).
+        // Mintable coin from map jackpot: 5% of totalWei (priced in DEGEN).
         uint256 mintableCoin = (totalWei * priceCoin) / (20 * price);
         uint256 bondCoin = (mintableCoin * 40) / 100;
         uint256 vaultCoin = mintableCoin - bondCoin;
@@ -87,9 +87,9 @@ contract PurgeGameBongModule is PurgeGameStorage {
 
         // Route vault share (if any) as mint allowance; ignore failures to avoid blocking jackpots.
         if (vaultCoin != 0) {
-            address vaultAddr = IPurgeCoin(coinAddr).vault();
+            address vaultAddr = IDegenerusCoin(coinAddr).vault();
             if (vaultAddr != address(0)) {
-                try IPurgeGameVaultLike(vaultAddr).deposit{value: 0}(vaultCoin, 0) {} catch {}
+                try IDegenerusGameVaultLike(vaultAddr).deposit{value: 0}(vaultCoin, 0) {} catch {}
             }
         }
 
@@ -109,7 +109,7 @@ contract PurgeGameBongModule is PurgeGameStorage {
 
         uint256 rateBps = 10_000;
         if (bongsAddr != address(0)) {
-            rateBps = IPurgeBongsLite(bongsAddr).stakeRateBps();
+            rateBps = IDegenerusBongsLite(bongsAddr).stakeRateBps();
         }
         if (rateBps == 0) return;
 
@@ -127,7 +127,7 @@ contract PurgeGameBongModule is PurgeGameStorage {
     function drainToBongs(address bongsAddr, address stethAddr, uint48 day) external {
         if (bongsAddr == address(0)) return;
 
-        IPurgeBongsLite bongContract = IPurgeBongsLite(bongsAddr);
+        IDegenerusBongsLite bongContract = IDegenerusBongsLite(bongsAddr);
         bongContract.notifyGameOver();
 
         uint256 stBal = IStETHLite(stethAddr).balanceOf(address(this));

@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import "./interfaces/IPurgeTrophies.sol";
+import "./interfaces/IDegenerusTrophies.sol";
 import "./interfaces/IconRendererTypes.sol"; // for IERC721Lite compat
 
 /**
- * @title PurgeTrophies
- * @notice Minimal, non-transferable ERC721-like cosmetic trophies for Purge.
+ * @title DegenerusTrophies
+ * @notice Minimal, non-transferable ERC721-like cosmetic trophies for Degenerus.
  * @dev Implements the ERC721 interface surface but reverts all transfer/approval flows.
  */
-contract PurgeTrophies is IPurgeTrophies {
+contract DegenerusTrophies is IDegenerusTrophies {
     // ---------------------------------------------------------------------
     // Errors / events
     // ---------------------------------------------------------------------
@@ -142,7 +142,7 @@ contract PurgeTrophies is IPurgeTrophies {
     // Views
     // ---------------------------------------------------------------------
     function name() external pure returns (string memory) {
-        return "Purge Game Trophies";
+        return "Degenerus Trophies";
     }
 
     function symbol() external pure returns (string memory) {

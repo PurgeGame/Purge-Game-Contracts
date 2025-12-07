@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {PurgeGameStorage} from "../storage/PurgeGameStorage.sol";
+import {DegenerusGameStorage} from "../storage/DegenerusGameStorage.sol";
 
 /**
- * @title PurgeGameMintModule
+ * @title DegenerusGameMintModule
  * @notice Delegate-called module that hosts mint history packing, airdrop math, and trait rebuild helpers.
  *         The storage layout mirrors the core contract so writes land in the parent via `delegatecall`.
  */
-contract PurgeGameMintModule is PurgeGameStorage {
+contract DegenerusGameMintModule is DegenerusGameStorage {
     error E();
 
     uint48 private constant JACKPOT_RESET_TIME = 82620;

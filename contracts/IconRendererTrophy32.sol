@@ -8,7 +8,7 @@ import {IIconRendererTrophy32Svg} from "./IconRendererTrophy32Svg.sol";
 
 /**
  * @title IconRendererTrophy32
- * @notice Dedicated renderer for Purge Game trophy metadata and SVG generation.
+ * @notice Dedicated renderer for Degenerus trophy metadata and SVG generation.
  */
 contract IconRendererTrophy32 {
     using Strings for uint256;
@@ -25,7 +25,7 @@ contract IconRendererTrophy32 {
     uint256 private constant TROPHY_OWED_MASK = (uint256(1) << 128) - 1;
     uint16 private constant BAF_TRAIT_SENTINEL = 0xFFFA;
     uint16 private constant DECIMATOR_TRAIT_SENTINEL = 0xFFFB;
-    IPurgedRead private immutable coin;
+    IDegenerusdRead private immutable coin;
     IIcons32 private immutable icons;
     IColorRegistry private immutable registry;
     address public immutable bongs;
@@ -42,7 +42,7 @@ contract IconRendererTrophy32 {
         address svgRenderer_,
         address bongs_
     ) {
-        coin = IPurgedRead(coin_);
+        coin = IDegenerusdRead(coin_);
         icons = IIcons32(icons_);
         registry = IColorRegistry(registry_);
         if (svgRenderer_ == address(0) || bongs_ == address(0)) revert E();
@@ -129,7 +129,7 @@ contract IconRendererTrophy32 {
         return _tokenURI(tokenId, data, extras, 0);
     }
 
-    /// @notice Render PurgeBong NFTs as exterminator trophy placeholders.
+    /// @notice Render DegenerusBong NFTs as exterminator trophy placeholders.
     function bongTokenURI(
         uint256 tokenId,
         uint32 createdDistance,
@@ -235,7 +235,7 @@ contract IconRendererTrophy32 {
         string memory desc;
         if (exTr == 0xFFFF) {
             if (lvl == 0) {
-                desc = string.concat("Reserved Purge Game ", trophyLabel, ".");
+                desc = string.concat("Reserved Degenerus ", trophyLabel, ".");
             } else {
                 desc = string.concat(
                     "Reserved for level ",
@@ -365,10 +365,10 @@ contract IconRendererTrophy32 {
         string memory img = svgRenderer.trophySvg(svgParams);
         if (isBong) {
             string memory name_ = bongMatured
-                ? string.concat("Matured PurgeBong #", tokenId.toString())
+                ? string.concat("Matured DegenerusBong #", tokenId.toString())
                 : string.concat(
                     _formatBpsPercent(bongChance),
-                    " PurgeBong #",
+                    " DegenerusBong #",
                     tokenId.toString()
                 );
             string memory bongAttrs = _bongAttributes(
@@ -383,7 +383,7 @@ contract IconRendererTrophy32 {
                 _packBong(
                     img,
                     name_,
-                    "A sequential claim on the revenue derived from Purge Game.",
+                    "A sequential claim on the revenue derived from Degenerus.",
                     bongAttrs
                 );
         }
@@ -501,14 +501,14 @@ contract IconRendererTrophy32 {
         string memory lvlStr = (level == 0) ? "TBD" : level.toString();
         string memory nm = isTrophy
             ? string.concat(
-                "Purge Game Level ",
+                "Degenerus Level ",
                 lvlStr,
                 " ",
                 trophyType,
                 " Trophy"
             )
             : string.concat(
-                "Purge Game Level ",
+                "Degenerus Level ",
                 lvlStr,
                 " #",
                 tokenId.toString()
@@ -556,7 +556,7 @@ contract IconRendererTrophy32 {
                     uint256(current).toString(),
                     '"},{"trait_type":"Odds","value":"',
                     _formatBpsPercent(chanceBps),
-                    '"},{"trait_type":"Sellback (PURGE)","value":"',
+                    '"},{"trait_type":"Sellback (DEGEN)","value":"',
                     _formatCoinAmount(sellCoinValue),
                     '"}]'
                 )
@@ -611,7 +611,7 @@ contract IconRendererTrophy32 {
         fracStr[4] = bytes1(uint8(48 + (frac / 10) % 10));
         fracStr[5] = bytes1(uint8(48 + (frac % 10)));
 
-        return string.concat(whole.toString(), ".", string(fracStr), " PURGE");
+        return string.concat(whole.toString(), ".", string(fracStr), " DEGEN");
     }
 
     function _pad4(uint16 v) private pure returns (string memory) {

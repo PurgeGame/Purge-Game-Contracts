@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {IPurgeGame as IPurgeGameCore} from "./interfaces/IPurgeGame.sol";
+import {IDegenerusGame as IDegenerusGameCore} from "./interfaces/IDegenerusGame.sol";
 
 /// @notice Minimal VRF coordinator surface needed for subscription admin actions.
 interface IVRFCoordinatorV2_5Owner {
@@ -16,13 +16,13 @@ interface IVRFCoordinatorV2_5Owner {
         returns (uint96 balance, uint96 nativeBalance, uint64 reqCount, address owner, address[] memory consumers);
 }
 
-interface IPurgeGameVrf is IPurgeGameCore {
+interface IDegenerusGameVrf is IDegenerusGameCore {
     function rngStalledForThreeDays() external view returns (bool);
     function updateVrfCoordinatorAndSub(address newCoordinator, uint256 newSubId, bytes32 newKeyHash) external;
     function wireInitialVrf(address coordinator_, uint256 subId) external;
 }
 
-interface IPurgeBondsVrf {
+interface IDegenerusBondsVrf {
     function wireBondVrf(address coordinator_, uint256 subId, bytes32 keyHash_) external;
 }
 
@@ -31,11 +31,11 @@ interface ILinkTokenLike {
     function transferAndCall(address to, uint256 value, bytes calldata data) external returns (bool);
 }
 
-interface IPurgeCoinPresaleLink {
+interface IDegenerusCoinPresaleLink {
     function creditPresaleFromLink(address player, uint256 amount) external;
 }
 
-interface IPurgeAffiliatePresalePrice {
+interface IDegenerusAffiliatePresalePrice {
     function presalePriceCoinEstimate() external view returns (uint256);
 }
 
@@ -49,13 +49,13 @@ interface IAggregatorV3 {
 }
 
 /**
- * @title PurgeGameVRFSub
+ * @title DegenerusGameVRFSub
  * @notice Holds ownership of the Chainlink VRF subscription and gates sensitive actions behind the game contract.
  *         A single `wire` call always boots bonds and optionally the game (if provided), each exactly once.
  *         After wiring, no actions are available unless the game reports a 3-day RNG stall, in which case
  *         `emergencyRecover` can migrate to a new coordinator/subscription (best-effort LINK refund + top-up).
  */
-contract PurgeGameVRFSub {
+contract DegenerusGameVRFSub {
     // -----------------------
     // Errors
     // -----------------------
@@ -146,7 +146,7 @@ contract PurgeGameVRFSub {
         if (!bondsWired) {
             IVRFCoordinatorV2_5Owner(coordinator).addConsumer(subscriptionId, bonds);
             emit ConsumerAdded(bonds);
-            IPurgeBondsVrf(bonds).wireBondVrf(coordinator, subscriptionId, bondKeyHash);
+            IDegenerusBondsVrf(bonds).wireBondVrf(coordinator, subscriptionId, bondKeyHash);
             bondsWired = true;
         }
 
@@ -155,7 +155,7 @@ contract PurgeGameVRFSub {
             game = game_;
             IVRFCoordinatorV2_5Owner(coordinator).addConsumer(subscriptionId, game_);
             emit ConsumerAdded(game_);
-            IPurgeGameVrf(game_).wireInitialVrf(coordinator, subscriptionId);
+            IDegenerusGameVrf(game_).wireInitialVrf(coordinator, subscriptionId);
             gameWired = true;
         } else if (gameWired && game_ != address(0) && game != game_) {
             revert AlreadyWired(); // game already set; ignore mismatched wiring attempts
@@ -201,7 +201,7 @@ contract PurgeGameVRFSub {
         IVRFCoordinatorV2_5Owner(coordinator).addConsumer(subscriptionId, game_);
         emit ConsumerAdded(game_);
 
-        IPurgeGameVrf(game_).wireInitialVrf(coordinator, subscriptionId);
+        IDegenerusGameVrf(game_).wireInitialVrf(coordinator, subscriptionId);
     }
 
     // -----------------------
@@ -214,7 +214,7 @@ contract PurgeGameVRFSub {
         bytes32 newKeyHash
     ) external onlyBonds returns (uint256 newSubId) {
         if (!wired) revert NotWired();
-        if (gameWired && game != address(0) && !IPurgeGameVrf(game).rngStalledForThreeDays()) revert NotStalled();
+        if (gameWired && game != address(0) && !IDegenerusGameVrf(game).rngStalledForThreeDays()) revert NotStalled();
         if (newCoordinator == address(0) || newKeyHash == bytes32(0)) revert ZeroAddress();
 
         uint256 oldSub = subscriptionId;
@@ -237,7 +237,7 @@ contract PurgeGameVRFSub {
             try IVRFCoordinatorV2_5Owner(newCoordinator).addConsumer(newSubId, bonds) {
                 emit ConsumerAdded(bonds);
             } catch {}
-            IPurgeBondsVrf(bonds).wireBondVrf(newCoordinator, newSubId, newKeyHash);
+            IDegenerusBondsVrf(bonds).wireBondVrf(newCoordinator, newSubId, newKeyHash);
         }
         if (gameWired && game != address(0)) {
             // Add the game as consumer; ignore failure to avoid blocking recovery.
@@ -245,7 +245,7 @@ contract PurgeGameVRFSub {
                 emit ConsumerAdded(game);
             } catch {}
             // Push new config into the game; must succeed to keep contracts in sync once wired.
-            IPurgeGameVrf(game).updateVrfCoordinatorAndSub(newCoordinator, newSubId, newKeyHash);
+            IDegenerusGameVrf(game).updateVrfCoordinatorAndSub(newCoordinator, newSubId, newKeyHash);
         }
 
         // Best-effort fund the new subscription with any LINK held here.
@@ -323,7 +323,7 @@ contract PurgeGameVRFSub {
         if (credit == 0) return;
 
         if (coinWired && coin != address(0)) {
-            IPurgeCoinPresaleLink(coin).creditPresaleFromLink(from, credit);
+            IDegenerusCoinPresaleLink(coin).creditPresaleFromLink(from, credit);
             emit LinkCreditRecorded(from, credit, true);
         } else {
             pendingLinkCredit[from] += credit;
@@ -338,7 +338,7 @@ contract PurgeGameVRFSub {
         uint256 credit = pendingLinkCredit[player];
         if (credit == 0) return;
         pendingLinkCredit[player] = 0;
-        IPurgeCoinPresaleLink(coin).creditPresaleFromLink(player, credit);
+        IDegenerusCoinPresaleLink(coin).creditPresaleFromLink(player, credit);
         emit LinkCreditRecorded(player, credit, true);
     }
 
@@ -371,7 +371,7 @@ contract PurgeGameVRFSub {
         if (gameWired) return 0;
         address aff = affiliate;
         if (aff == address(0)) return 0;
-        try IPurgeAffiliatePresalePrice(aff).presalePriceCoinEstimate() returns (uint256 p) {
+        try IDegenerusAffiliatePresalePrice(aff).presalePriceCoinEstimate() returns (uint256 p) {
             return p;
         } catch {
             return 0;

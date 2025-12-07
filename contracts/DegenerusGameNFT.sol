@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {PurgeTraitUtils} from "./PurgeTraitUtils.sol";
-import {IPurgeGame, MintPaymentKind} from "./interfaces/IPurgeGame.sol";
-import {IPurgeCoin} from "./interfaces/IPurgeCoin.sol";
-import {IPurgeAffiliate} from "./interfaces/IPurgeAffiliate.sol";
+import {DegenerusTraitUtils} from "./DegenerusTraitUtils.sol";
+import {IDegenerusGame, MintPaymentKind} from "./interfaces/IDegenerusGame.sol";
+import {IDegenerusCoin} from "./interfaces/IDegenerusCoin.sol";
+import {IDegenerusAffiliate} from "./interfaces/IDegenerusAffiliate.sol";
 
 enum PurchaseKind {
     Player,
@@ -36,13 +36,13 @@ struct PurchaseParams {
     bytes32 affiliateCode;
 }
 
-interface IPurgeGameNFT {
+interface IDegenerusGameNFT {
     function tokenTraitsPacked(uint256 tokenId) external view returns (uint32);
     function purchaseCount() external view returns (uint32);
     function finalizePurchasePhase(uint32 minted, uint256 rngWord) external;
     function advanceBase() external;
     function nextTokenId() external view returns (uint256);
-    function purge(address owner, uint256[] calldata tokenIds) external;
+    function burnFromGame(address owner, uint256[] calldata tokenIds) external;
     function currentBaseTokenId() external view returns (uint256);
     function processPendingMints(uint32 playersToProcess, uint32 multiplier) external returns (bool finished);
     function tokensOwed(address player) external view returns (uint32);
@@ -51,11 +51,11 @@ interface IPurgeGameNFT {
     function purchase(PurchaseParams calldata params) external payable;
 }
 
-/// @title PurgeGameNFT
-/// @notice ERC721 surface for Purge player tokens.
+/// @title DegenerusGameNFT
+/// @notice ERC721 surface for Degenerus player tokens.
 /// @dev Uses a packed ownership layout inspired by ERC721A; relies on external wiring from the coin contract
 ///      to set the trusted game address.
-contract PurgeGameNFT {
+contract DegenerusGameNFT {
     // ---------------------------------------------------------------------
     // Errors
     // ---------------------------------------------------------------------
@@ -119,8 +119,8 @@ contract PurgeGameNFT {
     uint256 private _virtualBurnCount;
     uint256 private _baseTokenId = BASE_TOKEN_START;
 
-    string private _name = "Purge Game";
-    string private _symbol = "PG";
+    string private _name = "Degenerus";
+    string private _symbol = "DGN";
 
     mapping(uint256 => uint256) private _packedOwnerships;
     mapping(address => uint256) private _packedAddressData;
@@ -128,11 +128,11 @@ contract PurgeGameNFT {
     mapping(address => mapping(address => bool)) private _operatorApprovals;
 
     // ---------------------------------------------------------------------
-    // Purge game storage
+    // Degenerus game storage
     // ---------------------------------------------------------------------
-    IPurgeGame private game;
+    IDegenerusGame private game;
     ITokenRenderer private immutable regularRenderer;
-    IPurgeCoin private immutable coin;
+    IDegenerusCoin private immutable coin;
     address private immutable affiliateProgram;
 
     uint32 private _purchaseCount;
@@ -163,8 +163,8 @@ contract PurgeGameNFT {
 
     constructor(address regularRenderer_, address coin_) {
         regularRenderer = ITokenRenderer(regularRenderer_);
-        coin = IPurgeCoin(coin_);
-        affiliateProgram = IPurgeCoin(coin_).affiliateProgram();
+        coin = IDegenerusCoin(coin_);
+        affiliateProgram = IDegenerusCoin(coin_).affiliateProgram();
         _mint(msg.sender, 1); // Mint the eternal token #0 to deployer
     }
 
@@ -205,7 +205,7 @@ contract PurgeGameNFT {
 
         if (tokenId != SPECIAL_TOKEN_ID && tokenId < _currentBaseTokenId()) revert InvalidToken();
 
-        uint32 traitsPacked = PurgeTraitUtils.packedTraitsForToken(tokenId);
+        uint32 traitsPacked = DegenerusTraitUtils.packedTraitsForToken(tokenId);
         uint8 t0 = uint8(traitsPacked);
         uint8 t1 = uint8(traitsPacked >> 8);
         uint8 t2 = uint8(traitsPacked >> 16);
@@ -228,7 +228,7 @@ contract PurgeGameNFT {
         if (affiliateAddr == address(0)) {
             return (address(0), bytes32(0));
         }
-        return IPurgeAffiliate(affiliateAddr).syntheticMapInfo(player);
+        return IDegenerusAffiliate(affiliateAddr).syntheticMapInfo(player);
     }
 
     function _payoutAddress(address player) private view returns (address) {
@@ -262,7 +262,7 @@ contract PurgeGameNFT {
         if (params.kind == PurchaseKind.Player) {
             _purchase(buyer, params.quantity, params.payInCoin, affiliateCode, params.payKind);
         } else if (params.kind == PurchaseKind.Map) {
-            _mintAndPurge(buyer, params.quantity, params.payInCoin, affiliateCode, params.payKind);
+            _mintAndBurn(buyer, params.quantity, params.payInCoin, affiliateCode, params.payKind);
         } else {
             revert E();
         }
@@ -352,14 +352,14 @@ contract PurgeGameNFT {
         emit TokenPurchase(buyer, qty32, payInCoin, payKind != MintPaymentKind.DirectEth, costAmount, bonus);
     }
 
-    function _mintAndPurge(
+    function _mintAndBurn(
         address buyer,
         uint256 quantity,
         bool payInCoin,
         bytes32 affiliateCode,
         MintPaymentKind payKind
     ) private {
-        // Map purchase flow: mints 4:1 scaled quantity and immediately queues them for purge draws.
+        // Map purchase flow: mints 4:1 scaled quantity and immediately queues them for burn draws.
         (
             uint24 lvl,
             uint8 state,
@@ -488,7 +488,7 @@ contract PurgeGameNFT {
         uint256 rakebackMint;
         address affiliateAddr = affiliateProgram;
         if (affiliateAddr != address(0)) {
-            rakebackMint = IPurgeAffiliate(affiliateAddr).payAffiliate(affiliateAmount, affiliateCode, payer, lvl);
+            rakebackMint = IDegenerusAffiliate(affiliateAddr).payAffiliate(affiliateAmount, affiliateCode, payer, lvl);
         }
 
         if (rakebackMint != 0) {
@@ -537,7 +537,7 @@ contract PurgeGameNFT {
     }
 
     function _coinReceive(address payer, uint32 quantity, uint256 amount, uint24 lvl, uint256 discount) private {
-        // Coin payments burn PURGE (with level-based modifiers) and notify quest tracking without moving ETH.
+        // Coin payments burn DEGEN (with level-based modifiers) and notify quest tracking without moving ETH.
         uint8 stepMod = uint8(lvl % 20);
         if (stepMod == 13) amount = (amount * 3) / 2;
         else if (stepMod == 18) amount = (amount * 9) / 10;
@@ -885,7 +885,7 @@ contract PurgeGameNFT {
         emit Approval(owner, to, tokenId);
     }
     // ---------------------------------------------------------------------
-    // Purge game wiring
+    // Degenerus game wiring
     // ---------------------------------------------------------------------
 
     modifier onlyGame() {
@@ -907,7 +907,7 @@ contract PurgeGameNFT {
         if (gameAddr == address(0)) return;
         address current = address(game);
         if (current == address(0)) {
-            game = IPurgeGame(gameAddr);
+            game = IDegenerusGame(gameAddr);
         } else if (gameAddr != current) {
             revert E();
         }
@@ -946,7 +946,7 @@ contract PurgeGameNFT {
     }
 
     /// @notice Burn a batch of player tokens (never trophies) owned by `owner`; trophies burned are tallied separately.
-    function purge(address owner, uint256[] calldata tokenIds) external onlyGame {
+    function burnFromGame(address owner, uint256[] calldata tokenIds) external onlyGame {
         uint256 burnDelta;
         uint256 len = tokenIds.length;
         uint256 baseLimit = _currentBaseTokenId();
@@ -954,7 +954,7 @@ contract PurgeGameNFT {
             uint256 tokenId = tokenIds[i];
             if (tokenId < baseLimit) revert InvalidToken();
             if (tokenId == SPECIAL_TOKEN_ID) revert InvalidToken();
-            _purgeToken(owner, tokenId);
+            _burnToken(owner, tokenId);
             unchecked {
                 burnDelta += _BURN_COUNT_INCREMENT_UNIT;
                 ++i;
@@ -962,11 +962,11 @@ contract PurgeGameNFT {
         }
 
         if (burnDelta != 0) {
-            _applyPurgeAccounting(owner, burnDelta);
+            _applyBurnAccounting(owner, burnDelta);
         }
     }
 
-    function _purgeToken(address owner, uint256 tokenId) private {
+    function _burnToken(address owner, uint256 tokenId) private {
         uint256 packed = _packedOwnershipOf(tokenId);
         if (address(uint160(packed)) != owner) revert TransferFromIncorrectOwner();
         _burnPacked(tokenId, packed);
@@ -994,7 +994,7 @@ contract PurgeGameNFT {
     }
 
     /// @dev Applies burn deltas to address data.
-    function _applyPurgeAccounting(address owner, uint256 burnDelta) private {
+    function _applyBurnAccounting(address owner, uint256 burnDelta) private {
         uint256 currentPackedData = _packedAddressData[owner];
         uint256 currentNumberBurned = (currentPackedData >> _BITPOS_NUMBER_BURNED) & _BITMASK_ADDRESS_DATA_ENTRY;
         uint256 incrementAmount = burnDelta >> _BITPOS_NUMBER_BURNED;
@@ -1038,7 +1038,7 @@ contract PurgeGameNFT {
     }
 
     function tokenTraitsPacked(uint256 tokenId) external pure returns (uint32) {
-        return PurgeTraitUtils.packedTraitsForToken(tokenId);
+        return DegenerusTraitUtils.packedTraitsForToken(tokenId);
     }
 
     function purchaseCount() external view returns (uint32) {

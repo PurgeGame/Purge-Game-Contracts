@@ -5,7 +5,7 @@ import "@openzeppelin/contracts/utils/Base64.sol";
 import "@openzeppelin/contracts/utils/Strings.sol";
 import "./interfaces/IconRendererTypes.sol"; // For IColorRegistry, IERC721Lite
 
-interface IPurgeBongRenderer {
+interface IDegenerusBongRenderer {
     function bongTokenURI(
         uint256 tokenId,
         uint32 createdDistance,
@@ -16,7 +16,7 @@ interface IPurgeBongRenderer {
     ) external view returns (string memory);
 }
 
-contract IconRendererBongTrophy is IPurgeBongRenderer {
+contract IconRendererBongTrophy is IDegenerusBongRenderer {
     using Strings for uint256;
 
     address public immutable bongs;
@@ -50,14 +50,14 @@ contract IconRendererBongTrophy is IPurgeBongRenderer {
         bool matured = (currentDistance == 0);
         
         string memory name_ = matured
-            ? string.concat("Matured PurgeBong #", tokenId.toString())
+            ? string.concat("Matured DegenerusBong #", tokenId.toString())
             : string.concat(
                 _formatBpsPercent(chanceBps),
-                " PurgeBong #",
+                " DegenerusBong #",
                 tokenId.toString()
             );
 
-        string memory desc = "A sequential claim on the revenue derived from Purge Game.";
+        string memory desc = "A sequential claim on the revenue derived from Degenerus.";
         string memory attributes = _bongAttributes(
             matured,
             staked,
@@ -71,6 +71,12 @@ contract IconRendererBongTrophy is IPurgeBongRenderer {
         string memory image = _generateSvg(chanceBps, colors);
 
         return _packJson(name_, desc, image, attributes);
+    }
+
+    /// @notice Legacy circular badge used by the former 1155s; kept here for reuse if needed.
+    function legacyBongBadge(uint256 tokenId, uint256 chanceBps) external view returns (string memory) {
+        (string memory outline, string memory diamond, string[3] memory flames) = _legacyColors(tokenId);
+        return _legacyBadgeSvg(chanceBps, outline, diamond, flames);
     }
 
     function _getColors(uint256 tokenId) private view returns (string[4] memory colors) {
@@ -127,12 +133,108 @@ contract IconRendererBongTrophy is IPurgeBongRenderer {
         return _rgbHex(_hsvToRgb(hue, sat, val));
     }
 
+    function _flamePalette(uint256 idx) private pure returns (string memory) {
+        // 0-9 red -> blue/violet spectrum
+        if (idx == 0) return "#ff2b2b";
+        if (idx == 1) return "#ff6a2b";
+        if (idx == 2) return "#ffb52b";
+        if (idx == 3) return "#ffd52b";
+        if (idx == 4) return "#c8ff2b";
+        if (idx == 5) return "#6bff6b";
+        if (idx == 6) return "#2bffda";
+        if (idx == 7) return "#2b8aff";
+        if (idx == 8) return "#6b2bff";
+        return "#b62bff"; // idx 9
+    }
+
     function _redShade(uint256 tokenId) private pure returns (string memory) {
         uint256 h = _rand(tokenId, "bong-red");
         uint16 hue = uint16(h % 2 == 0 ? (uint16(h % 25)) : uint16(330 + (h % 30))); // 0-24 or 330-359
         uint8 sat = 200 + uint8((h >> 8) % 55); // 200-254
         uint8 val = 190 + uint8((h >> 16) % 60); // 190-249
         return _rgbHex(_hsvToRgb(hue % 360, sat, val));
+    }
+
+    function _legacyColors(uint256 tokenId) private view returns (string memory outline, string memory diamond, string[3] memory flames) {
+        outline = _outlineColor(tokenId); // Border
+        diamond = _greenShade(tokenId); // Diamond
+
+        uint256 baseIdx = tokenId == 0 ? 0 : (tokenId - 1) % 10;
+        flames[0] = _flamePalette(baseIdx);
+        flames[1] = _flamePalette(baseIdx);
+        flames[2] = _flamePalette((baseIdx + 1) % 10);
+
+        if (bongs == address(0)) return (outline, diamond, flames);
+
+        string memory c = registry.tokenColor(bongs, tokenId, 0);
+        if (bytes(c).length != 0) outline = c;
+        c = registry.tokenColor(bongs, tokenId, 1);
+        if (bytes(c).length != 0) {
+            flames[0] = c;
+            flames[1] = c;
+            flames[2] = c;
+        }
+        c = registry.tokenColor(bongs, tokenId, 2);
+        if (bytes(c).length != 0) diamond = c;
+
+        return (outline, diamond, flames);
+    }
+
+    function _legacyBadgeSvg(uint256 chanceBps, string memory outline, string memory diamond, string[3] memory flames) private pure returns (string memory) {
+        uint256 scaleInt = 7;
+        if (chanceBps > 20) {
+            uint256 c = chanceBps > 500 ? 500 : chanceBps;
+            scaleInt = 7 + ((c - 20) * 31) / 480;
+        }
+
+        uint256 txVal = 256 - (256 * scaleInt) / 100;
+        uint256 ty = 250 - (256 * scaleInt) / 100;
+        uint256 fOff = (38 - scaleInt) * 15 / 10;
+        uint256 xOff = (38 - scaleInt);
+
+        string memory s = scaleInt.toString();
+        if (scaleInt < 10) s = string.concat("0", s);
+        string memory scaleStr = string.concat("0.", s);
+
+        string memory transform = string.concat(
+            "matrix(", scaleStr, " 0 0 ", scaleStr, " ", txVal.toString(), " ", ty.toString(), ")"
+        );
+
+        string memory flamesSvg;
+        if (chanceBps <= 150 || chanceBps >= 300) {
+            flamesSvg = string.concat(
+                "<use href='#flame-icon' x='256' y='", (330 - fOff).toString(), "' width='180' height='180' transform='translate(-90, -90)' fill='", flames[0], "'/>"
+            );
+        }
+        if (chanceBps > 150) {
+            uint256 outerY = 300;
+            uint256 outerXBase = 206;
+            uint256 outerXBaseRight = 306;
+            if (chanceBps < 300) {
+                outerY = 310;
+                outerXBase = 211;
+                outerXBaseRight = 301;
+            }
+            flamesSvg = string.concat(
+                flamesSvg,
+                "<use href='#flame-icon' x='", (outerXBase + xOff).toString(), "' y='", (outerY - fOff).toString(), "' width='180' height='180' transform='translate(-90, -90)' fill='", flames[1], "'/>",
+                "<use href='#flame-icon' x='", (outerXBaseRight - xOff).toString(), "' y='", (outerY - fOff).toString(), "' width='180' height='180' transform='translate(-90, -90)' fill='", flames[2], "'/>"
+            );
+        }
+
+        return string.concat(
+            "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'>",
+            "<defs><clipPath id='flame-clip'><circle cx='0' cy='0' r='27'/></clipPath>",
+            "<symbol id='ico' viewBox='0 0 784.37 1277.38'>", _ETH_PATH, "</symbol>",
+            "<symbol id='flame-icon' viewBox='-60 -60 120 120'><g clip-path='url(#flame-clip)'>",
+            "<path transform='matrix(0.13 0 0 0.13 -56 -41)' d='", _FLAME_D, "'/></g></symbol></defs>",
+            "<g transform='", transform, "'>",
+            "<circle cx='256' cy='256' r='256' fill='", outline, "'/>",
+            "<circle cx='256' cy='256' r='230' fill='", diamond, "'/>",
+            "<use href='#ico' x='128' y='128' width='256' height='256'/>",
+            flamesSvg,
+            "</g></svg>"
+        );
     }
 
     function _generateSvg(uint16 chanceBps, string[4] memory colors) private pure returns (string memory) {
@@ -226,7 +328,7 @@ contract IconRendererBongTrophy is IPurgeBongRenderer {
             '"},{"trait_type":"Initial Distance","value":"', uint256(created).toString(),
             '"},{"trait_type":"Current Distance","value":"', uint256(current).toString(),
             '"},{"trait_type":"Odds","value":"', _formatBpsPercent(chanceBps),
-            '"},{"trait_type":"Sellback (PURGE)","value":"', _formatCoinAmount(sellCoinValue),
+            '"},{"trait_type":"Sellback (DEGEN)","value":"', _formatCoinAmount(sellCoinValue),
             '"}]'
         ));
     }
@@ -262,7 +364,7 @@ contract IconRendererBongTrophy is IPurgeBongRenderer {
         fracStr[3] = bytes1(uint8(48 + (frac / 100) % 10));
         fracStr[4] = bytes1(uint8(48 + (frac / 10) % 10));
         fracStr[5] = bytes1(uint8(48 + (frac % 10)));
-        return string.concat(whole.toString(), ".", string(fracStr), " PURGE");
+        return string.concat(whole.toString(), ".", string(fracStr), " DEGEN");
     }
 
     function _hsvToRgb(uint16 h, uint8 s, uint8 v) private pure returns (uint24) {

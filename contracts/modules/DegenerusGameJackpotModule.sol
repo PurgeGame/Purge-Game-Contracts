@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {IPurgeCoinModule} from "../interfaces/PurgeGameModuleInterfaces.sol";
-import {PurgeGameStorage, PendingJackpotBongMint, ClaimableBongInfo} from "../storage/PurgeGameStorage.sol";
-import {PurgeTraitUtils} from "../PurgeTraitUtils.sol";
+import {IDegenerusCoinModule} from "../interfaces/DegenerusGameModuleInterfaces.sol";
+import {DegenerusGameStorage, PendingJackpotBongMint, ClaimableBongInfo} from "../storage/DegenerusGameStorage.sol";
+import {DegenerusTraitUtils} from "../DegenerusTraitUtils.sol";
 
-interface IPurgeGameAffiliatePayout {
+interface IDegenerusGameAffiliatePayout {
     function affiliatePayoutAddress(address player) external view returns (address recipient, address affiliateOwner);
 }
 
@@ -13,11 +13,11 @@ interface IStETH {
     function balanceOf(address account) external view returns (uint256);
 }
 
-interface IPurgeGameWithBongs {
+interface IDegenerusGameWithBongs {
     function bongs() external view returns (address);
 }
 
-interface IPurgeBongsJackpot {
+interface IDegenerusBongsJackpot {
     function purchaseGameBongs(
         address[] calldata recipients,
         uint256 quantity,
@@ -29,19 +29,19 @@ interface IPurgeBongsJackpot {
 }
 
 /**
- * @title PurgeGameJackpotModule
- * @notice Delegate-called module that hosts the jackpot distribution logic for `PurgeGame`.
+ * @title DegenerusGameJackpotModule
+ * @notice Delegate-called module that hosts the jackpot distribution logic for `DegenerusGame`.
  *         The storage layout mirrors the core contract so writes land in the parent via `delegatecall`.
  *         Acts as the single routing layer for jackpot math: pool sizing, trait splits, coin vs ETH
  *         routing, and credit flow all originate here so auditors can focus on one surface.
  */
-contract PurgeGameJackpotModule is PurgeGameStorage {
+contract DegenerusGameJackpotModule is DegenerusGameStorage {
     event PlayerCredited(address indexed player, address indexed recipient, uint256 amount);
 
     uint48 private constant JACKPOT_RESET_TIME = 82620;
     uint8 private constant JACKPOT_LEVEL_CAP = 10;
-    uint8 private constant EARLY_PURGE_COIN_ONLY_THRESHOLD = 50;
-    uint8 private constant EARLY_PURGE_BOOST_THRESHOLD = 60;
+    uint8 private constant EARLY_BURN_COIN_ONLY_THRESHOLD = 50;
+    uint8 private constant EARLY_BURN_BOOST_THRESHOLD = 60;
     uint256 private constant DEGENERATE_ENTROPY_CHECK_VALUE = 420;
     uint64 private constant MAP_JACKPOT_SHARES_PACKED =
         (uint64(6000)) | (uint64(1333) << 16) | (uint64(1333) << 32) | (uint64(1334) << 48);
@@ -69,7 +69,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
     uint256 private constant JACKPOT_BONG_MAX_BASE = 0.5 ether;
     uint8 private constant JACKPOT_BONG_MAX_MULTIPLIER = 4; // cap total bongs to keep gas bounded
     uint16 private constant BONG_BPS_MAP = 5000; // 50% of MAP jackpots routed into bongs
-    uint16 private constant BONG_BPS_DAILY = 2000; // 20% of daily/early-purge jackpots routed into bongs
+    uint16 private constant BONG_BPS_DAILY = 2000; // 20% of daily/early-burn jackpots routed into bongs
     bytes32 private constant MARKETABLE_BURN_SALT = keccak256("marketable-burn");
 
     // Packed parameters for a single jackpot run to keep the call surface lean.
@@ -80,41 +80,41 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         uint256 entropy;
         uint32 winningTraitsPacked;
         uint64 traitShareBpsPacked;
-        IPurgeCoinModule coinContract;
+        IDegenerusCoinModule coinContract;
     }
 
-    /// @notice Pays early-purge jackpots during purchase phase or the rolling daily jackpots at end of level.
-    /// @dev Manages boost arming/consumption, coin-only fallback at max early-purge %, and quest rolls.
+    /// @notice Pays early-burn jackpots during purchase phase or the rolling daily jackpots at end of level.
+    /// @dev Manages boost arming/consumption, coin-only fallback at max early-burn %, and quest rolls.
     function payDailyJackpot(
         bool isDaily,
         uint24 lvl,
         uint256 randWord,
-        IPurgeCoinModule coinContract
+        IDegenerusCoinModule coinContract
     ) external {
-        uint8 percentBefore = earlyPurgePercent;
+        uint8 percentBefore = earlyBurnPercent;
         bool mapReady = _mapJackpotReadyLocal();
         bool purchasePhaseActive = (gameState == 2 && !mapReady);
-        bool boostArmedBefore = earlyPurgeBoostArmed;
-        uint8 percentAfter = purchasePhaseActive ? _currentEarlyPurgePercent() : percentBefore;
+        bool boostArmedBefore = earlyBurnBoostArmed;
+        uint8 percentAfter = purchasePhaseActive ? _currentEarlyBurnPercent() : percentBefore;
         if (purchasePhaseActive) {
             if (percentAfter != percentBefore) {
-                earlyPurgePercent = percentAfter;
+                earlyBurnPercent = percentAfter;
                 if (
                     !boostArmedBefore &&
-                    percentBefore < EARLY_PURGE_BOOST_THRESHOLD &&
-                    percentAfter >= EARLY_PURGE_BOOST_THRESHOLD
+                    percentBefore < EARLY_BURN_BOOST_THRESHOLD &&
+                    percentAfter >= EARLY_BURN_BOOST_THRESHOLD
                 ) {
-                    earlyPurgeBoostArmed = true; // arm boost for the next jackpot instead of the current one
+                    earlyBurnBoostArmed = true; // arm boost for the next jackpot instead of the current one
                 }
             }
         }
 
         bool boostTrigger = purchasePhaseActive && boostArmedBefore;
         if (boostTrigger) {
-            earlyPurgeBoostArmed = false; // consume the armed boost
+            earlyBurnBoostArmed = false; // consume the armed boost
         }
 
-        bool coinOnly = !boostTrigger && percentBefore >= EARLY_PURGE_COIN_ONLY_THRESHOLD;
+        bool coinOnly = !boostTrigger && percentBefore >= EARLY_BURN_COIN_ONLY_THRESHOLD;
 
         uint48 questDay = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
 
@@ -147,7 +147,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
             // Only the reward pool-funded slice should reduce reward pool accounting.
             rewardPool -= paidEth;
         } else {
-            uint32 winningTraitsPacked = _packWinningTraits(_getWinningTraits(randWord, dailyPurgeCount));
+            uint32 winningTraitsPacked = _packWinningTraits(_getWinningTraits(randWord, dailyBurnCount));
             bool lastDaily = (jackpotCounter + 1) >= JACKPOT_LEVEL_CAP;
             uint256 budget = (dailyJackpotBase * _dailyJackpotBps(jackpotCounter)) / 10_000;
 
@@ -179,7 +179,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
                 rewardPool -= rewardSlice;
                 futureEthPool = rewardSlice + leftoverPool;
             } else {
-                uint256 futurePoolBps = jackpotCounter == 0 ? 300 : 100; // 3% on first purge, else 1%
+                uint256 futurePoolBps = jackpotCounter == 0 ? 300 : 100; // 3% on first burn, else 1%
                 if (jackpotCounter == 1) {
                     futurePoolBps += 100; // +1% boost on the second daily jackpot
                 }
@@ -206,7 +206,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
                 ++jackpotCounter;
             }
             if (jackpotCounter < JACKPOT_LEVEL_CAP) {
-                _clearDailyPurgeCount();
+                _clearDailyBurnCount();
             }
         }
 
@@ -220,7 +220,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         uint8 traitId,
         uint256 randWord,
         uint256 ethPool,
-        IPurgeCoinModule coinContract
+        IDegenerusCoinModule coinContract
     ) external returns (uint256 paidEth) {
         uint32 packedTrait = uint32(traitId);
         packedTrait |= uint32(traitId) << 8;
@@ -248,7 +248,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         uint24 lvl,
         uint256 rngWord,
         uint256 effectiveWei,
-        IPurgeCoinModule coinContract
+        IDegenerusCoinModule coinContract
     ) external {
         uint8[4] memory winningTraits = _getRandomTraits(rngWord);
         uint32 winningTraitsPacked = _packWinningTraits(winningTraits);
@@ -486,7 +486,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
     ) private returns (uint256 totalPaidEth) {
         uint8 band = uint8((jp.lvl % 100) / 20) + 1;
         uint16[4] memory bucketCounts = _traitBucketCounts(band, jp.entropy);
-        address bongsAddr = IPurgeGameWithBongs(address(this)).bongs();
+        address bongsAddr = IDegenerusGameWithBongs(address(this)).bongs();
         return
             _distributeJackpotEth(
                 jp.lvl,
@@ -522,7 +522,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         uint8[4] memory traitIds,
         uint16[4] memory shareBps,
         uint16[4] memory bucketCounts,
-        IPurgeCoinModule coinContract,
+        IDegenerusCoinModule coinContract,
         address bongsAddr,
         uint16 bongBps
     ) private returns (uint256 totalPaidEth) {
@@ -568,7 +568,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         uint8[4] memory traitIds,
         uint16[4] memory shareBps,
         uint16[4] memory bucketCounts,
-        IPurgeCoinModule coinContract
+        IDegenerusCoinModule coinContract
     ) private {
         uint256 coinDistributed;
         for (uint8 traitIdx; traitIdx < 4; ) {
@@ -616,7 +616,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
 
     /// @dev Resolves winners for a single trait bucket (trophies removed).
     function _resolveTraitWinners(
-        IPurgeCoinModule coinContract,
+        IDegenerusCoinModule coinContract,
         bool payCoin,
         uint24 lvl,
         uint8 traitId,
@@ -637,7 +637,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
 
         entropyState = _entropyStep(entropyState ^ (uint256(traitIdx) << 64) ^ traitShare);
         address[] memory winners = _randTraitTicket(
-            traitPurgeTicket[lvl],
+            traitBurnTicket[lvl],
             entropyState,
             traitId,
             uint8(totalCount),
@@ -650,8 +650,8 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
             !payCoin &&
             bongBps != 0 &&
             bongsAddr != address(0) &&
-            IPurgeBongsJackpot(bongsAddr).purchasesEnabled() &&
-            IPurgeBongsJackpot(bongsAddr).jackpotRewardsEnabled()
+            IDegenerusBongsJackpot(bongsAddr).purchasesEnabled() &&
+            IDegenerusBongsJackpot(bongsAddr).jackpotRewardsEnabled()
         ) {
             (bongSpent, ethPoolForWinners) = _jackpotBongSpend(
                 bongsAddr,
@@ -876,11 +876,11 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
             maxMints = 512; // stay well under block gas even for large batches
         }
 
-        address bongsAddr = IPurgeGameWithBongs(address(this)).bongs();
+        address bongsAddr = IDegenerusGameWithBongs(address(this)).bongs();
         if (
             bongsAddr == address(0) ||
-            !IPurgeBongsJackpot(bongsAddr).purchasesEnabled() ||
-            !IPurgeBongsJackpot(bongsAddr).jackpotRewardsEnabled()
+            !IDegenerusBongsJackpot(bongsAddr).purchasesEnabled() ||
+            !IDegenerusBongsJackpot(bongsAddr).jackpotRewardsEnabled()
         ) {
             return (false, 0);
         }
@@ -918,7 +918,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
                 }
             }
 
-            try IPurgeBongsJackpot(bongsAddr).purchaseGameBongs(
+            try IDegenerusBongsJackpot(bongsAddr).purchaseGameBongs(
                 recipients,
                 take,
                 batch.basePerBongWei,
@@ -956,12 +956,12 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
     }
 
     function _rollQuestForJackpot(
-        IPurgeCoinModule coinContract,
+        IDegenerusCoinModule coinContract,
         uint256 entropySource,
-        bool forceMintEthAndPurge,
+        bool forceMintEthAndDegenerus,
         uint48 questDay
     ) private {
-        if (forceMintEthAndPurge) {
+        if (forceMintEthAndDegenerus) {
             coinContract.rollDailyQuestWithOverrides(questDay, entropySource, true, true);
         } else {
             coinContract.rollDailyQuest(questDay, entropySource);
@@ -969,7 +969,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
     }
 
     function _creditJackpot(
-        IPurgeCoinModule coinContract,
+        IDegenerusCoinModule coinContract,
         bool payInCoin,
         address beneficiary,
         uint256 amount
@@ -985,7 +985,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
     }
 
     function _payoutRecipient(address player) private view returns (address recipient) {
-        (recipient, ) = IPurgeGameAffiliatePayout(address(this)).affiliatePayoutAddress(player);
+        (recipient, ) = IDegenerusGameAffiliatePayout(address(this)).affiliatePayoutAddress(player);
     }
 
     function _creditClaimableBongs(
@@ -1245,7 +1245,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
                 unchecked {
                     s = s * MAP_LCG_MULT + 1;
 
-                    uint8 traitId = PurgeTraitUtils.traitFromWord(s) + (uint8(i & 3) << 6);
+                    uint8 traitId = DegenerusTraitUtils.traitFromWord(s) + (uint8(i & 3) << 6);
 
                     if (counts[traitId]++ == 0) {
                         touchedTraits[touchedLen++] = traitId;
@@ -1261,7 +1261,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         uint256 levelSlot;
         assembly ("memory-safe") {
             mstore(0x00, lvl)
-            mstore(0x20, traitPurgeTicket.slot)
+            mstore(0x20, traitBurnTicket.slot)
             levelSlot := keccak256(0x00, 0x40)
         }
 
@@ -1293,9 +1293,9 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         }
     }
 
-    function _clearDailyPurgeCount() private {
+    function _clearDailyBurnCount() private {
         for (uint8 i; i < 80; ) {
-            dailyPurgeCount[i] = 0;
+            dailyBurnCount[i] = 0;
             unchecked {
                 ++i;
             }
@@ -1303,13 +1303,13 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
     }
 
     function _randTraitTicket(
-        address[][256] storage traitPurgeTicket_,
+        address[][256] storage traitBurnTicket_,
         uint256 randomWord,
         uint8 trait,
         uint8 numWinners,
         uint8 salt
     ) private view returns (address[] memory winners) {
-        address[] storage holders = traitPurgeTicket_[trait];
+        address[] storage holders = traitBurnTicket_[trait];
         uint256 len = holders.length;
         if (len == 0 || numWinners == 0) return new address[](0);
 
@@ -1325,7 +1325,7 @@ contract PurgeGameJackpotModule is PurgeGameStorage {
         }
     }
 
-    function _currentEarlyPurgePercent() private view returns (uint8) {
+    function _currentEarlyBurnPercent() private view returns (uint8) {
         uint256 prevPoolWei = lastPrizePool;
         if (prevPoolWei == 0) return 0;
         uint256 pct = ((currentPrizePool + nextPrizePool) * 100) / prevPoolWei;

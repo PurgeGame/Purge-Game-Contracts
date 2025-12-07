@@ -1,23 +1,23 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {IPurgeGame} from "./interfaces/IPurgeGame.sol";
-import {IPurgeAffiliate} from "./interfaces/IPurgeAffiliate.sol";
-import {IPurgeJackpots} from "./interfaces/IPurgeJackpots.sol";
-import {PurgeGameExternalOp} from "./interfaces/IPurgeGameExternal.sol";
+import {IDegenerusGame} from "./interfaces/IDegenerusGame.sol";
+import {IDegenerusAffiliate} from "./interfaces/IDegenerusAffiliate.sol";
+import {IDegenerusJackpots} from "./interfaces/IDegenerusJackpots.sol";
+import {DegenerusGameExternalOp} from "./interfaces/IDegenerusGameExternal.sol";
 
-interface IPurgeCoinJackpotView {
+interface IDegenerusCoinJackpotView {
     function coinflipAmount(address player) external view returns (uint256);
     function coinflipTop(uint24 lvl) external view returns (address player, uint96 score);
     function affiliateProgram() external view returns (address);
 }
 
 /**
- * @title PurgeJackpots
+ * @title DegenerusJackpots
  * @notice Standalone contract that owns BAF/Decimator jackpot state and claim logic.
- *         Purgecoin forwards flips/burns into this contract and calls it to resolve jackpots.
+ *         DegenerusCoin forwards flips/burns into this contract and calls it to resolve jackpots.
  */
-contract PurgeJackpots is IPurgeJackpots {
+contract DegenerusJackpots is IDegenerusJackpots {
     // ---------------------------------------------------------------------
     // Errors
     // ---------------------------------------------------------------------
@@ -76,8 +76,8 @@ contract PurgeJackpots is IPurgeJackpots {
     // ---------------------------------------------------------------------
     // Immutable wiring
     // ---------------------------------------------------------------------
-    IPurgeCoinJackpotView public coin;
-    IPurgeGame public purgeGame;
+    IDegenerusCoinJackpotView public coin;
+    IDegenerusGame public degenerusGame;
 
     // ---------------------------------------------------------------------
     // Constants
@@ -85,7 +85,7 @@ contract PurgeJackpots is IPurgeJackpots {
     uint256 private constant MILLION = 1e6;
 
     // ---------------------------------------------------------------------
-    // BAF / Decimator state (lives here; Purgecoin storage is unaffected)
+    // BAF / Decimator state (lives here; DegenerusCoin storage is unaffected)
     // ---------------------------------------------------------------------
     mapping(address => BafEntry) internal bafTotals;
     // Track Decimator burns per level so earlier levels remain claimable after a player participates in later ones.
@@ -117,7 +117,7 @@ contract PurgeJackpots is IPurgeJackpots {
     }
 
     modifier onlyGame() {
-        if (msg.sender != address(purgeGame)) revert OnlyGame();
+        if (msg.sender != address(degenerusGame)) revert OnlyGame();
         _;
     }
 
@@ -140,7 +140,7 @@ contract PurgeJackpots is IPurgeJackpots {
         if (coinAddr == address(0)) return;
         address current = address(coin);
         if (current == address(0)) {
-            coin = IPurgeCoinJackpotView(coinAddr);
+            coin = IDegenerusCoinJackpotView(coinAddr);
         } else if (coinAddr != current) {
             revert AlreadyWired();
         }
@@ -148,16 +148,16 @@ contract PurgeJackpots is IPurgeJackpots {
 
     function _setGame(address gameAddr) private {
         if (gameAddr == address(0)) return;
-        address current = address(purgeGame);
+        address current = address(degenerusGame);
         if (current == address(0)) {
-            purgeGame = IPurgeGame(gameAddr);
+            degenerusGame = IDegenerusGame(gameAddr);
         } else if (gameAddr != current) {
             revert AlreadyWired();
         }
     }
 
     // ---------------------------------------------------------------------
-    // Hooks from Purgecoin
+    // Hooks from DegenerusCoin
     // ---------------------------------------------------------------------
     /// @dev Track leaderboard state for BAF using total manual flips during the BAF period.
     /// @param amount The newly added flip amount to credit for this level.
@@ -300,7 +300,7 @@ contract PurgeJackpots is IPurgeJackpots {
             // Collect exterminators from each of the prior 20 levels (deduped).
             for (uint8 offset = 1; offset <= 20; ) {
                 if (lvl <= offset) break;
-                address ex = purgeGame.levelExterminator(uint24(lvl - offset));
+                address ex = degenerusGame.levelExterminator(uint24(lvl - offset));
                 if (ex != address(0)) {
                     bool seen;
                     for (uint8 i; i < exCount; ) {
@@ -432,7 +432,7 @@ contract PurgeJackpots is IPurgeJackpots {
             if (affiliateAddr == address(0)) {
                 toReturn += affiliateSlice;
             } else {
-                IPurgeAffiliate affiliate = IPurgeAffiliate(affiliateAddr);
+                IDegenerusAffiliate affiliate = IDegenerusAffiliate(affiliateAddr);
                 address[20] memory candidates;
                 uint256[20] memory candidateScores;
                 uint8 candidateCount;
@@ -632,7 +632,7 @@ contract PurgeJackpots is IPurgeJackpots {
                     ++salt;
                 }
                 entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
-                (, , address[] memory tickets) = purgeGame.sampleTraitTickets(entropy);
+                (, , address[] memory tickets) = degenerusGame.sampleTraitTickets(entropy);
 
                 // Pick up to 4 tickets from the sampled set.
                 uint256 limit = tickets.length;
@@ -804,7 +804,7 @@ contract PurgeJackpots is IPurgeJackpots {
 
     function claimDecimatorJackpot(uint24 lvl) external {
         uint256 amountWei = _consumeDecClaim(msg.sender, lvl);
-        purgeGame.applyExternalOp(PurgeGameExternalOp.DecJackpotClaim, msg.sender, amountWei, lvl);
+        degenerusGame.applyExternalOp(DegenerusGameExternalOp.DecJackpotClaim, msg.sender, amountWei, lvl);
     }
 
     function decClaimable(address player, uint24 lvl) external view override returns (uint256 amountWei, bool winner) {
@@ -820,7 +820,7 @@ contract PurgeJackpots is IPurgeJackpots {
         uint256 score = hasHint ? scoreHint : coin.coinflipAmount(player);
         if (score < 5_000 * MILLION) return false;
         // Require at least a 6-level ETH mint streak to ensure winners are active players.
-        return purgeGame.ethMintStreakCount(player) >= 6;
+        return degenerusGame.ethMintStreakCount(player) >= 6;
     }
 
     function _creditOrRefund(

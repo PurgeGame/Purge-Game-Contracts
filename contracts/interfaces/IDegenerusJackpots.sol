@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-interface IPurgeJackpots {
+interface IDegenerusJackpots {
     function runBafJackpot(
         uint256 poolWei,
         uint24 lvl,

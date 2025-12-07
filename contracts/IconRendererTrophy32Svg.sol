@@ -2,7 +2,7 @@
 pragma solidity ^0.8.26;
 
 import "@openzeppelin/contracts/utils/Strings.sol";
-import "./interfaces/IPurgeAffiliate.sol";
+import "./interfaces/IDegenerusAffiliate.sol";
 import "./interfaces/IconRendererTypes.sol";
 import {ITrophySvgAssets} from "./TrophySvgAssets.sol";
 
@@ -31,7 +31,7 @@ interface IIconRendererTrophy32Svg {
 contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg {
     using Strings for uint256;
 
-    IPurgedRead private immutable coin;
+    IDegenerusdRead private immutable coin;
     IIcons32 private immutable icons;
     IColorRegistry private immutable registry;
     ITrophySvgAssets private immutable assets;
@@ -79,7 +79,7 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg {
     int256 private constant TOP_AFFILIATE_UPWARD_1E6 = (VIEWBOX_HEIGHT_1E6 * 4) / 100; // 4% of total height
 
     constructor(address coin_, address icons_, address registry_, address assets_) {
-        coin = IPurgedRead(coin_);
+        coin = IDegenerusdRead(coin_);
         icons = IIcons32(icons_);
         registry = IColorRegistry(registry_);
         if (assets_ == address(0)) revert E();
@@ -367,13 +367,13 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg {
         return defColor;
     }
 
-    function _affiliateProgram() private view returns (IPurgeAffiliate) {
+    function _affiliateProgram() private view returns (IDegenerusAffiliate) {
         address affiliate = coin.affiliateProgram();
-        return affiliate == address(0) ? IPurgeAffiliate(address(0)) : IPurgeAffiliate(affiliate);
+        return affiliate == address(0) ? IDegenerusAffiliate(address(0)) : IDegenerusAffiliate(affiliate);
     }
 
     function _referrer(address user) private view returns (address) {
-        IPurgeAffiliate affiliate = _affiliateProgram();
+        IDegenerusAffiliate affiliate = _affiliateProgram();
         if (address(affiliate) == address(0)) return address(0);
         return affiliate.getReferrer(user);
     }

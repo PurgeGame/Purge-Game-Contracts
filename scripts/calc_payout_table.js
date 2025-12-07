@@ -7,7 +7,7 @@ function calculatePayoutTable(principal) {
     const RISK_BONUS_BPS_PER_UNIT = 12;
     const BPS_CAP = 250; 
 
-    console.log(`### Max Payout for 1k PURGE Stake (If Survived)`);
+    console.log(`### Max Payout for 1k DEGEN Stake (If Survived)`);
     let header = "| Dist |";
     let separator = "| :--- |";
     for (const r of risks) {

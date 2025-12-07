@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Simple on-chain token viewer for the Purge Game NFT on Sepolia.
+Simple on-chain token viewer for the Degenerus NFT on Sepolia.
 
 Usage:
     python3 scripts/token_viewer.py
@@ -51,7 +51,7 @@ def require_env(name: str) -> str:
     value = (
         os.environ.get(name)
         or os.environ.get(name.lower())
-        or os.environ.get(name.replace("PURGE_", ""))
+        or os.environ.get(name.replace("DEGEN_", ""))
         or ""
     )
     if not value:
@@ -60,7 +60,7 @@ def require_env(name: str) -> str:
 
 
 def resolve_rpc_url() -> str:
-    for key in ("PURGE_RPC_URL", "SEPOLIA_RPC_URL", "RPC_URL", "ALCHEMY_SEPOLIA_URL"):
+    for key in ("DEGEN_RPC_URL", "SEPOLIA_RPC_URL", "RPC_URL", "ALCHEMY_SEPOLIA_URL"):
         value = os.environ.get(key) or os.environ.get(key.lower())
         if value:
             return value
@@ -82,7 +82,7 @@ class TokenViewer(tk.Tk):
         self.current_svg_bytes: bytes | None = None
         self.preview_size = 512
 
-        self.title("Purge Testnet Token Viewer")
+        self.title("Degenerus Testnet Token Viewer")
         self.geometry("780x600")
 
         top = ttk.Frame(self, padding=8)
@@ -439,7 +439,7 @@ def main():
     w3 = Web3(Web3.HTTPProvider(provider_url))
     w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
 
-    artifact_path = ROOT / "artifacts" / "contracts" / "PurgeGameNFT.sol" / "PurgeGameNFT.json"
+    artifact_path = ROOT / "artifacts" / "contracts" / "DegenerusGameNFT.sol" / "DegenerusGameNFT.json"
     if not artifact_path.exists():
         raise RuntimeError(f"Missing artifact: {artifact_path}")
     with artifact_path.open() as fh:

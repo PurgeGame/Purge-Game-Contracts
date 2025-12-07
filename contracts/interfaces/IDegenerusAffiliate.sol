@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-interface IPurgeAffiliate {
+interface IDegenerusAffiliate {
     function payAffiliate(uint256 amount, bytes32 code, address sender, uint24 lvl) external returns (uint256);
     function createSyntheticMapPlayer(address synthetic, bytes32 code) external;
 

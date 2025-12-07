@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-/// @notice Shared helpers for generating and packing Purge trait identifiers.
-library PurgeTraitUtils {
+/// @notice Shared helpers for generating and packing Degenerus trait identifiers.
+library DegenerusTraitUtils {
     /// @dev Map a 32-bit random input to an 0..7 bucket with a fixed piecewise distribution.
     function weightedBucket(uint32 rnd) internal pure returns (uint8) {
         unchecked {

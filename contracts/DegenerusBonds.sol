@@ -2,8 +2,15 @@
 pragma solidity ^0.8.26;
 
 /// @notice Minimal view into the core game to read the current level.
-interface IPurgeGameLevel {
+interface IDegenerusGameLevel {
     function level() external view returns (uint24);
+}
+
+/// @notice Minimal view into the game for bond banking (ETH pooling + claim credit).
+interface IDegenerusGameBondBank is IDegenerusGameLevel {
+    function bondDeposit() external payable;
+    function bondCreditToClaimable(address player, uint256 amount) external;
+    function bondAvailable() external view returns (uint256);
 }
 
 /// @notice Minimal VRF coordinator surface for V2+ random word requests.
@@ -27,6 +34,7 @@ contract BondToken {
     // ---------------------------------------------------------------------
     error Unauthorized();
     error InsufficientBalance();
+    error Disabled();
 
     // ---------------------------------------------------------------------
     // Events
@@ -49,6 +57,7 @@ contract BondToken {
     uint256 public totalSupply;
     mapping(address => uint256) public balanceOf;
     mapping(address => mapping(address => uint256)) public allowance;
+    bool private disabled;
 
     constructor(string memory name_, string memory symbol_, address minter_, uint24 maturityLevel_) {
         name = name_;
@@ -68,11 +77,13 @@ contract BondToken {
     }
 
     function transfer(address to, uint256 amount) external returns (bool) {
+        _requireActive();
         _transfer(msg.sender, to, amount);
         return true;
     }
 
     function transferFrom(address from, address to, uint256 amount) external returns (bool) {
+        _requireActive();
         uint256 allowed = allowance[from][msg.sender];
         if (allowed < amount) revert Unauthorized();
         if (allowed != type(uint256).max) {
@@ -88,6 +99,7 @@ contract BondToken {
     // ------------------------------------------------------------------
 
     function mint(address to, uint256 amount) external {
+        _requireActive();
         if (msg.sender != minter) revert Unauthorized();
         totalSupply += amount;
         balanceOf[to] += amount;
@@ -95,6 +107,7 @@ contract BondToken {
     }
 
     function burn(address from, uint256 amount) external {
+        _requireActive();
         if (from != msg.sender) {
             uint256 allowed = allowance[from][msg.sender];
             if (allowed < amount) revert Unauthorized();
@@ -110,6 +123,10 @@ contract BondToken {
     // Internals
     // ------------------------------------------------------------------
 
+    function _requireActive() private view {
+        if (disabled) revert Disabled();
+    }
+
     function _transfer(address from, address to, uint256 amount) private {
         if (balanceOf[from] < amount) revert InsufficientBalance();
         balanceOf[from] -= amount;
@@ -123,18 +140,24 @@ contract BondToken {
         totalSupply -= amount;
         emit Transfer(from, address(0), amount);
     }
+
+    /// @notice Permanently disable transfers/mint/burn; callable only by the minter (bond controller).
+    function nuke() external {
+        if (msg.sender != minter) revert Unauthorized();
+        disabled = true;
+    }
 }
 
 /**
- * @title PurgeBonds
- * @notice Bond system wired for the Purge game:
+ * @title DegenerusBonds
+ * @notice Bond system wired for the Degenerus game:
  *         - Bonds created every 5 levels; sales open 10 levels before maturity.
  *         - Payout budget = 1.25x the last issuance raise (configurable for the first round).
  *         - Deposits award a score (multiplier stub) used for jackpots.
  *         - Five jackpot days mint a maturity-specific ERC20; total mint equals payout budget.
  *         - Burning the ERC20 enters a two-lane final jackpot at maturity; payout ~pro-rata to burned amount.
  */
-contract PurgeBonds {
+contract DegenerusBonds {
     // ---------------------------------------------------------------------
     // Errors
     // ---------------------------------------------------------------------
@@ -147,6 +170,7 @@ contract PurgeBonds {
     error AlreadyResolved();
     error NotResolved();
     error InsufficientReserve();
+    error BankCallFailed();
 
     // ---------------------------------------------------------------------
     // Events
@@ -160,7 +184,7 @@ contract PurgeBonds {
     event BondRolled(address indexed player, uint24 indexed fromMaturity, uint24 indexed toMaturity, uint256 amount);
     event BondBurnJackpot(uint24 indexed maturityLevel, uint8 indexed dayIndex, uint256 mintedAmount, uint256 rngWord);
     event BondBurnJackpotPayout(uint24 indexed maturityLevel, address indexed player, uint256 amount, uint8 placement);
-    event BondLaneCoinJackpot(uint24 indexed maturityLevel, uint256 mintedAmount);
+    event BondGameOver(uint256 poolSpent, uint24 partialMaturity);
 
     // ---------------------------------------------------------------------
     // Constants
@@ -225,7 +249,7 @@ contract PurgeBonds {
     // ---------------------------------------------------------------------
     mapping(uint24 => BondSeries) internal series;
     uint24[] internal maturities;
-    IPurgeGameLevel public immutable game;
+    IDegenerusGameLevel public immutable game;
     uint256 public lastIssuanceRaise;
     uint256 public initialPayoutBudget;
     address public immutable vrfAdmin; // usually the VRF sub owner
@@ -235,12 +259,14 @@ contract PurgeBonds {
     uint256 public vrfRequestId;
     uint256 private vrfPendingWord;
     bool private vrfRequestPending;
+    bool public bankedInGame = true; // true while funds live in the game contract’s bond pool
+    address public vault;
 
     // ---------------------------------------------------------------------
     // Constructor
     // ---------------------------------------------------------------------
     constructor(address game_, uint256 initialPayoutBudget_, address vrfAdmin_) {
-        game = IPurgeGameLevel(game_);
+        game = IDegenerusGameLevel(game_);
         initialPayoutBudget = initialPayoutBudget_;
         vrfAdmin = vrfAdmin_;
     }
@@ -258,13 +284,25 @@ contract PurgeBonds {
         vrfKeyHash = keyHash_;
     }
 
+    /// @notice Set the vault to receive excess funds beyond global bond obligations.
+    function setVault(address vault_) external {
+        if (msg.sender != vrfAdmin && msg.sender != address(game)) revert Unauthorized();
+        if (vault_ == address(0)) revert Unauthorized();
+        vault = vault_;
+    }
+
     /// @notice Player deposit flow during an active sale window.
     function deposit(uint24 maturityLevel) external payable returns (uint256 scoreAwarded) {
         if (msg.value == 0) revert SaleClosed();
+        if (!bankedInGame) revert BankCallFailed();
 
         BondSeries storage s = _getOrCreateSeries(maturityLevel);
         uint24 currLevel = _currentLevel();
         if (currLevel < s.saleStartLevel || currLevel >= s.maturityLevel) revert SaleClosed();
+
+        try IDegenerusGameBondBank(address(game)).bondDeposit{value: msg.value}() {} catch {
+            revert BankCallFailed();
+        }
 
         uint256 multiplier = _bondScoreMultiplier(msg.sender, msg.value);
         scoreAwarded = (msg.value * multiplier) / ONE;
@@ -280,6 +318,72 @@ contract PurgeBonds {
         s.raised += msg.value;
 
         emit BondDeposit(msg.sender, maturityLevel, msg.value, scoreAwarded);
+    }
+
+    /// @notice Emergency shutdown path: consume all ETH and resolve maturities in order, partially paying the last one.
+    /// @dev If no entropy is ready, this requests VRF (if configured) and exits; call again once fulfilled.
+    function gameOver() external payable {
+        if (msg.sender != address(game)) revert Unauthorized();
+        bankedInGame = false;
+
+        (uint256 entropy, bool requested) = _prepareEntropy(0);
+        if (entropy == 0) {
+            // Either VRF was requested or not configured; no entropy to proceed yet.
+            if (requested) return;
+            return;
+        }
+
+        uint256 initialPool = address(this).balance;
+        uint256 pool = initialPool;
+        uint256 rollingEntropy = entropy;
+        uint24 partialMaturity;
+
+        uint24 len = uint24(maturities.length);
+        for (uint24 i = 0; i < len; i++) {
+            BondSeries storage s = series[maturities[i]];
+            if (s.maturityLevel == 0 || s.resolved) continue;
+
+            (uint256 burned, ) = _obligationTotals(s);
+            if (burned == 0) {
+                s.resolved = true;
+                _nukeToken(s);
+                continue;
+            }
+
+            uint256 payout = burned <= pool ? burned : pool;
+            uint256 paid = _resolveSeriesGameOver(s, rollingEntropy, payout);
+            pool = pool >= paid ? pool - paid : 0;
+            rollingEntropy = uint256(keccak256(abi.encode(rollingEntropy, s.maturityLevel, "go")));
+
+            s.resolved = true;
+            s.rolloverReserve = 0;
+            _nukeToken(s);
+
+            if (paid < burned) {
+                partialMaturity = s.maturityLevel;
+                break;
+            }
+        }
+
+        // Mark any remaining series as resolved and nuke their tokens.
+        for (uint24 j = 0; j < len; j++) {
+            BondSeries storage rem = series[maturities[j]];
+            if (rem.maturityLevel == 0 || rem.resolved) continue;
+            rem.resolved = true;
+            rem.rolloverReserve = 0;
+            _nukeToken(rem);
+        }
+
+        uint256 spent = initialPool - pool;
+        // Any surplus after resolving in order is forwarded to the vault if configured.
+        if (pool != 0 && vault != address(0)) {
+            (bool ok, ) = payable(vault).call{value: pool}("");
+            if (ok) {
+                pool = 0;
+            }
+        }
+
+        emit BondGameOver(spent, partialMaturity);
     }
 
     /// @notice Run bond maintenance for the current level (create series, run jackpots, resolve funded maturities).
@@ -298,6 +402,7 @@ contract PurgeBonds {
 
         (uint256 entropy, bool requested) = _prepareEntropy(rngWord);
         if (entropy == 0) {
+            _sweepExcessToVault(currLevel);
             if (requested) return; // wait for VRF
             // If no entropy provided and no VRF configured, skip RNG-dependent work but allow series creation above.
             return;
@@ -317,21 +422,20 @@ contract PurgeBonds {
             }
 
             if (currLevel >= s.maturityLevel && !s.resolved) {
-                // If any unminted supply remains, drop it into the locked lanes as a coin jackpot.
-                uint256 remainingMint = s.payoutBudget > s.mintedBudget ? s.payoutBudget - s.mintedBudget : 0;
-                if (remainingMint != 0) {
-                    _runLaneCoinJackpot(s, remainingMint);
-                    rollingEntropy = uint256(keccak256(abi.encode(rollingEntropy, s.maturityLevel, "lane-jp")));
-                }
-
                 if (_isFunded(s, currLevel) && !backlogPending) {
-                    _resolveSeries(s, rollingEntropy);
-                    rollingEntropy = uint256(keccak256(abi.encode(rollingEntropy, s.maturityLevel, "resolve")));
+                    bool resolved = _resolveSeries(s, rollingEntropy);
+                    if (resolved) {
+                        rollingEntropy = uint256(keccak256(abi.encode(rollingEntropy, s.maturityLevel, "resolve")));
+                    } else {
+                        backlogPending = true;
+                    }
                 } else {
                     backlogPending = true; // enforce oldest-first resolution
                 }
             }
         }
+
+        _sweepExcessToVault(currLevel);
     }
 
     /// @notice Burn bond tokens to enter the final two-lane jackpot for a maturity.
@@ -345,17 +449,27 @@ contract PurgeBonds {
         if (s.maturityLevel == 0) revert InvalidMaturity();
         if (amount == 0) revert InsufficientScore();
 
+        laneHint; // reserved for future lane selection tweaks; currently deterministic by player+maturity
         uint24 currLevel = _currentLevel();
         (BondSeries storage target, uint24 targetMaturity) = _nextActiveSeries(maturityLevel, currLevel);
         if (target.resolved) revert AlreadyResolved();
 
         s.token.burn(msg.sender, amount);
 
-        (uint8 lane, bool boosted) = _registerBurn(target, targetMaturity, amount, currLevel);
+        uint256 burnWeight = amount;
+        if (s.resolved) {
+            uint256 reserve = s.rolloverReserve;
+            if (reserve == 0 || amount > reserve) revert InsufficientReserve();
+            s.rolloverReserve = reserve - amount;
+            target.carryPot += amount;
+            target.raised += amount;
+        }
+
+        (uint8 lane, bool boosted) = _registerBurn(target, targetMaturity, burnWeight, currLevel);
         if (targetMaturity != maturityLevel) {
             emit BondRolled(msg.sender, maturityLevel, targetMaturity, amount);
         }
-        emit BondBurned(msg.sender, targetMaturity, lane, amount, boosted);
+        emit BondBurned(msg.sender, targetMaturity, lane, burnWeight, boosted);
     }
 
     function _nextActiveSeries(uint24 maturityLevel, uint24 currLevel) private returns (BondSeries storage target, uint24 targetMaturity) {
@@ -500,18 +614,67 @@ contract PurgeBonds {
     }
 
     function _isFunded(BondSeries storage s, uint24 currLevel) private view returns (bool) {
-        (uint256 burned, uint256 outstanding) = _obligationTotals(s); // coin already burned into lanes + live supply
-
-        // Once at or past maturity, only the burned entries must be covered to resolve.
-        if (currLevel >= s.maturityLevel) {
-            return s.raised >= burned;
-        }
-
-        // Before maturity, require enough to cover burned entries plus all live coin as if it were burned.
-        return s.raised >= burned + outstanding;
+        uint256 available = _availableBank();
+        (uint256 totalRequired, ) = _requiredCoverTotals(s, currLevel);
+        return available >= totalRequired;
     }
 
-    function _bondScoreMultiplier(address /*player*/, uint256 /*depositWei*/) internal view returns (uint256) {
+    function _requiredCover(BondSeries storage s, uint24 /*currLevel*/) private view returns (uint256 required) {
+        if (s.maturityLevel == 0) return 0;
+        if (s.resolved) return s.rolloverReserve;
+
+        (uint256 burned, uint256 outstanding) = _obligationTotals(s);
+        required = burned + outstanding;
+    }
+
+    function _requiredCoverTotals(
+        BondSeries storage target,
+        uint24 currLevel
+    ) private view returns (uint256 total, uint256 current) {
+        uint24 len = uint24(maturities.length);
+        uint24 targetMat = target.maturityLevel;
+        for (uint24 i = 0; i < len; i++) {
+            BondSeries storage iter = series[maturities[i]];
+            uint256 req = _requiredCover(iter, currLevel);
+            total += req;
+            if (iter.maturityLevel == targetMat) {
+                current = req;
+            }
+        }
+    }
+
+    function _availableBank() private view returns (uint256 available) {
+        if (bankedInGame) {
+            try IDegenerusGameBondBank(address(game)).bondAvailable() returns (uint256 avail) {
+                return avail;
+            } catch {
+                return 0;
+            }
+        }
+        return address(this).balance;
+    }
+
+    function _sweepExcessToVault(uint24 currLevel) private {
+        address v = vault;
+        if (v == address(0)) return;
+        if (bankedInGame) return;
+
+        uint256 required;
+        uint24 len = uint24(maturities.length);
+        for (uint24 i = 0; i < len; i++) {
+            BondSeries storage s = series[maturities[i]];
+            required += _requiredCover(s, currLevel);
+        }
+
+        uint256 bal = address(this).balance;
+        if (bal <= required) return;
+
+        uint256 excess = bal - required;
+        (bool ok, ) = payable(v).call{value: excess}("");
+        ok; // best-effort sweep
+    }
+
+    function _bondScoreMultiplier(address /*player*/, uint256 /*depositWei*/) internal pure returns (uint256) {
         // Stub for future tuning; default 1x.
         return ONE;
     }
@@ -524,8 +687,8 @@ contract PurgeBonds {
         uint256 budget = lastIssuanceRaise == 0 ? initialPayoutBudget : (lastIssuanceRaise * 120) / 100;
         s.payoutBudget = budget;
 
-        string memory name = string(abi.encodePacked("Purge Bond L", _u24ToString(maturityLevel)));
-        string memory symbol = string(abi.encodePacked("PBL", _u24ToString(maturityLevel)));
+        string memory name = string(abi.encodePacked("Degenerus Bond L", _u24ToString(maturityLevel)));
+        string memory symbol = string(abi.encodePacked("DBL", _u24ToString(maturityLevel)));
         s.token = new BondToken(name, symbol, address(this), maturityLevel);
 
         maturities.push(maturityLevel);
@@ -541,7 +704,6 @@ contract PurgeBonds {
         }
     }
 
-    function _runJackpot(BondSeries storage s, uint256 rngWord, uint24 currLevel) private {
     function _runJackpotsForDay(BondSeries storage s, uint256 rngWord, uint24 currLevel) private {
         if (s.payoutBudget == 0 || s.mintedBudget >= s.payoutBudget) return;
 
@@ -635,44 +797,86 @@ contract PurgeBonds {
         _runMintJackpot(s, rngWord, toMint, true);
     }
 
-    function _runLaneCoinJackpot(BondSeries storage s, uint256 toMint) private {
-        uint256 totalBurn = s.lanes[0].total + s.lanes[1].total;
-        if (toMint == 0 || totalBurn == 0) return;
+    function _resolveSeriesGameOver(BondSeries storage s, uint256 rngWord, uint256 payout) private returns (uint256 paid) {
+        if (payout == 0) return 0;
+        uint8 lane = uint8(rngWord & 1);
+        if (s.lanes[lane].total == 0 && s.lanes[1 - lane].total != 0) {
+            lane = 1 - lane;
+        }
+        if (s.lanes[lane].total == 0) return 0;
 
-        uint256 minted;
-        for (uint8 laneIdx = 0; laneIdx < 2; laneIdx++) {
-            Lane storage lane = s.lanes[laneIdx];
-            uint256 len = lane.entries.length;
-            for (uint256 i = 0; i < len; i++) {
-                LaneEntry storage entry = lane.entries[i];
-                uint256 share = (toMint * entry.amount) / totalBurn;
-                if (share == 0) continue;
-                minted += share;
-                s.token.mint(entry.player, share);
+        Lane storage chosen = s.lanes[lane];
+        uint256 decPool = payout / 2;
+        uint256 drawPool = payout - decPool;
+
+        // Decimator slice: proportional to burned amount (score).
+        uint256 len = chosen.entries.length;
+        for (uint256 i = 0; i < len; i++) {
+            LaneEntry storage entry = chosen.entries[i];
+            uint256 share = (decPool * entry.amount) / chosen.total;
+            if (share == 0) continue;
+            paid += share;
+            if (!_creditPayout(entry.player, share)) {
+                paid -= share;
             }
         }
 
-        if (minted != 0) {
-            s.mintedBudget += minted;
-            emit BondLaneCoinJackpot(s.maturityLevel, minted);
+        // Ticketed draws on the remaining pool: 20%, 10%, 5%, 5%, 1% x10.
+        if (drawPool != 0) {
+            uint256 base = drawPool;
+            uint256 first = (base * 20) / 100;
+            uint256 second = (base * 10) / 100;
+            uint256 third = (base * 5) / 100;
+            uint256 fourth = (base * 5) / 100;
+            uint256 ones = base / 100; // 1%
+
+            uint256[14] memory buckets;
+            buckets[0] = first;
+            buckets[1] = second;
+            buckets[2] = third;
+            buckets[3] = fourth;
+            for (uint8 j = 4; j < 14; j++) {
+                buckets[j] = ones;
+            }
+
+            uint256 localEntropy = rngWord;
+            for (uint8 k = 0; k < 14; k++) {
+                uint256 prize = buckets[k];
+                if (prize == 0) continue;
+                localEntropy = uint256(keccak256(abi.encode(localEntropy, k, lane)));
+                address winner = _weightedLanePick(chosen, localEntropy);
+                if (winner == address(0)) continue;
+                paid += prize;
+                if (!_creditPayout(winner, prize)) {
+                    paid -= prize;
+                }
+            }
         }
     }
 
-    function _resolveSeries(BondSeries storage s, uint256 rngWord) private {
-        if (s.resolved) return;
+    function _nukeToken(BondSeries storage s) private {
+        if (address(s.token) == address(0)) return;
+        try s.token.nuke() {} catch {}
+    }
+
+    function _resolveSeries(BondSeries storage s, uint256 rngWord) private returns (bool resolved) {
+        if (s.resolved) return true;
         (uint256 burned, uint256 outstanding) = _obligationTotals(s);
         uint256 remainingToken = outstanding;
         uint256 payoutCap = s.payoutBudget + s.carryPot;
-        uint256 available = s.raised + s.carryPot;
-        uint256 payout = payoutCap > available ? available : payoutCap;
+        uint24 currLevel = _currentLevel();
+        uint256 available = _availableBank();
+        (uint256 totalRequired, uint256 currentRequired) = _requiredCoverTotals(s, currLevel);
+        if (available < totalRequired) return false;
 
-        if (payout < burned) revert InsufficientReserve();
+        uint256 otherRequired = totalRequired - currentRequired;
+        uint256 maxSpend = available - otherRequired;
+        uint256 payout = payoutCap > maxSpend ? maxSpend : payoutCap;
 
-        uint256 reserve;
-        if (payout > burned) {
-            uint256 leftover = payout - burned;
-            reserve = leftover > outstanding ? outstanding : leftover;
-        }
+        uint256 required = burned + outstanding;
+        if (payout < required || payout < currentRequired) return false;
+
+        uint256 reserve = outstanding;
 
         uint256 distributable = payout - reserve;
         s.rolloverReserve = reserve;
@@ -681,28 +885,62 @@ contract PurgeBonds {
             s.resolved = true;
             lastIssuanceRaise = s.raised;
             emit BondSeriesResolved(s.maturityLevel, 0, 0, remainingToken);
-            return;
+            return true;
         }
 
         uint8 lane = uint8(rngWord & 1);
         if (s.lanes[lane].total == 0 && s.lanes[1 - lane].total != 0) {
             lane = 1 - lane;
         }
-        if (s.lanes[lane].total == 0) revert NoBurnedEntries();
+        if (s.lanes[lane].total == 0) return false;
 
         Lane storage chosen = s.lanes[lane];
         uint256 paid;
-        uint256 len = chosen.entries.length;
         if (distributable != 0) {
+            uint256 decPool = distributable / 2;
+            uint256 drawPool = distributable - decPool;
+
+            // Decimator slice: proportional to burned amount (score).
+            uint256 len = chosen.entries.length;
             for (uint256 i = 0; i < len; i++) {
                 LaneEntry storage entry = chosen.entries[i];
-                uint256 share = (distributable * entry.amount) / chosen.total;
+                uint256 share = (decPool * entry.amount) / chosen.total;
                 if (share == 0) continue;
                 paid += share;
-                (bool ok, ) = entry.player.call{value: share}("");
-                if (!ok) {
-                    // best effort; if transfer fails, leave funds in contract for manual recovery
+                if (!_creditPayout(entry.player, share)) {
                     paid -= share;
+                }
+            }
+
+            // Ticketed draws on the remaining pool: 20%, 10%, 5%, 5%, 1% x10.
+            if (drawPool != 0) {
+                uint256 base = drawPool;
+                uint256 first = (base * 20) / 100;
+                uint256 second = (base * 10) / 100;
+                uint256 third = (base * 5) / 100;
+                uint256 fourth = (base * 5) / 100;
+                uint256 ones = base / 100; // 1%
+
+                uint256[14] memory buckets;
+                buckets[0] = first;
+                buckets[1] = second;
+                buckets[2] = third;
+                buckets[3] = fourth;
+                for (uint8 j = 4; j < 14; j++) {
+                    buckets[j] = ones;
+                }
+
+                uint256 localEntropy = rngWord;
+                for (uint8 k = 0; k < 14; k++) {
+                    uint256 prize = buckets[k];
+                    if (prize == 0) continue;
+                    localEntropy = uint256(keccak256(abi.encode(localEntropy, k, lane)));
+                    address winner = _weightedLanePick(chosen, localEntropy);
+                    if (winner == address(0)) continue;
+                    paid += prize;
+                    if (!_creditPayout(winner, prize)) {
+                        paid -= prize;
+                    }
                 }
             }
         }
@@ -710,6 +948,32 @@ contract PurgeBonds {
         s.resolved = true;
         lastIssuanceRaise = s.raised;
         emit BondSeriesResolved(s.maturityLevel, lane, paid, remainingToken);
+        return true;
+    }
+
+    function _weightedLanePick(Lane storage lane, uint256 entropy) private view returns (address) {
+        uint256 target = entropy % lane.total;
+        uint256 running;
+        uint256 len = lane.entries.length;
+        for (uint256 i = 0; i < len; i++) {
+            LaneEntry storage entry = lane.entries[i];
+            running += entry.amount;
+            if (running > target) return entry.player;
+        }
+        return len == 0 ? address(0) : lane.entries[len - 1].player;
+    }
+
+    function _creditPayout(address player, uint256 amount) private returns (bool) {
+        if (amount == 0) return true;
+        if (bankedInGame) {
+            try IDegenerusGameBondBank(address(game)).bondCreditToClaimable(player, amount) {
+                return true;
+            } catch {
+                return false;
+            }
+        }
+        (bool ok, ) = player.call{value: amount}("");
+        return ok;
     }
 
     function _weightedPick(BondSeries storage s, uint256 entropy, bool useBurners) private view returns (address) {

@@ -22,7 +22,7 @@ interface IVaultCoin {
 }
 
 /// @notice Minimal ERC20 used for vault share classes (coin-only and eth-only).
-contract PurgeVaultShare {
+contract DegenerusVaultShare {
     error Unauthorized();
     error ZeroAddress();
     error Insufficient();
@@ -117,12 +117,12 @@ contract PurgeVaultShare {
     }
 }
 
-/// @title PurgeStonkShare
-/// @notice Vault that holds ETH, stETH, and PURGE. Two share classes:
-///         - coinShare: claims PURGE only
+/// @title DegenerusStonkShare
+/// @notice Vault that holds ETH, stETH, and DEGEN. Two share classes:
+///         - coinShare: claims DEGEN only
 ///         - ethShare: claims ETH/stETH only
 ///         Each class has independent supply and retains the "burn all, mint a new billion" behavior.
-contract PurgeStonkNFT {
+contract DegenerusStonkNFT {
     // ---------------------------------------------------------------------
     // Errors
     // ---------------------------------------------------------------------
@@ -149,20 +149,20 @@ contract PurgeStonkNFT {
     // ---------------------------------------------------------------------
     // ERC20 metadata/state
     // ---------------------------------------------------------------------
-    string public constant name = "Purge Game Vault";
+    string public constant name = "Degenerus Vault";
     string public constant symbol = "PGV";
     uint8 public constant decimals = 18;
     uint256 public constant INITIAL_SUPPLY = 1_000_000_000 * 1e18; // 1 billion
     uint256 public constant REFILL_SUPPLY = 1_000_000_000 * 1e18; // 1 billion (used if final share is burned)
 
     // Share classes
-    PurgeVaultShare public immutable coinShare; // PURGE-only claims
-    PurgeVaultShare public immutable ethShare; // ETH/stETH-only claims
+    DegenerusVaultShare public immutable coinShare; // DEGEN-only claims
+    DegenerusVaultShare public immutable ethShare; // ETH/stETH-only claims
 
     // ---------------------------------------------------------------------
     // Wiring
     // ---------------------------------------------------------------------
-    address public immutable coin; // PURGE coin (or compatible)
+    address public immutable coin; // DEGEN coin (or compatible)
     IStETH public immutable steth; // stETH token
     address public immutable bongs; // trusted bong contract for deposits
     uint256 public coinReserve; // coin escrowed for future mint (not yet minted)
@@ -177,8 +177,8 @@ contract PurgeStonkNFT {
         steth = IStETH(stEth_);
         bongs = bongs_;
 
-        coinShare = new PurgeVaultShare("Purge Vault Coin", "PGVCOIN", address(this), INITIAL_SUPPLY, msg.sender);
-        ethShare = new PurgeVaultShare("Purge Vault Eth", "PGVETH", address(this), INITIAL_SUPPLY, msg.sender);
+        coinShare = new DegenerusVaultShare("Degenerus Vault Coin", "PGVCOIN", address(this), INITIAL_SUPPLY, msg.sender);
+        ethShare = new DegenerusVaultShare("Degenerus Vault Eth", "PGVETH", address(this), INITIAL_SUPPLY, msg.sender);
         IVaultCoin(coin_).setVault(address(this));
     }
 
@@ -225,10 +225,10 @@ contract PurgeStonkNFT {
     // ---------------------------------------------------------------------
     // Claims via burn
     // ---------------------------------------------------------------------
-    /// @notice Burn coin-share tokens to redeem the proportional slice of PURGE.
-    function purgeCoin(uint256 amount, address to) external returns (uint256 coinOut) {
+    /// @notice Burn coin-share tokens to redeem the proportional slice of DEGEN.
+    function burnCoin(uint256 amount, address to) external returns (uint256 coinOut) {
         if (to == address(0)) revert ZeroAddress();
-        PurgeVaultShare share = coinShare;
+        DegenerusVaultShare share = coinShare;
         uint256 bal = share.balanceOf(msg.sender);
         if (amount == 0 || amount > bal) revert Insufficient();
 
@@ -251,9 +251,9 @@ contract PurgeStonkNFT {
     }
 
     /// @notice Burn eth-share tokens to redeem the proportional slice of ETH and stETH.
-    function purgeEth(uint256 amount, address to) external returns (uint256 ethOut, uint256 stEthOut) {
+    function burnEth(uint256 amount, address to) external returns (uint256 ethOut, uint256 stEthOut) {
         if (to == address(0)) revert ZeroAddress();
-        PurgeVaultShare share = ethShare;
+        DegenerusVaultShare share = ethShare;
         uint256 bal = share.balanceOf(msg.sender);
         if (amount == 0 || amount > bal) revert Insufficient();
 
@@ -281,7 +281,7 @@ contract PurgeStonkNFT {
         if (stEthOut != 0) _payToken(address(steth), to, stEthOut);
     }
 
-    /// @notice View the coin-share burn required to withdraw a target amount of PURGE.
+    /// @notice View the coin-share burn required to withdraw a target amount of DEGEN.
     function previewBurnForCoinOut(uint256 coinOut) external view returns (uint256 burnAmount) {
         uint256 reserve = coinReserve;
         if (coinOut == 0 || coinOut > reserve) revert Insufficient();

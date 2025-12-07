@@ -80,7 +80,7 @@
   ],
   "contracts": {
     "renderer": "0xF919A53e063c2BD068D4dd09d04A5df482e112AD",
-    "purgecoin": "0x8CC9Bd305BDD5b1cb7CdfDD68D73A012649f11b7",
+    "degeneruscoin": "0x8CC9Bd305BDD5b1cb7CdfDD68D73A012649f11b7",
     "game": "0x0B6fBc09CaFb26bff87d669d1Ac28Ae2Fd71F0dE",
     "icons32": "0x7713E89f9628D3F47E3bbA53e16B8780474172AF",
     "nft": "0x4bC37C5E62A3782d9955Ed41705bdbDf8aF6f4c9",

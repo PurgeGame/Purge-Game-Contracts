@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {IPurgeGame} from "./interfaces/IPurgeGame.sol";
+import {IDegenerusGame} from "./interfaces/IDegenerusGame.sol";
 
-interface IPurgeCoinAffiliate {
+interface IDegenerusCoinAffiliate {
     function balanceOf(address account) external view returns (uint256);
     function presaleDistribute(address buyer, uint256 amountBase) external;
     function creditFlip(address player, uint256 amount) external;
@@ -12,11 +12,11 @@ interface IPurgeCoinAffiliate {
     function affiliatePrimePresale() external;
 }
 
-interface IPurgeBongsPresale {
+interface IDegenerusBongsPresale {
     function ingestPresaleEth() external payable;
 }
 
-interface IPurgeBongsAffiliateMint {
+interface IDegenerusBongsAffiliateMint {
     function mintAffiliateReward(
         address to,
         uint256 quantity,
@@ -25,7 +25,7 @@ interface IPurgeBongsAffiliateMint {
     ) external returns (uint256 startTokenId);
 }
 
-contract PurgeAffiliate {
+contract DegenerusAffiliate {
     // ---------------------------------------------------------------------
     // Events
     // ---------------------------------------------------------------------
@@ -95,8 +95,8 @@ contract PurgeAffiliate {
     // ---------------------------------------------------------------------
     address public immutable bongs;
 
-    IPurgeCoinAffiliate private coin;
-    IPurgeGame private purgeGame;
+    IDegenerusCoinAffiliate private coin;
+    IDegenerusGame private degenerusGame;
 
     // ---------------------------------------------------------------------
     // Affiliate state
@@ -191,7 +191,7 @@ contract PurgeAffiliate {
         }
         address current = address(coin);
         if (current == address(0)) {
-            coin = IPurgeCoinAffiliate(coinAddr);
+            coin = IDegenerusCoinAffiliate(coinAddr);
             presaleShutdown = true; // stop presale once coin is wired
             preCoinActive = false;
             coin.affiliatePrimePresale();
@@ -202,9 +202,9 @@ contract PurgeAffiliate {
 
     function _setGame(address gameAddr) private {
         if (gameAddr == address(0)) return;
-        address current = address(purgeGame);
+        address current = address(degenerusGame);
         if (current == address(0)) {
-            purgeGame = IPurgeGame(gameAddr);
+            degenerusGame = IDegenerusGame(gameAddr);
             uint256 seed = rewardSeedEth;
             if (seed != 0) {
                 rewardSeedEth = 0;
@@ -281,7 +281,7 @@ contract PurgeAffiliate {
         if (!ok) revert Insufficient();
     }
 
-    /// @notice Presale purchase flow (ETH -> PURGE) with linear price ramp and deferred bonuses.
+    /// @notice Presale purchase flow (ETH -> DEGEN) with linear price ramp and deferred bonuses.
     function presale() external payable returns (uint256 amountBase) {
         if (presaleShutdown) revert PresaleClosed();
         uint256 ethIn = msg.value;
@@ -312,7 +312,7 @@ contract PurgeAffiliate {
         presalePrincipal[buyer] += amountBase;
         presaleCoinEarned[buyer] += amountBase;
 
-        IPurgeBongsPresale(bongs).ingestPresaleEth{value: costWei}(); // bongs routes 90% to prize pool
+        IDegenerusBongsPresale(bongs).ingestPresaleEth{value: costWei}(); // bongs routes 90% to prize pool
 
         if (refund != 0) {
             (bool refundOk, ) = buyer.call{value: refund}("");
@@ -509,7 +509,7 @@ contract PurgeAffiliate {
 
         affiliateBongClaimed[lvl][msg.sender] = claimedMask | mask;
 
-        IPurgeBongsAffiliateMint(bongs).mintAffiliateReward(
+        IDegenerusBongsAffiliateMint(bongs).mintAffiliateReward(
             msg.sender,
             reward.bongs,
             reward.baseWeiPerBong,

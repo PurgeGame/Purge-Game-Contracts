@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Fetches real trophy metadata/SVGs from the deployed Purge Game NFT contract.
+ * Fetches real trophy metadata/SVGs from the deployed Degenerus NFT contract.
  *
  * Example:
  *   SEPOLIA_RPC_URL=https://... node scripts/generateTrophiesLive.js --token 1234 --token 5678
@@ -18,7 +18,7 @@ const path = require("path");
 
 const ROOT = path.join(__dirname, "..");
 const DEFAULT_OUTPUT = path.join(ROOT, "artifacts", "tmp", "trophies-live");
-const NFT_ARTIFACT = path.join(ROOT, "artifacts", "contracts", "PurgeGameNFT.sol", "PurgeGameNFT.json");
+const NFT_ARTIFACT = path.join(ROOT, "artifacts", "contracts", "DegenerusGameNFT.sol", "DegenerusGameNFT.json");
 const WALLET_CANDIDATES = [
   path.join(ROOT, "wallets.json"),
   path.join(ROOT, "env", "wallets.json"),
@@ -94,7 +94,7 @@ Options:
   --range a-b          Fetch every token between a and b inclusive.
   --output <dir>       Write files to this directory (default ${DEFAULT_OUTPUT}).
   --wallets <file>     Explicit wallets.json path.
-  --rpc <url>          JSON-RPC URL (defaults to env PURGE_RPC_URL/SEPOLIA_RPC_URL/RPC_URL).
+  --rpc <url>          JSON-RPC URL (defaults to env DEGEN_RPC_URL/SEPOLIA_RPC_URL/RPC_URL).
   --help               Show this message.
 `);
 }
@@ -121,7 +121,7 @@ function decodeMetadata(uri) {
 function resolveRpcUrl(cliRpc) {
   return (
     cliRpc ||
-    process.env.PURGE_RPC_URL ||
+    process.env.DEGEN_RPC_URL ||
     process.env.SEPOLIA_RPC_URL ||
     process.env.RPC_URL ||
     ""
@@ -140,7 +140,7 @@ async function main() {
   }
   const rpcUrl = resolveRpcUrl(rpcCli);
   if (!rpcUrl) {
-    throw new Error("Missing RPC URL. Set PURGE_RPC_URL/SEPOLIA_RPC_URL/RPC_URL or pass --rpc.");
+    throw new Error("Missing RPC URL. Set DEGEN_RPC_URL/SEPOLIA_RPC_URL/RPC_URL or pass --rpc.");
   }
   if (!fs.existsSync(NFT_ARTIFACT)) {
     throw new Error(`Missing artifact: ${NFT_ARTIFACT}`);

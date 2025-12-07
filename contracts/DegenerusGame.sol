@@ -1,23 +1,23 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {IPurgeGameNFT} from "./PurgeGameNFT.sol";
-import {IPurgeCoinModule} from "./interfaces/PurgeGameModuleInterfaces.sol";
-import {IPurgeCoin} from "./interfaces/IPurgeCoin.sol";
-import {IPurgeAffiliate} from "./interfaces/IPurgeAffiliate.sol";
-import {IPurgeRendererLike} from "./interfaces/IPurgeRendererLike.sol";
-import {IPurgeJackpots} from "./interfaces/IPurgeJackpots.sol";
-import {IPurgeTrophies} from "./interfaces/IPurgeTrophies.sol";
+import {IDegenerusGameNFT} from "./DegenerusGameNFT.sol";
+import {IDegenerusCoinModule} from "./interfaces/DegenerusGameModuleInterfaces.sol";
+import {IDegenerusCoin} from "./interfaces/IDegenerusCoin.sol";
+import {IDegenerusAffiliate} from "./interfaces/IDegenerusAffiliate.sol";
+import {IDegenerusRendererLike} from "./interfaces/IDegenerusRendererLike.sol";
+import {IDegenerusJackpots} from "./interfaces/IDegenerusJackpots.sol";
+import {IDegenerusTrophies} from "./interfaces/IDegenerusTrophies.sol";
 import {
-    IPurgeGameEndgameModule,
-    IPurgeGameJackpotModule,
-    IPurgeGameMintModule,
-    IPurgeGameBongModule
-} from "./interfaces/IPurgeGameModules.sol";
-import {MintPaymentKind} from "./interfaces/IPurgeGame.sol";
-import {PurgeGameExternalOp} from "./interfaces/IPurgeGameExternal.sol";
-import {PurgeGameStorage, ClaimableBongInfo} from "./storage/PurgeGameStorage.sol";
-import {PurgeGameCredit} from "./utils/PurgeGameCredit.sol";
+    IDegenerusGameEndgameModule,
+    IDegenerusGameJackpotModule,
+    IDegenerusGameMintModule,
+    IDegenerusGameBongModule
+} from "./interfaces/IDegenerusGameModules.sol";
+import {MintPaymentKind} from "./interfaces/IDegenerusGame.sol";
+import {DegenerusGameExternalOp} from "./interfaces/IDegenerusGameExternal.sol";
+import {DegenerusGameStorage, ClaimableBongInfo} from "./storage/DegenerusGameStorage.sol";
+import {DegenerusGameCredit} from "./utils/DegenerusGameCredit.sol";
 
 interface IStETH {
     function submit(address referral) external payable returns (uint256);
@@ -27,7 +27,7 @@ interface IStETH {
     function transferFrom(address from, address to, uint256 amount) external returns (bool);
 }
 
-interface IPurgeBongs {
+interface IDegenerusBongs {
     function payBongs(
         uint256 coinAmount,
         uint256 stEthAmount,
@@ -50,8 +50,12 @@ interface IPurgeBongs {
     ) external returns (uint256 startTokenId);
 }
 
+interface IDegenerusBondsGameOver {
+    function gameOver() external payable;
+}
+
 /**
- * @title Purge Game — Core NFT game contract
+ * @title Degenerus — Core NFT game contract
  * @notice This file defines the on-chain game logic surface (interfaces + core state).
  */
 
@@ -87,7 +91,7 @@ interface ILinkToken {
 // Contract
 // ===========================================================================
 
-contract PurgeGame is PurgeGameStorage {
+contract DegenerusGame is DegenerusGameStorage {
     // -----------------------
     // Custom Errors
     // -----------------------
@@ -107,7 +111,7 @@ contract PurgeGame is PurgeGameStorage {
     event PlayerCredited(address indexed player, address indexed recipient, uint256 amount);
     event BongCreditAdded(address indexed player, uint256 amount);
     event Jackpot(uint256 traits); // Encodes jackpot metadata
-    event Purge(address indexed player, uint256[] tokenIds);
+    event Degenerus(address indexed player, uint256[] tokenIds);
     event Advance(uint8 gameState);
     event ReverseFlip(address indexed caller, uint256 totalQueued, uint256 cost);
     event VrfCoordinatorUpdated(address indexed previous, address indexed current);
@@ -117,13 +121,13 @@ contract PurgeGame is PurgeGameStorage {
     // -----------------------
     // Immutable Addresses
     // -----------------------
-    IPurgeRendererLike private immutable renderer; // Trusted renderer; used for tokenURI composition
-    IPurgeCoin private immutable coin; // Trusted coin/game-side coordinator (PURGE ERC20)
-    IPurgeGameNFT private immutable nft; // ERC721 interface for mint/burn/metadata surface
+    IDegenerusRendererLike private immutable renderer; // Trusted renderer; used for tokenURI composition
+    IDegenerusCoin private immutable coin; // Trusted coin/game-side coordinator (DEGEN ERC20)
+    IDegenerusGameNFT private immutable nft; // ERC721 interface for mint/burn/metadata surface
     address public immutable bongs; // Bong contract for resolution and metadata
     address private immutable affiliateProgram; // Cached affiliate program for payout routing
     IStETH private immutable steth; // stETH token held by the game
-    address private immutable jackpots; // PurgeJackpots contract
+    address private immutable jackpots; // DegenerusJackpots contract
     address private immutable endgameModule; // Delegate module for endgame settlement
     address private immutable jackpotModule; // Delegate module for jackpot routines
     address private immutable mintModule; // Delegate module for mint packing + trait rebuild helpers
@@ -148,7 +152,7 @@ contract PurgeGame is PurgeGameStorage {
     uint16 private constant LUCK_PER_LINK_PERCENT = 22; // flip credit per LINK before multiplier (as % of priceCoin)
     uint32 private constant VRF_CALLBACK_GAS_LIMIT = 200_000;
     uint16 private constant VRF_REQUEST_CONFIRMATIONS = 10;
-    uint256 private constant RNG_NUDGE_BASE_COST = 100 * 1e6; // PURGE has 6 decimals
+    uint256 private constant RNG_NUDGE_BASE_COST = 100 * 1e6; // DEGEN has 6 decimals
 
     // mintPacked_ layout (LSB ->):
     // [0-23]=last ETH level, [24-47]=total ETH level count, [48-71]=ETH level streak,
@@ -176,7 +180,7 @@ contract PurgeGame is PurgeGameStorage {
     // -----------------------
 
     /**
-     * @param purgeCoinContract Trusted PURGE ERC20 / game coordinator address
+     * @param degenerusCoinContract Trusted DEGEN ERC20 / game coordinator address
      * @param renderer_         Trusted on-chain renderer
      * @param nftContract       ERC721 game contract
      * @param endgameModule_    Delegate module handling endgame settlement
@@ -187,14 +191,14 @@ contract PurgeGame is PurgeGameStorage {
      * @param vrfKeyHash_       VRF key hash
      * @param linkToken_        LINK token contract (ERC677) for VRF billing
      * @param stEthToken_       stETH token address
-     * @param jackpots_         PurgeJackpots contract address (wires Decimator/BAF jackpots)
+     * @param jackpots_         DegenerusJackpots contract address (wires Decimator/BAF jackpots)
      * @param bongs_            Bongs contract address
      * @param trophies_         Standalone trophy ERC721 contract (cosmetic only)
      * @param affiliateProgram_ Affiliate program contract address (for payouts/trophies)
      * @param vrfAdmin_         VRF owner/admin contract authorized to rotate the coordinator/subscription on stalls
      */
     constructor(
-        address purgeCoinContract,
+        address degenerusCoinContract,
         address renderer_,
         address nftContract,
         address endgameModule_,
@@ -211,9 +215,9 @@ contract PurgeGame is PurgeGameStorage {
         address affiliateProgram_,
         address vrfAdmin_
     ) {
-        coin = IPurgeCoin(purgeCoinContract);
-        renderer = IPurgeRendererLike(renderer_);
-        nft = IPurgeGameNFT(nftContract);
+        coin = IDegenerusCoin(degenerusCoinContract);
+        renderer = IDegenerusRendererLike(renderer_);
+        nft = IDegenerusGameNFT(nftContract);
         endgameModule = endgameModule_;
         jackpotModule = jackpotModule_;
         mintModule = mintModule_;
@@ -231,6 +235,73 @@ contract PurgeGame is PurgeGameStorage {
         deployTimestamp = uint48(block.timestamp);
     }
 
+    modifier onlyBonds() {
+        if (msg.sender != bonds) revert E();
+        _;
+    }
+
+    // Wire bonds once post-deploy (admin = vrfAdmin for lack of a richer role system).
+    function setBonds(address bonds_) external {
+        if (msg.sender != vrfAdmin || bonds_ == address(0) || bonds != address(0)) revert E();
+        bonds = bonds_;
+    }
+
+    /// @notice Accept ETH for bond obligations; callable only by the bond contract.
+    function bondDeposit() external payable onlyBonds {
+        if (bondGameOver) revert E();
+        bondPool += msg.value;
+    }
+
+    /// @notice Credit bond winnings into claimable balance and burn from the bond pool.
+    function bondCreditToClaimable(address player, uint256 amount) external onlyBonds {
+        if (bondGameOver || amount == 0 || amount > bondPool) revert E();
+        bondPool -= amount;
+        unchecked {
+            bondClaimableWinnings[player] += amount;
+        }
+    }
+
+    /// @notice View helper for bonds to know available ETH in the game-held bond pool.
+    function bondAvailable() external view returns (uint256) {
+        if (bondGameOver) return 0;
+        return bondPool;
+    }
+
+    /// @notice Claim bond winnings (no DEGEN burn required).
+    function claimBondWinnings() external {
+        address player = msg.sender;
+        uint256 amount = bondClaimableWinnings[player];
+        if (amount == 0) revert E();
+        bondClaimableWinnings[player] = 0;
+        _payoutWithStethFallback(player, amount);
+    }
+
+    function getBondWinnings() external view returns (uint256) {
+        return bondClaimableWinnings[msg.sender];
+    }
+
+    /// @notice Shutdown path: flush bond pool to the bonds contract and let it resolve internally.
+    /// @dev Access: vrfAdmin acts as an owner surrogate; bonds may also call to complete shutdown.
+    function shutdownBonds() external {
+        address bondsAddr = bonds;
+        if (bondsAddr == address(0) || bondGameOver) revert E();
+        if (msg.sender != vrfAdmin && msg.sender != bondsAddr) revert E();
+        bondGameOver = true;
+        uint256 ethAmount = address(this).balance;
+        bondPool = 0;
+
+        // Forward all stETH to bonds as part of final settlement.
+        uint256 stAmount = steth.balanceOf(address(this));
+        if (stAmount != 0) {
+            principalStEth = 0;
+            if (!steth.transfer(bondsAddr, stAmount)) revert E();
+        }
+
+        (bool ok, ) = payable(bondsAddr).call{value: ethAmount}("");
+        if (!ok) revert E();
+        IDegenerusBondsGameOver(bondsAddr).gameOver{value: 0}();
+    }
+
     // --- View: lightweight game status -------------------------------------------------
 
     function prizePoolTargetView() external view returns (uint256) {
@@ -244,7 +315,7 @@ contract PurgeGame is PurgeGameStorage {
     /// @notice Resolve the payout recipient for a player, routing synthetic MAP-only players to their affiliate owner.
     function affiliatePayoutAddress(address player) public view returns (address recipient, address affiliateOwner) {
         address affiliateAddr = affiliateProgram;
-        (affiliateOwner, ) = IPurgeAffiliate(affiliateAddr).syntheticMapInfo(player);
+        (affiliateOwner, ) = IDegenerusAffiliate(affiliateAddr).syntheticMapInfo(player);
         recipient = affiliateOwner == address(0) ? player : affiliateOwner;
     }
 
@@ -365,9 +436,9 @@ contract PurgeGame is PurgeGameStorage {
             uint256 priceWei = price;
             if (priceWei == 0) revert E();
 
-            // Charge PURGE for the equivalent ETH cost at current priceWei.
-            uint256 purgeCost = (priceWei * mintUnits) / 1 ether;
-            coin.burnCoin(player, purgeCost);
+            // Charge DEGEN for the equivalent ETH cost at current priceWei.
+            uint256 burnCost = (priceWei * mintUnits) / 1 ether;
+            coin.burnCoin(player, burnCost);
             return _recordMintDataModule(player, lvl, true, 0);
         }
 
@@ -385,7 +456,7 @@ contract PurgeGame is PurgeGameStorage {
         uint256 amount,
         MintPaymentKind payKind
     ) private returns (uint256 prizeContribution) {
-        (bool ok, uint256 prize, uint256 creditUsed) = PurgeGameCredit.processMintPayment(
+        (bool ok, uint256 prize, uint256 creditUsed) = DegenerusGameCredit.processMintPayment(
             claimableWinnings,
             bongCredit,
             player,
@@ -410,13 +481,13 @@ contract PurgeGame is PurgeGameStorage {
     /// @notice Advances the game state machine. Anyone can call, but standard flows
     ///         require the caller to have completed an ETH mint for the current day.
     /// @param cap Emergency unstuck function, in case a necessary transaction is too large for a block.
-    ///            Using cap removes Purgecoin payment.
+    ///            Using cap removes DegenerusCoin payment.
     function advanceGame(uint32 cap) external {
         address caller = msg.sender;
         uint48 ts = uint48(block.timestamp);
         // Day index uses JACKPOT_RESET_TIME offset instead of unix midnight to align jackpots/quests.
         uint48 day = _currentDayIndex();
-        IPurgeCoin coinContract = coin;
+        IDegenerusCoin coinContract = coin;
         uint48 lst = levelStartTime;
         if (lst == LEVEL_START_SENTINEL) {
             uint48 deployTs = deployTimestamp;
@@ -470,7 +541,7 @@ contract PurgeGame is PurgeGameStorage {
                     if (lvl != 0) {
                         address topStake = coinContract.recordStakeResolution(lvl, day);
                         if (topStake != address(0)) {
-                            IPurgeTrophies(trophies).mintStake(topStake, lvl);
+                            IDegenerusTrophies(trophies).mintStake(topStake, lvl);
                         }
                     }
                     if (lastExterminatedTrait != TRAIT_ID_TIMEOUT) {
@@ -558,7 +629,7 @@ contract PurgeGame is PurgeGameStorage {
                 nft.finalizePurchasePhase(mintedCount, rngWordCurrent);
                 traitRebuildCursor = 0;
                 airdropMultiplier = 1;
-                earlyPurgePercent = 0;
+                earlyBurnPercent = 0;
                 levelStartTime = ts;
                 gameState = 3;
                 mapJackpotPaid = false;
@@ -568,7 +639,7 @@ contract PurgeGame is PurgeGameStorage {
                 break;
             }
 
-            // --- State 3 - Purge ---
+            // --- State 3 - Degenerus ---
             if (_gameState == 3) {
                 bool batchesPending = airdropIndex < pendingMapMints.length;
                 if (batchesPending) {
@@ -605,17 +676,17 @@ contract PurgeGame is PurgeGameStorage {
         }
     }
 
-    // --- Purging NFTs into tickets & potentially ending the level -----------------------------------
+    // --- Burning NFTs into tickets & potentially ending the level -----------------------------------
 
-    function purge(uint256[] calldata tokenIds) external {
+    function burnTokens(uint256[] calldata tokenIds) external {
         if (rngLockedFlag) revert RngNotReady();
         if (gameState != 3) revert NotTimeYet();
 
         uint256 count = tokenIds.length;
         if (count == 0 || count > 75) revert InvalidQuantity();
         address caller = msg.sender;
-        nft.purge(caller, tokenIds);
-        coin.notifyQuestPurge(caller, uint32(count));
+        nft.burnFromGame(caller, tokenIds);
+        coin.notifyQuestBurn(caller, uint32(count));
 
         uint24 lvl = level;
         uint8 mod10 = uint8(lvl % 10);
@@ -629,7 +700,7 @@ contract PurgeGame is PurgeGameStorage {
         uint256 bonusTenths;
         uint256 stakeBonusCoin;
 
-        address[][256] storage tickets = traitPurgeTicket[lvl];
+        address[][256] storage tickets = traitBurnTicket[lvl];
 
         uint16 winningTrait = TRAIT_ID_TIMEOUT;
         for (uint256 i; i < count; ) {
@@ -680,9 +751,9 @@ contract PurgeGame is PurgeGameStorage {
                     winningTrait = trait3;
                     break;
                 }
-                dailyPurgeCount[trait0 & 0x07] += 1;
-                dailyPurgeCount[((trait1 - 64) >> 3) + 8] += 1;
-                dailyPurgeCount[trait2 - 128 + 16] += 1;
+                dailyBurnCount[trait0 & 0x07] += 1;
+                dailyBurnCount[((trait1 - 64) >> 3) + 8] += 1;
+                dailyBurnCount[trait2 - 128 + 16] += 1;
                 ++i;
             }
 
@@ -693,8 +764,8 @@ contract PurgeGame is PurgeGameStorage {
         }
 
         if (isDoubleCountStep) count <<= 1;
-        _creditPurgeFlip(caller, stakeBonusCoin, priceCoinLocal, count, bonusTenths);
-        emit Purge(caller, tokenIds);
+        _creditBurnFlip(caller, stakeBonusCoin, priceCoinLocal, count, bonusTenths);
+        emit Degenerus(caller, tokenIds);
 
         if (winningTrait != TRAIT_ID_TIMEOUT) {
             _endLevel(winningTrait);
@@ -738,7 +809,7 @@ contract PurgeGame is PurgeGameStorage {
             currentPrizePool = pool;
             _setExterminatorForLevel(levelSnapshot, callerExterminator);
 
-            IPurgeTrophies(trophies).mintExterminator(
+            IDegenerusTrophies(trophies).mintExterminator(
                 callerExterminator,
                 levelSnapshot,
                 exTrait,
@@ -766,9 +837,9 @@ contract PurgeGame is PurgeGameStorage {
         }
         traitRebuildCursor = 0;
         jackpotCounter = 0;
-        // Reset daily purge counters so the next level's jackpots start fresh.
+        // Reset daily burn counters so the next level's jackpots start fresh.
         for (uint8 i; i < 80; ) {
-            dailyPurgeCount[i] = 0;
+            dailyBurnCount[i] = 0;
             unchecked {
                 ++i;
             }
@@ -784,7 +855,7 @@ contract PurgeGame is PurgeGameStorage {
 
         gameState = 1;
         if (traitExterminated) {
-            coin.normalizeActivePurgeQuests();
+            coin.normalizeActiveBurnQuests();
         }
 
         nft.advanceBase(); // let NFT pull its own nextTokenId to avoid redundant calls here
@@ -792,9 +863,9 @@ contract PurgeGame is PurgeGameStorage {
 
     /// @notice Delegatecall into the endgame module to resolve slow settlement paths.
     function _runEndgameModule(uint24 lvl, uint32 cap, uint256 rngWord) internal {
-        // Endgame settlement logic lives in PurgeGameEndgameModule (delegatecall keeps state on this contract).
+        // Endgame settlement logic lives in DegenerusGameEndgameModule (delegatecall keeps state on this contract).
         (bool ok, bytes memory data) = endgameModule.delegatecall(
-            abi.encodeWithSelector(IPurgeGameEndgameModule.finalizeEndgame.selector, lvl, cap, rngWord, jackpots)
+            abi.encodeWithSelector(IDegenerusGameEndgameModule.finalizeEndgame.selector, lvl, cap, rngWord, jackpots)
         );
         if (!ok || data.length == 0) return;
 
@@ -813,7 +884,7 @@ contract PurgeGame is PurgeGameStorage {
         uint32 mintUnits
     ) private returns (uint256 coinReward) {
         (bool ok, bytes memory data) = mintModule.delegatecall(
-            abi.encodeWithSelector(IPurgeGameMintModule.recordMintData.selector, player, lvl, coinMint, mintUnits)
+            abi.encodeWithSelector(IDegenerusGameMintModule.recordMintData.selector, player, lvl, coinMint, mintUnits)
         );
         if (!ok || data.length == 0) revert E();
         return abi.decode(data, (uint256));
@@ -821,7 +892,7 @@ contract PurgeGame is PurgeGameStorage {
 
     function _calculateAirdropMultiplierModule(uint32 purchaseCount, uint24 lvl) private returns (uint32) {
         (bool ok, bytes memory data) = mintModule.delegatecall(
-            abi.encodeWithSelector(IPurgeGameMintModule.calculateAirdropMultiplier.selector, purchaseCount, lvl)
+            abi.encodeWithSelector(IDegenerusGameMintModule.calculateAirdropMultiplier.selector, purchaseCount, lvl)
         );
         if (!ok || data.length == 0) revert E();
         return abi.decode(data, (uint32));
@@ -829,7 +900,7 @@ contract PurgeGame is PurgeGameStorage {
 
     function _purchaseTargetCountFromRawModule(uint32 rawCount) private returns (uint32) {
         (bool ok, bytes memory data) = mintModule.delegatecall(
-            abi.encodeWithSelector(IPurgeGameMintModule.purchaseTargetCountFromRaw.selector, rawCount)
+            abi.encodeWithSelector(IDegenerusGameMintModule.purchaseTargetCountFromRaw.selector, rawCount)
         );
         if (!ok || data.length == 0) revert E();
         return abi.decode(data, (uint32));
@@ -837,7 +908,7 @@ contract PurgeGame is PurgeGameStorage {
 
     function _rebuildTraitCountsModule(uint32 tokenBudget, uint32 target, uint256 baseTokenId) private {
         (bool ok, ) = mintModule.delegatecall(
-            abi.encodeWithSelector(IPurgeGameMintModule.rebuildTraitCounts.selector, tokenBudget, target, baseTokenId)
+            abi.encodeWithSelector(IDegenerusGameMintModule.rebuildTraitCounts.selector, tokenBudget, target, baseTokenId)
         );
         if (!ok) revert E();
     }
@@ -850,7 +921,7 @@ contract PurgeGame is PurgeGameStorage {
     ) private returns (bool worked) {
         (bool ok, bytes memory data) = bongModule.delegatecall(
             abi.encodeWithSelector(
-                IPurgeGameBongModule.bongMaintenanceForMap.selector,
+                IDegenerusGameBongModule.bongMaintenanceForMap.selector,
                 bongs,
                 address(coin),
                 address(steth),
@@ -866,7 +937,7 @@ contract PurgeGame is PurgeGameStorage {
 
     function _stakeForTargetRatioModule(uint24 lvl) private {
         (bool ok, bytes memory data) = bongModule.delegatecall(
-            abi.encodeWithSelector(IPurgeGameBongModule.stakeForTargetRatio.selector, bongs, address(steth), lvl)
+            abi.encodeWithSelector(IDegenerusGameBongModule.stakeForTargetRatio.selector, bongs, address(steth), lvl)
         );
         if (!ok) {
             _revertWith(data);
@@ -875,7 +946,7 @@ contract PurgeGame is PurgeGameStorage {
 
     function _drainToBongsModule(uint48 day) private {
         (bool ok, bytes memory data) = bongModule.delegatecall(
-            abi.encodeWithSelector(IPurgeGameBongModule.drainToBongs.selector, bongs, address(steth), day)
+            abi.encodeWithSelector(IDegenerusGameBongModule.drainToBongs.selector, bongs, address(steth), day)
         );
         if (!ok) {
             _revertWith(data);
@@ -889,14 +960,14 @@ contract PurgeGame is PurgeGameStorage {
         }
     }
 
-    /// @notice Unified external hook for trusted modules to adjust PurgeGame accounting.
+    /// @notice Unified external hook for trusted modules to adjust DegenerusGame accounting.
     /// @param op      Operation selector.
     /// @param account Player to credit (when applicable).
     /// @param amount  Wei amount associated with the operation.
     /// @param lvl     Level context for the operation (unused by the game, used by callers).
-    function applyExternalOp(PurgeGameExternalOp op, address account, uint256 amount, uint24 lvl) external {
+    function applyExternalOp(DegenerusGameExternalOp op, address account, uint256 amount, uint24 lvl) external {
         lvl;
-        if (op == PurgeGameExternalOp.DecJackpotClaim) {
+        if (op == DegenerusGameExternalOp.DecJackpotClaim) {
             address jackpotsAddr = jackpots;
             if (jackpotsAddr == address(0) || msg.sender != jackpotsAddr) revert E();
             _addClaimableEth(account, amount);
@@ -909,7 +980,7 @@ contract PurgeGame is PurgeGameStorage {
 
     /// @notice Claim the caller’s accrued ETH winnings (affiliates, jackpots, endgame payouts).
     /// @dev Leaves a 1 wei sentinel so subsequent credits remain non-zero -> cheaper SSTORE.
-    ///      burnCoin runs before zeroing state and assumes the PURGE coin cannot reenter or grief claims.
+    ///      burnCoin runs before zeroing state and assumes the DEGEN coin cannot reenter or grief claims.
     function claimWinnings() external {
         address player = msg.sender;
         uint256 amount = claimableWinnings[player];
@@ -1021,7 +1092,7 @@ contract PurgeGame is PurgeGameStorage {
         if (creditWei == 0) return;
         address bongsAddr = bongs;
         if (bongsAddr == address(0)) return;
-        if (!IPurgeBongs(bongsAddr).purchasesEnabled()) return;
+        if (!IDegenerusBongs(bongsAddr).purchasesEnabled()) return;
 
         uint256 base = _bongMarketPrice(info.basePerBongWei);
         if (base == 0) return;
@@ -1038,8 +1109,8 @@ contract PurgeGame is PurgeGameStorage {
         bool stake = info.stake || info.basePerBongWei == 0; // default to staked when unset
         info.weiAmount = uint128(creditWei - spend);
         bongCreditEscrow = escrow - spend;
-        IPurgeBongs(bongsAddr).payBongs{value: spend}(0, 0, 0, 0, 0);
-        IPurgeBongs(bongsAddr).purchaseGameBongs(recipients, quantity, base, stake);
+        IDegenerusBongs(bongsAddr).payBongs{value: spend}(0, 0, 0, 0, 0);
+        IDegenerusBongs(bongsAddr).purchaseGameBongs(recipients, quantity, base, stake);
     }
 
     function _bongMarketPrice(uint256 preferredBase) private view returns (uint256) {
@@ -1080,7 +1151,7 @@ contract PurgeGame is PurgeGameStorage {
     /// @param mapPurchase If true, purchase MAPs; otherwise purchase NFTs.
     // Credit-based purchase entrypoints handled directly on the NFT contract to keep the game slimmer.
 
-    /// @notice Sample up to 100 trait purge tickets from a random trait and recent level (last 20 levels).
+    /// @notice Sample up to 100 trait burn tickets from a random trait and recent level (last 20 levels).
     /// @param entropy Random seed used to select level, trait, and starting offset.
     function sampleTraitTickets(
         uint256 entropy
@@ -1096,7 +1167,7 @@ contract PurgeGame is PurgeGameStorage {
         lvlSel = currentLvl - offset;
 
         traitSel = uint8(uint256(keccak256(abi.encode(entropy, lvlSel))) & 0xFF);
-        address[] storage arr = traitPurgeTicket[lvlSel][traitSel];
+        address[] storage arr = traitBurnTicket[lvlSel][traitSel];
         uint256 len = arr.length;
         if (len == 0) {
             return (lvlSel, traitSel, new address[](0));
@@ -1153,7 +1224,7 @@ contract PurgeGame is PurgeGameStorage {
 
         address jackpotsAddr = jackpots;
         if (jackpotsAddr == address(0)) revert E();
-        uint256 returnWei = IPurgeJackpots(jackpotsAddr).runDecimatorJackpot(pool, lvl, rngWord);
+        uint256 returnWei = IDegenerusJackpots(jackpotsAddr).runDecimatorJackpot(pool, lvl, rngWord);
 
         if (returnWei != 0) {
             rewardPool += returnWei;
@@ -1168,11 +1239,11 @@ contract PurgeGame is PurgeGameStorage {
     function payMapJackpot(uint24 lvl, uint256 rngWord, uint256 effectiveWei) internal {
         (bool ok, ) = jackpotModule.delegatecall(
             abi.encodeWithSelector(
-                IPurgeGameJackpotModule.payMapJackpot.selector,
+                IDegenerusGameJackpotModule.payMapJackpot.selector,
                 lvl,
                 rngWord,
                 effectiveWei,
-                IPurgeCoinModule(address(coin))
+                IDegenerusCoinModule(address(coin))
             )
         );
         if (!ok) return;
@@ -1181,7 +1252,7 @@ contract PurgeGame is PurgeGameStorage {
     function _calcPrizePoolForJackpot(uint24 lvl, uint256 rngWord) internal returns (uint256 effectiveWei) {
         (bool ok, bytes memory data) = jackpotModule.delegatecall(
             abi.encodeWithSelector(
-                IPurgeGameJackpotModule.calcPrizePoolForJackpot.selector,
+                IDegenerusGameJackpotModule.calcPrizePoolForJackpot.selector,
                 lvl,
                 rngWord,
                 address(steth)
@@ -1191,16 +1262,16 @@ contract PurgeGame is PurgeGameStorage {
         return abi.decode(data, (uint256));
     }
 
-    // --- Daily & early‑purge jackpots ---------------------------------------------------------------
+    // --- Daily & early‑burn jackpots ---------------------------------------------------------------
 
     function payDailyJackpot(bool isDaily, uint24 lvl, uint256 randWord) internal {
         (bool ok, ) = jackpotModule.delegatecall(
             abi.encodeWithSelector(
-                IPurgeGameJackpotModule.payDailyJackpot.selector,
+                IDegenerusGameJackpotModule.payDailyJackpot.selector,
                 isDaily,
                 lvl,
                 randWord,
-                IPurgeCoinModule(address(coin))
+                IDegenerusCoinModule(address(coin))
             )
         );
         if (!ok) return;
@@ -1215,12 +1286,12 @@ contract PurgeGame is PurgeGameStorage {
         if (msg.sender != address(this)) revert E();
         (bool ok, bytes memory data) = jackpotModule.delegatecall(
             abi.encodeWithSelector(
-                IPurgeGameJackpotModule.payExterminationJackpot.selector,
+                IDegenerusGameJackpotModule.payExterminationJackpot.selector,
                 lvl,
                 traitId,
                 randWord,
                 ethPool,
-                IPurgeCoinModule(address(coin))
+                IDegenerusCoinModule(address(coin))
             )
         );
         if (!ok || data.length == 0) return 0;
@@ -1323,7 +1394,7 @@ contract PurgeGame is PurgeGameStorage {
     /// @return finished True if all pending map mints have been fully processed.
     function _processMapBatch(uint32 writesBudget) internal returns (bool finished) {
         (bool ok, bytes memory data) = jackpotModule.delegatecall(
-            abi.encodeWithSelector(IPurgeGameJackpotModule.processMapBatch.selector, writesBudget)
+            abi.encodeWithSelector(IDegenerusGameJackpotModule.processMapBatch.selector, writesBudget)
         );
         if (!ok || data.length == 0) return false;
         return abi.decode(data, (bool));
@@ -1333,7 +1404,7 @@ contract PurgeGame is PurgeGameStorage {
     /// @param maxMints Max bongs to mint this call (0 = default chunk size).
     function workJackpotBongMints(uint256 maxMints) external {
         (bool ok, bytes memory data) = jackpotModule.delegatecall(
-            abi.encodeWithSelector(IPurgeGameJackpotModule.processPendingJackpotBongs.selector, maxMints)
+            abi.encodeWithSelector(IDegenerusGameJackpotModule.processPendingJackpotBongs.selector, maxMints)
         );
         if (!ok || data.length == 0) return;
 
@@ -1349,7 +1420,7 @@ contract PurgeGame is PurgeGameStorage {
     /// @return burned Bongs burned.
     /// @return complete True if shutdown burning is finished.
     function finalizeBongShutdown(uint256 maxIds) public returns (uint256 processedIds, uint256 burned, bool complete) {
-        return IPurgeBongs(bongs).finalizeShutdown(maxIds);
+        return IDegenerusBongs(bongs).finalizeShutdown(maxIds);
     }
 
     function _requestRngBestEffort(uint48 day) private returns (bool requested) {
@@ -1366,7 +1437,7 @@ contract PurgeGame is PurgeGameStorage {
                 })
             )
         returns (uint256 id) {
-            IPurgeBongs(bongs).setTransfersLocked(true, day);
+            IDegenerusBongs(bongs).setTransfersLocked(true, day);
             vrfRequestId = id;
             rngFulfilled = false;
             rngWordCurrent = 0;
@@ -1382,7 +1453,7 @@ contract PurgeGame is PurgeGameStorage {
     function _requestRng(uint8 gameState_, bool isMapJackpotDay, uint24 lvl, uint48 day) private {
         bool shouldLockBongs = (gameState_ == 2 && isMapJackpotDay) || (gameState_ == 0);
         if (shouldLockBongs) {
-            IPurgeBongs(bongs).setTransfersLocked(true, day);
+            IDegenerusBongs(bongs).setTransfersLocked(true, day);
         }
 
         // Hard revert if Chainlink request fails; this intentionally halts game progress until VRF funding/config is fixed.
@@ -1438,7 +1509,7 @@ contract PurgeGame is PurgeGameStorage {
         rngRequestTime = 0;
     }
 
-    /// @notice Pay PURGE to nudge the next RNG word by +1; cost scales +50% per queued nudge and resets after fulfillment.
+    /// @notice Pay DEGEN to nudge the next RNG word by +1; cost scales +50% per queued nudge and resets after fulfillment.
     /// @dev Only available while RNG is unlocked (before a VRF request is in-flight).
     function reverseFlip() external {
         if (rngLockedFlag) revert RngLocked();
@@ -1529,7 +1600,7 @@ contract PurgeGame is PurgeGameStorage {
         }
     }
 
-    function _creditPurgeFlip(
+    function _creditBurnFlip(
         address caller,
         uint256 stakeBonusCoin,
         uint256 priceCoinLocal,
@@ -1589,7 +1660,7 @@ contract PurgeGame is PurgeGameStorage {
     }
 
     function _consumeTrait(uint8 traitId, uint32 endLevel) private returns (bool reachedZero) {
-        // Trait counts are expected to be seeded for the current level; hitting zero here should only occur via purge flow.
+        // Trait counts are expected to be seeded for the current level; hitting zero here should only occur via burn flow.
         uint32 stored = traitRemaining[traitId];
 
         unchecked {
@@ -1641,7 +1712,7 @@ contract PurgeGame is PurgeGameStorage {
         uint32 limit,
         address player
     ) external view returns (uint24 count, uint32 nextOffset, uint32 total) {
-        address[] storage a = traitPurgeTicket[lvl][trait];
+        address[] storage a = traitBurnTicket[lvl][trait];
         total = uint32(a.length);
         if (offset >= total) return (0, total, total);
 

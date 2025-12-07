@@ -17,7 +17,7 @@ struct ClaimableBongInfo {
 }
 
 /**
- * @title PurgeGameStorage
+ * @title DegenerusGameStorage
  * @notice Shared storage layout between the core game contract and its delegatecall modules.
  *         Keeping all slot definitions in a single contract prevents layout drift.
  *
@@ -27,7 +27,7 @@ struct ClaimableBongInfo {
  * - Slot 2: RNG / trait flags (pricing and other scalars pack after the flag block)
  * Everything else starts at slot 4+ (full-width balances, arrays, mappings).
  */
-abstract contract PurgeGameStorage {
+abstract contract DegenerusGameStorage {
     // ---------------------------------------------------------------------
     // Packed core state (slots 0-2)
     // ---------------------------------------------------------------------
@@ -39,20 +39,20 @@ abstract contract PurgeGameStorage {
     uint32 internal airdropMapsProcessedCount; // maps handled within current airdrop batch
     uint32 internal airdropIndex; // index into pendingMapMints for batched airdrops
     uint24 public level = 1; // current level (1-indexed)
-    uint16 internal lastExterminatedTrait = 420; // last trait purged this level; 420 == TRAIT_ID_TIMEOUT sentinel
-    uint8 public gameState = 1; // FSM: 0=idle,1=pregame,2=airdrop/mint,3=purge window
+    uint16 internal lastExterminatedTrait = 420; // last trait cleared this level; 420 == TRAIT_ID_TIMEOUT sentinel
+    uint8 public gameState = 1; // FSM: 0=idle,1=pregame,2=airdrop/mint,3=burn window
 
     // Slot 1: actor pointers and sub-state cursors.
     uint32 internal traitRebuildCursor; // progress cursor when reseeding trait counts
     uint32 internal airdropMultiplier = 1; // airdrop bonus multiplier (scaled integer)
     uint8 internal jackpotCounter; // jackpots processed within the current level
-    uint8 internal earlyPurgePercent; // % of previous prize pool carried into early purge reward (0-255)
+    uint8 internal earlyBurnPercent; // % of previous prize pool carried into early burn reward (0-255)
     bool internal mapJackpotPaid; // true once the map jackpot has been executed for the current purchase phase
     bool internal lastPurchaseDay; // true once the map prize target is met; next tick skips daily/jackpot prep
     bool internal decWindowOpen = true; // latch to hold decimator window open until RNG is requested
 
     // Slot 2: RNG/trait flags + stETH address.
-    bool internal earlyPurgeBoostArmed; // true if the next jackpot should apply the boost
+    bool internal earlyBurnBoostArmed; // true if the next jackpot should apply the boost
     bool internal rngLockedFlag; // true while waiting for VRF fulfillment
     bool internal rngFulfilled = true; // tracks VRF lifecycle; default true pre-first request
     bool internal traitCountsSeedQueued; // true if initial trait counts were staged and await overwrite flag
@@ -76,10 +76,13 @@ abstract contract PurgeGameStorage {
     uint256 internal bafHundredPool; // reserved pool for the BAF 100-level special
     uint256 internal rngWordCurrent; // latest VRF word (or 0 if pending)
     uint256 internal vrfRequestId; // last VRF request id used to match fulfillments
+    uint256 internal bondPool; // ETH dedicated to bond obligations (lives in game unless gameOver flushes to bonds)
     uint256 internal totalFlipReversals; // number of reverse flips purchased against current RNG
     uint256 internal principalStEth; // stETH principal the contract has staked
     uint48 public deployTimestamp; // deployment timestamp for long-tail inactivity guard
     uint48 internal shutdownRngRequestDay; // day index used when requesting RNG during shutdown/idle drain
+    address internal bonds; // bonds contract wired once post-deploy
+    bool internal bondGameOver; // true once bondPool has been flushed to bonds for direct claims
 
     // ---------------------------------------------------------------------
     // Minting / airdrops
@@ -93,10 +96,11 @@ abstract contract PurgeGameStorage {
     // Token / trait state
     // ---------------------------------------------------------------------
     mapping(address => uint256) internal claimableWinnings; // ETH claimable by players
-    mapping(uint24 => address[][256]) internal traitPurgeTicket; // level -> trait id -> ticket owner list
-    uint32[80] internal dailyPurgeCount; // per-day trait hit counters used for jackpot selection
+    mapping(address => uint256) internal bondClaimableWinnings; // ETH claimable from bond payouts (no coin burn)
+    mapping(uint24 => address[][256]) internal traitBurnTicket; // level -> trait id -> ticket owner list
+    uint32[80] internal dailyBurnCount; // per-day trait hit counters used for jackpot selection
     uint32[256] internal traitRemaining; // remaining supply per trait id
-    mapping(address => uint256) internal mintPacked_; // bit-packed mint history (see PurgeGame ETH_* constants for layout)
+    mapping(address => uint256) internal mintPacked_; // bit-packed mint history (see DegenerusGame ETH_* constants for layout)
 
     // Bong maintenance state
     uint24 internal lastBongFundingLevel; // tracks the last level where bong funding was performed
