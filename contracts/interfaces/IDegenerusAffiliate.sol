@@ -5,8 +5,6 @@ interface IDegenerusAffiliate {
     function payAffiliate(uint256 amount, bytes32 code, address sender, uint24 lvl) external returns (uint256);
     function createSyntheticMapPlayer(address synthetic, bytes32 code) external;
 
-    function getTopAffiliate(uint24 lvl) external view returns (address);
-
     function affiliateTop(uint24 lvl) external view returns (address player, uint96 score);
 
     function getReferrer(address player) external view returns (address);

@@ -433,13 +433,6 @@ contract DegenerusCoin {
         _mint(address(this), presaleTotal);
     }
 
-    /// @notice Mint DEGEN to the bonds contract for bond payouts (game or bonds caller).
-    function bondPayment(uint256 amount) external {
-        address sender = msg.sender;
-        if (sender != bonds) revert OnlyGame();
-        _mint(bonds, amount);
-    }
-
     /// @notice Escrow virtual coin to the vault (no token movement); increases mint allowance.
     function vaultEscrowFrom(address from, uint256 amount) external onlyVault {
         from; // unused (kept for interface compatibility)

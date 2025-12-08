@@ -585,11 +585,6 @@ contract DegenerusAffiliate {
     // ---------------------------------------------------------------------
     // Views
     // ---------------------------------------------------------------------
-    function getTopAffiliate(uint24 lvl) external view returns (address) {
-        (address player, ) = affiliateTop(lvl);
-        return player;
-    }
-
     /// @notice Return the recorded top affiliate for a given level.
     function affiliateTop(uint24 lvl) public view returns (address player, uint96 score) {
         PlayerScore memory stored = affiliateTopByLevel[lvl];

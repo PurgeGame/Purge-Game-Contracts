@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+import {IDegenerusCoinModule} from "./DegenerusGameModuleInterfaces.sol";
 import {QuestInfo, PlayerQuestView} from "./IDegenerusQuestModule.sol";
 
-interface IDegenerusCoin {
+interface IDegenerusCoin is IDegenerusCoinModule {
     function jackpots() external view returns (address);
     function affiliateProgram() external view returns (address);
 
-    function creditFlip(address player, uint256 amount) external;
     function creditFlipBatch(address[3] calldata players, uint256[3] calldata amounts) external;
 
     function burnCoin(address target, uint256 amount) external;
@@ -32,9 +32,6 @@ interface IDegenerusCoin {
 
     function coinflipTop(uint24 level) external view returns (address player, uint96 score);
 
-    function rollDailyQuest(uint48 day, uint256 entropy) external;
-    function rollDailyQuestWithOverrides(uint48 day, uint256 entropy, bool forceMintEth, bool forceBurn) external;
-
     function notifyQuestMint(address player, uint32 quantity, bool paidWithEth) external;
 
     function notifyQuestBond(address player, uint256 basePerBondWei) external;
@@ -54,6 +51,4 @@ interface IDegenerusCoin {
         );
 
     function getPlayerQuestView(address player) external view returns (PlayerQuestView memory viewData);
-
-    function bondPayment(uint256 amount) external;
 }
