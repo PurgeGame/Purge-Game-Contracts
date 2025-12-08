@@ -614,7 +614,7 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
             return false;
         }
         uint24 lvl = game_.level();
-        return lvl != 0 && (lvl % 100) == 0;
+        return lvl != 0 && (lvl % 10) == 0;
     }
 
     /// @dev Decimator quests are unlocked at specific level boundaries.
@@ -623,15 +623,12 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         if (address(game_) == address(0)) {
             return false;
         }
+        (bool decOn, ) = game_.decWindow();
+        if (!decOn) return false;
         uint24 lvl = game_.level();
-        if (lvl != 0 && (lvl % DECIMATOR_SPECIAL_LEVEL) == 0) {
-            return true;
-        }
-        if (lvl < 25) {
-            return false;
-        }
-        bool standard = (lvl % 10) == 5 && (lvl % 100) != 95;
-        return standard;
+        if (lvl != 0 && (lvl % DECIMATOR_SPECIAL_LEVEL) == 0) return true;
+        if (lvl < 15) return false;
+        return (lvl % 10) == 5 && (lvl % 100) != 95;
     }
 
     function _clampedAdd128(uint128 current, uint256 delta) private pure returns (uint128) {
@@ -957,29 +954,13 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
 
     /// @dev ETH mint eligibility is based on the last ETH mint level being within three levels.
     function _hasRecentEthMint(address player) private view returns (bool) {
-        if (player == address(0)) {
-            return false;
-        }
-        IDegenerusGame game_ = questGame;
-        if (address(game_) == address(0)) {
-            return false;
-        }
-        uint24 lastLevel = game_.ethMintLastLevel(player);
-        if (lastLevel == 0) {
-            return false;
-        }
-        uint24 currentLevel = game_.level();
-        if (currentLevel <= lastLevel) {
-            return true;
-        }
-        return currentLevel - lastLevel <= 3;
+        player; // unused under disabled gate
+        return true;
     }
 
     /// @dev ETH priming can be satisfied via forced progress (same day) or recent ETH mint history.
     function _ethMintReady(PlayerQuestState storage state, address player) private view returns (bool) {
-        if ((state.completionMask & QUEST_STATE_ETH_PRIMED) != 0) {
-            return true;
-        }
+        state; // unused under disabled gate
         return _hasRecentEthMint(player);
     }
 }

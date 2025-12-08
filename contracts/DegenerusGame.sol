@@ -75,13 +75,6 @@ struct VRFRandomWordsRequest {
 
 interface IVRFCoordinator {
     function requestRandomWords(VRFRandomWordsRequest calldata request) external returns (uint256);
-
-    function getSubscription(
-        uint256 subId
-    )
-        external
-        view
-        returns (uint96 balance, uint96 premium, uint64 reqCount, address owner, address[] memory consumers);
 }
 
 // ===========================================================================
@@ -120,7 +113,6 @@ contract DegenerusGame is DegenerusGameStorage {
     IDegenerusRendererLike private immutable renderer; // Trusted renderer; used for tokenURI composition
     IDegenerusCoin private immutable coin; // Trusted coin/game-side coordinator (DEGEN ERC20)
     IDegenerusGameNFT private immutable nft; // ERC721 interface for mint/burn/metadata surface
-    address public immutable bonds; // Bond contract for resolution and metadata
     address private immutable affiliateProgram; // Cached affiliate program for payout routing
     IStETH private immutable steth; // stETH token held by the game
     address private immutable jackpots; // DegenerusJackpots contract
@@ -153,20 +145,11 @@ contract DegenerusGame is DegenerusGameStorage {
     // [156-175]=COIN day streak, [176-207]=aggregate last day, [208-227]=aggregate day streak,
     // [228-243]=units minted at current level, [244]=level bonus paid flag.
     uint256 private constant MINT_MASK_24 = (uint256(1) << 24) - 1;
-    uint256 private constant MINT_MASK_16 = (uint256(1) << 16) - 1;
-    uint256 private constant MINT_MASK_20 = (uint256(1) << 20) - 1;
     uint256 private constant MINT_MASK_32 = (uint256(1) << 32) - 1;
     uint256 private constant ETH_LAST_LEVEL_SHIFT = 0;
     uint256 private constant ETH_LEVEL_COUNT_SHIFT = 24;
     uint256 private constant ETH_LEVEL_STREAK_SHIFT = 48;
     uint256 private constant ETH_DAY_SHIFT = 72;
-    uint256 private constant ETH_DAY_STREAK_SHIFT = 104;
-    uint256 private constant COIN_DAY_SHIFT = 124;
-    uint256 private constant COIN_DAY_STREAK_SHIFT = 156;
-    uint256 private constant AGG_DAY_SHIFT = 176;
-    uint256 private constant AGG_DAY_STREAK_SHIFT = 208;
-    uint256 private constant ETH_LEVEL_UNITS_SHIFT = 228;
-    uint256 private constant ETH_LEVEL_BONUS_SHIFT = 244;
 
     // -----------------------
     // Constructor
@@ -231,15 +214,8 @@ contract DegenerusGame is DegenerusGameStorage {
         _;
     }
 
-    // Wire bonds once post-deploy (admin = vrfAdmin for lack of a richer role system).
-    function setBonds(address bonds_) external {
-        if (msg.sender != vrfAdmin || bonds_ == address(0) || bonds != address(0)) revert E();
-        bonds = bonds_;
-    }
-
     /// @notice Accept ETH for bond obligations; callable only by the bond contract.
     function bondDeposit() external payable onlyBonds {
-        if (bondGameOver) revert E();
         bondPool += msg.value;
     }
 
@@ -247,28 +223,13 @@ contract DegenerusGame is DegenerusGameStorage {
     function bondCreditToClaimable(address player, uint256 amount) external onlyBonds {
         if (bondGameOver || amount == 0 || amount > bondPool) revert E();
         bondPool -= amount;
-        unchecked {
-            bondClaimableWinnings[player] += amount;
-        }
+        _addClaimableEth(player, amount);
     }
 
     /// @notice View helper for bonds to know available ETH in the game-held bond pool.
     function bondAvailable() external view returns (uint256) {
         if (bondGameOver) return 0;
         return bondPool;
-    }
-
-    /// @notice Claim bond winnings (no DEGEN burn required).
-    function claimBondWinnings() external {
-        address player = msg.sender;
-        uint256 amount = bondClaimableWinnings[player];
-        if (amount == 0) revert E();
-        bondClaimableWinnings[player] = 0;
-        _payoutWithStethFallback(player, amount);
-    }
-
-    function getBondWinnings() external view returns (uint256) {
-        return bondClaimableWinnings[msg.sender];
     }
 
     /// @notice Shutdown path: flush bond pool to the bonds contract and let it resolve internally.
@@ -821,7 +782,6 @@ contract DegenerusGame is DegenerusGameStorage {
         if (levelSnapshot % 100 == 0) {
             lastPrizePool = rewardPool;
             price = 0.05 ether;
-            priceCoin = 1_000_000_000;
         }
 
         unchecked {
@@ -845,12 +805,8 @@ contract DegenerusGame is DegenerusGameStorage {
             price = 0.05 ether;
         } else if (cycleOffset == 30) {
             price = 0.1 ether;
-        } else if (cycleOffset == 50) {
-            priceCoin = 800_000_000;
-        } else if (cycleOffset == 70) {
-            priceCoin = 700_000_000;
-        } else if (cycleOffset == 90) {
-            priceCoin = 600_000_000;
+        } else if (cycleOffset == 80) {
+            price = 0.15 ether;
         } else if (cycleOffset == 0) {
             price = 0.25 ether;
         }
@@ -980,14 +936,12 @@ contract DegenerusGame is DegenerusGameStorage {
 
     // --- Claiming winnings (ETH) --------------------------------------------------------------------
 
-    /// @notice Claim the caller’s accrued ETH winnings (affiliates, jackpots, endgame payouts).
+    /// @notice Claim the caller’s accrued ETH winnings (affiliates, jackpots, bonds, endgame payouts).
     /// @dev Leaves a 1 wei sentinel so subsequent credits remain non-zero -> cheaper SSTORE.
-    ///      burnCoin runs before zeroing state and assumes the DEGEN coin cannot reenter or grief claims.
     function claimWinnings() external {
         address player = msg.sender;
         uint256 amount = claimableWinnings[player];
         if (amount <= 1) revert E();
-        coin.burnCoin(player, priceCoin / 10); // Burn cost = 10% of current coin unit price
         _applyBondCredit(player, 0);
         uint256 payout;
         unchecked {

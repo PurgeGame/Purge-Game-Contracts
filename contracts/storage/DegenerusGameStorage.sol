@@ -95,7 +95,6 @@ abstract contract DegenerusGameStorage {
     // Token / trait state
     // ---------------------------------------------------------------------
     mapping(address => uint256) internal claimableWinnings; // ETH claimable by players
-    mapping(address => uint256) internal bondClaimableWinnings; // ETH claimable from bond payouts (no coin burn)
     mapping(uint24 => address[][256]) internal traitBurnTicket; // level -> trait id -> ticket owner list
     uint32[80] internal dailyBurnCount; // per-day trait hit counters used for jackpot selection
     uint32[256] internal traitRemaining; // remaining supply per trait id

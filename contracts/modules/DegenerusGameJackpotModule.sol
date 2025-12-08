@@ -13,10 +13,6 @@ interface IStETH {
     function balanceOf(address account) external view returns (uint256);
 }
 
-interface IDegenerusGameWithBonds {
-    function bonds() external view returns (address);
-}
-
 interface IDegenerusBondsJackpot {
     function purchaseGameBonds(
         address[] calldata recipients,
@@ -486,7 +482,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
     ) private returns (uint256 totalPaidEth) {
         uint8 band = uint8((jp.lvl % 100) / 20) + 1;
         uint16[4] memory bucketCounts = _traitBucketCounts(band, jp.entropy);
-        address bondsAddr = IDegenerusGameWithBonds(address(this)).bonds();
+        address bondsAddr = bonds;
         return
             _distributeJackpotEth(
                 jp.lvl,
@@ -876,7 +872,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
             maxMints = 512; // stay well under block gas even for large batches
         }
 
-        address bondsAddr = IDegenerusGameWithBonds(address(this)).bonds();
+        address bondsAddr = bonds;
         if (
             bondsAddr == address(0) ||
             !IDegenerusBondsJackpot(bondsAddr).purchasesEnabled() ||

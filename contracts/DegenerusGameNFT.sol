@@ -299,6 +299,9 @@ contract DegenerusGameNFT {
             // Level-100 ETH purchases scale price based on ETH mint history and prior level-100 mints.
             (expectedWei, levelHundredCount) = _levelHundredCost(msg.sender, priceWei, uint32(quantity));
         }
+        if (!payInCoin) {
+            expectedWei += _initiationFee(targetLevel, msg.sender, priceWei);
+        }
 
         uint256 bonus;
         uint256 bonusCoinReward;
@@ -384,6 +387,9 @@ contract DegenerusGameNFT {
             // Level-100 ETH map mints share the same scaling rules as token mints.
             (expectedWei, levelHundredCount) = _levelHundredCost(buyer, priceWei / 4, uint32(quantity));
         }
+        if (!payInCoin) {
+            expectedWei += _initiationFee(lvl, buyer, priceWei);
+        }
 
         uint256 bonus;
         uint256 claimableBonus;
@@ -441,16 +447,16 @@ contract DegenerusGameNFT {
         uint8 gameState,
         bool mapPurchase,
         MintPaymentKind payKind,
-        uint256 expectedWei,
+        uint256 costWei,
         uint256 priceUnit
     ) private returns (uint256 bonusMint) {
         // ETH purchases optionally bypass payment when in-game credit is used; all flows are forwarded to game logic.
         if (payKind == MintPaymentKind.DirectEth) {
-            if (msg.value != expectedWei) revert E();
+            if (msg.value != costWei) revert E();
         } else if (payKind == MintPaymentKind.Claimable || payKind == MintPaymentKind.BondCredit) {
             if (msg.value != 0) revert E();
         } else if (payKind == MintPaymentKind.Combined) {
-            if (msg.value > expectedWei) revert E();
+            if (msg.value > costWei) revert E();
         } else {
             revert E();
         }
@@ -461,11 +467,11 @@ contract DegenerusGameNFT {
 
         uint256 streakBonus;
         if (payKind == MintPaymentKind.DirectEth) {
-            streakBonus = game.recordMint{value: expectedWei}(payer, lvl, false, expectedWei, mintUnits, payKind);
+            streakBonus = game.recordMint{value: costWei}(payer, lvl, false, costWei, mintUnits, payKind);
         } else if (payKind == MintPaymentKind.Combined) {
-            streakBonus = game.recordMint{value: msg.value}(payer, lvl, false, expectedWei, mintUnits, payKind);
+            streakBonus = game.recordMint{value: msg.value}(payer, lvl, false, costWei, mintUnits, payKind);
         } else {
-            streakBonus = game.recordMint(payer, lvl, false, expectedWei, mintUnits, payKind);
+            streakBonus = game.recordMint(payer, lvl, false, costWei, mintUnits, payKind);
         }
 
         if (mintedQuantity != 0) {
@@ -501,6 +507,12 @@ contract DegenerusGameNFT {
                 bonusMint += streakBonus;
             }
         }
+    }
+
+    function _initiationFee(uint24 lvl, address player, uint256 priceWei) private view returns (uint256) {
+        if (lvl <= 3 || priceWei == 0) return 0;
+        if (game.ethMintLevelCount(player) != 0) return 0;
+        return priceWei / 5;
     }
 
     function _levelHundredCost(
