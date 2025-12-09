@@ -35,7 +35,6 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
     uint32 private constant QUEST_TIER_STREAK_SPAN = 7;
     uint8 private constant QUEST_STATE_COMPLETED_SLOTS_MASK = (uint8(1) << QUEST_SLOT_COUNT) - 1;
     uint8 private constant QUEST_STATE_STREAK_CREDITED = 1 << 7;
-    uint8 private constant QUEST_STATE_ETH_PRIMED = 1 << 5;
 
     // Baseline minima for quest targets and rarer decimator level trigger
     uint16 private constant QUEST_MIN_TOKEN = 250;
@@ -60,15 +59,14 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
     /// @notice Progress and streak bookkeeping per player.
     struct PlayerQuestState {
         uint32 lastCompletedDay; // Last day where the primary quest was completed
+        uint32 lastActiveDay; // Last day where any quest slot was completed
         uint32 streak; // Current streak of days with full completion
         uint32 baseStreak; // Snapshot of streak at start of day (used for rewards)
         uint32 lastSyncDay; // Day we last reset progress/completionMask
         uint32[QUEST_SLOT_COUNT] lastProgressDay; // Tracks per-slot progress day to auto-reset
         uint32[QUEST_SLOT_COUNT] lastQuestVersion; // Quest version used when progress was recorded
         uint128[QUEST_SLOT_COUNT] progress; // Accumulated progress toward targets per slot
-        uint32 forcedProgressDay; // Day used for ETH priming accumulation
-        uint128 forcedProgress; // Progress toward ETH priming target
-        uint8 completionMask; // Bit 0/1 for slot completion, plus ETH_PRIMED/STREAK_CREDITED bits
+        uint8 completionMask; // Bit 0/1 for slot completion, plus STREAK_CREDITED bit
     }
 
     DailyQuest[QUEST_SLOT_COUNT] private activeQuests;
@@ -152,6 +150,7 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         DailyQuest[QUEST_SLOT_COUNT] storage quests = activeQuests;
         bool burnAllowed = _canRollBurnQuest(day) || forceBurn;
         bool decAllowed = _canRollDecimatorQuest();
+        bool bafOpen = _isBafOpen();
 
         uint256 primaryEntropy = entropy;
         uint256 bonusEntropy = (entropy >> 128) | (entropy << 128); // swap halves for slot1
@@ -159,7 +158,7 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         uint8 primaryType = forceMintEth ? QUEST_TYPE_MINT_ETH : _primaryQuestType(primaryEntropy);
         uint8 bonusType = forceBurn
             ? QUEST_TYPE_BURN
-            : _bonusQuestType(bonusEntropy, primaryType, burnAllowed, decAllowed, _canRollBafQuest());
+            : _bonusQuestType(bonusEntropy, primaryType, burnAllowed, decAllowed, bafOpen);
 
         _seedQuestType(quests[0], day, primaryEntropy, primaryType);
         quests[0].flags &= ~QUEST_FLAG_FORCE_BURN;
@@ -184,28 +183,12 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         DailyQuest[QUEST_SLOT_COUNT] memory quests = activeQuests;
         uint48 currentDay = _currentQuestDay(quests);
         PlayerQuestState storage state = questPlayerState[player];
-        if (player == address(0) || quantity == 0 || currentDay == 0) {
+        if (currentDay == 0) {
             return (0, false, quests[0].questType, state.streak, false);
         }
 
         _questSyncState(state, currentDay);
         uint8 tier = _questTier(state.baseStreak);
-
-        bool mintedReady = _ethMintReady(state, player);
-
-        if (!mintedReady) {
-            if (!paidWithEth) {
-                return (0, false, QUEST_TYPE_MINT_ETH, state.streak, false);
-            }
-            _syncForcedProgress(state, currentDay);
-            state.forcedProgress = _clampedAdd128(state.forcedProgress, quantity);
-            uint256 entropySource = quests[0].day == currentDay ? quests[0].entropy : quests[1].entropy;
-            uint32 forcedTarget = _questMintEthTarget(tier, entropySource);
-            if (state.forcedProgress >= forcedTarget) {
-                return _questCompleteForced(state, currentDay);
-            }
-            return (0, false, QUEST_TYPE_MINT_ETH, state.streak, false);
-        }
 
         uint256 priceUnit = questGame.coinPriceUnit();
         bool matched;
@@ -266,9 +249,6 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
             return (0, false, quests[0].questType, state.streak, false);
         }
         _questSyncState(state, currentDay);
-        if (!_ethMintReady(state, player)) {
-            return (0, false, QUEST_TYPE_MINT_ETH, state.streak, false);
-        }
 
         (DailyQuest memory quest, uint8 slotIndex) = _currentDayQuestOfType(quests, currentDay, QUEST_TYPE_FLIP);
         if (slotIndex == type(uint8).max) {
@@ -279,7 +259,7 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         uint8 tier = _questTier(state.baseStreak);
         uint128 progressAfter = _clampedAdd128(state.progress[slotIndex], flipCredit);
         state.progress[slotIndex] = progressAfter;
-        uint256 target = uint256(_questFlipTargetTokens(tier, quest.entropy)) * MILLION;
+        uint256 target = uint256(_questFlipTargetTokens(tier, quest.flags, quest.entropy)) * MILLION;
         if (progressAfter < target) {
             return (0, false, quest.questType, state.streak, false);
         }
@@ -300,9 +280,6 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
             return (0, false, quests[0].questType, state.streak, false);
         }
         _questSyncState(state, currentDay);
-        if (!_ethMintReady(state, player)) {
-            return (0, false, QUEST_TYPE_MINT_ETH, state.streak, false);
-        }
         uint8 tier = _questTier(state.baseStreak);
         uint256 priceUnit = questGame.coinPriceUnit();
 
@@ -312,7 +289,7 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         }
         _questSyncProgress(state, slotIndex, currentDay, quest.version);
         state.progress[slotIndex] = _clampedAdd128(state.progress[slotIndex], burnAmount);
-        uint256 target = uint256(_questDecimatorTargetTokens(tier, quest.entropy)) * MILLION;
+        uint256 target = uint256(_questDecimatorTargetTokens(tier, quest.flags, quest.entropy)) * MILLION;
         if (state.progress[slotIndex] >= target) {
             return _questComplete(state, slotIndex, quest, priceUnit);
         }
@@ -331,9 +308,6 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
             return (0, false, quests[0].questType, state.streak, false);
         }
         _questSyncState(state, currentDay);
-        if (!_ethMintReady(state, player)) {
-            return (0, false, QUEST_TYPE_MINT_ETH, state.streak, false);
-        }
 
         (DailyQuest memory quest, uint8 slotIndex) = _currentDayQuestOfType(quests, currentDay, QUEST_TYPE_BOND);
         if (slotIndex == type(uint8).max) {
@@ -348,12 +322,8 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
             return (0, false, quest.questType, state.streak, false);
         }
 
-        uint256 coinEquivalent = (basePerBondWei * priceUnit) / priceWei;
-        if (coinEquivalent == 0) {
-            return (0, false, quest.questType, state.streak, false);
-        }
-        state.progress[slotIndex] = _clampedAdd128(state.progress[slotIndex], coinEquivalent);
-        uint256 target = _questBondTargetCoin(tier, quest.entropy, priceUnit);
+        state.progress[slotIndex] = _clampedAdd128(state.progress[slotIndex], basePerBondWei);
+        uint256 target = _questBondTargetWei(tier, quest.flags, quest.entropy, priceWei);
         if (state.progress[slotIndex] < target) {
             return (0, false, quest.questType, state.streak, false);
         }
@@ -372,9 +342,6 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
             return (0, false, quests[0].questType, state.streak, false);
         }
         _questSyncState(state, currentDay);
-        if (!_ethMintReady(state, player)) {
-            return (0, false, QUEST_TYPE_MINT_ETH, state.streak, false);
-        }
         uint8 tier = _questTier(state.baseStreak);
         uint256 priceUnit = questGame.coinPriceUnit();
 
@@ -384,7 +351,7 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         }
         _questSyncProgress(state, slotIndex, currentDay, quest.version);
         state.progress[slotIndex] = _clampedAdd128(state.progress[slotIndex], amount);
-        uint256 target = uint256(_questAffiliateTargetTokens(tier, quest.entropy)) * MILLION;
+        uint256 target = uint256(_questAffiliateTargetTokens(tier, quest.flags, quest.entropy)) * MILLION;
         if (state.progress[slotIndex] >= target) {
             return _questComplete(state, slotIndex, quest, priceUnit);
         }
@@ -403,9 +370,6 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
             return (0, false, quests[0].questType, state.streak, false);
         }
         _questSyncState(state, currentDay);
-        if (!_ethMintReady(state, player)) {
-            return (0, false, QUEST_TYPE_MINT_ETH, state.streak, false);
-        }
         uint8 tier = _questTier(state.baseStreak);
         uint256 priceUnit = questGame.coinPriceUnit();
 
@@ -423,7 +387,7 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
             fallbackType = quest.questType;
             _questSyncProgress(state, slot, currentDay, quest.version);
             state.progress[slot] = _clampedAdd128(state.progress[slot], quantity);
-            uint32 target = _questBurnTarget(tier, quest.entropy);
+            uint32 target = _questBurnTarget(tier, quest.flags, quest.entropy);
             if (state.progress[slot] >= target) {
                 return _questComplete(state, slot, quest, priceUnit);
             }
@@ -550,20 +514,20 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
     ) private view returns (QuestRequirements memory req) {
         uint8 qType = quest.questType;
         if (qType == QUEST_TYPE_MINT_ANY) {
-            req.mints = _questMintAnyTarget(tier, quest.entropy);
+            req.mints = _questMintAnyTarget(tier, quest.flags, quest.entropy);
         } else if (qType == QUEST_TYPE_MINT_ETH) {
-            req.mints = _questMintEthTarget(tier, quest.entropy);
+            req.mints = _questMintEthTarget(tier, quest.flags, quest.entropy);
         } else if (qType == QUEST_TYPE_BURN) {
-            req.mints = _questBurnTarget(tier, quest.entropy);
+            req.mints = _questBurnTarget(tier, quest.flags, quest.entropy);
         } else if (qType == QUEST_TYPE_FLIP) {
-            req.tokenAmount = uint256(_questFlipTargetTokens(tier, quest.entropy)) * MILLION;
+            req.tokenAmount = uint256(_questFlipTargetTokens(tier, quest.flags, quest.entropy)) * MILLION;
         } else if (qType == QUEST_TYPE_DECIMATOR) {
-            req.tokenAmount = uint256(_questDecimatorTargetTokens(tier, quest.entropy)) * MILLION;
+            req.tokenAmount = uint256(_questDecimatorTargetTokens(tier, quest.flags, quest.entropy)) * MILLION;
         } else if (qType == QUEST_TYPE_AFFILIATE) {
-            req.tokenAmount = uint256(_questAffiliateTargetTokens(tier, quest.entropy)) * MILLION;
+            req.tokenAmount = uint256(_questAffiliateTargetTokens(tier, quest.flags, quest.entropy)) * MILLION;
         } else if (qType == QUEST_TYPE_BOND) {
-            uint256 priceUnit = questGame.coinPriceUnit();
-            req.tokenAmount = _questBondTargetCoin(tier, quest.entropy, priceUnit);
+            uint256 priceWei = questGame.mintPrice();
+            req.tokenAmount = _questBondTargetWei(tier, quest.flags, quest.entropy, priceWei);
         }
     }
 
@@ -607,16 +571,6 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         return game_.gameState() == 3;
     }
 
-    /// @dev BAF quests map to flip quest at BAF levels (level milestones, multiples of 100).
-    function _canRollBafQuest() private view returns (bool) {
-        IDegenerusGame game_ = questGame;
-        if (address(game_) == address(0)) {
-            return false;
-        }
-        uint24 lvl = game_.level();
-        return lvl != 0 && (lvl % 10) == 0;
-    }
-
     /// @dev Decimator quests are unlocked at specific level boundaries.
     function _canRollDecimatorQuest() private view returns (bool) {
         IDegenerusGame game_ = questGame;
@@ -629,6 +583,16 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         if (lvl != 0 && (lvl % DECIMATOR_SPECIAL_LEVEL) == 0) return true;
         if (lvl < 15) return false;
         return (lvl % 10) == 5 && (lvl % 100) != 95;
+    }
+
+    /// @dev BAF weighting is active when the current level is in a BAF-open window (divisible by 10 in burn state).
+    function _isBafOpen() private view returns (bool) {
+        IDegenerusGame game_ = questGame;
+        if (address(game_) == address(0)) {
+            return false;
+        }
+        uint24 lvl = game_.level();
+        return game_.isBafLevelActive(lvl);
     }
 
     function _clampedAdd128(uint128 current, uint256 delta) private pure returns (uint128) {
@@ -657,8 +621,8 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         _questSyncProgress(state, slot, quest.day, quest.version);
         state.progress[slot] = _clampedAdd128(state.progress[slot], quantity);
         uint32 target = quest.questType == QUEST_TYPE_MINT_ANY
-            ? _questMintAnyTarget(tier, quest.entropy)
-            : _questMintEthTarget(tier, quest.entropy);
+            ? _questMintAnyTarget(tier, quest.flags, quest.entropy)
+            : _questMintEthTarget(tier, quest.flags, quest.entropy);
         if (state.progress[slot] >= target) {
             return _questComplete(state, slot, quest, priceUnit);
         }
@@ -667,8 +631,9 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
 
     /// @dev Resets per-day bookkeeping and streak if a day was missed.
     function _questSyncState(PlayerQuestState storage state, uint48 currentDay) private {
-        if (state.lastCompletedDay != 0 && currentDay > uint48(state.lastCompletedDay + 1)) {
-            state.streak = 0;
+        uint32 anchorDay = state.lastActiveDay != 0 ? state.lastActiveDay : state.lastCompletedDay;
+        if (anchorDay != 0 && currentDay > uint48(anchorDay + 1)) {
+            state.streak = 0; // full miss (no quest completion) for at least one day
         }
         if (state.lastSyncDay != currentDay) {
             state.lastSyncDay = uint32(currentDay);
@@ -716,14 +681,6 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         return state.lastSyncDay == quest.day && (state.completionMask & uint8(1 << slot)) != 0;
     }
 
-    /// @dev Clears ETH priming progress when the day rolls over.
-    function _syncForcedProgress(PlayerQuestState storage state, uint48 currentDay) private {
-        if (state.forcedProgressDay != currentDay) {
-            state.forcedProgressDay = uint32(currentDay);
-            state.forcedProgress = 0;
-        }
-    }
-
     /// @dev Group streak into tiers to avoid per-day bespoke tables.
     function _questTier(uint32 streak) private pure returns (uint8) {
         uint32 tier = streak / QUEST_TIER_STREAK_SPAN;
@@ -751,33 +708,37 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         return target;
     }
 
-    function _questMintAnyTarget(uint8 tier, uint256 entropy) private pure returns (uint32) {
+    function _difficultyForTarget(uint8 /*questFlags*/, uint256 entropy) private pure returns (uint16) {
+        return uint16(entropy & 0x3FF); // raw roll decides where within the tier range the target lands
+    }
+
+    function _questMintAnyTarget(uint8 tier, uint8 flags, uint256 entropy) private pure returns (uint32) {
         uint16 maxVal = _questPackedValue(QUEST_MINT_ANY_PACKED, tier);
-        uint16 difficulty = uint16(entropy & 0x3FF);
+        uint16 difficulty = _difficultyForTarget(flags, entropy);
         return _questLinearTarget(QUEST_MIN_MINT, uint32(maxVal), difficulty);
     }
 
-    function _questMintEthTarget(uint8 tier, uint256 entropy) private pure returns (uint32) {
+    function _questMintEthTarget(uint8 tier, uint8 flags, uint256 entropy) private pure returns (uint32) {
         if (tier == 0) {
             return QUEST_MIN_MINT;
         }
         uint16 maxVal = _questPackedValue(QUEST_MINT_ETH_PACKED, tier);
-        uint16 difficulty = uint16(entropy & 0x3FF);
+        uint16 difficulty = _difficultyForTarget(flags, entropy);
         return _questLinearTarget(QUEST_MIN_MINT, uint32(maxVal), difficulty);
     }
 
-    function _questBurnTarget(uint8 tier, uint256 entropy) private pure returns (uint32) {
-        return _questMintEthTarget(tier, entropy);
+    function _questBurnTarget(uint8 tier, uint8 flags, uint256 entropy) private pure returns (uint32) {
+        return _questMintEthTarget(tier, flags, entropy);
     }
 
-    function _questFlipTargetTokens(uint8 tier, uint256 entropy) private pure returns (uint32) {
+    function _questFlipTargetTokens(uint8 tier, uint8 flags, uint256 entropy) private pure returns (uint32) {
         uint16 maxVal = _questPackedValue(QUEST_FLIP_PACKED, tier);
-        uint16 difficulty = uint16(entropy & 0x3FF);
+        uint16 difficulty = _difficultyForTarget(flags, entropy);
         return _questLinearTarget(QUEST_MIN_FLIP_STAKE_TOKEN, uint32(maxVal), difficulty);
     }
 
-    function _questDecimatorTargetTokens(uint8 tier, uint256 entropy) private pure returns (uint32) {
-        uint32 base = _questFlipTargetTokens(tier, entropy);
+    function _questDecimatorTargetTokens(uint8 tier, uint8 flags, uint256 entropy) private pure returns (uint32) {
+        uint32 base = _questFlipTargetTokens(tier, flags, entropy);
         uint32 doubled = base * 2;
         if (doubled < base) {
             return type(uint32).max;
@@ -785,24 +746,21 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         return doubled;
     }
 
-    function _questAffiliateTargetTokens(uint8 tier, uint256 entropy) private pure returns (uint32) {
+    function _questAffiliateTargetTokens(uint8 tier, uint8 flags, uint256 entropy) private pure returns (uint32) {
         uint16 maxVal = _questPackedValue(QUEST_AFFILIATE_PACKED, tier);
-        uint16 difficulty = uint16(entropy & 0x3FF);
+        uint16 difficulty = _difficultyForTarget(flags, entropy);
         return _questLinearTarget(QUEST_MIN_TOKEN, uint32(maxVal), difficulty);
     }
 
-    function _questBondTargetCoin(uint8 tier, uint256 entropy, uint256 priceUnit) private pure returns (uint256) {
-        if (priceUnit == 0) return 0;
-        if (tier == 0) return priceUnit; // tier0 always 1 price unit
+    function _questBondTargetWei(uint8 tier, uint8 flags, uint256 entropy, uint256 priceWei) private pure returns (uint256) {
+        if (priceWei == 0) return 0;
+        uint256 minWei = priceWei >> 1; // half a mint
+        uint256 span = (priceWei * 5) / 2; // additional 2.5x mint cost => max 3x
+        uint256 tierMax = minWei + (span * tier) / QUEST_TIER_MAX_INDEX;
+        if (tierMax <= minWei) return minWei;
 
-        uint256 maxCoin = priceUnit * 5; // cap at 5x price unit for max tier
-        uint256 step = (maxCoin - priceUnit) / QUEST_TIER_MAX_INDEX;
-        uint256 tierMin = priceUnit + (step * tier);
-        uint256 tierMax = tier == QUEST_TIER_MAX_INDEX ? maxCoin : (tierMin + step);
-        if (tierMax <= tierMin) return tierMin;
-
-        uint16 difficulty = uint16(entropy & 0x3FF);
-        uint256 target = tierMin + (uint256(difficulty) * (tierMax - tierMin)) / 1024;
+        uint16 difficulty = _difficultyForTarget(flags, entropy);
+        uint256 target = minWei + (uint256(difficulty) * (tierMax - minWei)) / 1024;
         if (target > tierMax) target = tierMax;
         return target;
     }
@@ -826,56 +784,73 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         return QUEST_TYPE_BOND;
     }
 
-    /// @dev Select the bonus quest type (distinct from primary) respecting burn/decimator availability.
+    /// @dev Select the bonus quest type (distinct from primary) while skipping disabled categories.
     function _bonusQuestType(
         uint256 entropy,
         uint8 primaryType,
         bool burnAllowed,
         bool decAllowed,
-        bool bafAllowed
+        bool bafOpen
     ) private pure returns (uint8) {
-        if (decAllowed) {
-            return QUEST_TYPE_DECIMATOR;
-        }
-        if (bafAllowed) {
-            return QUEST_TYPE_FLIP;
-        }
-        for (uint8 attempt; attempt < QUEST_TYPE_COUNT * 2; ) {
-            uint8 candidate = uint8((entropy + attempt) % QUEST_TYPE_COUNT);
+        uint16[QUEST_TYPE_COUNT] memory weights;
+        uint16 total;
+
+        for (uint8 candidate; candidate < QUEST_TYPE_COUNT; ) {
             if (candidate == primaryType) {
                 unchecked {
-                    ++attempt;
+                    ++candidate;
                 }
                 continue;
             }
             if (!burnAllowed && candidate == QUEST_TYPE_BURN) {
                 unchecked {
-                    ++attempt;
+                    ++candidate;
                 }
                 continue;
             }
             if (!decAllowed && candidate == QUEST_TYPE_DECIMATOR) {
-                candidate = QUEST_TYPE_FLIP;
-                if (candidate == primaryType) {
-                    unchecked {
-                        ++attempt;
-                    }
-                    continue;
+                unchecked {
+                    ++candidate;
                 }
+                continue;
             }
-            return candidate;
-        }
-        return primaryType == QUEST_TYPE_MINT_ETH ? QUEST_TYPE_AFFILIATE : QUEST_TYPE_MINT_ETH;
-    }
 
-    /// @dev Marks ETH mint priming complete without granting a reward.
-    function _questCompleteForced(
-        PlayerQuestState storage state,
-        uint48 currentDay
-    ) private returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) {
-        state.completionMask |= QUEST_STATE_ETH_PRIMED;
-        state.forcedProgressDay = uint32(currentDay);
-        return (0, false, QUEST_TYPE_MINT_ETH, state.streak, false);
+            uint16 weight = 1;
+            if (candidate == QUEST_TYPE_DECIMATOR && decAllowed) {
+                weight = 4; // 4x weight during decimator windows
+            } else if (candidate == QUEST_TYPE_FLIP && bafOpen) {
+                weight = 4; // 4x weight during BAF windows
+            } else if (candidate == QUEST_TYPE_BURN && burnAllowed) {
+                weight = 2; // 2x weight when burn quests are enabled
+            }
+
+            weights[candidate] = weight;
+            total += weight;
+
+            unchecked {
+                ++candidate;
+            }
+        }
+
+        if (total == 0) {
+            return primaryType == QUEST_TYPE_MINT_ETH ? QUEST_TYPE_AFFILIATE : QUEST_TYPE_MINT_ETH;
+        }
+
+        uint256 roll = entropy % uint256(total);
+        for (uint8 candidate; candidate < QUEST_TYPE_COUNT; ) {
+            uint16 weight = weights[candidate];
+            if (weight != 0) {
+                if (roll < weight) {
+                    return candidate;
+                }
+                roll -= weight;
+            }
+            unchecked {
+                ++candidate;
+            }
+        }
+
+        return primaryType == QUEST_TYPE_MINT_ETH ? QUEST_TYPE_AFFILIATE : QUEST_TYPE_MINT_ETH;
     }
 
     /// @dev Completes a quest slot, credits streak when all slots finish, and returns the proportional reward.
@@ -885,20 +860,32 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         DailyQuest memory quest,
         uint256 priceUnit
     ) private returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) {
+        uint8 mask = state.completionMask;
         uint8 slotMask = uint8(1 << slot);
-        if ((state.completionMask & slotMask) != 0) {
+        if ((mask & slotMask) != 0) {
             return (0, false, quest.questType, state.streak, false);
         }
-        state.completionMask |= slotMask;
+        mask |= slotMask;
+        if (quest.day > state.lastActiveDay) {
+            state.lastActiveDay = uint32(quest.day);
+        }
+
         uint32 newStreak = state.streak;
         bool streakJustUpdated;
-        if ((state.completionMask & QUEST_STATE_STREAK_CREDITED) == 0 && slot == 0) {
-            state.completionMask |= QUEST_STATE_STREAK_CREDITED;
+        
+        // Streak is credited only when ALL slots are complete.
+        if (
+            (mask & QUEST_STATE_COMPLETED_SLOTS_MASK) == QUEST_STATE_COMPLETED_SLOTS_MASK &&
+            (mask & QUEST_STATE_STREAK_CREDITED) == 0
+        ) {
+            mask |= QUEST_STATE_STREAK_CREDITED;
             newStreak = state.streak + 1;
             state.streak = newStreak;
             state.lastCompletedDay = uint32(quest.day);
             streakJustUpdated = true;
         }
+        state.completionMask = mask;
+
         bool isHard = (quest.flags & QUEST_FLAG_HIGH_DIFFICULTY) != 0;
         uint32 rewardStreak = streakJustUpdated ? newStreak : state.baseStreak;
         uint256 baseReward = _questBaseReward(rewardStreak, quest.flags, priceUnit);
@@ -952,15 +939,4 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         return quests[1].day;
     }
 
-    /// @dev ETH mint eligibility is based on the last ETH mint level being within three levels.
-    function _hasRecentEthMint(address player) private pure returns (bool) {
-        player; // unused under disabled gate
-        return true;
-    }
-
-    /// @dev ETH priming can be satisfied via forced progress (same day) or recent ETH mint history.
-    function _ethMintReady(PlayerQuestState storage state, address player) private pure returns (bool) {
-        state; // unused under disabled gate
-        return _hasRecentEthMint(player);
-    }
 }

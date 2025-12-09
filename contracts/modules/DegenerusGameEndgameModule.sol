@@ -56,9 +56,8 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
             _maybeMintAffiliateTop(prevLevel);
 
             uint256 poolValue = currentPrizePool;
-            uint256 exterminatorShare = (prevLevel % 10 == 4 && prevLevel != 4)
-                ? (poolValue * 40) / 100
-                : (poolValue * 30) / 100;
+            uint16 exShareBps = _exterminatorShareBps(prevLevel, rngWord);
+            uint256 exterminatorShare = (poolValue * exShareBps) / 10_000;
 
             claimableDelta += _payExterminatorShare(ex, exterminatorShare);
 
@@ -262,5 +261,15 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
         }
         netSpend = poolWei - refund;
         return (netSpend, claimableDelta);
+    }
+
+    /// @dev Returns exterminator share in basis points; rolls 20-40% except on big-ex levels (fixed 40%).
+    function _exterminatorShareBps(uint24 prevLevel, uint256 rngWord) private pure returns (uint16) {
+        if (prevLevel % 10 == 4 && prevLevel != 4) {
+            return 4000; // 40% on big-ex levels
+        }
+        uint256 seed = uint256(keccak256(abi.encode(rngWord, prevLevel, "ex_share")));
+        uint256 roll = seed % 21; // 0-20 inclusive
+        return uint16(2000 + roll * 100); // 20-40% in 1% steps
     }
 }

@@ -138,8 +138,7 @@ contract DegenerusGame is DegenerusGameStorage {
 
     // mintPacked_ layout (LSB ->):
     // [0-23]=last ETH level, [24-47]=total ETH level count, [48-71]=ETH level streak,
-    // [72-103]=last ETH day, [104-123]=ETH day streak, [124-155]=last COIN day,
-    // [156-175]=COIN day streak, [176-207]=aggregate last day, [208-227]=aggregate day streak,
+    // [72-103]=last ETH day, [104-227]=reserved (legacy day/coin/agg tracking),
     // [228-243]=units minted at current level, [244]=level bonus paid flag.
     uint256 private constant MINT_MASK_24 = (uint256(1) << 24) - 1;
     uint256 private constant MINT_MASK_32 = (uint256(1) << 32) - 1;
@@ -736,7 +735,7 @@ contract DegenerusGame is DegenerusGameStorage {
     /// @dev
     /// When a trait is exterminated (<256):
     /// - Lock the exterminated trait in the current level’s storage.
-    /// - Pay the exterminator slice immediately (30%, or 40% on levels where `prevLevel % 10 == 4` and `prevLevel > 4`).
+    /// - Pay the exterminator slice immediately (roll 20-40%, or fixed 40% when `prevLevel % 10 == 4` and `prevLevel > 4`).
     /// - Route the remaining prize pool into a trait-only daily-style jackpot during endgame settlement (no equal-split bonus path).
     ///
     /// When a non-trait end occurs (>=256, e.g. daily jackpots path):

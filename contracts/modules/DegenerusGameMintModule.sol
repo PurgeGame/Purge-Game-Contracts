@@ -17,17 +17,11 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
 
     uint256 private constant MINT_MASK_24 = (uint256(1) << 24) - 1;
     uint256 private constant MINT_MASK_16 = (uint256(1) << 16) - 1;
-    uint256 private constant MINT_MASK_20 = (uint256(1) << 20) - 1;
     uint256 private constant MINT_MASK_32 = (uint256(1) << 32) - 1;
     uint256 private constant ETH_LAST_LEVEL_SHIFT = 0;
     uint256 private constant ETH_LEVEL_COUNT_SHIFT = 24;
     uint256 private constant ETH_LEVEL_STREAK_SHIFT = 48;
     uint256 private constant ETH_DAY_SHIFT = 72;
-    uint256 private constant ETH_DAY_STREAK_SHIFT = 104;
-    uint256 private constant COIN_DAY_SHIFT = 124;
-    uint256 private constant COIN_DAY_STREAK_SHIFT = 156;
-    uint256 private constant AGG_DAY_SHIFT = 176;
-    uint256 private constant AGG_DAY_STREAK_SHIFT = 208;
     uint256 private constant ETH_LEVEL_UNITS_SHIFT = 228;
     uint256 private constant ETH_LEVEL_BONUS_SHIFT = 244;
 
@@ -43,7 +37,8 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
         uint256 data;
 
         if (coinMint) {
-            data = _applyMintDay(prevData, day, COIN_DAY_SHIFT, MINT_MASK_32, COIN_DAY_STREAK_SHIFT, MINT_MASK_20);
+            // Coin mints no longer record per-day metadata.
+            return coinReward;
         } else {
             uint256 priceCoinLocal = priceCoin;
             uint24 prevLevel = uint24((prevData >> ETH_LAST_LEVEL_SHIFT) & MINT_MASK_24);
@@ -75,7 +70,7 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
                 return coinReward;
             }
 
-            data = _applyMintDay(prevData, day, ETH_DAY_SHIFT, MINT_MASK_32, ETH_DAY_STREAK_SHIFT, MINT_MASK_20);
+            data = _setMintDay(prevData, day, ETH_DAY_SHIFT, MINT_MASK_32);
 
             if (sameLevel) {
                 data = _setPacked(data, ETH_LEVEL_UNITS_SHIFT, MINT_MASK_16, levelUnitsAfter);
@@ -240,49 +235,13 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
         return uint32(day);
     }
 
-    function _applyMintDay(
-        uint256 data,
-        uint32 day,
-        uint256 dayShift,
-        uint256 dayMask,
-        uint256 streakShift,
-        uint256 streakMask
-    ) private pure returns (uint256) {
-        data = _bumpMintDay(data, day, dayShift, dayMask, streakShift, streakMask);
-        if (dayShift != AGG_DAY_SHIFT) {
-            data = _bumpMintDay(data, day, AGG_DAY_SHIFT, MINT_MASK_32, AGG_DAY_STREAK_SHIFT, MINT_MASK_20);
-        }
-        return data;
-    }
-
-    function _bumpMintDay(
-        uint256 data,
-        uint32 day,
-        uint256 dayShift,
-        uint256 dayMask,
-        uint256 streakShift,
-        uint256 streakMask
-    ) private pure returns (uint256) {
+    function _setMintDay(uint256 data, uint32 day, uint256 dayShift, uint256 dayMask) private pure returns (uint256) {
         uint32 prevDay = uint32((data >> dayShift) & dayMask);
         if (prevDay == day) {
             return data;
         }
-
-        uint256 streak = (data >> streakShift) & streakMask;
-        if (prevDay != 0 && day == prevDay + 1) {
-            if (streak < streakMask) {
-                unchecked {
-                    streak += 1;
-                }
-            }
-        } else {
-            streak = 1;
-        }
-
         uint256 clearedDay = data & ~(dayMask << dayShift);
-        uint256 updated = clearedDay | (uint256(day) << dayShift);
-        uint256 clearedStreak = updated & ~(streakMask << streakShift);
-        return clearedStreak | (streak << streakShift);
+        return clearedDay | (uint256(day) << dayShift);
     }
 
     function _setPacked(uint256 data, uint256 shift, uint256 mask, uint256 value) private pure returns (uint256) {

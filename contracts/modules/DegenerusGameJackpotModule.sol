@@ -61,7 +61,6 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
     uint16 private constant JACKPOT_BOND_BPS_GRAND = 5000; // 50% skim for the top bucket
     uint16 private constant JACKPOT_BOND_BPS_OTHER = 1000; // 10% skim for other buckets
     uint256 private constant JACKPOT_BOND_MIN_BASE = 0.02 ether;
-    uint8 private constant JACKPOT_BOND_MAX_MULTIPLIER = 4; // cap total bonds to keep gas bounded
     uint16 private constant BOND_BPS_MAP = 5000; // 50% of MAP jackpots routed into bonds
     uint16 private constant BOND_BPS_DAILY = 2000; // 20% of daily/early-burn jackpots routed into bonds
 
@@ -542,8 +541,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
                 entropyState,
                 bucketCount,
                 bondsAddr,
-                traitIdx == 0 ? JACKPOT_BOND_BPS_GRAND : (bondBps == 0 ? 0 : JACKPOT_BOND_BPS_OTHER),
-                traitIdx == 0
+                traitIdx == 0 ? JACKPOT_BOND_BPS_GRAND : (bondBps == 0 ? 0 : JACKPOT_BOND_BPS_OTHER)
             );
             totalPaidEth += delta + bondSpent;
             liabilityDelta += bucketLiability;
@@ -588,8 +586,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
                 entropy,
                 bucketCount,
                 address(0),
-                0,
-                false
+                0
             );
             unchecked {
                 ++traitIdx;
@@ -623,8 +620,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
         uint256 entropy,
         uint16 winnerCount,
         address bondsAddr,
-        uint16 bondBps,
-        bool isGrandBucket
+        uint16 bondBps
     )
         private
         returns (uint256 entropyState, uint256 ethDelta, uint256 coinDelta, uint256 bondSpent, uint256 liabilityDelta)
@@ -657,8 +653,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
                 perWinner,
                 traitShare,
                 entropyState,
-                bondBps,
-                isGrandBucket
+                bondBps
             );
             liabilityDelta += burnLiability;
         }
@@ -702,11 +697,9 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
         uint256 perWinner,
         uint256 traitShare,
         uint256 entropyState,
-        uint16 bondBps,
-        bool /*isGrandBucket*/
+        uint16 bondBps
     ) private returns (uint256 bondSpent, uint256 liabilityDelta) {
         uint256 winnersLen = winners.length;
-        if (winnersLen == 0 || perWinner == 0) return (0, 0);
 
         IDegenerusBondsJackpot bondsContract = IDegenerusBondsJackpot(bondsAddr);
 
