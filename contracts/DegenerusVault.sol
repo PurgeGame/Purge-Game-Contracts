@@ -117,12 +117,12 @@ contract DegenerusVaultShare {
     }
 }
 
-/// @title DegenerusStonkShare
-/// @notice Vault that holds ETH, stETH, and DEGEN. Two share classes:
-///         - coinShare: claims DEGEN only
+/// @title DegenerusVault
+/// @notice Vault that holds ETH, stETH, and BURNIE. Two share classes:
+///         - coinShare: claims BURNIE only
 ///         - ethShare: claims ETH/stETH only
 ///         Each class has independent supply and retains the "burn all, mint a new billion" behavior.
-contract DegenerusStonkNFT {
+contract DegenerusVault {
     // ---------------------------------------------------------------------
     // Errors
     // ---------------------------------------------------------------------
@@ -156,13 +156,13 @@ contract DegenerusStonkNFT {
     uint256 public constant REFILL_SUPPLY = 1_000_000_000 * 1e18; // 1 billion (used if final share is burned)
 
     // Share classes
-    DegenerusVaultShare public immutable coinShare; // DEGEN-only claims
+    DegenerusVaultShare public immutable coinShare; // BURNIE-only claims
     DegenerusVaultShare public immutable ethShare; // ETH/stETH-only claims
 
     // ---------------------------------------------------------------------
     // Wiring
     // ---------------------------------------------------------------------
-    address public immutable coin; // DEGEN coin (or compatible)
+    address public immutable coin; // BURNIE coin (or compatible)
     IStETH public immutable steth; // stETH token
     address public immutable bonds; // trusted bond contract for deposits
     uint256 public coinReserve; // coin escrowed for future mint (not yet minted)
@@ -225,7 +225,7 @@ contract DegenerusStonkNFT {
     // ---------------------------------------------------------------------
     // Claims via burn
     // ---------------------------------------------------------------------
-    /// @notice Burn coin-share tokens to redeem the proportional slice of DEGEN.
+    /// @notice Burn coin-share tokens to redeem the proportional slice of BURNIE.
     function burnCoin(uint256 amount, address to) external returns (uint256 coinOut) {
         if (to == address(0)) revert ZeroAddress();
         DegenerusVaultShare share = coinShare;
@@ -281,7 +281,7 @@ contract DegenerusStonkNFT {
         if (stEthOut != 0) _payToken(address(steth), to, stEthOut);
     }
 
-    /// @notice View the coin-share burn required to withdraw a target amount of DEGEN.
+    /// @notice View the coin-share burn required to withdraw a target amount of BURNIE.
     function previewBurnForCoinOut(uint256 coinOut) external view returns (uint256 burnAmount) {
         uint256 reserve = coinReserve;
         if (coinOut == 0 || coinOut > reserve) revert Insufficient();

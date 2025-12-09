@@ -556,7 +556,7 @@ contract IconRendererTrophy32 {
                     uint256(current).toString(),
                     '"},{"trait_type":"Odds","value":"',
                     _formatBpsPercent(chanceBps),
-                    '"},{"trait_type":"Sellback (DEGEN)","value":"',
+                    '"},{"trait_type":"Sellback (BURNIE)","value":"',
                     _formatCoinAmount(sellCoinValue),
                     '"}]'
                 )
@@ -611,7 +611,7 @@ contract IconRendererTrophy32 {
         fracStr[4] = bytes1(uint8(48 + (frac / 10) % 10));
         fracStr[5] = bytes1(uint8(48 + (frac % 10)));
 
-        return string.concat(whole.toString(), ".", string(fracStr), " DEGEN");
+        return string.concat(whole.toString(), ".", string(fracStr), " BURNIE");
     }
 
     function _pad4(uint16 v) private pure returns (string memory) {

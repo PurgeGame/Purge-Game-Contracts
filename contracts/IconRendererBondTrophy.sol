@@ -328,7 +328,7 @@ contract IconRendererBondTrophy is IDegenerusBondRenderer {
             '"},{"trait_type":"Initial Distance","value":"', uint256(created).toString(),
             '"},{"trait_type":"Current Distance","value":"', uint256(current).toString(),
             '"},{"trait_type":"Odds","value":"', _formatBpsPercent(chanceBps),
-            '"},{"trait_type":"Sellback (DEGEN)","value":"', _formatCoinAmount(sellCoinValue),
+            '"},{"trait_type":"Sellback (BURNIE)","value":"', _formatCoinAmount(sellCoinValue),
             '"}]'
         ));
     }
@@ -364,7 +364,7 @@ contract IconRendererBondTrophy is IDegenerusBondRenderer {
         fracStr[3] = bytes1(uint8(48 + (frac / 100) % 10));
         fracStr[4] = bytes1(uint8(48 + (frac / 10) % 10));
         fracStr[5] = bytes1(uint8(48 + (frac % 10)));
-        return string.concat(whole.toString(), ".", string(fracStr), " DEGEN");
+        return string.concat(whole.toString(), ".", string(fracStr), " BURNIE");
     }
 
     function _hsvToRgb(uint16 h, uint8 s, uint8 v) private pure returns (uint24) {

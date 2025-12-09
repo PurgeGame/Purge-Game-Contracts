@@ -254,7 +254,7 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         return (0, false, matched ? fallbackType : QUEST_TYPE_MINT_ANY, state.streak, false);
     }
 
-    /// @notice Handle flip/unstake progress credited in DEGEN base units (6 decimals).
+    /// @notice Handle flip/unstake progress credited in BURNIE base units (6 decimals).
     function handleFlip(
         address player,
         uint256 flipCredit
@@ -288,7 +288,7 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         return _questComplete(state, slotIndex, quest, priceUnit);
     }
 
-    /// @notice Handle decimator burns counted in DEGEN base units (6 decimals).
+    /// @notice Handle decimator burns counted in BURNIE base units (6 decimals).
     function handleDecimator(
         address player,
         uint256 burnAmount
@@ -360,7 +360,7 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         return _questComplete(state, slotIndex, quest, priceUnit);
     }
 
-    /// @notice Handle affiliate earnings credited in DEGEN base units (6 decimals).
+    /// @notice Handle affiliate earnings credited in BURNIE base units (6 decimals).
     function handleAffiliate(
         address player,
         uint256 amount
@@ -953,13 +953,13 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
     }
 
     /// @dev ETH mint eligibility is based on the last ETH mint level being within three levels.
-    function _hasRecentEthMint(address player) private view returns (bool) {
+    function _hasRecentEthMint(address player) private pure returns (bool) {
         player; // unused under disabled gate
         return true;
     }
 
     /// @dev ETH priming can be satisfied via forced progress (same day) or recent ETH mint history.
-    function _ethMintReady(PlayerQuestState storage state, address player) private view returns (bool) {
+    function _ethMintReady(PlayerQuestState storage state, address player) private pure returns (bool) {
         state; // unused under disabled gate
         return _hasRecentEthMint(player);
     }

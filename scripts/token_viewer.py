@@ -51,6 +51,7 @@ def require_env(name: str) -> str:
     value = (
         os.environ.get(name)
         or os.environ.get(name.lower())
+        or os.environ.get(name.replace("BURNIE_", ""))
         or os.environ.get(name.replace("DEGEN_", ""))
         or ""
     )
@@ -60,7 +61,7 @@ def require_env(name: str) -> str:
 
 
 def resolve_rpc_url() -> str:
-    for key in ("DEGEN_RPC_URL", "SEPOLIA_RPC_URL", "RPC_URL", "ALCHEMY_SEPOLIA_URL"):
+    for key in ("BURNIE_RPC_URL", "DEGEN_RPC_URL", "SEPOLIA_RPC_URL", "RPC_URL", "ALCHEMY_SEPOLIA_URL"):
         value = os.environ.get(key) or os.environ.get(key.lower())
         if value:
             return value
@@ -439,7 +440,7 @@ def main():
     w3 = Web3(Web3.HTTPProvider(provider_url))
     w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
 
-    artifact_path = ROOT / "artifacts" / "contracts" / "DegenerusGameNFT.sol" / "DegenerusGameNFT.json"
+    artifact_path = ROOT / "artifacts" / "contracts" / "DegenerusGamepieces.sol" / "DegenerusGamepieces.json"
     if not artifact_path.exists():
         raise RuntimeError(f"Missing artifact: {artifact_path}")
     with artifact_path.open() as fh:

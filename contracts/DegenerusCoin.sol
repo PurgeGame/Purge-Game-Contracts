@@ -2,10 +2,10 @@
 pragma solidity ^0.8.26;
 
 /// @title DegenerusCoin
-/// @notice ERC20-style game token that doubles as accounting for coinflip wagers, stakes, quests, and jackpots.
+/// @notice ERC20-style game token (BURNIE) that doubles as accounting for coinflip wagers, stakes, quests, and jackpots.
 /// @dev Acts as the hub for gameplay modules (game, NFTs, quests, jackpots). Mint/burn only occurs
 ///      through explicit gameplay flows; there is intentionally no public mint.
-import {DegenerusGameNFT} from "./DegenerusGameNFT.sol";
+import {DegenerusGamepieces} from "./DegenerusGamepieces.sol";
 import {DegenerusAffiliate} from "./DegenerusAffiliate.sol";
 import {IDegenerusGame} from "./interfaces/IDegenerusGame.sol";
 import {IDegenerusQuestModule, QuestInfo, PlayerQuestView} from "./interfaces/IDegenerusQuestModule.sol";
@@ -51,8 +51,8 @@ contract DegenerusCoin {
     // ERC20 state
     // ---------------------------------------------------------------------
     // Minimal ERC20 metadata/state; transfers are unchecked beyond underflow protection in Solidity 0.8.
-    string public name = "DegenerusCoin";
-    string public symbol = "DEGEN";
+    string public name = "Burnie";
+    string public symbol = "BURNIE";
     uint256 public totalSupply;
     mapping(address => uint256) public balanceOf;
     mapping(address => mapping(address => uint256)) public allowance;
@@ -77,7 +77,7 @@ contract DegenerusCoin {
     // ---------------------------------------------------------------------
     // Core modules; set once via `wire`.
     IDegenerusGame internal degenerusGame;
-    DegenerusGameNFT internal degenerusGameNFT;
+    DegenerusGamepieces internal degenerusGamepieces;
     IDegenerusQuestModule internal questModule;
     DegenerusAffiliate public immutable affiliateProgram;
     address public jackpots;
@@ -167,7 +167,7 @@ contract DegenerusCoin {
     // Constants (units & limits)
     // ---------------------------------------------------------------------
     uint256 private constant MILLION = 1e6; // token has 6 decimals
-    uint256 private constant MIN = 100 * MILLION; // min burn / min flip (100 DEGEND)
+    uint256 private constant MIN = 100 * MILLION; // min burn / min flip (100 BURNIE)
     uint16 private constant COINFLIP_EXTRA_MIN_PERCENT = 78; // base % on non-extreme flips
     uint16 private constant COINFLIP_EXTRA_RANGE = 38; // roll range (add to min) => [78..115]
     uint16 private constant BPS_DENOMINATOR = 10_000; // basis point math helper
@@ -188,7 +188,7 @@ contract DegenerusCoin {
 
     modifier onlyGameplayContracts() {
         address sender = msg.sender;
-        if (sender != address(degenerusGame) && sender != address(degenerusGameNFT)) revert OnlyGame();
+        if (sender != address(degenerusGame) && sender != address(degenerusGamepieces)) revert OnlyGame();
         _;
     }
 
@@ -196,7 +196,7 @@ contract DegenerusCoin {
         address sender = msg.sender;
         if (
             sender != address(degenerusGame) &&
-            sender != address(degenerusGameNFT) &&
+            sender != address(degenerusGamepieces) &&
             sender != address(affiliateProgram)
         ) revert OnlyGame();
         _;
@@ -229,7 +229,7 @@ contract DegenerusCoin {
         }
     }
 
-    /// @notice Burn DEGEN to increase the caller’s coinflip stake, applying streak bonuses when eligible.
+    /// @notice Burn BURNIE to increase the caller’s coinflip stake, applying streak bonuses when eligible.
     /// @param amount Amount (6 decimals) to burn; must satisfy the global minimum, or zero to just cash out.
     function depositCoinflip(uint256 amount) external {
         // Allow zero-amount calls to act as a cash-out of pending winnings without adding a new stake.
@@ -270,7 +270,7 @@ contract DegenerusCoin {
         _transfer(address(this), msg.sender, amount);
     }
 
-    /// @notice Burn DEGEN during an active Decimator window to accrue weighted participation.
+    /// @notice Burn BURNIE during an active Decimator window to accrue weighted participation.
     /// @param amount Amount (6 decimals) to burn; must satisfy the global minimum.
     function decimatorBurn(uint256 amount) external {
         (bool decOn, uint24 lvl) = degenerusGame.decWindow();
@@ -345,7 +345,7 @@ contract DegenerusCoin {
         return _claimCoinflipsInternal(player);
     }
 
-    /// @notice Burn DEGEND to open a future stake targeting `targetLevel` with a risk radius.
+    /// @notice Burn BURNIE to open a future stake targeting `targetLevel` with a risk radius.
     /// @dev
     /// - `burnAmt` must be at least 250e6 base units (token has 6 decimals).
     /// - `targetLevel` must be ahead of the current effective game level.
@@ -383,9 +383,9 @@ contract DegenerusCoin {
 
     function _setNft(address nft_) private {
         if (nft_ == address(0)) return;
-        address current = address(degenerusGameNFT);
+        address current = address(degenerusGamepieces);
         if (current == address(0)) {
-            degenerusGameNFT = DegenerusGameNFT(nft_);
+            degenerusGamepieces = DegenerusGamepieces(nft_);
         } else if (nft_ != current) {
             revert AlreadyWired();
         }
@@ -605,7 +605,7 @@ contract DegenerusCoin {
         return module.getPlayerQuestView(player);
     }
 
-    /// @notice Burn DEGEN from `target` during gameplay flows (purchases, fees).
+    /// @notice Burn BURNIE from `target` during gameplay flows (purchases, fees).
     /// @dev Access: DegenerusGame or NFT only. OZ ERC20 `_burn` reverts on zero address or insufficient balance.
     function burnCoin(address target, uint256 amount) external onlyGameplayContracts {
         _burn(target, amount);
@@ -836,7 +836,7 @@ contract DegenerusCoin {
 
     /// @notice Increase the global bounty pool.
     /// @dev Uses unchecked addition; will wrap on overflow.
-    /// @param amount Amount of DEGEND to add to the bounty pool.
+    /// @param amount Amount of BURNIE to add to the bounty pool.
     function _addToBounty(uint256 amount) internal {
         unchecked {
             // Gas-optimized: wraps on overflow, which would effectively reset the bounty.

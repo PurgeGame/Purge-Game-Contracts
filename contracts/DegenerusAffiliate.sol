@@ -281,7 +281,7 @@ contract DegenerusAffiliate {
         if (!ok) revert Insufficient();
     }
 
-    /// @notice Presale purchase flow (ETH -> DEGEN) with linear price ramp and deferred bonuses.
+    /// @notice Presale purchase flow (ETH -> BURNIE) with linear price ramp and deferred bonuses.
     function presale() external payable returns (uint256 amountBase) {
         if (presaleShutdown) revert PresaleClosed();
         uint256 ethIn = msg.value;

@@ -50,33 +50,32 @@ library DegenerusGameCredit {
         uint256 amount,
         MintPaymentKind payKind,
         uint256 msgValue
-    ) internal returns (bool ok, uint256 prizeContribution, uint256 creditUsed) {
+    ) internal returns (bool ok, uint256 prizeContribution, uint256 creditUsed, uint256 claimableUsed) {
         if (payKind == MintPaymentKind.DirectEth) {
-            if (msgValue != amount) return (false, 0, 0);
-            return (true, amount, 0);
+            if (msgValue != amount) return (false, 0, 0, 0);
+            return (true, amount, 0, 0);
         }
         if (payKind == MintPaymentKind.Claimable) {
-            if (msgValue != 0) return (false, 0, 0);
+            if (msgValue != 0) return (false, 0, 0, 0);
             uint256 claimable = claimableWinnings[player];
-            if (claimable <= amount) return (false, 0, 0);
+            if (claimable <= amount) return (false, 0, 0, 0);
             unchecked {
                 claimableWinnings[player] = claimable - amount;
             }
-            return (true, amount, 0);
+            return (true, amount, 0, amount);
         }
         if (payKind == MintPaymentKind.BondCredit) {
-            if (msgValue != 0) return (false, 0, 0);
+            if (msgValue != 0) return (false, 0, 0, 0);
             uint256 credit = bondCredit[player];
-            if (credit < amount) return (false, 0, 0);
+            if (credit < amount) return (false, 0, 0, 0);
             unchecked {
                 bondCredit[player] = credit - amount;
             }
-            return (true, 0, amount);
+            return (true, 0, amount, 0);
         }
         if (payKind == MintPaymentKind.Combined) {
-            if (msgValue > amount) return (false, 0, 0);
+            if (msgValue > amount) return (false, 0, 0, 0);
             uint256 remaining = amount - msgValue;
-            uint256 claimableUsed;
             if (remaining != 0) {
                 uint256 claimable = claimableWinnings[player];
                 if (claimable > 1) {
@@ -92,16 +91,16 @@ library DegenerusGameCredit {
             }
             if (remaining != 0) {
                 uint256 credit = bondCredit[player];
-                if (credit < remaining) return (false, 0, 0);
+                if (credit < remaining) return (false, 0, 0, 0);
                 unchecked {
                     bondCredit[player] = credit - remaining;
                 }
                 creditUsed = remaining;
                 remaining = 0;
             }
-            if (remaining != 0) return (false, 0, 0);
-            return (true, msgValue + claimableUsed, creditUsed);
+            if (remaining != 0) return (false, 0, 0, 0);
+            return (true, msgValue + claimableUsed, creditUsed, claimableUsed);
         }
-        return (false, 0, 0);
+        return (false, 0, 0, 0);
     }
 }

@@ -19,7 +19,7 @@ contract IconRendererRegular32 {
 
     // ---------------- Storage ----------------
 
-    IDegenerusdRead private immutable coin; // DEGEN ERC20 implementing affiliateProgram()
+    IDegenerusdRead private immutable coin; // BURNIE ERC20 implementing affiliateProgram()
     IIcons32 private immutable icons; // External icon data source
     IColorRegistry private immutable registry; // Color override store
     address public immutable bonds; // admin
@@ -223,7 +223,7 @@ contract IconRendererRegular32 {
 
     // Linked contracts (set once).
     address private game; // DegenerusGame contract (authorised caller)
-    IERC721Lite private nft; // DegenerusGameNFT ERC721 contract
+    IERC721Lite private nft; // DegenerusGamepieces ERC721 contract
     // --- Square geometry (for trophy sizing vs inner side) -----------------
     uint32 private constant SQUARE_SIDE_100 = 100; // <rect width/height>
     uint32 private constant BORDER_STROKE_W = 2; // stroke-width in _svgHeader()
@@ -303,7 +303,7 @@ contract IconRendererRegular32 {
     /// @dev Read the exterminated trait from a packed trophy `data` word.
     ///      Bits [167:152] hold: 0xFFFF for placeholder (unwon), else uint8 trait id.
     ///      Bit 200 is reserved for MAP trophies (1 = MAP, 0 = level trophy).
-    /// @notice Render metadata + image for a DEGEN token (regular or trophy).
+    /// @notice Render metadata + image for a BURNIE token (regular or trophy).
     /// @param tokenId   NFT id.
     /// @param data      Packed game data:
     ///                  - Trophy: bits [167:152] exterminated trait (0xFFFF = placeholder), bits [151:128] level, bit 200 = MAP flag.

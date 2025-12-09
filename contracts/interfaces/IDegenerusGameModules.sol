@@ -51,7 +51,6 @@ interface IDegenerusGameJackpotModule {
 interface IDegenerusGameBondModule {
     function bondMaintenanceForMap(
         address bondsAddr,
-        address coinAddr,
         address stethAddr,
         uint48 day,
         uint256 totalWei,
@@ -59,7 +58,7 @@ interface IDegenerusGameBondModule {
         uint32 cap
     ) external returns (bool worked);
     function stakeForTargetRatio(address bondsAddr, address stethAddr, uint24 lvl) external;
-    function drainToBonds(address bondsAddr, address stethAddr, uint48 day) external;
+    function drainToBonds(address bondsAddr, address stethAddr) external;
 }
 
 interface IDegenerusGameMintModule {

@@ -81,6 +81,7 @@ abstract contract DegenerusGameStorage {
     uint256 internal principalStEth; // stETH principal the contract has staked
     uint48 public deployTimestamp; // deployment timestamp for long-tail inactivity guard
     address internal bonds; // bonds contract wired once post-deploy
+    address internal vault; // reward vault for BURNIE/ETH/stETH routing
     bool internal bondGameOver; // true once bondPool has been flushed to bonds for direct claims
 
     // ---------------------------------------------------------------------
@@ -95,6 +96,7 @@ abstract contract DegenerusGameStorage {
     // Token / trait state
     // ---------------------------------------------------------------------
     mapping(address => uint256) internal claimableWinnings; // ETH claimable by players
+    uint256 internal claimableWinningsLiability; // aggregate ETH owed via claimableWinnings
     mapping(uint24 => address[][256]) internal traitBurnTicket; // level -> trait id -> ticket owner list
     uint32[80] internal dailyBurnCount; // per-day trait hit counters used for jackpot selection
     uint32[256] internal traitRemaining; // remaining supply per trait id

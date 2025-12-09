@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {IDegenerusGameNFT} from "./DegenerusGameNFT.sol";
+import {IDegenerusGamepieces} from "./DegenerusGamepieces.sol";
 import {IDegenerusCoinModule} from "./interfaces/DegenerusGameModuleInterfaces.sol";
 import {IDegenerusCoin} from "./interfaces/IDegenerusCoin.sol";
 import {IDegenerusAffiliate} from "./interfaces/IDegenerusAffiliate.sol";
@@ -32,12 +32,9 @@ interface IDegenerusBonds {
     function payBonds(
         uint256 coinAmount,
         uint256 stEthAmount,
-        uint48 rngDay,
-        uint256 rngWord,
-        uint256 maxBonds
+        uint256 rngWord
     ) external payable;
-    function resolvePendingBonds(uint256 maxBonds) external;
-    function resolvePending() external view returns (bool);
+    function resolveBonds(uint256 rngWord) external returns (bool worked);
     function notifyGameOver() external;
     function finalizeShutdown(uint256 maxIds) external returns (uint256 processedIds, uint256 burned, bool complete);
     function setTransfersLocked(bool locked, uint48 rngDay) external;
@@ -111,8 +108,8 @@ contract DegenerusGame is DegenerusGameStorage {
     // Immutable Addresses
     // -----------------------
     IDegenerusRendererLike private immutable renderer; // Trusted renderer; used for tokenURI composition
-    IDegenerusCoin private immutable coin; // Trusted coin/game-side coordinator (DEGEN ERC20)
-    IDegenerusGameNFT private immutable nft; // ERC721 interface for mint/burn/metadata surface
+    IDegenerusCoin private immutable coin; // Trusted coin/game-side coordinator (BURNIE ERC20)
+    IDegenerusGamepieces private immutable nft; // ERC721 interface for mint/burn/metadata surface
     address private immutable affiliateProgram; // Cached affiliate program for payout routing
     IStETH private immutable steth; // stETH token held by the game
     address private immutable jackpots; // DegenerusJackpots contract
@@ -137,7 +134,7 @@ contract DegenerusGame is DegenerusGameStorage {
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
     uint32 private constant VRF_CALLBACK_GAS_LIMIT = 200_000;
     uint16 private constant VRF_REQUEST_CONFIRMATIONS = 10;
-    uint256 private constant RNG_NUDGE_BASE_COST = 100 * 1e6; // DEGEN has 6 decimals
+    uint256 private constant RNG_NUDGE_BASE_COST = 100 * 1e6; // BURNIE has 6 decimals
 
     // mintPacked_ layout (LSB ->):
     // [0-23]=last ETH level, [24-47]=total ETH level count, [48-71]=ETH level streak,
@@ -156,7 +153,7 @@ contract DegenerusGame is DegenerusGameStorage {
     // -----------------------
 
     /**
-     * @param degenerusCoinContract Trusted DEGEN ERC20 / game coordinator address
+     * @param degenerusCoinContract Trusted BURNIE ERC20 / game coordinator address
      * @param renderer_         Trusted on-chain renderer
      * @param nftContract       ERC721 game contract
      * @param endgameModule_    Delegate module handling endgame settlement
@@ -170,6 +167,7 @@ contract DegenerusGame is DegenerusGameStorage {
      * @param bonds_            Bonds contract address
      * @param trophies_         Standalone trophy ERC721 contract (cosmetic only)
      * @param affiliateProgram_ Affiliate program contract address (for payouts/trophies)
+     * @param vault_            Reward vault contract address
      * @param vrfAdmin_         VRF owner/admin contract authorized to rotate the coordinator/subscription on stalls
      */
     constructor(
@@ -187,11 +185,12 @@ contract DegenerusGame is DegenerusGameStorage {
         address bonds_,
         address trophies_,
         address affiliateProgram_,
+        address vault_,
         address vrfAdmin_
     ) {
         coin = IDegenerusCoin(degenerusCoinContract);
         renderer = IDegenerusRendererLike(renderer_);
-        nft = IDegenerusGameNFT(nftContract);
+        nft = IDegenerusGamepieces(nftContract);
         endgameModule = endgameModule_;
         jackpotModule = jackpotModule_;
         mintModule = mintModule_;
@@ -205,6 +204,7 @@ contract DegenerusGame is DegenerusGameStorage {
         bonds = bonds_;
         trophies = trophies_;
         affiliateProgramAddr = affiliateProgram_;
+        vault = vault_;
         if (!steth.approve(bonds_, type(uint256).max)) revert E();
         deployTimestamp = uint48(block.timestamp);
     }
@@ -223,6 +223,7 @@ contract DegenerusGame is DegenerusGameStorage {
     function bondCreditToClaimable(address player, uint256 amount) external onlyBonds {
         if (bondGameOver || amount == 0 || amount > bondPool) revert E();
         bondPool -= amount;
+        claimableWinningsLiability += amount;
         _addClaimableEth(player, amount);
     }
 
@@ -388,7 +389,7 @@ contract DegenerusGame is DegenerusGameStorage {
             uint256 priceWei = price;
             if (priceWei == 0) revert E();
 
-            // Charge DEGEN for the equivalent ETH cost at current priceWei.
+            // Charge BURNIE for the equivalent ETH cost at current priceWei.
             uint256 burnCost = (priceWei * mintUnits) / 1 ether;
             coin.burnCoin(player, burnCost);
             return _recordMintDataModule(player, lvl, true, 0);
@@ -408,7 +409,7 @@ contract DegenerusGame is DegenerusGameStorage {
         uint256 amount,
         MintPaymentKind payKind
     ) private returns (uint256 prizeContribution) {
-        (bool ok, uint256 prize, uint256 creditUsed) = DegenerusGameCredit.processMintPayment(
+        (bool ok, uint256 prize, uint256 creditUsed, uint256 claimableUsed) = DegenerusGameCredit.processMintPayment(
             claimableWinnings,
             bondCredit,
             player,
@@ -417,6 +418,13 @@ contract DegenerusGame is DegenerusGameStorage {
             msg.value
         );
         if (!ok) revert E();
+        if (claimableUsed != 0) {
+            if (claimableWinningsLiability >= claimableUsed) {
+                claimableWinningsLiability -= claimableUsed;
+            } else {
+                claimableWinningsLiability = 0;
+            }
+        }
         if (creditUsed != 0) {
             uint256 escrow = bondCreditEscrow;
             if (escrow != 0) {
@@ -446,14 +454,14 @@ contract DegenerusGame is DegenerusGameStorage {
             if (
                 deployTs != 0 && uint256(ts) >= uint256(deployTs) + DEPLOY_IDLE_TIMEOUT // uint256 to avoid uint48 overflow
             ) {
-                drainToBonds(day);
+                drainToBonds();
                 return;
             }
         }
         uint8 _gameState = gameState;
         // Liveness drain
         if (ts - 365 days > lst && _gameState != 0) {
-            drainToBonds(day);
+            drainToBonds();
             return;
         }
         uint24 lvl = level;
@@ -881,7 +889,6 @@ contract DegenerusGame is DegenerusGameStorage {
             abi.encodeWithSelector(
                 IDegenerusGameBondModule.bondMaintenanceForMap.selector,
                 bonds,
-                address(coin),
                 address(steth),
                 day,
                 totalWei,
@@ -902,9 +909,9 @@ contract DegenerusGame is DegenerusGameStorage {
         }
     }
 
-    function _drainToBondsModule(uint48 day) private {
+    function _drainToBondsModule() private {
         (bool ok, bytes memory data) = bondModule.delegatecall(
-            abi.encodeWithSelector(IDegenerusGameBondModule.drainToBonds.selector, bonds, address(steth), day)
+            abi.encodeWithSelector(IDegenerusGameBondModule.drainToBonds.selector, bonds, address(steth))
         );
         if (!ok) {
             _revertWith(data);
@@ -928,6 +935,7 @@ contract DegenerusGame is DegenerusGameStorage {
         if (op == DegenerusGameExternalOp.DecJackpotClaim) {
             address jackpotsAddr = jackpots;
             if (jackpotsAddr == address(0) || msg.sender != jackpotsAddr) revert E();
+            claimableWinningsLiability += amount;
             _addClaimableEth(account, amount);
         } else {
             revert E();
@@ -947,6 +955,11 @@ contract DegenerusGame is DegenerusGameStorage {
         unchecked {
             claimableWinnings[player] = 1;
             payout = amount - 1;
+            if (claimableWinningsLiability >= payout) {
+                claimableWinningsLiability -= payout;
+            } else {
+                claimableWinningsLiability = 0;
+            }
         }
         _payoutWithStethFallback(player, payout);
     }
@@ -976,6 +989,7 @@ contract DegenerusGame is DegenerusGameStorage {
         info.basePerBondWei = 0;
         info.stake = false;
         bondCreditEscrow = bondCreditEscrow - creditWei;
+        claimableWinningsLiability += creditWei;
         _addClaimableEth(player, creditWei);
         emit BondCreditLiquidated(player, creditWei);
         return true;
@@ -1019,6 +1033,7 @@ contract DegenerusGame is DegenerusGameStorage {
 
         address bondsAddr = bonds;
         if (bondsAddr == address(0)) {
+            claimableWinningsLiability += spend;
             _addClaimableEth(player, spend);
             return;
         }
@@ -1027,6 +1042,7 @@ contract DegenerusGame is DegenerusGameStorage {
             // bond purchase succeeded
         } catch {
             // fallback to crediting winnings if bond deposit fails
+            claimableWinningsLiability += spend;
             _addClaimableEth(player, spend);
         }
     }
@@ -1038,6 +1054,7 @@ contract DegenerusGame is DegenerusGameStorage {
             currentPrizePool += msg.value;
             return;
         }
+        claimableWinningsLiability += msg.value;
         _addClaimableEth(player, msg.value);
     }
 
@@ -1212,8 +1229,9 @@ contract DegenerusGame is DegenerusGameStorage {
         return true;
     }
 
-    function drainToBonds(uint48 day) private {
-        _drainToBondsModule(day);
+    function drainToBonds() private {
+        _drainToBondsModule();
+        uint48 day = _currentDayIndex();
         gameState = 0;
         _requestRngBestEffort(day);
     }
@@ -1415,7 +1433,7 @@ contract DegenerusGame is DegenerusGameStorage {
         rngRequestTime = 0;
     }
 
-    /// @notice Pay DEGEN to nudge the next RNG word by +1; cost scales +50% per queued nudge and resets after fulfillment.
+    /// @notice Pay BURNIE to nudge the next RNG word by +1; cost scales +50% per queued nudge and resets after fulfillment.
     /// @dev Only available while RNG is unlocked (before a VRF request is in-flight).
     function reverseFlip() external {
         if (rngLockedFlag) revert RngLocked();

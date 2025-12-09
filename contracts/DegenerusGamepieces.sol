@@ -36,7 +36,7 @@ struct PurchaseParams {
     bytes32 affiliateCode;
 }
 
-interface IDegenerusGameNFT {
+interface IDegenerusGamepieces {
     function tokenTraitsPacked(uint256 tokenId) external view returns (uint32);
     function purchaseCount() external view returns (uint32);
     function finalizePurchasePhase(uint32 minted, uint256 rngWord) external;
@@ -51,11 +51,11 @@ interface IDegenerusGameNFT {
     function purchase(PurchaseParams calldata params) external payable;
 }
 
-/// @title DegenerusGameNFT
+/// @title DegenerusGamepieces
 /// @notice ERC721 surface for Degenerus player tokens.
 /// @dev Uses a packed ownership layout inspired by ERC721A; relies on external wiring from the coin contract
 ///      to set the trusted game address.
-contract DegenerusGameNFT {
+contract DegenerusGamepieces {
     // ---------------------------------------------------------------------
     // Errors
     // ---------------------------------------------------------------------
@@ -549,7 +549,7 @@ contract DegenerusGameNFT {
     }
 
     function _coinReceive(address payer, uint32 quantity, uint256 amount, uint24 lvl, uint256 discount) private {
-        // Coin payments burn DEGEN (with level-based modifiers) and notify quest tracking without moving ETH.
+        // Coin payments burn BURNIE (with level-based modifiers) and notify quest tracking without moving ETH.
         uint8 stepMod = uint8(lvl % 20);
         if (stepMod == 13) amount = (amount * 3) / 2;
         else if (stepMod == 18) amount = (amount * 9) / 10;

@@ -241,6 +241,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
         address recipient = _payoutRecipient(beneficiary);
         unchecked {
             claimableWinnings[recipient] += weiAmount;
+            claimableWinningsLiability += weiAmount;
         }
         emit PlayerCredited(beneficiary, recipient, weiAmount);
     }
