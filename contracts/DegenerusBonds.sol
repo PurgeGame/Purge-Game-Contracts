@@ -317,14 +317,21 @@ contract DegenerusBonds {
 
     /// @notice Player deposit flow during an active sale window.
     function deposit(uint24 maturityLevel) external payable returns (uint256 scoreAwarded) {
-        return _depositFor(msg.sender, msg.sender, maturityLevel, msg.value);
+        uint24 active = _activeMaturity();
+        if (maturityLevel != active) revert SaleClosed();
+        return depositFor(msg.sender);
+    }
+
+    /// @notice Deposit into the current active maturity; defaults beneficiary to caller when zero.
+    function depositFor(address beneficiary) public payable returns (uint256 scoreAwarded) {
+        address ben = beneficiary == address(0) ? msg.sender : beneficiary;
+        uint24 maturityLevel = _activeMaturity();
+        return _depositFor(ben, ben, maturityLevel, msg.value);
     }
 
     /// @notice Deposit on behalf of a player into the current active maturity (game compatibility shim).
-    /// @dev Caller is expected to be the game when using credit on behalf of a player.
     function depositCurrentFor(address beneficiary) external payable returns (uint256 scoreAwarded) {
-        uint24 maturityLevel = _activeMaturity();
-        return _depositFor(beneficiary, beneficiary, maturityLevel, msg.value);
+        return depositFor(beneficiary);
     }
 
     /// @notice Funding shim used by the game to route yield/coin into bonds and run upkeep.

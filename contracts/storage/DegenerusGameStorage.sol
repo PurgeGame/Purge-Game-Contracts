@@ -127,4 +127,7 @@ abstract contract DegenerusGameStorage {
     // ---------------------------------------------------------------------
     address internal trophies; // standalone trophy contract (purely cosmetic)
     address internal affiliateProgramAddr; // cached affiliate program (for trophies)
+
+    // Cached affiliate payout overrides (synthetic MAP players -> affiliate owner)
+    mapping(address => address) internal affiliatePayoutCache;
 }

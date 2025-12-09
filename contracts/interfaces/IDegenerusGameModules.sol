@@ -6,10 +6,9 @@ import {IDegenerusCoinModule} from "./DegenerusGameModuleInterfaces.sol";
 interface IDegenerusGameEndgameModule {
     function finalizeEndgame(
         uint24 lvl,
-        uint32 cap,
         uint256 rngWord,
         address jackpots
-    ) external returns (bool readyForPurchase);
+    ) external;
 }
 
 interface IDegenerusGameJackpotModule {
@@ -48,6 +47,7 @@ interface IDegenerusGameBondModule {
     function bondMaintenanceForMap(
         address bondsAddr,
         address stethAddr,
+        uint24 lvl,
         uint256 totalWei,
         uint256 rngWord
     ) external returns (bool worked);

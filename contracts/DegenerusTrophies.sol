@@ -58,6 +58,7 @@ contract DegenerusTrophies is IDegenerusTrophies {
     mapping(uint256 => address) private _owners;
     mapping(address => uint256) private _balances;
     mapping(uint256 => uint256) private _trophyData;
+    mapping(uint256 => uint96) private _affiliateScore;
 
     constructor(address renderer_) {
         if (renderer_ == address(0)) revert InvalidRenderer();
@@ -113,10 +114,11 @@ contract DegenerusTrophies is IDegenerusTrophies {
         emit TrophyMinted(tokenId, to, TrophyKind.Baf, level, 0);
     }
 
-    function mintAffiliate(address to, uint24 level) external override onlyGame returns (uint256 tokenId) {
+    function mintAffiliate(address to, uint24 level, uint96 score) external override onlyGame returns (uint256 tokenId) {
         tokenId = _mint(to);
         uint256 data = (AFFILIATE_TRAIT_SENTINEL << 152) | (uint256(level) << 128) | AFFILIATE_TROPHY_FLAG;
         _trophyData[tokenId] = data;
+        _affiliateScore[tokenId] = score;
         emit TrophyMinted(tokenId, to, TrophyKind.Affiliate, level, 0);
     }
 
@@ -173,8 +175,15 @@ contract DegenerusTrophies is IDegenerusTrophies {
 
     function tokenURI(uint256 tokenId) external view returns (string memory) {
         if (_owners[tokenId] == address(0)) revert InvalidToken();
+        uint256 data = _trophyData[tokenId];
         uint32[4] memory extras;
-        return ITrophyRenderer(renderer).tokenURI(tokenId, _trophyData[tokenId], extras);
+        if ((data & AFFILIATE_TROPHY_FLAG) != 0) {
+            uint96 score = _affiliateScore[tokenId];
+            extras[0] = uint32(score);
+            extras[1] = uint32(score >> 32);
+            extras[2] = uint32(score >> 64);
+        }
+        return ITrophyRenderer(renderer).tokenURI(tokenId, data, extras);
     }
 
     function trophyData(uint256 tokenId) external view returns (uint256) {

@@ -174,6 +174,13 @@ contract IconRendererTrophy32 {
         if (forcePlaceholder) {
             exTr = 0xFFFF;
         }
+        uint96 affiliateScore;
+        if (isAffiliate) {
+            affiliateScore =
+                uint96(extras[0]) |
+                (uint96(extras[1]) << 32) |
+                (uint96(extras[2]) << 64);
+        }
         bool invertFlag = (data & TROPHY_FLAG_INVERT) != 0;
         uint32 statusFlags = extras[0];
         bool isBond = (statusFlags & (uint32(1) << 31)) != 0;
@@ -248,9 +255,18 @@ contract IconRendererTrophy32 {
         } else if (isAffiliate && exTr == 0xFFFE) {
             desc = string.concat(
                 "Awarded to the top affiliate for level ",
-                lvlStr,
-                "."
+                lvlStr
             );
+            if (affiliateScore != 0) {
+                desc = string.concat(
+                    desc,
+                    " with an affiliate score of ",
+                    _formatCoinAmount(affiliateScore),
+                    "."
+                );
+            } else {
+                desc = string.concat(desc, ".");
+            }
         } else if (isStake && exTr == 0xFFFD) {
             desc = string.concat(
                 "Awarded for level ",
@@ -320,6 +336,16 @@ contract IconRendererTrophy32 {
                     '"}'
                 )
             );
+            if (isAffiliate && affiliateScore != 0) {
+                attrs = string(
+                    abi.encodePacked(
+                        attrs,
+                        ',{"trait_type":"Affiliate Score","value":"',
+                        _formatCoinAmount(affiliateScore),
+                        '"}'
+                    )
+                );
+            }
             if (includeTraitAttr) {
                 attrs = string(
                     abi.encodePacked(

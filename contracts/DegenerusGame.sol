@@ -264,6 +264,11 @@ contract DegenerusGame is DegenerusGameStorage {
         return nextPrizePool;
     }
 
+    /// @notice Create a synthetic MAP-only player for the caller’s affiliate code.
+    function createSyntheticMapPlayer(bytes32 code) external returns (address synthetic) {
+        synthetic = IDegenerusAffiliate(affiliateProgram).createSyntheticMapPlayer(msg.sender, code);
+    }
+
     /// @notice Resolve the payout recipient for a player, routing synthetic MAP-only players to their affiliate owner.
     function affiliatePayoutAddress(address player) public view returns (address recipient, address affiliateOwner) {
         address affiliateAddr = affiliateProgram;
@@ -485,26 +490,24 @@ contract DegenerusGame is DegenerusGameStorage {
 
             // --- State 1 - Pregame ---
             if (_gameState == 1) {
-                _runEndgameModule(lvl, cap, rngWord); // handles payouts, wipes, endgame dist, and jackpots
-                if (gameState == 2) {
-                    if (lvl != 0) {
-                        address topStake = coinContract.recordStakeResolution(lvl, day);
-                        if (topStake != address(0)) {
-                            IDegenerusTrophies(trophies).mintStake(topStake, lvl);
-                        }
+                _runEndgameModule(lvl, rngWord); // handles payouts, wipes, endgame dist, and jackpots
+                if (lvl != 0) {
+                    address topStake = coinContract.recordStakeResolution(lvl, day);
+                    if (topStake != address(0)) {
+                        IDegenerusTrophies(trophies).mintStake(topStake, lvl);
                     }
-                    if (lastExterminatedTrait != TRAIT_ID_TIMEOUT) {
-                        payDailyJackpot(false, level, rngWord);
-                    }
-                    _stakeForTargetRatioModule(lvl);
-                    bool decOpen = ((lvl >= 25) && ((lvl % 10) == 5) && ((lvl % 100) != 95));
-                    // Preserve an already-open window for the level-100 decimator special until its RNG request closes it.
-                    if (!decWindowOpen && decOpen) {
-                        decWindowOpen = true;
-                    }
-                    if (lvl % 100 == 99) decWindowOpen = true;
-                    _unlockRng(day);
                 }
+                if (lastExterminatedTrait != TRAIT_ID_TIMEOUT) {
+                    payDailyJackpot(false, level, rngWord);
+                }
+                _stakeForTargetRatioModule(lvl);
+                bool decOpen = ((lvl >= 25) && ((lvl % 10) == 5) && ((lvl % 100) != 95));
+                // Preserve an already-open window for the level-100 decimator special until its RNG request closes it.
+                if (!decWindowOpen && decOpen) {
+                    decWindowOpen = true;
+                }
+                if (lvl % 100 == 99) decWindowOpen = true;
+                _unlockRng(day);
                 break;
             }
 
@@ -537,7 +540,7 @@ contract DegenerusGame is DegenerusGameStorage {
                     }
 
                     uint256 totalWeiForBond = rewardPool + currentPrizePool;
-                    _bondMaintenanceForMapModule(totalWeiForBond, rngWord);
+                    _bondMaintenanceForMapModule(totalWeiForBond, rngWord, lvl);
                     if (bonds != address(0)) {
                         bool bondsResolved = IDegenerusBonds(bonds).resolveBonds(rngWord);
                         if (bondsResolved) {
@@ -817,17 +820,15 @@ contract DegenerusGame is DegenerusGameStorage {
     }
 
     /// @notice Delegatecall into the endgame module to resolve slow settlement paths.
-    function _runEndgameModule(uint24 lvl, uint32 cap, uint256 rngWord) internal {
+    function _runEndgameModule(uint24 lvl, uint256 rngWord) internal {
         // Endgame settlement logic lives in DegenerusGameEndgameModule (delegatecall keeps state on this contract).
         (bool ok, bytes memory data) = endgameModule.delegatecall(
-            abi.encodeWithSelector(IDegenerusGameEndgameModule.finalizeEndgame.selector, lvl, cap, rngWord, jackpots)
+            abi.encodeWithSelector(IDegenerusGameEndgameModule.finalizeEndgame.selector, lvl, rngWord, jackpots)
         );
-        if (!ok || data.length == 0) return;
-
-        bool readyForPurchase = abi.decode(data, (bool));
-        if (readyForPurchase) {
-            gameState = 2; // No endgame work pending; move directly into the purchase/airdrop state.
+        if (!ok) {
+            _revertWith(data);
         }
+        gameState = 2; // Endgame is fully settled; move directly into the purchase/airdrop state.
     }
 
     // --- Delegate helpers (mint module) --------------------------------------------------------------
@@ -873,12 +874,13 @@ contract DegenerusGame is DegenerusGameStorage {
         if (!ok) revert E();
     }
 
-    function _bondMaintenanceForMapModule(uint256 totalWei, uint256 rngWord) private {
+    function _bondMaintenanceForMapModule(uint256 totalWei, uint256 rngWord, uint24 lvl) private {
         (bool ok, bytes memory data) = bondModule.delegatecall(
             abi.encodeWithSelector(
                 IDegenerusGameBondModule.bondMaintenanceForMap.selector,
                 bonds,
                 address(steth),
+                lvl,
                 totalWei,
                 rngWord
             )
@@ -1044,7 +1046,7 @@ contract DegenerusGame is DegenerusGameStorage {
             uint256 bafPool = (basePool * 10) / 100;
             decimatorHundredPool = decPool;
             bafHundredPool = bafPool;
-            rewardPool -= decPool;
+            rewardPool -= decPool + bafPool;
             decimatorHundredReady = true;
         }
 

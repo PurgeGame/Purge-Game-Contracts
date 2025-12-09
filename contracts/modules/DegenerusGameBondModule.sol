@@ -29,13 +29,24 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
     uint256 private constant REWARD_POOL_MIN_STAKE = 0.5 ether;
 
     /// @notice Handle bond funding/resolve work during map jackpot prep.
-    function bondMaintenanceForMap(address bondsAddr, address stethAddr, uint256 totalWei, uint256 rngWord) external {
+    function bondMaintenanceForMap(
+        address bondsAddr,
+        address stethAddr,
+        uint24 lvl,
+        uint256 totalWei,
+        uint256 rngWord
+    ) external {
         IBonds bondContract = IBonds(bondsAddr);
 
         uint256 stBal = IStETHLite(stethAddr).balanceOf(address(this));
         uint256 ethBal = address(this).balance;
 
         uint256 obligations = currentPrizePool + nextPrizePool + rewardPool + claimablePool + bondPool;
+        if (lvl % 100 == 0) {
+            unchecked {
+                obligations += decimatorHundredPool + bafHundredPool; // include reserved reward slices so they cannot be skimmed as “yield” on level 100
+            }
+        }
         uint256 combined = ethBal + stBal;
         uint256 yieldTotal = combined > obligations ? combined - obligations : 0;
 
@@ -72,6 +83,13 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
         uint256 stBal = IStETHLite(stethAddr).balanceOf(address(this));
         uint256 ethBal = address(this).balance;
         uint256 obligations = currentPrizePool + nextPrizePool + rewardPool + claimablePool + bondPool;
+        uint256 decPool = decimatorHundredPool;
+        uint256 bafPool = bafHundredPool;
+        if (decPool != 0 || bafPool != 0) {
+            unchecked {
+                obligations += decPool + bafPool; // only non-zero during level-100 specials
+            }
+        }
         uint256 combined = ethBal + stBal;
         total = combined > obligations ? combined - obligations : 0;
     }
@@ -86,9 +104,9 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
         if (pool == 0) return;
 
         uint256 rateBps = 10_000;
-        if (bondsAddr != address(0)) {
-            rateBps = IBonds(bondsAddr).stakeRateBps();
-        }
+
+        rateBps = IBonds(bondsAddr).stakeRateBps();
+
         if (rateBps == 0) return;
 
         uint256 targetSt = (pool * rateBps) / 10_000; // stake against configured share of reward pool
@@ -98,7 +116,12 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
         uint256 stakeAmount = targetSt - stBal;
         if (stakeAmount < REWARD_POOL_MIN_STAKE) return;
 
-        _stakeEth(stethAddr, stakeAmount);
+        // Best-effort staking; skip if stETH deposits are paused or unavailable.
+        try IStETHLite(stethAddr).submit{value: stakeAmount}(address(0)) returns (uint256 minted) {
+            minted;
+        } catch {
+            return;
+        }
     }
 
     /// @notice Inform bonds of shutdown and transfer all assets to it.
@@ -106,17 +129,19 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
         IBonds bondContract = IBonds(bondsAddr);
         bondContract.notifyGameOver();
 
+        // Lock bond accounting and zero in-game pools before handing assets to bonds to avoid post-drain credits.
+        bondGameOver = true;
+        bondPool = 0;
+        currentPrizePool = 0;
+        nextPrizePool = 0;
+        rewardPool = 0;
+        claimablePool = 0;
+        decimatorHundredPool = 0;
+        bafHundredPool = 0;
+        dailyJackpotBase = 0;
+
         uint256 stBal = IStETHLite(stethAddr).balanceOf(address(this));
         uint256 ethBal = address(this).balance;
         bondContract.payBonds{value: ethBal}(0, stBal, 0);
-    }
-
-    function _stakeEth(address stethAddr, uint256 amount) private {
-        // Best-effort staking; skip if stETH deposits are paused or unavailable.
-        try IStETHLite(stethAddr).submit{value: amount}(address(0)) returns (uint256 minted) {
-            minted;
-        } catch {
-            return;
-        }
     }
 }

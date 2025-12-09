@@ -52,6 +52,7 @@ contract DegenerusAffiliate {
     error ClaimScoreTooLow();
     error ClaimConfigTooLarge();
     error InvalidClaimConfig();
+    error OnlyGame();
 
     // ---------------------------------------------------------------------
     // Types
@@ -110,6 +111,7 @@ contract DegenerusAffiliate {
     uint256 public presaleClaimableTotal;
     mapping(address => uint256) public presalePrincipal; // principal bought while coin is unwired
     uint96 public totalPresaleSold;
+    uint64 private syntheticNonce;
     mapping(uint24 => PlayerScore) private affiliateTopByLevel;
     uint256 private presaleInventoryBase = PRESALE_SUPPLY_TOKENS * MILLION; // used before coin is wired
     bool private preCoinActive = true;
@@ -243,18 +245,31 @@ contract DegenerusAffiliate {
         emit Affiliate(0, code_, msg.sender); // 0 = player referred
     }
 
-    /// @notice Create a synthetic MAP-only player controlled by the caller (affiliate).
-    /// @dev Locks referral code to caller-owned `code_` and tags the synthetic address as map-only.
-    function createSyntheticMapPlayer(address synthetic, bytes32 code_) external {
-        if (synthetic == address(0)) revert ZeroAddress();
+    /// @notice Create a synthetic MAP-only player for an affiliate; callable only by the game.
+    /// @dev Synthetic addresses are auto-generated with the low 48 bits zeroed to make them identifiable.
+    function createSyntheticMapPlayer(address affiliateOwner, bytes32 code_) external returns (address synthetic) {
+        if (msg.sender != address(degenerusGame)) revert OnlyGame();
+        if (affiliateOwner == address(0)) revert ZeroAddress();
         AffiliateCodeInfo storage info = affiliateCode[code_];
-        if (info.owner != msg.sender) revert OnlyAuthorized();
-        if (syntheticMapOwner[synthetic] != address(0)) revert Insufficient();
+        if (info.owner != affiliateOwner) revert OnlyAuthorized();
+
+        uint160 mask = uint160(~((uint160(1) << 48) - 1));
+        uint64 nonce = syntheticNonce;
+        do {
+            unchecked {
+                ++nonce;
+            }
+            synthetic = address(
+                uint160(uint256(keccak256(abi.encode(affiliateOwner, code_, nonce, block.chainid)))) & mask
+            );
+        } while (synthetic == address(0) || syntheticMapOwner[synthetic] != address(0));
+        syntheticNonce = nonce;
+
         if (playerReferralCode[synthetic] != bytes32(0)) revert Insufficient();
-        syntheticMapOwner[synthetic] = msg.sender;
+        syntheticMapOwner[synthetic] = affiliateOwner;
         syntheticMapCode[synthetic] = code_;
         playerReferralCode[synthetic] = code_;
-        emit SyntheticMapPlayerCreated(synthetic, msg.sender, code_);
+        emit SyntheticMapPlayerCreated(synthetic, affiliateOwner, code_);
     }
 
     /// @notice Return the recorded referrer for `player` (zero address if none).
