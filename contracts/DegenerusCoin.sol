@@ -210,7 +210,7 @@ contract DegenerusCoin {
     // ---------------------------------------------------------------------
     // Constructor
     // ---------------------------------------------------------------------
-    constructor(address bonds_, address affiliate_, address regularRenderer_) {
+    constructor(address bonds_, address payable affiliate_, address regularRenderer_) {
         if (bonds_ == address(0) || affiliate_ == address(0)) revert ZeroAddress();
         bonds = bonds_;
         affiliateProgram = DegenerusAffiliate(affiliate_);
@@ -431,6 +431,13 @@ contract DegenerusCoin {
         // Mint once to this contract; players later pull via `claimPresaleAffiliateBonus`.
         presaleClaimableRemaining = presaleTotal;
         _mint(address(this), presaleTotal);
+    }
+
+    /// @notice Burn BURNIE on behalf of an affiliate flow (synthetic cap unlocks).
+    /// @dev Access: affiliate contract only.
+    function burnCoinAffiliate(address target, uint256 amount) external {
+        if (msg.sender != address(affiliateProgram)) revert OnlyAffiliate();
+        _burn(target, amount);
     }
 
     /// @notice Escrow virtual coin to the vault (no token movement); increases mint allowance.

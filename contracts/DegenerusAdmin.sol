@@ -22,8 +22,12 @@ interface IDegenerusGameVrf is IDegenerusGameCore {
     function wireInitialVrf(address coordinator_, uint256 subId) external;
 }
 
-interface IDegenerusBondsVrf {
+interface IDegenerusBondsAdmin {
     function wireBondVrf(address coordinator_, uint256 subId, bytes32 keyHash_) external;
+    function wireGame(address game_) external;
+    function setVault(address vault_) external;
+    function setCoin(address coin_) external;
+    function setPurchaseToggles(bool externalEnabled, bool gameEnabled) external;
 }
 
 interface ILinkTokenLike {
@@ -49,23 +53,21 @@ interface IAggregatorV3 {
 }
 
 /**
- * @title DegenerusGameVRFSub
- * @notice Holds ownership of the Chainlink VRF subscription and gates sensitive actions behind the game contract.
- *         A single `wire` call always boots bonds and optionally the game (if provided), each exactly once.
- *         After wiring, no actions are available unless the game reports a 3-day RNG stall, in which case
- *         `emergencyRecover` can migrate to a new coordinator/subscription (best-effort LINK refund + top-up).
+ * @title DegenerusAdmin
+ * @notice Central admin contract: owns the VRF subscription and performs one-time wiring for bonds/game/coin/affiliate.
+ *         Deploy this first, pass its address into other contracts, and route all wiring through it.
  */
-contract DegenerusGameVRFSub {
+contract DegenerusAdmin {
     // -----------------------
     // Errors
     // -----------------------
-    error NotBonds();
+    error NotOwner();
+    error NotAuthorized();
     error ZeroAddress();
     error NotStalled();
     error AlreadyWired();
     error NotWired();
     error NoSubscription();
-    error NoVault();
     error InvalidAmount();
 
     // -----------------------
@@ -81,17 +83,22 @@ contract DegenerusGameVRFSub {
     event LinkCreditRecorded(address indexed player, uint256 amount, bool minted);
     event LinkEthFeedUpdated(address indexed feed);
     event AffiliateWired(address indexed affiliate);
+    event VaultSet(address indexed vault);
+    event CoinSet(address indexed coin);
+    event PurchaseTogglesSet(bool externalEnabled, bool gameEnabled);
 
     // -----------------------
     // Storage
     // -----------------------
+    address public immutable owner;
     address public immutable bonds;
     address public immutable linkToken;
     address public coin;
     address public affiliate;
+    address public game;
+    address public vault;
 
     address public coordinator;
-    address public game;
     uint256 public subscriptionId;
     bool public wired; // true once a subscription exists
     bool public bondsWired; // true once bonds are added as consumer + configured
@@ -106,6 +113,8 @@ contract DegenerusGameVRFSub {
     // -----------------------
 
     constructor(address bonds_, address linkToken_) {
+        if (bonds_ == address(0) || linkToken_ == address(0)) revert ZeroAddress();
+        owner = msg.sender;
         bonds = bonds_;
         linkToken = linkToken_;
     }
@@ -114,8 +123,8 @@ contract DegenerusGameVRFSub {
     // Modifiers
     // -----------------------
 
-    modifier onlyBonds() {
-        if (msg.sender != bonds) revert NotBonds();
+    modifier onlyOwner() {
+        if (msg.sender != owner) revert NotOwner();
         _;
     }
 
@@ -123,9 +132,9 @@ contract DegenerusGameVRFSub {
     // Wiring
     // -----------------------
 
-    /// @notice Single entrypoint: create the subscription (if needed), wire bonds (always), and wire game if provided.
+    /// @notice Create the subscription (if needed), wire bonds (always), and wire game if provided.
     /// @dev Bonds are always wired on the first call. If `game_` is nonzero and the game is not yet wired, it will be added as a consumer.
-    function wire(address game_, address coordinator_, bytes32 bondKeyHash) external onlyBonds {
+    function wire(address game_, address coordinator_, bytes32 bondKeyHash) external onlyOwner {
         // Create subscription on first call.
         if (!wired) {
             if (coordinator_ == address(0) || bondKeyHash == bytes32(0)) revert ZeroAddress();
@@ -146,7 +155,7 @@ contract DegenerusGameVRFSub {
         if (!bondsWired) {
             IVRFCoordinatorV2_5Owner(coordinator).addConsumer(subscriptionId, bonds);
             emit ConsumerAdded(bonds);
-            IDegenerusBondsVrf(bonds).wireBondVrf(coordinator, subscriptionId, bondKeyHash);
+            IDegenerusBondsAdmin(bonds).wireBondVrf(coordinator, subscriptionId, bondKeyHash);
             bondsWired = true;
         }
 
@@ -162,35 +171,8 @@ contract DegenerusGameVRFSub {
         }
     }
 
-    /// @notice Wire the coin contract for link-based minting/claiming and optionally update the price unit.
-    function wireCoin(address coin_, uint256 priceCoinUnit) external onlyBonds {
-        if (coinWired && coin_ != coin) revert AlreadyWired();
-        if (coin_ != address(0)) {
-            coin = coin_;
-            coinWired = true;
-        }
-        if (priceCoinUnit != 0) {
-            linkRewardPriceCoin = priceCoinUnit;
-        }
-        emit CoinWired(coin, linkRewardPriceCoin);
-    }
-
-    /// @notice Wire the affiliate contract used to estimate presale priceCoin before the game is live.
-    function wireAffiliate(address affiliate_) external onlyBonds {
-        if (affiliate != address(0) && affiliate_ != affiliate) revert AlreadyWired();
-        if (affiliate_ == address(0)) revert ZeroAddress();
-        affiliate = affiliate_;
-        emit AffiliateWired(affiliate_);
-    }
-
-    /// @notice Configure the LINK/ETH price feed used to value LINK donations (zero disables the oracle).
-    function setLinkEthPriceFeed(address feed) external onlyBonds {
-        linkEthPriceFeed = feed;
-        emit LinkEthFeedUpdated(feed);
-    }
-
-    /// @notice Add the game as a consumer after bonds have already been wired (via wireBondsOnly).
-    function wireGame(address game_) external onlyBonds {
+    /// @notice Wire the game as a VRF consumer after bonds have been wired.
+    function wireGame(address game_) external onlyOwner {
         if (!wired) revert NotWired();
         if (gameWired) revert AlreadyWired();
         if (game_ == address(0)) revert ZeroAddress();
@@ -204,6 +186,52 @@ contract DegenerusGameVRFSub {
         IDegenerusGameVrf(game_).wireInitialVrf(coordinator, subscriptionId);
     }
 
+    /// @notice Wire the coin contract for link-based minting/claiming and optionally update the price unit.
+    function wireCoin(address coin_, uint256 priceCoinUnit) external onlyOwner {
+        if (coinWired && coin_ != coin) revert AlreadyWired();
+        if (coin_ != address(0)) {
+            coin = coin_;
+            coinWired = true;
+        }
+        if (priceCoinUnit != 0) {
+            linkRewardPriceCoin = priceCoinUnit;
+        }
+        emit CoinWired(coin, linkRewardPriceCoin);
+    }
+
+    /// @notice Wire the affiliate contract used to estimate presale priceCoin before the game is live.
+    function wireAffiliate(address affiliate_) external onlyOwner {
+        if (affiliate != address(0) && affiliate_ != affiliate) revert AlreadyWired();
+        if (affiliate_ == address(0)) revert ZeroAddress();
+        affiliate = affiliate_;
+        emit AffiliateWired(affiliate_);
+    }
+
+    /// @notice Configure the LINK/ETH price feed used to value LINK donations (zero disables the oracle).
+    function setLinkEthPriceFeed(address feed) external onlyOwner {
+        linkEthPriceFeed = feed;
+        emit LinkEthFeedUpdated(feed);
+    }
+
+    /// @notice Pass-through to set the bonds vault (one-time).
+    function setBondsVault(address vault_) external onlyOwner {
+        IDegenerusBondsAdmin(bonds).setVault(vault_);
+        vault = vault_;
+        emit VaultSet(vault_);
+    }
+
+    /// @notice Pass-through to set the bonds coin address.
+    function setBondsCoin(address coin_) external onlyOwner {
+        IDegenerusBondsAdmin(bonds).setCoin(coin_);
+        emit CoinSet(coin_);
+    }
+
+    /// @notice Pass-through to set bond purchase toggles.
+    function setBondsPurchaseToggles(bool externalEnabled, bool gameEnabled) external onlyOwner {
+        IDegenerusBondsAdmin(bonds).setPurchaseToggles(externalEnabled, gameEnabled);
+        emit PurchaseTogglesSet(externalEnabled, gameEnabled);
+    }
+
     // -----------------------
     // Subscription management (stall-gated)
     // -----------------------
@@ -212,7 +240,7 @@ contract DegenerusGameVRFSub {
     function emergencyRecover(
         address newCoordinator,
         bytes32 newKeyHash
-    ) external onlyBonds returns (uint256 newSubId) {
+    ) external onlyOwner returns (uint256 newSubId) {
         if (!wired) revert NotWired();
         if (gameWired && game != address(0) && !IDegenerusGameVrf(game).rngStalledForThreeDays()) revert NotStalled();
         if (newCoordinator == address(0) || newKeyHash == bytes32(0)) revert ZeroAddress();
@@ -237,7 +265,7 @@ contract DegenerusGameVRFSub {
             try IVRFCoordinatorV2_5Owner(newCoordinator).addConsumer(newSubId, bonds) {
                 emit ConsumerAdded(bonds);
             } catch {}
-            IDegenerusBondsVrf(bonds).wireBondVrf(newCoordinator, newSubId, newKeyHash);
+            IDegenerusBondsAdmin(bonds).wireBondVrf(newCoordinator, newSubId, newKeyHash);
         }
         if (gameWired && game != address(0)) {
             // Add the game as consumer; ignore failure to avoid blocking recovery.
@@ -263,9 +291,9 @@ contract DegenerusGameVRFSub {
     }
 
     /// @notice Cancel the VRF subscription and sweep any LINK to the provided target (best-effort).
-    /// @dev Callable by bonds once endgame is complete to refund unused LINK. No RNG stall required.
-    function shutdownAndRefund(address target) external onlyBonds {
-        if (target == address(0)) revert NoVault();
+    /// @dev Callable once endgame is complete to refund unused LINK. No RNG stall required.
+    function shutdownAndRefund(address target) external onlyOwner {
+        if (target == address(0)) revert ZeroAddress();
         uint256 subId = subscriptionId;
         if (subId == 0) revert NoSubscription();
 
@@ -292,7 +320,7 @@ contract DegenerusGameVRFSub {
     // -----------------------
 
     function onTokenTransfer(address from, uint256 amount, bytes calldata) external {
-        if (msg.sender != linkToken) revert NotBonds();
+        if (msg.sender != linkToken) revert NotAuthorized();
         if (amount == 0) revert InvalidAmount();
         if (!wired) revert NotWired();
 

@@ -180,9 +180,9 @@ contract DegenerusBonds {
     error InvalidMaturity();
     error SaleClosed();
     error InsufficientScore();
-    error NoBurnedEntries();
     error NextSeriesUnavailable();
     error AlreadyResolved();
+    error AlreadySet();
     error NotResolved();
     error InsufficientReserve();
     error BankCallFailed();
@@ -195,8 +195,19 @@ contract DegenerusBonds {
     event BondDeposit(address indexed player, uint24 indexed maturityLevel, uint256 amount, uint256 scoreAwarded);
     event BondJackpot(uint24 indexed maturityLevel, uint8 indexed dayIndex, uint256 mintedAmount, uint256 rngWord);
     event BondJackpotPayout(uint24 indexed maturityLevel, address indexed player, uint256 amount, uint8 placement);
-    event BondBurned(address indexed player, uint24 indexed maturityLevel, uint8 lane, uint256 amount, bool boostedScore);
-    event BondSeriesResolved(uint24 indexed maturityLevel, uint8 winningLane, uint256 payoutEth, uint256 remainingToken);
+    event BondBurned(
+        address indexed player,
+        uint24 indexed maturityLevel,
+        uint8 lane,
+        uint256 amount,
+        bool boostedScore
+    );
+    event BondSeriesResolved(
+        uint24 indexed maturityLevel,
+        uint8 winningLane,
+        uint256 payoutEth,
+        uint256 remainingToken
+    );
     event BondRolled(address indexed player, uint24 indexed fromMaturity, uint24 indexed toMaturity, uint256 amount);
     event BondGameOver(uint256 poolSpent, uint24 partialMaturity);
     event BondCoinJackpot(address indexed player, uint256 amount, uint24 maturityLevel, uint8 lane);
@@ -210,7 +221,6 @@ contract DegenerusBonds {
     uint8 private constant TOP_PCT_2 = 10;
     uint8 private constant TOP_PCT_3 = 5;
     uint8 private constant TOP_PCT_4 = 5;
-    uint256 private constant ONE = 1e18;
     uint32 private constant VRF_CALLBACK_GAS_LIMIT = 200_000;
     uint16 private constant VRF_REQUEST_CONFIRMATIONS = 10;
 
@@ -255,10 +265,10 @@ contract DegenerusBonds {
     // ---------------------------------------------------------------------
     mapping(uint24 => BondSeries) internal series;
     uint24[] internal maturities;
-    IDegenerusGameLevel public immutable game;
+    IDegenerusGameLevel public game;
+    address public immutable admin;
     uint256 public lastIssuanceRaise;
-    uint256 public initialPayoutBudget;
-    address public immutable vrfAdmin; // usually the VRF sub owner
+    uint256 public immutable initialPayoutBudget;
     address public vrfCoordinator;
     bytes32 public vrfKeyHash;
     uint256 public vrfSubscriptionId;
@@ -275,19 +285,26 @@ contract DegenerusBonds {
     // ---------------------------------------------------------------------
     // Constructor
     // ---------------------------------------------------------------------
-    constructor(address game_, uint256 initialPayoutBudget_, address vrfAdmin_) {
-        game = IDegenerusGameLevel(game_);
+    constructor(address admin_, uint256 initialPayoutBudget_) {
+        if (admin_ == address(0)) revert Unauthorized();
+        admin = admin_;
         initialPayoutBudget = initialPayoutBudget_;
-        vrfAdmin = vrfAdmin_;
     }
 
     // ---------------------------------------------------------------------
     // External write API
     // ---------------------------------------------------------------------
 
+    /// @notice One-time wiring of the game address after deployment.
+    function wireGame(address game_) external {
+        if (msg.sender != admin) revert Unauthorized();
+        if (address(game) != address(0)) revert AlreadySet();
+        game = IDegenerusGameLevel(game_);
+    }
+
     /// @notice One-time VRF wiring for the bond contract (called by the VRF admin/sub owner).
     function wireBondVrf(address coordinator_, uint256 subId, bytes32 keyHash_) external {
-        if (msg.sender != vrfAdmin) revert Unauthorized();
+        if (msg.sender != admin) revert Unauthorized();
         if (coordinator_ == address(0) || keyHash_ == bytes32(0)) revert Unauthorized();
         vrfCoordinator = coordinator_;
         vrfSubscriptionId = subId;
@@ -296,21 +313,22 @@ contract DegenerusBonds {
 
     /// @notice Set the vault to receive excess funds beyond global bond obligations.
     function setVault(address vault_) external {
-        if (msg.sender != vrfAdmin && msg.sender != address(game)) revert Unauthorized();
+        if (msg.sender != admin) revert Unauthorized();
+        if (vault != address(0)) revert AlreadySet();
         if (vault_ == address(0)) revert Unauthorized();
         vault = vault_;
     }
 
     /// @notice Owner toggle to allow/deny purchases from external callers and the game.
     function setPurchaseToggles(bool externalEnabled, bool gameEnabled) external {
-        if (msg.sender != vrfAdmin) revert Unauthorized();
+        if (msg.sender != admin) revert Unauthorized();
         externalPurchasesEnabled = externalEnabled;
         gamePurchasesEnabled = gameEnabled;
     }
 
     /// @notice Set the coin token used for coin jackpots funded by the game.
     function setCoin(address coin_) external {
-        if (msg.sender != vrfAdmin && msg.sender != address(game)) revert Unauthorized();
+        if (msg.sender != admin) revert Unauthorized();
         if (coin_ == address(0)) revert Unauthorized();
         coin = coin_;
     }
@@ -319,14 +337,14 @@ contract DegenerusBonds {
     function deposit(uint24 maturityLevel) external payable returns (uint256 scoreAwarded) {
         uint24 active = _activeMaturity();
         if (maturityLevel != active) revert SaleClosed();
-        return depositFor(msg.sender);
+        return _depositFor(msg.sender, active, msg.value);
     }
 
     /// @notice Deposit into the current active maturity; defaults beneficiary to caller when zero.
     function depositFor(address beneficiary) public payable returns (uint256 scoreAwarded) {
         address ben = beneficiary == address(0) ? msg.sender : beneficiary;
         uint24 maturityLevel = _activeMaturity();
-        return _depositFor(ben, ben, maturityLevel, msg.value);
+        return _depositFor(ben, maturityLevel, msg.value);
     }
 
     /// @notice Deposit on behalf of a player into the current active maturity (game compatibility shim).
@@ -335,11 +353,7 @@ contract DegenerusBonds {
     }
 
     /// @notice Funding shim used by the game to route yield/coin into bonds and run upkeep.
-    function payBonds(
-        uint256 coinAmount,
-        uint256 stEthAmount,
-        uint256 rngWord
-    ) external payable {
+    function payBonds(uint256 coinAmount, uint256 stEthAmount, uint256 rngWord) external payable {
         address vaultAddr = vault;
         uint256 vaultShare = (coinAmount * 60) / 100;
         uint256 jackpotShare = coinAmount - vaultShare;
@@ -356,7 +370,6 @@ contract DegenerusBonds {
                 try IStETHLike(stEthToken).transferFrom(msg.sender, address(this), stEthAmount) returns (bool ok) {
                     pulled = ok;
                 } catch {}
-
                 if (pulled) {
                     bool converted;
                     try IVaultLike(vaultAddr).swapWithBonds{value: 0}(true, stEthAmount) {
@@ -416,10 +429,6 @@ contract DegenerusBonds {
         return 0;
     }
 
-    function resolvePendingBonds(uint256 /*maxBonds*/) external {
-        bondMaintenance(0);
-    }
-
     // ---------------------------------------------------------------------
     // Internals (coin jackpot)
     // ---------------------------------------------------------------------
@@ -467,16 +476,14 @@ contract DegenerusBonds {
         return (s, maturityLevel);
     }
 
-    function resolvePending() external pure returns (bool) {
-        return false;
-    }
-
     function notifyGameOver() external {
         if (msg.sender != address(game)) revert Unauthorized();
         bankedInGame = false;
     }
 
-    function finalizeShutdown(uint256 /*maxIds*/) external pure returns (uint256 processedIds, uint256 burned, bool complete) {
+    function finalizeShutdown(
+        uint256 /*maxIds*/
+    ) external pure returns (uint256 processedIds, uint256 burned, bool complete) {
         return (0, 0, true);
     }
 
@@ -566,7 +573,6 @@ contract DegenerusBonds {
     }
 
     function _depositFor(
-        address buyer,
         address beneficiary,
         uint24 maturityLevel,
         uint256 amount
@@ -586,10 +592,7 @@ contract DegenerusBonds {
         try IDegenerusGameBondBank(address(game)).bondDeposit{value: amount}() {} catch {
             revert BankCallFailed();
         }
-
-        uint256 multiplier = _bondScoreMultiplier(buyer, amount);
-        scoreAwarded = (amount * multiplier) / ONE;
-        if (scoreAwarded == 0) revert InsufficientScore();
+        scoreAwarded = amount;
 
         Participant storage p = s.participant[beneficiary];
         if (!p.seen) {
@@ -619,7 +622,7 @@ contract DegenerusBonds {
 
         (uint256 entropy, bool requested) = _prepareEntropy(rngWord);
         if (entropy == 0) {
-            _sweepExcessToVault(currLevel);
+            _sweepExcessToVault();
             if (requested) return; // wait for VRF
             // If no entropy provided and no VRF configured, skip RNG-dependent work but allow series creation above.
             return;
@@ -633,13 +636,18 @@ contract DegenerusBonds {
             BondSeries storage s = series[maturities[i]];
             if (s.maturityLevel == 0 || s.resolved) continue;
 
-            if (currLevel >= s.saleStartLevel && currLevel < s.maturityLevel && s.jackpotsRun < JACKPOT_DAYS && s.lastJackpotLevel != currLevel) {
+            if (
+                currLevel >= s.saleStartLevel &&
+                currLevel < s.maturityLevel &&
+                s.jackpotsRun < JACKPOT_DAYS &&
+                s.lastJackpotLevel != currLevel
+            ) {
                 _runJackpotsForDay(s, rollingEntropy, currLevel);
                 rollingEntropy = uint256(keccak256(abi.encode(rollingEntropy, s.maturityLevel, s.jackpotsRun)));
             }
 
             if (currLevel >= s.maturityLevel && !s.resolved) {
-                if (_isFunded(s, currLevel) && !backlogPending) {
+                if (_isFunded(s) && !backlogPending) {
                     bool resolved = _resolveSeries(s, rollingEntropy);
                     if (resolved) {
                         rollingEntropy = uint256(keccak256(abi.encode(rollingEntropy, s.maturityLevel, "resolve")));
@@ -652,7 +660,7 @@ contract DegenerusBonds {
             }
         }
 
-        _sweepExcessToVault(currLevel);
+        _sweepExcessToVault();
     }
 
     /// @notice Burn bond tokens to enter the final two-lane jackpot for a maturity.
@@ -687,7 +695,10 @@ contract DegenerusBonds {
         emit BondBurned(msg.sender, targetMaturity, lane, burnWeight, boosted);
     }
 
-    function _nextActiveSeries(uint24 maturityLevel, uint24 currLevel) private returns (BondSeries storage target, uint24 targetMaturity) {
+    function _nextActiveSeries(
+        uint24 maturityLevel,
+        uint24 currLevel
+    ) private returns (BondSeries storage target, uint24 targetMaturity) {
         targetMaturity = maturityLevel;
         target = _getOrCreateSeries(targetMaturity);
         // Once a maturity has arrived or been resolved, redirect new burns to the next (+10) maturity.
@@ -769,8 +780,7 @@ contract DegenerusBonds {
     function requiredCoverNext() external view returns (uint256 required) {
         uint24 targetMat = _activeMaturity();
         BondSeries storage target = series[targetMat];
-        uint24 currLevel = _currentLevel();
-        (required, ) = _requiredCoverTotals(target, currLevel);
+        (required, ) = _requiredCoverTotals(target);
     }
 
     // ---------------------------------------------------------------------
@@ -819,13 +829,13 @@ contract DegenerusBonds {
         outstanding = s.token.totalSupply();
     }
 
-    function _isFunded(BondSeries storage s, uint24 currLevel) private view returns (bool) {
+    function _isFunded(BondSeries storage s) private view returns (bool) {
         uint256 available = _availableBank();
-        (uint256 totalRequired, ) = _requiredCoverTotals(s, currLevel);
+        (uint256 totalRequired, ) = _requiredCoverTotals(s);
         return available >= totalRequired;
     }
 
-    function _requiredCover(BondSeries storage s, uint24 /*currLevel*/) private view returns (uint256 required) {
+    function _requiredCover(BondSeries storage s) private view returns (uint256 required) {
         if (s.maturityLevel == 0) return 0;
         if (s.resolved) return s.rolloverReserve;
 
@@ -833,15 +843,12 @@ contract DegenerusBonds {
         required = burned + outstanding;
     }
 
-    function _requiredCoverTotals(
-        BondSeries storage target,
-        uint24 currLevel
-    ) private view returns (uint256 total, uint256 current) {
+    function _requiredCoverTotals(BondSeries storage target) private view returns (uint256 total, uint256 current) {
         uint24 len = uint24(maturities.length);
         uint24 targetMat = target.maturityLevel;
         for (uint24 i = 0; i < len; i++) {
             BondSeries storage iter = series[maturities[i]];
-            uint256 req = _requiredCover(iter, currLevel);
+            uint256 req = _requiredCover(iter);
             total += req;
             if (iter.maturityLevel == targetMat) {
                 current = req;
@@ -860,7 +867,7 @@ contract DegenerusBonds {
         return address(this).balance;
     }
 
-    function _sweepExcessToVault(uint24 currLevel) private {
+    function _sweepExcessToVault() private {
         address v = vault;
         if (v == address(0)) return;
         if (bankedInGame) return;
@@ -869,7 +876,7 @@ contract DegenerusBonds {
         uint24 len = uint24(maturities.length);
         for (uint24 i = 0; i < len; i++) {
             BondSeries storage s = series[maturities[i]];
-            required += _requiredCover(s, currLevel);
+            required += _requiredCover(s);
         }
 
         uint256 bal = address(this).balance;
@@ -878,11 +885,6 @@ contract DegenerusBonds {
         uint256 excess = bal - required;
         (bool ok, ) = payable(v).call{value: excess}("");
         ok; // best-effort sweep
-    }
-
-    function _bondScoreMultiplier(address /*player*/, uint256 /*depositWei*/) internal pure returns (uint256) {
-        // Stub for future tuning; default 1x.
-        return ONE;
     }
 
     function _createSeries(uint24 maturityLevel) private {
@@ -923,7 +925,7 @@ contract DegenerusBonds {
             targetTotal = remainingBudget;
         }
 
-        uint256 primaryMint = targetTotal > remainingBudget ? remainingBudget : targetTotal;
+        uint256 primaryMint = targetTotal;
 
         if (primaryMint != 0 && s.totalScore != 0) {
             _runMintJackpot(s, rngWord, primaryMint);
@@ -977,17 +979,24 @@ contract DegenerusBonds {
         _emitJackpotPayout(s.maturityLevel, w4, fourth, 4);
         remaining -= fourth;
 
-        for (uint256 i = 4; i < JACKPOT_SPOTS; i++) {
+        for (uint256 i = 4; i < JACKPOT_SPOTS; ) {
             entropy = uint256(keccak256(abi.encode(entropy, i)));
             address winner = _weightedPick(s, entropy);
             uint256 amount = (i == JACKPOT_SPOTS - 1) ? remaining : perOther;
             s.token.mint(winner, amount);
             _emitJackpotPayout(s.maturityLevel, winner, amount, uint8(i + 1));
             remaining -= amount;
+            unchecked {
+                ++i;
+            }
         }
     }
 
-    function _resolveSeriesGameOver(BondSeries storage s, uint256 rngWord, uint256 payout) private returns (uint256 paid) {
+    function _resolveSeriesGameOver(
+        BondSeries storage s,
+        uint256 rngWord,
+        uint256 payout
+    ) private returns (uint256 paid) {
         if (payout == 0) return 0;
         uint8 lane = uint8(rngWord & 1);
         if (s.lanes[lane].total == 0 && s.lanes[1 - lane].total != 0) {
@@ -1001,9 +1010,12 @@ contract DegenerusBonds {
 
         // Decimator slice: proportional to burned amount (score).
         uint256 len = chosen.entries.length;
-        for (uint256 i = 0; i < len; i++) {
+        for (uint256 i = 0; i < len; ) {
             LaneEntry storage entry = chosen.entries[i];
             uint256 share = (decPool * entry.amount) / chosen.total;
+            unchecked {
+                ++i;
+            }
             if (share == 0) continue;
             paid += share;
             if (!_creditPayout(entry.player, share)) {
@@ -1030,8 +1042,11 @@ contract DegenerusBonds {
             }
 
             uint256 localEntropy = rngWord;
-            for (uint8 k = 0; k < 14; k++) {
+            for (uint8 k = 0; k < 14; ) {
                 uint256 prize = buckets[k];
+                unchecked {
+                    ++k;
+                }
                 if (prize == 0) continue;
                 localEntropy = uint256(keccak256(abi.encode(localEntropy, k, lane)));
                 address winner = _weightedLanePick(chosen, localEntropy);
@@ -1054,9 +1069,8 @@ contract DegenerusBonds {
         (uint256 burned, uint256 outstanding) = _obligationTotals(s);
         uint256 remainingToken = outstanding;
         uint256 payoutCap = s.payoutBudget + s.carryPot;
-        uint24 currLevel = _currentLevel();
         uint256 available = _availableBank();
-        (uint256 totalRequired, uint256 currentRequired) = _requiredCoverTotals(s, currLevel);
+        (uint256 totalRequired, uint256 currentRequired) = _requiredCoverTotals(s);
         if (available < totalRequired) return false;
 
         uint256 otherRequired = totalRequired - currentRequired;
@@ -1064,7 +1078,7 @@ contract DegenerusBonds {
         uint256 payout = payoutCap > maxSpend ? maxSpend : payoutCap;
 
         uint256 required = burned + outstanding;
-        if (payout < required || payout < currentRequired) return false;
+        if (payout < required) return false;
 
         uint256 reserve = outstanding;
 
@@ -1092,9 +1106,12 @@ contract DegenerusBonds {
 
             // Decimator slice: proportional to burned amount (score).
             uint256 len = chosen.entries.length;
-            for (uint256 i = 0; i < len; i++) {
+            for (uint256 i = 0; i < len; ) {
                 LaneEntry storage entry = chosen.entries[i];
                 uint256 share = (decPool * entry.amount) / chosen.total;
+                unchecked {
+                    ++i;
+                }
                 if (share == 0) continue;
                 paid += share;
                 if (!_creditPayout(entry.player, share)) {
@@ -1121,8 +1138,11 @@ contract DegenerusBonds {
                 }
 
                 uint256 localEntropy = rngWord;
-                for (uint8 k = 0; k < 14; k++) {
+                for (uint8 k = 0; k < 14; ) {
                     uint256 prize = buckets[k];
+                    unchecked {
+                        ++k;
+                    }
                     if (prize == 0) continue;
                     localEntropy = uint256(keccak256(abi.encode(localEntropy, k, lane)));
                     address winner = _weightedLanePick(chosen, localEntropy);
@@ -1204,7 +1224,7 @@ contract DegenerusBonds {
         temp = value;
         while (temp != 0) {
             index--;
-            buffer[index] = bytes1(uint8(48 + temp % 10));
+            buffer[index] = bytes1(uint8(48 + (temp % 10)));
             temp /= 10;
         }
         str = string(buffer);

@@ -10,19 +10,11 @@ interface IDegenerusCoinAffiliate {
     function creditFlipBatch(address[3] calldata players, uint256[3] calldata amounts) external;
     function affiliateQuestReward(address player, uint256 amount) external returns (uint256);
     function affiliatePrimePresale() external;
+    function burnCoinAffiliate(address target, uint256 amount) external;
 }
 
 interface IDegenerusBondsPresale {
     function ingestPresaleEth() external payable;
-}
-
-interface IDegenerusBondsAffiliateMint {
-    function mintAffiliateReward(
-        address to,
-        uint256 quantity,
-        uint256 basePerBondWei,
-        bool stake
-    ) external returns (uint256 startTokenId);
 }
 
 contract DegenerusAffiliate {
@@ -30,8 +22,6 @@ contract DegenerusAffiliate {
     // Events
     // ---------------------------------------------------------------------
     event Affiliate(uint256 amount, bytes32 indexed code, address sender);
-    event AffiliateBondClaimed(address indexed player, uint24 indexed lvl, uint8 indexed tier, uint8 bondsMinted);
-    event AffiliateBondRewardsUpdated(uint256 count);
     event SyntheticMapPlayerCreated(address indexed synthetic, address indexed affiliate, bytes32 code);
 
     // ---------------------------------------------------------------------
@@ -47,12 +37,8 @@ contract DegenerusAffiliate {
     error PresaleExceedsRemaining();
     error PresalePerTxLimit();
     error PresaleClosed();
-    error ClaimTierInvalid();
-    error ClaimAlreadyClaimed();
-    error ClaimScoreTooLow();
-    error ClaimConfigTooLarge();
-    error InvalidClaimConfig();
     error OnlyGame();
+    error SyntheticCap();
 
     // ---------------------------------------------------------------------
     // Types
@@ -67,11 +53,9 @@ contract DegenerusAffiliate {
         uint8 rakeback;
     }
 
-    struct AffiliateBondReward {
-        uint96 scoreRequired; // affiliate score needed (base units, 6 decimals)
-        uint96 baseWeiPerBond; // base value per bond for win odds (>= min base, capped to 0.5 ETH when minting)
-        uint8 bonds; // number of bonds minted for this tier
-        bool stake; // whether the reward bonds are staked (soulbound)
+    struct SyntheticCapInfo {
+        uint32 minted; // number of synthetic players created
+        uint32 cap; // total synthetic players allowed
     }
 
     // ---------------------------------------------------------------------
@@ -87,9 +71,9 @@ contract DegenerusAffiliate {
     uint256 private constant PRESALE_PRICE_DIVISOR = 1000; // pricePer1000 / 1000 = price per token
     uint256 private constant PRESALE_PRICE_FLOOR_1000 = 0.0075 ether; // minimum price per 1,000 tokens
     uint256 private constant PRESALE_MAX_ETH_PER_TX = 1 ether;
-    uint256 private constant AFFILIATE_BOND_MIN_BASE = 0.02 ether;
-    uint256 private constant AFFILIATE_BOND_MAX_BASE = 0.5 ether;
-    uint256 private constant AFFILIATE_BOND_MAX_TIERS = 256;
+    uint256 private constant SYNTH_BASE_COST = 1500 * MILLION; // base 10 slots after level > 3
+    uint256 private constant SYNTH_TOPUP_COST = 2500 * MILLION; // per +10 slots
+    uint32 private constant SYNTH_BATCH = 10;
 
     // ---------------------------------------------------------------------
     // Immutable / wiring
@@ -106,23 +90,20 @@ contract DegenerusAffiliate {
     mapping(uint24 => mapping(address => uint256)) public affiliateCoinEarned;
     mapping(address => bytes32) private playerReferralCode;
     mapping(address => address) public syntheticMapOwner; // synthetic player -> affiliate owner
-    mapping(address => bytes32) private syntheticMapCode; // synthetic player -> locked affiliate code
     mapping(address => uint256) public presaleCoinEarned;
-    uint256 public presaleClaimableTotal;
     mapping(address => uint256) public presalePrincipal; // principal bought while coin is unwired
+    mapping(uint24 => PlayerScore) private affiliateTopByLevel;
+    mapping(address => SyntheticCapInfo) private syntheticCap;
+    uint256 public presaleClaimableTotal;
+    uint256 private presaleInventoryBase = PRESALE_SUPPLY_TOKENS * MILLION; // used before coin is wired
+    uint256 private presalePricePer1000 = PRESALE_PRICE_START_1000;
     uint96 public totalPresaleSold;
     uint64 private syntheticNonce;
-    mapping(uint24 => PlayerScore) private affiliateTopByLevel;
-    uint256 private presaleInventoryBase = PRESALE_SUPPLY_TOKENS * MILLION; // used before coin is wired
-    bool private preCoinActive = true;
-    uint256 private rewardSeedEth; // legacy accumulator (unused while presale forwards directly to bonds)
-    bool private presaleShutdown; // permanently stops new presale purchases once coin is wired
-    uint256 private presalePricePer1000 = PRESALE_PRICE_START_1000;
     uint48 private presaleLastDay;
+    bool private preCoinActive = true;
+    bool private presaleShutdown; // permanently stops new presale purchases once coin is wired
     bool private presaleIncreasedToday;
     bool private referralLocksActive;
-    AffiliateBondReward[] private affiliateBondRewards;
-    mapping(uint24 => mapping(address => uint256)) public affiliateBondClaimed; // bitmask of claimed tiers per level
 
     function _applyPresaleDecay() private returns (uint256 pricePer1000) {
         uint48 day = uint48(block.timestamp / 1 days);
@@ -207,12 +188,6 @@ contract DegenerusAffiliate {
         address current = address(degenerusGame);
         if (current == address(0)) {
             degenerusGame = IDegenerusGame(gameAddr);
-            uint256 seed = rewardSeedEth;
-            if (seed != 0) {
-                rewardSeedEth = 0;
-                (bool ok, ) = payable(gameAddr).call{value: seed}("");
-                if (!ok) revert Insufficient();
-            }
             referralLocksActive = true; // allow locking of referral codes only once the game is wired
         } else if (gameAddr != current) {
             revert AlreadyConfigured();
@@ -245,13 +220,15 @@ contract DegenerusAffiliate {
         emit Affiliate(0, code_, msg.sender); // 0 = player referred
     }
 
-    /// @notice Create a synthetic MAP-only player for an affiliate; callable only by the game.
+    /// @notice Create a synthetic MAP-only player; callable only by the affiliate that owns the code.
     /// @dev Synthetic addresses are auto-generated with the low 48 bits zeroed to make them identifiable.
-    function createSyntheticMapPlayer(address affiliateOwner, bytes32 code_) external returns (address synthetic) {
-        if (msg.sender != address(degenerusGame)) revert OnlyGame();
-        if (affiliateOwner == address(0)) revert ZeroAddress();
+    function createSyntheticMapPlayer(bytes32 code_) external returns (address synthetic) {
+        address affiliateOwner = msg.sender;
         AffiliateCodeInfo storage info = affiliateCode[code_];
         if (info.owner != affiliateOwner) revert OnlyAuthorized();
+
+        address gameAddr = address(degenerusGame);
+        if (gameAddr == address(0)) revert OnlyGame();
 
         uint160 mask = uint160(~((uint160(1) << 48) - 1));
         uint64 nonce = syntheticNonce;
@@ -266,9 +243,24 @@ contract DegenerusAffiliate {
         syntheticNonce = nonce;
 
         if (playerReferralCode[synthetic] != bytes32(0)) revert Insufficient();
+        SyntheticCapInfo storage capInfo = syntheticCap[affiliateOwner];
+        uint32 cap = capInfo.cap;
+        if (cap == 0) {
+            // Grant the base 10 slots for free only through level 3; later requires a paid unlock.
+            uint24 currentLevel = degenerusGame.level();
+            if (currentLevel <= 3) {
+                cap = SYNTH_BATCH;
+                capInfo.cap = cap;
+            } else {
+                revert SyntheticCap();
+            }
+        }
+        if (capInfo.minted >= cap) revert SyntheticCap();
         syntheticMapOwner[synthetic] = affiliateOwner;
-        syntheticMapCode[synthetic] = code_;
         playerReferralCode[synthetic] = code_;
+        unchecked {
+            ++capInfo.minted;
+        }
         emit SyntheticMapPlayerCreated(synthetic, affiliateOwner, code_);
     }
 
@@ -283,19 +275,6 @@ contract DegenerusAffiliate {
         presaleShutdown = true;
     }
 
-    /// @notice Withdraw admin funds (excludes prize-pool-reserved ETH).
-    function withdrawAdmin(address payable to, uint256 amount) external {
-        if (msg.sender != bonds) revert OnlyBonds();
-        if (to == address(0)) revert Zero();
-        uint256 reserved = rewardSeedEth;
-        uint256 bal = address(this).balance;
-        uint256 available = bal > reserved ? bal - reserved : 0;
-        if (amount == 0) amount = available;
-        if (amount == 0 || amount > available) revert Insufficient();
-        (bool ok, ) = to.call{value: amount}("");
-        if (!ok) revert Insufficient();
-    }
-
     /// @notice Presale purchase flow (ETH -> BURNIE) with linear price ramp and deferred bonuses.
     function presale() external payable returns (uint256 amountBase) {
         if (presaleShutdown) revert PresaleClosed();
@@ -305,27 +284,33 @@ contract DegenerusAffiliate {
 
         if (!preCoinActive) revert PresaleExceedsRemaining();
         uint256 pricePer1000 = _applyPresaleDecay();
-        uint256 inventoryTokens = presaleInventoryBase / MILLION;
+        uint256 inventoryBase = presaleInventoryBase;
+        uint256 inventoryTokens = inventoryBase / MILLION;
         if (inventoryTokens == 0) revert PresaleExceedsRemaining();
 
         // price per token = pricePer1000 / 1000
-        uint256 tokensOut = (ethIn * PRESALE_PRICE_DIVISOR) / pricePer1000;
+        uint256 tokensOut;
+        unchecked {
+            tokensOut = (ethIn * PRESALE_PRICE_DIVISOR) / pricePer1000;
+        }
         if (tokensOut == 0) revert Insufficient();
         if (tokensOut > inventoryTokens) {
             tokensOut = inventoryTokens;
         }
 
-        uint256 costWei = (tokensOut * pricePer1000) / PRESALE_PRICE_DIVISOR;
+        uint256 costWei;
+        unchecked {
+            costWei = (tokensOut * pricePer1000) / PRESALE_PRICE_DIVISOR;
+        }
         uint256 refund = ethIn - costWei;
 
         amountBase = tokensOut * MILLION;
         totalPresaleSold = uint96(uint256(totalPresaleSold) + amountBase);
-        presaleClaimableTotal += amountBase;
 
         address payable buyer = payable(msg.sender);
-        presaleInventoryBase -= amountBase;
+        presaleInventoryBase = inventoryBase - amountBase;
         presalePrincipal[buyer] += amountBase;
-        presaleCoinEarned[buyer] += amountBase;
+        uint256 buyerEarned = presaleCoinEarned[buyer] + amountBase;
 
         IDegenerusBondsPresale(bonds).ingestPresaleEth{value: costWei}(); // bonds routes 90% to prize pool
 
@@ -337,16 +322,21 @@ contract DegenerusAffiliate {
         _bumpPresalePrice(costWei);
 
         address affiliateAddr = _referrerAddress(buyer);
+        uint256 claimableDelta = amountBase;
         if (affiliateAddr != address(0) && affiliateAddr != buyer) {
             uint256 affiliateBonus = (amountBase * 5) / 100;
             uint256 buyerBonus = (amountBase * 2) / 100;
             if (affiliateBonus != 0) {
                 presaleCoinEarned[affiliateAddr] += affiliateBonus;
+                claimableDelta += affiliateBonus;
             }
             if (buyerBonus != 0) {
-                presaleCoinEarned[buyer] += buyerBonus;
+                buyerEarned += buyerBonus;
+                claimableDelta += buyerBonus;
             }
         }
+        presaleCoinEarned[buyer] = buyerEarned;
+        presaleClaimableTotal += claimableDelta;
     }
 
     // ---------------------------------------------------------------------
@@ -395,181 +385,111 @@ contract DegenerusAffiliate {
         }
         uint8 rakebackPct = info.rakeback;
 
-        uint256 baseAmount = amount;
         mapping(address => uint256) storage earned = affiliateCoinEarned[lvl];
 
-        address[3] memory players;
-        uint256[3] memory amounts;
-        uint256 cursor;
-
-        // Pay direct affiliate
-        // Direct affiliate: rakeback and score are based on the base amount.
-        uint256 rakebackShare = (baseAmount * uint256(rakebackPct)) / 100;
-        uint256 affiliateShareBase = baseAmount - rakebackShare;
-        uint256 affiliatePayout = affiliateShareBase;
-
+        // Pay direct affiliate (score based on base amount).
+        uint256 rakebackShare = (amount * uint256(rakebackPct)) / 100;
+        uint256 affiliateShareBase = amount - rakebackShare;
         uint256 newTotal = earned[affiliateAddr] + affiliateShareBase; // score ignores stake bonus
         earned[affiliateAddr] = newTotal;
 
-        uint256 questReward = coinActive ? coin.affiliateQuestReward(affiliateAddr, affiliatePayout) : 0;
-
-        uint256 totalFlipAward = affiliatePayout + questReward;
-        if (totalFlipAward != 0 && coinActive) {
-            players[cursor] = affiliateAddr;
-            amounts[cursor] = totalFlipAward;
-            unchecked {
-                ++cursor;
-            }
-        } else if (totalFlipAward != 0) {
-            presaleCoinEarned[affiliateAddr] += totalFlipAward;
-            presaleClaimableTotal += totalFlipAward;
-        }
-
         _updateTopAffiliate(affiliateAddr, newTotal, lvl);
-
         playerRakeback = rakebackShare;
 
-        // Upline bonus (20% of base amount); no stake bonus applied to uplines.
-        address upline = _referrerAddress(affiliateAddr);
-        if (upline != address(0) && upline != sender) {
-            uint256 bonus = baseAmount / 5;
-            uint256 questRewardUpline = coinActive ? coin.affiliateQuestReward(upline, bonus) : 0;
-            uint256 uplineTotal = earned[upline] + bonus;
-            earned[upline] = uplineTotal;
-            uint256 totalUpline = bonus + questRewardUpline;
-            if (totalUpline != 0) {
-                if (coinActive && cursor < 3) {
+        if (coinActive) {
+            address[3] memory players;
+            uint256[3] memory amounts;
+            uint256 cursor;
+
+            uint256 questReward = coin.affiliateQuestReward(affiliateAddr, affiliateShareBase);
+            uint256 totalFlipAward = affiliateShareBase + questReward;
+            if (totalFlipAward != 0) {
+                players[cursor] = affiliateAddr;
+                amounts[cursor] = totalFlipAward;
+                unchecked {
+                    ++cursor;
+                }
+            }
+
+            // Upline bonus (20% of base amount); no stake bonus applied to uplines.
+            address upline = _referrerAddress(affiliateAddr);
+            if (upline != address(0) && upline != sender) {
+                uint256 bonus = amount / 5;
+                uint256 questRewardUpline = coin.affiliateQuestReward(upline, bonus);
+                uint256 totalUpline = bonus + questRewardUpline;
+                earned[upline] = earned[upline] + bonus;
+
+                if (totalUpline != 0 && cursor < 3) {
                     players[cursor] = upline;
                     amounts[cursor] = totalUpline;
                     unchecked {
                         ++cursor;
                     }
-                } else if (!coinActive) {
-                    presaleCoinEarned[upline] += totalUpline;
-                    presaleClaimableTotal += totalUpline;
                 }
-            }
 
-            // Second upline bonus (20%)
-            address upline2 = _referrerAddress(upline);
-            if (upline2 != address(0)) {
-                uint256 bonus2 = bonus / 5;
-                uint256 questReward2 = coinActive ? coin.affiliateQuestReward(upline2, bonus2) : 0;
-                uint256 upline2Total = earned[upline2] + bonus2;
-                earned[upline2] = upline2Total;
-                uint256 totalUpline2 = bonus2 + questReward2;
-                if (totalUpline2 != 0) {
-                    if (coinActive && cursor < 3) {
+                // Second upline bonus (20% of first upline share)
+                address upline2 = _referrerAddress(upline);
+                if (upline2 != address(0)) {
+                    uint256 bonus2 = bonus / 5;
+                    uint256 questReward2 = coin.affiliateQuestReward(upline2, bonus2);
+                    uint256 totalUpline2 = bonus2 + questReward2;
+                    earned[upline2] = earned[upline2] + bonus2;
+
+                    if (totalUpline2 != 0 && cursor < 3) {
                         players[cursor] = upline2;
                         amounts[cursor] = totalUpline2;
-                    } else if (!coinActive) {
-                        presaleCoinEarned[upline2] += totalUpline2;
-                        presaleClaimableTotal += totalUpline2;
+                        unchecked {
+                            ++cursor;
+                        }
                     }
                 }
             }
-        }
 
-        if (players[0] != address(0) || players[1] != address(0) || players[2] != address(0)) {
-            coin.creditFlipBatch(players, amounts);
-        } else if (!coinActive && playerRakeback != 0) {
-            presaleCoinEarned[sender] += playerRakeback;
-            presaleClaimableTotal += playerRakeback;
+            if (cursor != 0) {
+                if (cursor == 1) {
+                    coin.creditFlip(players[0], amounts[0]);
+                } else {
+                    coin.creditFlipBatch(players, amounts);
+                }
+            }
+        } else {
+            uint256 totalFlipAwardPre = affiliateShareBase;
+            if (totalFlipAwardPre != 0) {
+                presaleCoinEarned[affiliateAddr] += totalFlipAwardPre;
+                presaleClaimableTotal += totalFlipAwardPre;
+            }
+
+            // Upline bonus (20% of base amount); no stake bonus applied to uplines.
+            address uplinePre = _referrerAddress(affiliateAddr);
+            if (uplinePre != address(0) && uplinePre != sender) {
+                uint256 bonusPre = amount / 5;
+                uint256 uplineTotalPre = bonusPre;
+                earned[uplinePre] = earned[uplinePre] + bonusPre;
+                if (uplineTotalPre != 0) {
+                    presaleCoinEarned[uplinePre] += uplineTotalPre;
+                    presaleClaimableTotal += uplineTotalPre;
+                }
+
+                // Second upline bonus (20% of first upline share)
+                address upline2Pre = _referrerAddress(uplinePre);
+                if (upline2Pre != address(0)) {
+                    uint256 bonus2Pre = bonusPre / 5;
+                    earned[upline2Pre] = earned[upline2Pre] + bonus2Pre;
+                    if (bonus2Pre != 0) {
+                        presaleCoinEarned[upline2Pre] += bonus2Pre;
+                        presaleClaimableTotal += bonus2Pre;
+                    }
+                }
+            }
+
+            if (playerRakeback != 0) {
+                presaleCoinEarned[sender] += playerRakeback;
+                presaleClaimableTotal += playerRakeback;
+            }
         }
 
         emit Affiliate(amount, storedCode, sender);
         return playerRakeback;
-    }
-
-    // ---------------------------------------------------------------------
-    // Affiliate bond claims (reward mints)
-    // ---------------------------------------------------------------------
-    /// @notice Configure claim tiers that award free bonds to affiliates once they reach a score threshold for a level.
-    /// @dev Access: bonds only. Up to 256 tiers supported (bit-packed claimed flags).
-    function setAffiliateBondRewards(AffiliateBondReward[] calldata rewards) external {
-        if (msg.sender != bonds) revert OnlyBonds();
-        uint256 len = rewards.length;
-        if (len > AFFILIATE_BOND_MAX_TIERS) revert ClaimConfigTooLarge();
-        delete affiliateBondRewards;
-        for (uint256 i; i < len; ) {
-            AffiliateBondReward calldata reward = rewards[i];
-            if (
-                reward.scoreRequired == 0 ||
-                reward.bonds == 0 ||
-                reward.baseWeiPerBond < AFFILIATE_BOND_MIN_BASE ||
-                reward.baseWeiPerBond > AFFILIATE_BOND_MAX_BASE
-            ) {
-                revert InvalidClaimConfig();
-            }
-            affiliateBondRewards.push(reward);
-            unchecked {
-                ++i;
-            }
-        }
-        emit AffiliateBondRewardsUpdated(len);
-    }
-
-    /// @notice Claim a bond reward tier for the caller for a given level.
-    /// @param lvl Level whose affiliate score is evaluated.
-    /// @param tierIdx Reward tier index (0-based).
-    function claimAffiliateBond(uint24 lvl, uint8 tierIdx) external {
-        AffiliateBondReward memory reward = _affiliateBondReward(tierIdx);
-
-        uint256 claimedMask = affiliateBondClaimed[lvl][msg.sender];
-        uint256 mask = uint256(1) << tierIdx;
-        if ((claimedMask & mask) != 0) revert ClaimAlreadyClaimed();
-
-        uint256 score = affiliateCoinEarned[lvl][msg.sender];
-        if (score < reward.scoreRequired) revert ClaimScoreTooLow();
-
-        affiliateBondClaimed[lvl][msg.sender] = claimedMask | mask;
-
-        IDegenerusBondsAffiliateMint(bonds).mintAffiliateReward(
-            msg.sender,
-            reward.bonds,
-            reward.baseWeiPerBond,
-            reward.stake
-        );
-
-        emit AffiliateBondClaimed(msg.sender, lvl, tierIdx, reward.bonds);
-    }
-
-    /// @notice Return the number of claimable tiers and the claimed bitmask for a player/level pair.
-    function claimableAffiliateBondTiers(
-        address player,
-        uint24 lvl
-    ) external view returns (uint16 claimable, uint256 claimedMask) {
-        claimedMask = affiliateBondClaimed[lvl][player];
-        uint256 len = affiliateBondRewards.length;
-        if (len == 0) return (0, claimedMask);
-
-        uint256 score = affiliateCoinEarned[lvl][player];
-        for (uint256 i; i < len; ) {
-            AffiliateBondReward memory reward = affiliateBondRewards[i];
-            if ((claimedMask & (uint256(1) << i)) == 0 && score >= reward.scoreRequired) {
-                unchecked {
-                    ++claimable;
-                }
-            }
-            unchecked {
-                ++i;
-            }
-        }
-    }
-
-    /// @notice Number of configured affiliate bond reward tiers.
-    function affiliateBondRewardsLength() external view returns (uint256) {
-        return affiliateBondRewards.length;
-    }
-
-    /// @notice Return a configured affiliate bond reward tier.
-    function affiliateBondReward(uint256 idx) external view returns (AffiliateBondReward memory) {
-        return affiliateBondRewards[idx];
-    }
-
-    function _affiliateBondReward(uint8 idx) private view returns (AffiliateBondReward memory reward) {
-        if (idx >= affiliateBondRewards.length) revert ClaimTierInvalid();
-        reward = affiliateBondRewards[idx];
     }
 
     /// @notice Consume and return the caller’s accrued presale/early affiliate coin for minting.
@@ -595,6 +515,12 @@ contract DegenerusAffiliate {
         if (player == address(0) || amount == 0) return;
         presaleCoinEarned[player] += amount;
         presaleClaimableTotal += amount;
+    }
+
+    /// @notice Reject unsolicited ETH by immediately forwarding to the bonds contract.
+    receive() external payable {
+        (bool ok, ) = payable(bonds).call{value: msg.value}("");
+        if (!ok) revert Insufficient();
     }
 
     // ---------------------------------------------------------------------
@@ -646,7 +572,45 @@ contract DegenerusAffiliate {
     /// @notice Return synthetic map info (affiliate owner and locked code) for a synthetic player.
     function syntheticMapInfo(address synthetic) external view returns (address owner, bytes32 code) {
         owner = syntheticMapOwner[synthetic];
-        code = syntheticMapCode[synthetic];
+        code = playerReferralCode[synthetic];
+    }
+
+    /// @notice View current synthetic cap and minted count for an affiliate owner.
+    function syntheticCapView(address affiliateOwner) external view returns (uint32 minted, uint32 cap) {
+        SyntheticCapInfo memory info = syntheticCap[affiliateOwner];
+        return (info.minted, info.cap);
+    }
+
+    /// @notice Increase synthetic MAP player cap by 10-slot increments by burning BURNIE.
+    /// @dev Base cap of 10 is free only through level 3; later requires paying the base cost.
+    function increaseSyntheticCap(uint8 batches) external {
+        address affiliateOwner = msg.sender;
+        SyntheticCapInfo storage info = syntheticCap[affiliateOwner];
+        uint32 newCap = info.cap;
+        uint256 cost;
+        if (newCap != 0 && batches == 0) revert Zero();
+
+        if (newCap == 0) {
+            address gameAddr = address(degenerusGame);
+            if (gameAddr == address(0)) revert OnlyGame();
+            if (degenerusGame.level() > 3) {
+                cost = SYNTH_BASE_COST;
+            }
+            newCap = SYNTH_BATCH;
+        }
+
+        if (batches != 0) {
+            uint32 addSlots = uint32(batches) * SYNTH_BATCH;
+            newCap += addSlots;
+            cost += uint256(batches) * SYNTH_TOPUP_COST;
+        }
+
+        info.cap = newCap;
+
+        if (cost != 0) {
+            if (address(coin) == address(0)) revert ZeroAddress();
+            coin.burnCoinAffiliate(affiliateOwner, cost);
+        }
     }
 
     // ---------------------------------------------------------------------
@@ -685,5 +649,4 @@ contract DegenerusAffiliate {
             affiliateTopByLevel[lvl] = PlayerScore({player: player, score: score});
         }
     }
-
 }
