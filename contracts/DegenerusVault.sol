@@ -199,6 +199,11 @@ contract DegenerusVault {
         emit Deposit(msg.sender, msg.value, 0, 0);
     }
 
+    /// @notice Explicit helper to accept pushed ETH (mirrors the receive hook, emits Deposit).
+    function pushEth() external payable {
+        emit Deposit(msg.sender, msg.value, 0, 0);
+    }
+
     /// @notice Swap ETH <-> stETH with the bond contract to rebalance liquidity.
     /// @dev stEthForEth=true pulls stETH from bonds and sends back ETH. Otherwise stakes inbound ETH and returns minted stETH.
     function swapWithBonds(bool stEthForEth, uint256 amount) external payable {

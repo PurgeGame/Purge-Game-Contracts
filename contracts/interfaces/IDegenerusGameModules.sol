@@ -48,10 +48,8 @@ interface IDegenerusGameBondModule {
     function bondMaintenanceForMap(
         address bondsAddr,
         address stethAddr,
-        uint48 day,
         uint256 totalWei,
-        uint256 rngWord,
-        uint32 cap
+        uint256 rngWord
     ) external returns (bool worked);
     function stakeForTargetRatio(address bondsAddr, address stethAddr, uint24 lvl) external;
     function drainToBonds(address bondsAddr, address stethAddr) external;

@@ -10,10 +10,6 @@ struct PendingJackpotBondMint {
     address[] winners; // jackpot winners used to derive bond recipients (keeps ordering deterministic)
 }
 
-struct ClaimableBondInfo {
-    uint128 weiAmount; // ETH value earmarked for bonds (capped to keep struct in one slot)
-}
-
 /**
  * @title DegenerusGameStorage
  * @notice Shared storage layout between the core game contract and its delegatecall modules.
@@ -76,7 +72,7 @@ abstract contract DegenerusGameStorage {
     uint256 internal vrfRequestId; // last VRF request id used to match fulfillments
     uint256 internal bondPool; // ETH dedicated to bond obligations (lives in game unless gameOver flushes to bonds)
     uint256 internal totalFlipReversals; // number of reverse flips purchased against current RNG
-    uint256 internal principalStEth; // stETH principal the contract has staked
+    uint256 internal principalStEth; // deprecated; left for storage layout compatibility
     uint48 public deployTimestamp; // deployment timestamp for long-tail inactivity guard
     address internal bonds; // bonds contract wired once post-deploy
     address internal vault; // reward vault for BURNIE/ETH/stETH routing
@@ -94,7 +90,7 @@ abstract contract DegenerusGameStorage {
     // Token / trait state
     // ---------------------------------------------------------------------
     mapping(address => uint256) internal claimableWinnings; // ETH claimable by players
-    uint256 internal claimableWinningsLiability; // aggregate ETH owed via claimableWinnings
+    uint256 internal claimablePool; // aggregate ETH owed via claimableWinnings
     mapping(uint24 => address[][256]) internal traitBurnTicket; // level -> trait id -> ticket owner list
     uint32[80] internal dailyBurnCount; // per-day trait hit counters used for jackpot selection
     uint32[256] internal traitRemaining; // remaining supply per trait id
@@ -103,8 +99,9 @@ abstract contract DegenerusGameStorage {
     // Bond maintenance state (formerly bond)
     uint24 internal lastBondFundingLevel; // tracks the last level where bond funding was performed
     uint48 internal lastBondResolutionDay; // last day index that auto bond resolution ran
-    uint256 internal bondCreditEscrow; // ETH escrowed to back bond-credit prize funding
-    mapping(address => bool) internal autoBondLiquidate; // opt-in flag to auto-liquidate bond credits into winnings
+    // Deprecated: legacy claimable-bond credit escrow and auto-liquidation settings.
+    uint256 internal bondCreditEscrow;
+    mapping(address => bool) internal autoBondLiquidate;
     mapping(address => bool) internal bondCashoutHalf; // opt-in flag to take 50% cash instead of receiving bonds
 
     // ---------------------------------------------------------------------
@@ -122,7 +119,8 @@ abstract contract DegenerusGameStorage {
     // ---------------------------------------------------------------------
     PendingJackpotBondMint[] internal pendingJackpotBondMints; // deprecated
     uint256 internal pendingJackpotBondCursor; // deprecated
-    mapping(address => ClaimableBondInfo) internal claimableBondInfo; // per-player bond credits (only spendable on bonds)
+    // Deprecated: legacy claimable bond credit tracking
+    mapping(address => uint128) internal claimableBondInfo;
 
     // ---------------------------------------------------------------------
     // Cosmetic trophies

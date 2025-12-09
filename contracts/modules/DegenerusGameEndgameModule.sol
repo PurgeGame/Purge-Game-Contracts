@@ -4,7 +4,7 @@ pragma solidity ^0.8.26;
 import {IDegenerusJackpots} from "../interfaces/IDegenerusJackpots.sol";
 import {IDegenerusTrophies} from "../interfaces/IDegenerusTrophies.sol";
 import {IDegenerusAffiliate} from "../interfaces/IDegenerusAffiliate.sol";
-import {DegenerusGameStorage, ClaimableBondInfo} from "../storage/DegenerusGameStorage.sol";
+import {DegenerusGameStorage} from "../storage/DegenerusGameStorage.sol";
 
 interface IDegenerusGameAffiliatePayout {
     function affiliatePayoutAddress(address player) external view returns (address recipient, address affiliateOwner);
@@ -17,6 +17,11 @@ interface IDegenerusGameTraitJackpot {
         uint256 rngWord,
         uint256 ethPool
     ) external returns (uint256 paidEth);
+}
+
+interface IDegenerusBondsJackpot {
+    function depositCurrentFor(address beneficiary) external payable returns (uint256 scoreAwarded);
+    function purchasesEnabled() external view returns (bool);
 }
 
 /**
@@ -153,13 +158,19 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
         uint16 bondBps,
         uint256 entropy
     ) private returns (uint256 ethPortion) {
+        address bondsAddr = bonds;
         uint256 winnersLen = winners.length;
-        if (bondBps == 0 || amount == 0 || winnersLen == 0) {
+        if (bondBps == 0 || amount == 0 || winnersLen == 0 || bondsAddr == address(0)) {
             return amount;
         }
 
         uint256 bondBudget = (amount * bondBps) / 10_000;
         if (bondBudget < JACKPOT_BOND_MIN_BASE) {
+            return amount;
+        }
+
+        IDegenerusBondsJackpot bondsContract = IDegenerusBondsJackpot(bondsAddr);
+        if (!bondsContract.purchasesEnabled()) {
             return amount;
         }
 
@@ -184,49 +195,59 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
             basePerBond = JACKPOT_BOND_MIN_BASE;
         }
 
-        uint256 spend = basePerBond * quantity;
-        if (spend > amount) {
+        uint256 plannedSpend = basePerBond * quantity;
+        if (plannedSpend > amount) {
             basePerBond = amount / quantity;
             if (basePerBond < JACKPOT_BOND_MIN_BASE) {
                 return amount;
             }
-            spend = basePerBond * quantity;
+            plannedSpend = basePerBond * quantity;
         }
-        if (spend == 0 || spend > amount) {
+        if (plannedSpend == 0 || plannedSpend > amount) {
             return amount;
         }
 
         uint16 offset = uint16(entropy % winnersLen);
-        uint96 base96 = uint96(basePerBond);
-        _creditClaimableBonds(winners, uint16(quantity), base96, offset);
-        if (spend != 0) {
-            unchecked {
-                bondCreditEscrow += spend;
-            }
-        }
+        uint256 per = quantity / winnersLen;
+        uint256 rem = quantity % winnersLen;
+        ethPortion = amount;
 
-        return amount - spend;
-    }
+        uint256 rewardAdd;
 
-    function _creditClaimableBonds(address[] memory winners, uint16 quantity, uint96 basePerBond, uint16 offset) private {
-        if (quantity == 0 || winners.length == 0 || basePerBond == 0) return;
-        uint256 len = winners.length;
-        uint256 per = quantity / len;
-        uint256 rem = quantity % len;
-        for (uint256 i; i < len; ) {
+        for (uint256 i; i < winnersLen; ) {
             uint256 share = per;
             if (i < rem) {
                 unchecked {
                     ++share;
                 }
             }
-            if (share != 0) {
-                address recipient = winners[(uint256(offset) + i) % len];
-                _addClaimableBond(recipient, uint256(share) * uint256(basePerBond));
+                if (share != 0) {
+                    address recipient = winners[(uint256(offset) + i) % winnersLen];
+                    uint256 spend = share * basePerBond;
+                    if (bondCashoutHalf[recipient]) {
+                        uint256 payout = spend / 2;
+                        uint256 remainder = spend - payout;
+                        uint256 rewardSlice = remainder / 2;
+                        if (payout != 0) {
+                            _addClaimableEth(recipient, payout);
+                        }
+                        rewardAdd += rewardSlice;
+                        ethPortion -= spend;
+                    } else {
+                        try bondsContract.depositCurrentFor{value: spend}(recipient) {
+                            ethPortion -= spend;
+                        } catch {
+                            // leave spend in ethPortion on failure
+                    }
+                }
             }
             unchecked {
                 ++i;
             }
+        }
+
+        if (rewardAdd != 0) {
+            rewardPool += rewardAdd;
         }
     }
 
@@ -236,7 +257,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
         address recipient = _payoutRecipient(beneficiary);
         unchecked {
             claimableWinnings[recipient] += weiAmount;
-            claimableWinningsLiability += weiAmount;
+            claimablePool += weiAmount;
         }
         emit PlayerCredited(beneficiary, recipient, weiAmount);
     }
@@ -268,27 +289,6 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
 
     function _payoutRecipient(address player) private view returns (address recipient) {
         (recipient, ) = IDegenerusGameAffiliatePayout(address(this)).affiliatePayoutAddress(player);
-    }
-
-    function _addClaimableBond(address player, uint256 weiAmount) private {
-        if (player == address(0) || weiAmount == 0) return;
-        ClaimableBondInfo storage info = claimableBondInfo[player];
-        unchecked {
-            info.weiAmount = uint128(uint256(info.weiAmount) + weiAmount);
-        }
-        _autoLiquidateBondCredit(player);
-    }
-
-    function _autoLiquidateBondCredit(address player) private returns (bool converted) {
-        if (!autoBondLiquidate[player]) return false;
-        ClaimableBondInfo storage info = claimableBondInfo[player];
-        uint256 creditWei = info.weiAmount;
-        if (creditWei == 0) return false;
-
-        info.weiAmount = 0;
-        bondCreditEscrow = bondCreditEscrow - creditWei;
-        _addClaimableEth(player, creditWei);
-        return true;
     }
 
     function _runBafJackpot(

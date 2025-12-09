@@ -758,6 +758,14 @@ contract DegenerusBonds {
         return series[maturityLevel].payoutBudget;
     }
 
+    /// @notice Required cover across all maturities up to the next active maturity.
+    function requiredCoverNext() external view returns (uint256 required) {
+        uint24 targetMat = _activeMaturity();
+        BondSeries storage target = series[targetMat];
+        uint24 currLevel = _currentLevel();
+        (required, ) = _requiredCoverTotals(target, currLevel);
+    }
+
     // ---------------------------------------------------------------------
     // Internals
     // ---------------------------------------------------------------------

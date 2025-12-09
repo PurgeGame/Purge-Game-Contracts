@@ -8,6 +8,7 @@ interface IBonds {
     function resolveBonds(uint256 rngWord) external returns (bool worked);
     function notifyGameOver() external;
     function stakeRateBps() external view returns (uint16);
+    function requiredCoverNext() external view returns (uint256 required);
 }
 
 interface IStETHLite {
@@ -28,63 +29,41 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
     uint256 private constant REWARD_POOL_MIN_STAKE = 0.5 ether;
 
     /// @notice Handle bond funding/resolve work during map jackpot prep.
-    function bondMaintenanceForMap(
-        address bondsAddr,
-        address stethAddr,
-        uint48 day,
-        uint256 totalWei,
-        uint256 rngWord,
-        uint32 /*cap*/
-    ) external returns (bool worked) {
-        if (bondsAddr == address(0)) return false;
+    function bondMaintenanceForMap(address bondsAddr, address stethAddr, uint256 totalWei, uint256 rngWord) external {
         IBonds bondContract = IBonds(bondsAddr);
 
-        bool funded;
-        if (lastBondFundingLevel != level) {
-            uint256 yieldTotal = yieldPool(stethAddr);
+        uint256 stBal = IStETHLite(stethAddr).balanceOf(address(this));
+        uint256 ethBal = address(this).balance;
 
-            // Mintable coin from map jackpot: 5% of totalWei (priced in DEGEN).
-            uint256 mintableCoin = (totalWei * priceCoin) / (20 * price);
-            uint256 bondCoin = (mintableCoin * 40) / 100;
-            uint256 vaultCoin = mintableCoin - bondCoin;
+        uint256 obligations = currentPrizePool + nextPrizePool + rewardPool + claimablePool + bondPool;
+        uint256 combined = ethBal + stBal;
+        uint256 yieldTotal = combined > obligations ? combined - obligations : 0;
 
-            uint256 bondSkim = yieldTotal / 4; // 25% to bonds
-            uint256 rewardTopUp = yieldTotal / 20; // 5% to reward pool
+        // Mintable coin from map jackpot: 5% of totalWei (priced in DEGEN); send full amount to bonds.
+        uint256 bondCoin = (totalWei * priceCoin) / (20 * price);
 
-            uint256 ethTracked = currentPrizePool + nextPrizePool + rewardPool + bondCreditEscrow;
-            uint256 ethAvail = address(this).balance > ethTracked ? address(this).balance - ethTracked : 0;
-            uint256 ethForBonds = bondSkim <= ethAvail ? bondSkim : ethAvail;
+        uint256 bondSkim = yieldTotal / 4; // 25% to bonds
+        uint256 rewardTopUp = yieldTotal / 20; // 5% to reward pool
 
-            uint256 stBal = IStETHLite(stethAddr).balanceOf(address(this));
-            uint256 stYield = stBal > principalStEth ? (stBal - principalStEth) : 0;
-            uint256 stForBonds = bondSkim > ethForBonds ? bondSkim - ethForBonds : 0;
-            if (stForBonds > stYield) {
-                stForBonds = stYield;
-                bondSkim = ethForBonds + stForBonds;
-            }
-
-            uint256 ethAfterBond = ethAvail > ethForBonds ? ethAvail - ethForBonds : 0;
-            uint256 rewardFromEth = rewardTopUp <= ethAfterBond ? rewardTopUp : ethAfterBond;
-            if (rewardFromEth != 0) {
-                rewardPool += rewardFromEth;
-            }
-
-            // Route vault share as mint allowance; ignore failures to avoid blocking jackpots.
-            if (vaultCoin != 0) {
-                address v = vault;
-                if (v != address(0)) {
-                    try IVault(v).deposit{value: 0}(vaultCoin, 0) {} catch {}
-                }
-            }
-
-            bondContract.payBonds{value: ethForBonds}(bondCoin, stForBonds, rngWord);
-            lastBondFundingLevel = level;
-            funded = (ethForBonds != 0 || stForBonds != 0 || bondCoin != 0 || rewardFromEth != 0);
+        uint256 required = bondContract.requiredCoverNext();
+        uint256 shortfall = required > bondPool ? required - bondPool : 0;
+        uint256 toBondPool = bondSkim < shortfall ? bondSkim : shortfall;
+        if (toBondPool != 0) {
+            bondPool += toBondPool;
         }
 
-        bool resolved = bondContract.resolveBonds(rngWord);
-        lastBondResolutionDay = day;
-        return funded || resolved;
+        uint256 leftover = bondSkim - toBondPool;
+        uint256 stSpend;
+        uint256 ethSpend;
+        if (leftover != 0) {
+            stSpend = leftover <= stBal ? leftover : stBal;
+            if (stSpend < leftover) {
+                uint256 gap = leftover - stSpend;
+                ethSpend = gap <= ethBal ? gap : ethBal;
+            }
+        }
+        bondContract.payBonds{value: ethSpend}(bondCoin, stSpend, rngWord);
+        rewardPool += rewardTopUp;
     }
 
     /// @notice View helper to compute untracked funds (stETH + ETH minus obligations).
@@ -92,9 +71,7 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
     function yieldPool(address stethAddr) public view returns (uint256 total) {
         uint256 stBal = IStETHLite(stethAddr).balanceOf(address(this));
         uint256 ethBal = address(this).balance;
-        uint256 tracked = currentPrizePool + nextPrizePool + rewardPool + bondCreditEscrow + claimableWinningsLiability;
-
-        uint256 obligations = tracked + principalStEth;
+        uint256 obligations = currentPrizePool + nextPrizePool + rewardPool + claimablePool + bondPool;
         uint256 combined = ethBal + stBal;
         total = combined > obligations ? combined - obligations : 0;
     }
@@ -115,7 +92,7 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
         if (rateBps == 0) return;
 
         uint256 targetSt = (pool * rateBps) / 10_000; // stake against configured share of reward pool
-        uint256 stBal = principalStEth;
+        uint256 stBal = IStETHLite(stethAddr).balanceOf(address(this));
         if (stBal >= targetSt) return;
 
         uint256 stakeAmount = targetSt - stBal;
@@ -126,16 +103,10 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
 
     /// @notice Inform bonds of shutdown and transfer all assets to it.
     function drainToBonds(address bondsAddr, address stethAddr) external {
-        if (bondsAddr == address(0)) return;
-
         IBonds bondContract = IBonds(bondsAddr);
         bondContract.notifyGameOver();
 
         uint256 stBal = IStETHLite(stethAddr).balanceOf(address(this));
-        if (stBal != 0) {
-            principalStEth = 0;
-        }
-
         uint256 ethBal = address(this).balance;
         bondContract.payBonds{value: ethBal}(0, stBal, 0);
     }
@@ -143,7 +114,7 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
     function _stakeEth(address stethAddr, uint256 amount) private {
         // Best-effort staking; skip if stETH deposits are paused or unavailable.
         try IStETHLite(stethAddr).submit{value: amount}(address(0)) returns (uint256 minted) {
-            principalStEth += minted;
+            minted;
         } catch {
             return;
         }

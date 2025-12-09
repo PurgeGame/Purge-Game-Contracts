@@ -16,7 +16,7 @@ import {
 } from "./interfaces/IDegenerusGameModules.sol";
 import {MintPaymentKind} from "./interfaces/IDegenerusGame.sol";
 import {DegenerusGameExternalOp} from "./interfaces/IDegenerusGameExternal.sol";
-import {DegenerusGameStorage, ClaimableBondInfo} from "./storage/DegenerusGameStorage.sol";
+import {DegenerusGameStorage} from "./storage/DegenerusGameStorage.sol";
 import {DegenerusGameCredit} from "./utils/DegenerusGameCredit.sol";
 
 interface IStETH {
@@ -223,7 +223,7 @@ contract DegenerusGame is DegenerusGameStorage {
     function bondCreditToClaimable(address player, uint256 amount) external onlyBonds {
         if (bondGameOver || amount == 0 || amount > bondPool) revert E();
         bondPool -= amount;
-        claimableWinningsLiability += amount;
+        claimablePool += amount;
         _addClaimableEth(player, amount);
     }
 
@@ -246,7 +246,6 @@ contract DegenerusGame is DegenerusGameStorage {
         // Forward all stETH to bonds as part of final settlement.
         uint256 stAmount = steth.balanceOf(address(this));
         if (stAmount != 0) {
-            principalStEth = 0;
             if (!steth.transfer(bondsAddr, stAmount)) revert E();
         }
 
@@ -409,7 +408,7 @@ contract DegenerusGame is DegenerusGameStorage {
         uint256 amount,
         MintPaymentKind payKind
     ) private returns (uint256 prizeContribution) {
-        (bool ok, uint256 prize, uint256 creditUsed, uint256 claimableUsed) = DegenerusGameCredit.processMintPayment(
+        (bool ok, uint256 prize, , uint256 claimableUsed) = DegenerusGameCredit.processMintPayment(
             claimableWinnings,
             bondCredit,
             player,
@@ -419,20 +418,10 @@ contract DegenerusGame is DegenerusGameStorage {
         );
         if (!ok) revert E();
         if (claimableUsed != 0) {
-            if (claimableWinningsLiability >= claimableUsed) {
-                claimableWinningsLiability -= claimableUsed;
+            if (claimablePool >= claimableUsed) {
+                claimablePool -= claimableUsed;
             } else {
-                claimableWinningsLiability = 0;
-            }
-        }
-        if (creditUsed != 0) {
-            uint256 escrow = bondCreditEscrow;
-            if (escrow != 0) {
-                uint256 applied = creditUsed < escrow ? creditUsed : escrow;
-                unchecked {
-                    prize += applied;
-                    bondCreditEscrow = escrow - applied;
-                }
+                claimablePool = 0;
             }
         }
         return prize;
@@ -548,8 +537,13 @@ contract DegenerusGame is DegenerusGameStorage {
                     }
 
                     uint256 totalWeiForBond = rewardPool + currentPrizePool;
-                    if (_bondMaintenanceForMapModule(day, totalWeiForBond, rngWord, cap)) {
-                        break; // bond batch consumed this tick; rerun advanceGame to continue
+                    _bondMaintenanceForMapModule(totalWeiForBond, rngWord);
+                    if (bonds != address(0)) {
+                        bool bondsResolved = IDegenerusBonds(bonds).resolveBonds(rngWord);
+                        if (bondsResolved) {
+                            lastBondResolutionDay = day;
+                            break; // bond batch consumed this tick; rerun advanceGame to continue
+                        }
                     }
                     uint256 mapEffectiveWei = _calcPrizePoolForJackpot(lvl, rngWord);
                     payMapJackpot(lvl, rngWord, mapEffectiveWei);
@@ -879,25 +873,17 @@ contract DegenerusGame is DegenerusGameStorage {
         if (!ok) revert E();
     }
 
-    function _bondMaintenanceForMapModule(
-        uint48 day,
-        uint256 totalWei,
-        uint256 rngWord,
-        uint32 cap
-    ) private returns (bool worked) {
+    function _bondMaintenanceForMapModule(uint256 totalWei, uint256 rngWord) private {
         (bool ok, bytes memory data) = bondModule.delegatecall(
             abi.encodeWithSelector(
                 IDegenerusGameBondModule.bondMaintenanceForMap.selector,
                 bonds,
                 address(steth),
-                day,
                 totalWei,
-                rngWord,
-                cap
+                rngWord
             )
         );
-        if (!ok || data.length == 0) revert E();
-        return abi.decode(data, (bool));
+        if (!ok) revert E();
     }
 
     function _stakeForTargetRatioModule(uint24 lvl) private {
@@ -935,7 +921,7 @@ contract DegenerusGame is DegenerusGameStorage {
         if (op == DegenerusGameExternalOp.DecJackpotClaim) {
             address jackpotsAddr = jackpots;
             if (jackpotsAddr == address(0) || msg.sender != jackpotsAddr) revert E();
-            claimableWinningsLiability += amount;
+            claimablePool += amount;
             _addClaimableEth(account, amount);
         } else {
             revert E();
@@ -950,15 +936,14 @@ contract DegenerusGame is DegenerusGameStorage {
         address player = msg.sender;
         uint256 amount = claimableWinnings[player];
         if (amount <= 1) revert E();
-        _applyBondCredit(player, 0);
         uint256 payout;
         unchecked {
             claimableWinnings[player] = 1;
             payout = amount - 1;
-            if (claimableWinningsLiability >= payout) {
-                claimableWinningsLiability -= payout;
+            if (claimablePool >= payout) {
+                claimablePool -= payout;
             } else {
-                claimableWinningsLiability = 0;
+                claimablePool = 0;
             }
         }
         _payoutWithStethFallback(player, payout);
@@ -971,99 +956,12 @@ contract DegenerusGame is DegenerusGameStorage {
     }
 
     /// @notice Toggle auto-liquidation of bond credits into claimable winnings (tax applies on withdrawal).
-    /// @dev When enabled, any existing bond credit is immediately converted if escrowed funds are available.
-    function setAutoBondLiquidate(bool enabled) external {
-        autoBondLiquidate[msg.sender] = enabled;
-        if (enabled) {
-            _autoLiquidateBondCredit(msg.sender);
-        }
-    }
-
-    /// @notice Opt out of receiving bonds; take 50% of bond funds as claimable ETH instead.
     function setBondCashoutHalf(bool enabled) external {
         bondCashoutHalf[msg.sender] = enabled;
     }
 
-    function _autoLiquidateBondCredit(address player) private returns (bool converted) {
-        if (!autoBondLiquidate[player]) return false;
-        ClaimableBondInfo storage info = claimableBondInfo[player];
-        uint256 creditWei = info.weiAmount;
-        if (creditWei == 0) return false;
-
-        info.weiAmount = 0;
-        bondCreditEscrow = bondCreditEscrow - creditWei;
-        claimableWinningsLiability += creditWei;
-        _addClaimableEth(player, creditWei);
-        emit BondCreditLiquidated(player, creditWei);
-        return true;
-    }
-
-    /// @notice Spend any claimable bond credits without claiming ETH winnings.
-    /// @param amountWei Optional cap on spend this call (0 = all).
-    function claimBondCredits(uint256 amountWei) external {
-        _applyBondCredit(msg.sender, amountWei);
-    }
-
-    /// @notice Spend bond credits into the active bond series; falls back to crediting ETH if bonds are unavailable.
-    /// @param amountWei Optional face amount to spend; 0 means use full credit.
-    function cashoutBondCredits(uint256 amountWei) external {
-        _applyBondCredit(msg.sender, amountWei);
-    }
-
     function bondCreditOf(address player) external view returns (uint256) {
         return bondCredit[player];
-    }
-
-    /// @notice Spend any claimable bond credits owed to `player` before paying ETH winnings.
-    /// @param amountWei Optional cap on spend this call (0 = spend all).
-    function _applyBondCredit(address player, uint256 amountWei) private {
-        if (_autoLiquidateBondCredit(player)) return;
-        ClaimableBondInfo storage info = claimableBondInfo[player];
-        uint256 creditWei = info.weiAmount;
-        if (creditWei == 0) return;
-        if (amountWei == 0 || amountWei > creditWei) {
-            amountWei = creditWei;
-        }
-        uint256 spend = amountWei;
-        uint256 escrow = bondCreditEscrow;
-        if (spend > escrow) {
-            spend = escrow;
-        }
-        if (spend == 0) return;
-
-        info.weiAmount = uint128(creditWei - spend);
-        bondCreditEscrow = escrow - spend;
-
-        address bondsAddr = bonds;
-        if (bondCashoutHalf[player]) {
-            uint256 payout = spend / 2;
-            uint256 remainder = spend - payout;
-            uint256 rewardSlice = remainder / 2;
-
-            if (payout != 0) {
-                claimableWinningsLiability += payout;
-                _addClaimableEth(player, payout);
-            }
-            if (rewardSlice != 0) {
-                rewardPool += rewardSlice;
-            }
-            // Remaining remainder/2 stays on contract as untracked yield pool.
-            return;
-        }
-
-        if (bondsAddr == address(0)) {
-            claimableWinningsLiability += spend;
-            _addClaimableEth(player, spend);
-            return;
-        }
-
-        try IDegenerusBonds(bondsAddr).depositCurrentFor{value: spend}(player) {
-            // bond purchase succeeded
-        } catch {
-            // fallback to crediting winnings if bond deposit fails
-            claimableWinningsLiability += spend;
-            _addClaimableEth(player, spend);
-        }
     }
 
     /// @notice Credit claimable ETH for a player from bond redemptions (bonds contract only).
@@ -1073,7 +971,7 @@ contract DegenerusGame is DegenerusGameStorage {
             currentPrizePool += msg.value;
             return;
         }
-        claimableWinningsLiability += msg.value;
+        claimablePool += msg.value;
         _addClaimableEth(player, msg.value);
     }
 
@@ -1253,7 +1151,6 @@ contract DegenerusGame is DegenerusGameStorage {
         if (stEthForEth) {
             if (msg.value != 0) revert E();
             if (!steth.transferFrom(msg.sender, address(this), amount)) revert E();
-            principalStEth += amount;
 
             if (address(this).balance < amount) revert E();
             if (rewardPool >= amount) {
@@ -1468,11 +1365,6 @@ contract DegenerusGame is DegenerusGameStorage {
         uint256 stSend = amount <= stBal ? amount : stBal;
         if (stSend != 0) {
             if (!steth.transfer(to, stSend)) revert E();
-            if (principalStEth >= stSend) {
-                principalStEth -= stSend;
-            } else {
-                principalStEth = 0;
-            }
         }
 
         uint256 remaining = amount - stSend;
@@ -1500,11 +1392,6 @@ contract DegenerusGame is DegenerusGameStorage {
         uint256 stSend = remaining <= stBal ? remaining : stBal;
         if (stSend != 0) {
             if (!steth.transfer(to, stSend)) revert E();
-            if (principalStEth >= stSend) {
-                principalStEth -= stSend;
-            } else {
-                principalStEth = 0;
-            }
         }
 
         uint256 leftover = remaining - stSend;

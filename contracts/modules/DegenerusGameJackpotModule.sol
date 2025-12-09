@@ -297,13 +297,13 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
         if ((lvl % 100) == 0) {
             if (stethAddr != address(0)) {
                 uint256 stBal = IStETH(stethAddr).balanceOf(address(this));
-                if (stBal > principalStEth) {
-                    uint256 yieldPool = stBal - principalStEth;
-                    if (level100RollTotal < 5) {
-                        uint256 bonus = yieldPool / 2;
-                        if (bonus != 0) {
-                            rewardPool += bonus;
-                        }
+                uint256 totalBal = address(this).balance + stBal;
+                uint256 obligations = currentPrizePool + nextPrizePool + rewardPool + claimablePool + bondPool;
+                if (totalBal > obligations && level100RollTotal < 5) {
+                    uint256 yieldPool = totalBal - obligations;
+                    uint256 bonus = yieldPool / 2;
+                    if (bonus != 0) {
+                        rewardPool += bonus;
                     }
                 }
             }
@@ -318,7 +318,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
 
     function _addClaimableEth(address beneficiary, uint256 weiAmount) private {
         _addClaimableEthNoLiability(beneficiary, weiAmount);
-        claimableWinningsLiability += weiAmount;
+        claimablePool += weiAmount;
     }
 
     function _traitBucketCounts(uint8 band, uint256 entropy) private pure returns (uint16[4] memory counts) {
@@ -558,7 +558,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
 
         if (liabilityDelta != 0) {
             unchecked {
-                claimableWinningsLiability += liabilityDelta;
+                claimablePool += liabilityDelta;
             }
         }
     }
