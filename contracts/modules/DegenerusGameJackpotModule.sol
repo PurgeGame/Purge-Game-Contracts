@@ -9,7 +9,7 @@ interface IDegenerusGameAffiliatePayout {
     function affiliatePayoutAddress(address player) external view returns (address recipient, address affiliateOwner);
 }
 
-interface IStETH {
+interface IStETHView {
     function balanceOf(address account) external view returns (uint256);
 }
 
@@ -79,63 +79,11 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
     /// @notice Pays early-burn jackpots during purchase phase or the rolling daily jackpots at end of level.
     /// @dev Manages boost arming/consumption, coin-only fallback at max early-burn %, and quest rolls.
     function payDailyJackpot(bool isDaily, uint24 lvl, uint256 randWord, IDegenerusCoinModule coinContract) external {
-        uint8 percentBefore = earlyBurnPercent;
-        bool mapReady = _mapJackpotReadyLocal();
-        bool purchasePhaseActive = (gameState == 2 && !mapReady);
-        bool boostArmedBefore = earlyBurnBoostArmed;
-        uint8 percentAfter = purchasePhaseActive ? _currentEarlyBurnPercent() : percentBefore;
-        if (purchasePhaseActive) {
-            if (percentAfter != percentBefore) {
-                earlyBurnPercent = percentAfter;
-                if (
-                    !boostArmedBefore &&
-                    percentBefore < EARLY_BURN_BOOST_THRESHOLD &&
-                    percentAfter >= EARLY_BURN_BOOST_THRESHOLD
-                ) {
-                    earlyBurnBoostArmed = true; // arm boost for the next jackpot instead of the current one
-                }
-            }
-        }
-
-        bool boostTrigger = purchasePhaseActive && boostArmedBefore;
-        if (boostTrigger) {
-            earlyBurnBoostArmed = false; // consume the armed boost
-        }
-
-        bool coinOnly = !boostTrigger && percentBefore >= EARLY_BURN_COIN_ONLY_THRESHOLD;
-
         uint48 questDay = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
+        uint32 winningTraitsPacked;
 
-        if (!isDaily) {
-            uint32 winningTraitsPacked = _packWinningTraits(_getRandomTraits(randWord));
-
-            uint256 rewardPoolSlice;
-            if (!coinOnly) {
-                uint256 poolBps = boostTrigger ? 200 : 50; // default 0.5%, boosted 2% when armed
-                rewardPoolSlice = (rewardPool * poolBps) / 10_000;
-                rewardPoolSlice = (rewardPoolSlice * _rewardJackpotScaleBps(lvl)) / 10_000;
-            }
-
-            uint256 ethPool = rewardPoolSlice;
-            uint256 paidEth = _executeJackpot(
-                JackpotParams({
-                    lvl: lvl,
-                    ethPool: ethPool,
-                    coinPool: priceCoin * 10,
-                    entropy: randWord ^ (uint256(lvl) << 192),
-                    winningTraitsPacked: winningTraitsPacked,
-                    traitShareBpsPacked: DAILY_JACKPOT_SHARES_PACKED,
-                    coinContract: coinContract
-                }),
-                false,
-                false,
-                BOND_BPS_DAILY
-            );
-
-            // Only the reward pool-funded slice should reduce reward pool accounting.
-            rewardPool -= paidEth;
-        } else {
-            uint32 winningTraitsPacked = _packWinningTraits(_getWinningTraits(randWord, dailyBurnCount));
+        if (isDaily) {
+            winningTraitsPacked = _packWinningTraits(_getWinningTraits(randWord, dailyBurnCount));
             bool lastDaily = (jackpotCounter + 1) >= JACKPOT_LEVEL_CAP;
             uint256 budget = (dailyJackpotBase * _dailyJackpotBps(jackpotCounter)) / 10_000;
 
@@ -196,8 +144,60 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
             if (jackpotCounter < JACKPOT_LEVEL_CAP) {
                 _clearDailyBurnCount();
             }
+
+            _rollQuestForJackpot(coinContract, randWord, false, questDay);
+            return;
         }
 
+        // Non-daily (early-burn) path.
+        uint8 percentBefore = earlyBurnPercent;
+        bool boostArmedBefore = earlyBurnBoostArmed;
+        uint8 percentAfter = _currentEarlyBurnPercent();
+        if (percentAfter != percentBefore) {
+            earlyBurnPercent = percentAfter;
+            if (
+                !boostArmedBefore &&
+                percentBefore < EARLY_BURN_BOOST_THRESHOLD &&
+                percentAfter >= EARLY_BURN_BOOST_THRESHOLD
+            ) {
+                earlyBurnBoostArmed = true; // arm boost for the next jackpot instead of the current one
+            }
+        }
+
+        bool boostTrigger = boostArmedBefore;
+        if (boostTrigger) {
+            earlyBurnBoostArmed = false; // consume the armed boost
+        }
+
+        bool coinOnly = !boostTrigger && percentAfter >= EARLY_BURN_COIN_ONLY_THRESHOLD;
+
+        winningTraitsPacked = _packWinningTraits(_getRandomTraits(randWord));
+
+        uint256 rewardPoolSlice;
+        if (!coinOnly) {
+            uint256 poolBps = boostTrigger ? 200 : 50; // default 0.5%, boosted 2% when armed
+            rewardPoolSlice = (rewardPool * poolBps) / 10_000;
+            rewardPoolSlice = (rewardPoolSlice * _rewardJackpotScaleBps(lvl)) / 10_000;
+        }
+
+        uint256 ethPool = rewardPoolSlice;
+        uint256 paidEth = _executeJackpot(
+            JackpotParams({
+                lvl: lvl,
+                ethPool: ethPool,
+                coinPool: priceCoin * 10,
+                entropy: randWord ^ (uint256(lvl) << 192),
+                winningTraitsPacked: winningTraitsPacked,
+                traitShareBpsPacked: DAILY_JACKPOT_SHARES_PACKED,
+                coinContract: coinContract
+            }),
+            false,
+            false,
+            BOND_BPS_DAILY
+        );
+
+        // Only the reward pool-funded slice should reduce reward pool accounting.
+        rewardPool -= paidEth;
         _rollQuestForJackpot(coinContract, randWord, false, questDay);
     }
 
@@ -266,10 +266,8 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
         uint256 rngWord,
         address stethAddr
     ) external returns (uint256 effectiveWei) {
-        if (nextPrizePool != 0) {
-            currentPrizePool += nextPrizePool;
-            nextPrizePool = 0;
-        }
+        currentPrizePool += nextPrizePool;
+        nextPrizePool = 0;
 
         uint256 totalWei = rewardPool + currentPrizePool;
         uint256 mapPct;
@@ -281,7 +279,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
         rewardPool = _rewardPool;
 
         uint256 jackpotBase = totalWei - _rewardPool;
-        mapPct = _mapJackpotPercent(lvl);
+        mapPct = _mapJackpotPercent(lvl, rngWord);
         mapWei = (jackpotBase * mapPct) / 100;
 
         unchecked {
@@ -295,30 +293,27 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
         effectiveWei = mapWei;
 
         if ((lvl % 100) == 0) {
-            if (stethAddr != address(0)) {
-                uint256 stBal = IStETH(stethAddr).balanceOf(address(this));
-                uint256 totalBal = address(this).balance + stBal;
-                uint256 obligations = currentPrizePool + nextPrizePool + rewardPool + claimablePool + bondPool;
-                if (totalBal > obligations && level100RollTotal < 5) {
-                    uint256 yieldPool = totalBal - obligations;
-                    uint256 bonus = yieldPool / 2;
-                    if (bonus != 0) {
-                        rewardPool += bonus;
-                    }
+            uint256 stBal = IStETHView(stethAddr).balanceOf(address(this));
+            uint256 totalBal = address(this).balance + stBal;
+            uint256 obligations = currentPrizePool + nextPrizePool + rewardPool + claimablePool + bondPool;
+            uint256 bafPool = bafHundredPool;
+            if (bafPool != 0) {
+                unchecked {
+                    obligations += bafPool;
                 }
+            }
+            if (totalBal > obligations && level100RollTotal < 5) {
+                uint256 yieldPool = totalBal - obligations;
+                uint256 bonus = yieldPool / 2;
+                rewardPool += bonus;
             }
         }
     }
 
-    function _addClaimableEthNoLiability(address beneficiary, uint256 weiAmount) private {
+    function _addClaimableEth(address beneficiary, uint256 weiAmount) private {
         address recipient = _payoutRecipient(beneficiary);
         claimableWinnings[recipient] += weiAmount;
         emit PlayerCredited(beneficiary, recipient, weiAmount);
-    }
-
-    function _addClaimableEth(address beneficiary, uint256 weiAmount) private {
-        _addClaimableEthNoLiability(beneficiary, weiAmount);
-        claimablePool += weiAmount;
     }
 
     function _traitBucketCounts(uint8 band, uint256 entropy) private pure returns (uint16[4] memory counts) {
@@ -428,8 +423,9 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
         return result;
     }
 
-    function _mapJackpotPercent(uint24 lvl) private pure returns (uint256) {
-        return (lvl % 20 == 16) ? 40 : 30;
+    function _mapJackpotPercent(uint24 lvl, uint256 rngWord) private pure returns (uint256) {
+        if (lvl % 20 == 16) return 40; // keep the big MAP levels fixed
+        return 20 + (rngWord % 21); // 20-40% otherwise
     }
 
     function _dailyJackpotBps(uint8 idx) private pure returns (uint16) {
@@ -650,18 +646,15 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
         );
         if (winners.length == 0) return (entropyState, 0, 0, 0, 0);
 
-        uint256 ethPoolForWinners = traitShare;
-        uint256 upfrontPaid;
-        if (
-            !payCoin &&
-            bondBps != 0 &&
-            bondsAddr != address(0) &&
-            IDegenerusBondsJackpot(bondsAddr).purchasesEnabled()
-        ) {
+        uint256 perWinner = traitShare / totalCount;
+        if (perWinner == 0) return (entropyState, 0, 0, bondSpent, liabilityDelta);
+
+        if (!payCoin && bondBps != 0 && IDegenerusBondsJackpot(bondsAddr).purchasesEnabled()) {
             uint256 burnLiability;
-            (bondSpent, ethPoolForWinners, burnLiability, upfrontPaid) = _jackpotBondSpend(
+            (bondSpent, burnLiability) = _jackpotBondSpend(
                 bondsAddr,
                 winners,
+                perWinner,
                 traitShare,
                 entropyState,
                 bondBps,
@@ -669,9 +662,6 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
             );
             liabilityDelta += burnLiability;
         }
-
-        uint256 perWinner = ethPoolForWinners / totalCount;
-        if (perWinner == 0) return (entropyState, 0, 0, bondSpent, liabilityDelta);
 
         uint256 len = winners.length;
         if (payCoin) {
@@ -687,22 +677,21 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
             return (entropyState, 0, coinDelta, bondSpent, liabilityDelta);
         }
 
-        uint256 totalPayout = perWinner * len;
-        if (totalPayout == 0) {
-            if (upfrontPaid != 0) {
-                return (entropyState, upfrontPaid, 0, bondSpent, liabilityDelta);
-            }
-            return (entropyState, 0, 0, bondSpent, liabilityDelta);
-        }
-
-        liabilityDelta += totalPayout;
+        uint256 totalPayout;
         for (uint256 i; i < len; ) {
-            _addClaimableEthNoLiability(winners[i], perWinner);
+            address w = winners[i];
+            if (w != address(0)) {
+                _addClaimableEth(w, perWinner);
+                totalPayout += perWinner;
+            }
             unchecked {
                 ++i;
             }
         }
-        ethDelta = totalPayout + upfrontPaid;
+        if (totalPayout == 0) return (entropyState, 0, 0, bondSpent, liabilityDelta);
+
+        liabilityDelta += totalPayout;
+        ethDelta = totalPayout;
 
         return (entropyState, ethDelta, 0, bondSpent, liabilityDelta);
     }
@@ -710,97 +699,69 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
     function _jackpotBondSpend(
         address bondsAddr,
         address[] memory winners,
+        uint256 perWinner,
         uint256 traitShare,
         uint256 entropyState,
         uint16 bondBps,
-        bool isGrandBucket
-    ) private returns (uint256 bondSpent, uint256 ethPoolForWinners, uint256 liabilityDelta, uint256 upfrontPaid) {
+        bool /*isGrandBucket*/
+    ) private returns (uint256 bondSpent, uint256 liabilityDelta) {
         uint256 winnersLen = winners.length;
-        if (winnersLen == 0) return (0, traitShare, 0, 0);
+        if (winnersLen == 0 || perWinner == 0) return (0, 0);
 
         IDegenerusBondsJackpot bondsContract = IDegenerusBondsJackpot(bondsAddr);
 
         // Immediately spend the bond skim on live bond purchases for the drawn winners.
         uint256 bondBudget = (traitShare * bondBps) / 10_000;
-        if (bondBudget < JACKPOT_BOND_MIN_BASE) return (0, traitShare, 0, 0);
-
-        uint256 basePerBond = bondBudget / winnersLen;
-        if (!isGrandBucket && basePerBond > JACKPOT_BOND_MIN_BASE) {
-            basePerBond = JACKPOT_BOND_MIN_BASE; // spread non-grand buckets across more bonds when budget allows
-        }
-        if (basePerBond < JACKPOT_BOND_MIN_BASE) {
-            basePerBond = JACKPOT_BOND_MIN_BASE;
-        }
-
-        uint256 quantity = bondBudget / basePerBond;
-        if (quantity == 0) return (0, traitShare, 0, 0);
-
-        uint256 maxQuantity = winnersLen * JACKPOT_BOND_MAX_MULTIPLIER;
-        if (quantity > maxQuantity) {
-            quantity = maxQuantity;
-        }
-
-        basePerBond = (bondBudget + quantity - 1) / quantity; // ceil to fully spend bond budget
-        if (basePerBond < JACKPOT_BOND_MIN_BASE) {
-            basePerBond = JACKPOT_BOND_MIN_BASE;
-        }
-
-        uint256 plannedSpend = basePerBond * quantity;
-        if (plannedSpend == 0 || plannedSpend > traitShare) return (0, traitShare, 0, 0);
+        if (bondBudget < perWinner) return (0, 0);
 
         uint16 offset = uint16(entropyState % winnersLen);
-        uint256 per = quantity / winnersLen;
-        uint256 rem = quantity % winnersLen;
-
         uint256 rewardAdd;
+        uint256 targetBondWinners = bondBudget / perWinner;
+        if (targetBondWinners > winnersLen) {
+            targetBondWinners = winnersLen;
+        }
 
-        for (uint256 i; i < winnersLen; ) {
-            uint256 shareQty = per;
-            if (i < rem) {
+        for (uint256 i; i < targetBondWinners; ) {
+            address recipient = winners[(uint256(offset) + i) % winnersLen];
+            if (recipient == address(0)) {
                 unchecked {
-                    ++shareQty;
+                    ++i;
+                }
+                continue;
+            }
+            bool spent;
+            if (bondCashoutHalf[recipient]) {
+                uint256 payout = perWinner / 2;
+                uint256 remainder = perWinner - payout;
+                uint256 rewardSlice = remainder / 2;
+                if (payout != 0) {
+                    _addClaimableEth(recipient, payout);
+                    liabilityDelta += payout;
+                }
+                rewardAdd += rewardSlice;
+                spent = true;
+            } else {
+                try bondsContract.depositCurrentFor{value: perWinner}(recipient) {
+                    spent = true;
+                } catch {
+                    spent = false;
                 }
             }
-            if (shareQty != 0) {
-                address recipient = winners[(uint256(offset) + i) % winnersLen];
-                uint256 amount = shareQty * basePerBond;
-                if (amount != 0) {
-                    if (bondCashoutHalf[recipient]) {
-                        uint256 payout = amount / 2;
-                        uint256 remainder = amount - payout;
-                        uint256 rewardSlice = remainder / 2;
-                        if (payout != 0) {
-                            _addClaimableEthNoLiability(recipient, payout);
-                            upfrontPaid += payout;
-                            liabilityDelta += payout;
-                        }
-                        rewardAdd += rewardSlice;
-                        // remainder - rewardSlice sinks into the contract balance (yield pool)
-                        bondSpent += amount;
-                    } else {
-                        try bondsContract.depositCurrentFor{value: amount}(recipient) {
-                            bondSpent += amount;
-                        } catch {
-                            // leave amount in the ETH pool when bonds reject the purchase
-                        }
-                    }
-                }
+
+            if (spent) {
+                winners[(uint256(offset) + i) % winnersLen] = address(0);
+                bondSpent += perWinner;
             }
             unchecked {
                 ++i;
             }
         }
 
-        if (bondSpent == 0 && upfrontPaid == 0) {
-            return (0, traitShare, liabilityDelta, upfrontPaid);
-        }
-
         if (rewardAdd != 0) {
             rewardPool += rewardAdd;
         }
 
-        ethPoolForWinners = traitShare - bondSpent;
-        return (bondSpent, ethPoolForWinners, liabilityDelta, upfrontPaid);
+        return (bondSpent, liabilityDelta);
     }
 
     function _entropyStep(uint256 state) private pure returns (uint256) {
@@ -837,7 +798,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
             coinContract.creditFlip(recipient, amount);
         } else {
             // Liability is tracked by the caller to avoid per-winner SSTORE cost.
-            _addClaimableEthNoLiability(beneficiary, amount);
+            _addClaimableEth(beneficiary, amount);
         }
         return true;
     }
@@ -939,19 +900,12 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
                 ++lvl;
             }
         }
-        bool throttleWrites;
-        bool mapReady = _mapJackpotReadyLocal();
-        if (gameState == 2 && !mapReady) {
-            throttleWrites = true;
-        } else if (gameState == 2 && mapReady) {
-            bool firstAirdropBatch = (idx == 0 && processed == 0);
-            if (firstAirdropBatch) {
-                throttleWrites = true;
-            }
-        }
-        if (throttleWrites) {
+
+        bool firstAirdropBatch = (idx == 0 && processed == 0);
+        if (firstAirdropBatch) {
             writesBudget -= (writesBudget * 35) / 100; // 65% scaling
         }
+
         uint32 used = 0;
         uint256 entropy = rngWordCurrent;
 
@@ -1127,9 +1081,5 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
         uint256 pct = ((currentPrizePool + nextPrizePool) * 100) / prevPoolWei;
         if (pct > type(uint8).max) return type(uint8).max;
         return uint8(pct);
-    }
-
-    function _mapJackpotReadyLocal() private view returns (bool) {
-        return (gameState == 2 && lastPurchaseDay);
     }
 }

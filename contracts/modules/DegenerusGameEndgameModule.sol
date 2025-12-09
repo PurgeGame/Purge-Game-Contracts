@@ -137,45 +137,41 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
     }
 
     function _payExterminatorShare(address ex, uint256 exterminatorShare) private returns (uint256 claimableDelta) {
-        address[] memory exArr = new address[](1);
-        exArr[0] = ex;
-        (uint256 ethPortion, uint256 splitClaimable) = _splitEthWithBonds(exArr, exterminatorShare, BOND_BPS_HALF);
+        bool bondsEnabled = IDegenerusBondsJackpot(bonds).purchasesEnabled();
+        (uint256 ethPortion, uint256 splitClaimable) = _splitEthWithBond(
+            ex,
+            exterminatorShare,
+            BOND_BPS_HALF,
+            bondsEnabled
+        );
         claimableDelta = splitClaimable + _addClaimableEth(ex, ethPortion);
     }
 
-    function _splitEthWithBonds(
-        address[] memory winners,
+    function _splitEthWithBond(
+        address winner,
         uint256 amount,
-        uint16 bondBps
+        uint16 bondBps,
+        bool bondsEnabled
     ) private returns (uint256 ethPortion, uint256 claimableDelta) {
-        uint256 winnersLen = winners.length;
         uint256 bondBudget = (amount * bondBps) / 10_000;
 
-        uint256 base = bondBudget / winnersLen;
-        uint256 extra = bondBudget % winnersLen;
         ethPortion = amount;
 
-        if (!IDegenerusBondsJackpot(bonds).purchasesEnabled()) {
+        if (!bondsEnabled || bondBudget == 0) {
             return (ethPortion, claimableDelta);
         }
 
-        for (uint256 i; i < winnersLen; ) {
-            uint256 spend = base + (i < extra ? 1 : 0);
-            address recipient = winners[i];
-            if (bondCashoutHalf[recipient]) {
-                uint256 payout = spend / 2;
-                claimableDelta += _addClaimableEth(recipient, payout);
-                ethPortion -= spend;
-            } else {
-                try IDegenerusBondsJackpot(bonds).depositCurrentFor{value: spend}(recipient) {
-                    ethPortion -= spend;
-                } catch {
-                    // leave spend in ethPortion to pay out as ETH on failure
-                }
-            }
-            unchecked {
-                ++i;
-            }
+        if (bondCashoutHalf[winner]) {
+            uint256 payout = bondBudget / 2;
+            claimableDelta = _addClaimableEth(winner, payout);
+            ethPortion -= bondBudget;
+            return (ethPortion, claimableDelta);
+        }
+
+        try IDegenerusBondsJackpot(bonds).depositCurrentFor{value: bondBudget}(winner) {
+            ethPortion -= bondBudget;
+        } catch {
+            // leave bondBudget in ethPortion to pay out as ETH on failure
         }
         return (ethPortion, claimableDelta);
     }
@@ -241,19 +237,17 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
             uint256 bondMask,
             uint256 refund
         ) = IDegenerusJackpots(jackpotsAddr).runBafJackpot(poolWei, lvl, rngWord);
-        address[] memory single = new address[](1);
+        bool bondsEnabled = IDegenerusBondsJackpot(bonds).purchasesEnabled();
         for (uint256 i; i < winnersArr.length; ) {
             uint256 amount = amountsArr[i];
             uint256 ethPortion = amount;
             uint256 tmpClaimable;
             bool forceBond = (bondMask & (uint256(1) << i)) != 0;
             if (forceBond) {
-                single[0] = winnersArr[i];
                 // Force full bond payout for tagged winners (with ETH fallback if bonds cannot be minted).
-                (ethPortion, tmpClaimable) = _splitEthWithBonds(single, amount, 10_000);
+                (ethPortion, tmpClaimable) = _splitEthWithBond(winnersArr[i], amount, 10_000, bondsEnabled);
             } else if (i < 2) {
-                single[0] = winnersArr[i];
-                (ethPortion, tmpClaimable) = _splitEthWithBonds(single, amount, BOND_BPS_HALF);
+                (ethPortion, tmpClaimable) = _splitEthWithBond(winnersArr[i], amount, BOND_BPS_HALF, bondsEnabled);
             }
             claimableDelta += tmpClaimable;
             if (ethPortion != 0) {

@@ -44,7 +44,7 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
         uint256 obligations = currentPrizePool + nextPrizePool + rewardPool + claimablePool + bondPool;
         if (lvl % 100 == 0) {
             unchecked {
-                obligations += decimatorHundredPool + bafHundredPool; // include reserved reward slices so they cannot be skimmed as “yield” on level 100
+                obligations += bafHundredPool; // include reserved reward slices so they cannot be skimmed as “yield” on level 100. Decimator already ran
             }
         }
         uint256 combined = ethBal + stBal;
