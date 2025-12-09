@@ -186,6 +186,7 @@ contract DegenerusBonds {
     error NotResolved();
     error InsufficientReserve();
     error BankCallFailed();
+    error PurchasesDisabled();
 
     // ---------------------------------------------------------------------
     // Events
@@ -265,6 +266,8 @@ contract DegenerusBonds {
     uint256 private vrfPendingWord;
     bool private vrfRequestPending;
     bool public bankedInGame = true; // true while funds live in the game contract’s bond pool
+    bool public externalPurchasesEnabled = true; // owner toggle for non-game purchases
+    bool public gamePurchasesEnabled = true; // owner toggle for game-routed purchases
     address public vault;
     address public coin;
     uint256 private coinJackpotPot;
@@ -296,6 +299,13 @@ contract DegenerusBonds {
         if (msg.sender != vrfAdmin && msg.sender != address(game)) revert Unauthorized();
         if (vault_ == address(0)) revert Unauthorized();
         vault = vault_;
+    }
+
+    /// @notice Owner toggle to allow/deny purchases from external callers and the game.
+    function setPurchaseToggles(bool externalEnabled, bool gameEnabled) external {
+        if (msg.sender != vrfAdmin) revert Unauthorized();
+        externalPurchasesEnabled = externalEnabled;
+        gamePurchasesEnabled = gameEnabled;
     }
 
     /// @notice Set the coin token used for coin jackpots funded by the game.
@@ -470,7 +480,7 @@ contract DegenerusBonds {
     }
 
     function purchasesEnabled() external view returns (bool) {
-        return bankedInGame;
+        return bankedInGame && gamePurchasesEnabled;
     }
 
     /// @notice Emergency shutdown path: consume all ETH and resolve maturities in order, partially paying the last one.
@@ -556,6 +566,11 @@ contract DegenerusBonds {
     ) private returns (uint256 scoreAwarded) {
         if (amount == 0) revert SaleClosed();
         if (!bankedInGame) revert BankCallFailed();
+        if (msg.sender == address(game)) {
+            if (!gamePurchasesEnabled) revert PurchasesDisabled();
+        } else {
+            if (!externalPurchasesEnabled) revert PurchasesDisabled();
+        }
 
         BondSeries storage s = _getOrCreateSeries(maturityLevel);
         uint24 currLevel = _currentLevel();
@@ -906,8 +921,11 @@ contract DegenerusBonds {
     }
 
     function _emissionPct(uint8 run) private pure returns (uint256) {
-        if (run < 4) return 5; // first four runs: 5% each
-        if (run == 4) return 80; // final run: 80%
+        if (run == 0) return 5;
+        if (run == 1) return 5;
+        if (run == 2) return 10;
+        if (run == 3) return 10;
+        if (run == 4) return 70;
         return 0;
     }
 

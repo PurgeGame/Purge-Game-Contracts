@@ -208,12 +208,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
         return amount - spend;
     }
 
-    function _creditClaimableBonds(
-        address[] memory winners,
-        uint16 quantity,
-        uint96 basePerBond,
-        uint16 offset
-    ) private {
+    function _creditClaimableBonds(address[] memory winners, uint16 quantity, uint96 basePerBond, uint16 offset) private {
         if (quantity == 0 || winners.length == 0 || basePerBond == 0) return;
         uint256 len = winners.length;
         uint256 per = quantity / len;
@@ -227,7 +222,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
             }
             if (share != 0) {
                 address recipient = winners[(uint256(offset) + i) % len];
-                _addClaimableBond(recipient, uint256(share) * uint256(basePerBond), basePerBond, true);
+                _addClaimableBond(recipient, uint256(share) * uint256(basePerBond));
             }
             unchecked {
                 ++i;
@@ -275,13 +270,9 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
         (recipient, ) = IDegenerusGameAffiliatePayout(address(this)).affiliatePayoutAddress(player);
     }
 
-    function _addClaimableBond(address player, uint256 weiAmount, uint96 basePerBond, bool stake) private {
-        if (player == address(0) || weiAmount == 0 || basePerBond == 0) return;
+    function _addClaimableBond(address player, uint256 weiAmount) private {
+        if (player == address(0) || weiAmount == 0) return;
         ClaimableBondInfo storage info = claimableBondInfo[player];
-        if (info.basePerBondWei == 0) {
-            info.basePerBondWei = basePerBond;
-            info.stake = stake;
-        }
         unchecked {
             info.weiAmount = uint128(uint256(info.weiAmount) + weiAmount);
         }
@@ -295,8 +286,6 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
         if (creditWei == 0) return false;
 
         info.weiAmount = 0;
-        info.basePerBondWei = 0;
-        info.stake = false;
         bondCreditEscrow = bondCreditEscrow - creditWei;
         _addClaimableEth(player, creditWei);
         return true;

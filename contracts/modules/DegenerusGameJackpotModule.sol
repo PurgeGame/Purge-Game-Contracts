@@ -2,7 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {IDegenerusCoinModule} from "../interfaces/DegenerusGameModuleInterfaces.sol";
-import {DegenerusGameStorage, PendingJackpotBondMint, ClaimableBondInfo} from "../storage/DegenerusGameStorage.sol";
+import {DegenerusGameStorage} from "../storage/DegenerusGameStorage.sol";
 import {DegenerusTraitUtils} from "../DegenerusTraitUtils.sol";
 
 interface IDegenerusGameAffiliatePayout {
@@ -21,7 +21,7 @@ interface IDegenerusBondsJackpot {
         bool stake
     ) external returns (uint256 startTokenId);
     function purchasesEnabled() external view returns (bool);
-    function jackpotRewardsEnabled() external view returns (bool);
+    function depositCurrentFor(address beneficiary) external payable returns (uint256 scoreAwarded);
 }
 
 /**
@@ -58,15 +58,12 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
     uint16 private constant DAILY_JACKPOT_BPS_9 = 1225;
     uint32 private constant WRITES_BUDGET_SAFE = 800;
     uint64 private constant MAP_LCG_MULT = 0x5851F42D4C957F2D;
-    uint16 private constant JACKPOT_BOND_BPS = 1000; // default bond skim bps (overridable per jackpot)
     uint16 private constant JACKPOT_BOND_BPS_GRAND = 5000; // 50% skim for the top bucket
     uint16 private constant JACKPOT_BOND_BPS_OTHER = 1000; // 10% skim for other buckets
     uint256 private constant JACKPOT_BOND_MIN_BASE = 0.02 ether;
-    uint256 private constant JACKPOT_BOND_MAX_BASE = 0.5 ether;
     uint8 private constant JACKPOT_BOND_MAX_MULTIPLIER = 4; // cap total bonds to keep gas bounded
     uint16 private constant BOND_BPS_MAP = 5000; // 50% of MAP jackpots routed into bonds
     uint16 private constant BOND_BPS_DAILY = 2000; // 20% of daily/early-burn jackpots routed into bonds
-    bytes32 private constant MARKETABLE_BURN_SALT = keccak256("marketable-burn");
 
     // Packed parameters for a single jackpot run to keep the call surface lean.
     struct JackpotParams {
@@ -654,15 +651,15 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
         if (winners.length == 0) return (entropyState, 0, 0, 0, 0);
 
         uint256 ethPoolForWinners = traitShare;
+        uint256 upfrontPaid;
         if (
             !payCoin &&
             bondBps != 0 &&
             bondsAddr != address(0) &&
-            IDegenerusBondsJackpot(bondsAddr).purchasesEnabled() &&
-            IDegenerusBondsJackpot(bondsAddr).jackpotRewardsEnabled()
+            IDegenerusBondsJackpot(bondsAddr).purchasesEnabled()
         ) {
             uint256 burnLiability;
-            (bondSpent, ethPoolForWinners, burnLiability) = _jackpotBondSpend(
+            (bondSpent, ethPoolForWinners, burnLiability, upfrontPaid) = _jackpotBondSpend(
                 bondsAddr,
                 winners,
                 traitShare,
@@ -691,7 +688,12 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
         }
 
         uint256 totalPayout = perWinner * len;
-        if (totalPayout == 0) return (entropyState, 0, 0, bondSpent, liabilityDelta);
+        if (totalPayout == 0) {
+            if (upfrontPaid != 0) {
+                return (entropyState, upfrontPaid, 0, bondSpent, liabilityDelta);
+            }
+            return (entropyState, 0, 0, bondSpent, liabilityDelta);
+        }
 
         liabilityDelta += totalPayout;
         for (uint256 i; i < len; ) {
@@ -700,7 +702,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
                 ++i;
             }
         }
-        ethDelta = totalPayout;
+        ethDelta = totalPayout + upfrontPaid;
 
         return (entropyState, ethDelta, 0, bondSpent, liabilityDelta);
     }
@@ -712,14 +714,15 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
         uint256 entropyState,
         uint16 bondBps,
         bool isGrandBucket
-    ) private returns (uint256 bondSpent, uint256 ethPoolForWinners, uint256 liabilityDelta) {
+    ) private returns (uint256 bondSpent, uint256 ethPoolForWinners, uint256 liabilityDelta, uint256 upfrontPaid) {
         uint256 winnersLen = winners.length;
-        if (bondsAddr == address(0) || winnersLen == 0) return (0, traitShare, 0);
+        if (winnersLen == 0) return (0, traitShare, 0, 0);
 
-        if (bondBps == 0) return (0, traitShare, 0);
+        IDegenerusBondsJackpot bondsContract = IDegenerusBondsJackpot(bondsAddr);
 
+        // Immediately spend the bond skim on live bond purchases for the drawn winners.
         uint256 bondBudget = (traitShare * bondBps) / 10_000;
-        if (bondBudget < JACKPOT_BOND_MIN_BASE) return (0, traitShare, 0);
+        if (bondBudget < JACKPOT_BOND_MIN_BASE) return (0, traitShare, 0, 0);
 
         uint256 basePerBond = bondBudget / winnersLen;
         if (!isGrandBucket && basePerBond > JACKPOT_BOND_MIN_BASE) {
@@ -730,7 +733,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
         }
 
         uint256 quantity = bondBudget / basePerBond;
-        if (quantity == 0) return (0, traitShare, 0);
+        if (quantity == 0) return (0, traitShare, 0, 0);
 
         uint256 maxQuantity = winnersLen * JACKPOT_BOND_MAX_MULTIPLIER;
         if (quantity > maxQuantity) {
@@ -742,232 +745,62 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
             basePerBond = JACKPOT_BOND_MIN_BASE;
         }
 
-        uint256 spend = basePerBond * quantity;
-        if (spend == 0 || spend > traitShare) return (0, traitShare, 0);
+        uint256 plannedSpend = basePerBond * quantity;
+        if (plannedSpend == 0 || plannedSpend > traitShare) return (0, traitShare, 0, 0);
 
         uint16 offset = uint16(entropyState % winnersLen);
-        // Split 90/10 locked/marketable while preserving deterministic rotation.
-        uint16 marketable = uint16(quantity / 10);
-        if (marketable == 0 && quantity != 0) {
-            marketable = 1; // ceil to guarantee ~10% marketable when small
-        }
-        if (marketable > quantity) {
-            marketable = uint16(quantity);
-        }
-        uint16 locked = uint16(quantity - marketable);
+        uint256 per = quantity / winnersLen;
+        uint256 rem = quantity % winnersLen;
 
-        // Burn any existing marketable credits from would-be recipients to make the upside higher but risky.
-        address[] memory burners;
-        uint256[] memory burnerAmounts;
-        uint16 burnerCount;
-        uint256 burnedWei;
-        if (marketable != 0) {
-            (burners, burnerAmounts, burnerCount, burnedWei) = _burnExistingMarketableCredits(winners);
-            if (burnerCount != 0 && locked != 0) {
-                uint16 boost = marketable > locked ? locked : marketable; // double marketable slice up to remaining locked
-                locked = uint16(uint256(locked) - uint256(boost));
-                marketable = uint16(uint256(marketable) + uint256(boost));
-            }
-            if (burnedWei != 0) {
-                uint256 escrow = bondCreditEscrow;
-                if (burnedWei > escrow) {
-                    burnedWei = escrow;
-                }
-                bondCreditEscrow = escrow - burnedWei;
-            }
-        }
-        if (locked != 0) {
-            _creditClaimableBonds(winners, locked, uint96(basePerBond), offset, true);
-        }
-        if (marketable != 0) {
-            address[] memory pool;
-            uint256 poolLen;
-            if (burnerCount == 0) {
-                pool = winners;
-                poolLen = winnersLen;
-            } else {
-                poolLen = burnerCount;
-                pool = new address[](poolLen);
-                for (uint256 i; i < poolLen; ) {
-                    pool[i] = burners[i];
-                    unchecked {
-                        ++i;
-                    }
+        uint256 rewardAdd;
+
+        for (uint256 i; i < winnersLen; ) {
+            uint256 shareQty = per;
+            if (i < rem) {
+                unchecked {
+                    ++shareQty;
                 }
             }
-
-            uint16 offsetMarketable = uint16(
-                _entropyStep(entropyState ^ uint256(MARKETABLE_BURN_SALT)) % (poolLen == 0 ? 1 : poolLen)
-            );
-            if (poolLen != 0) {
-                _creditClaimableBonds(pool, marketable, uint96(basePerBond), offsetMarketable, false);
-            }
-            // One in five burns pays out decimator-style: pick a winning sub-bucket, pay freed pool pro-rata to that bucket.
-            if (burnerCount != 0 && burnedWei != 0) {
-                // Pool = desired supply before burn minus unburned supply after burn -> equals total burned credit.
-                uint256 payPool = burnedWei;
-                uint256 payEntropy = _entropyStep(entropyState ^ uint256(MARKETABLE_BURN_SALT) ^ basePerBond);
-                uint8 winningBucket = uint8(payEntropy % 5); // 1-in-5 bucket wins
-
-                uint256[5] memory bucketTotals;
-                for (uint256 i; i < burnerCount; ) {
-                    uint8 bucket = uint8(
-                        uint256(keccak256(abi.encode(payEntropy, burners[i], burnerAmounts[i], i))) % 5
-                    );
-                    bucketTotals[bucket] += burnerAmounts[i];
-                    unchecked {
-                        ++i;
-                    }
-                }
-
-                uint256 winningTotal = bucketTotals[winningBucket];
-                if (winningTotal != 0) {
-                    uint256 paid;
-                    for (uint256 i; i < burnerCount; ) {
-                        uint8 bucket = uint8(
-                            uint256(keccak256(abi.encode(payEntropy, burners[i], burnerAmounts[i], i))) % 5
-                        );
-                        if (bucket == winningBucket) {
-                            uint256 share = (payPool * burnerAmounts[i]) / winningTotal;
-                            if (share != 0) {
-                                _addClaimableEthNoLiability(burners[i], share);
-                                paid += share;
-                                liabilityDelta += share;
-                            }
+            if (shareQty != 0) {
+                address recipient = winners[(uint256(offset) + i) % winnersLen];
+                uint256 amount = shareQty * basePerBond;
+                if (amount != 0) {
+                    if (bondCashoutHalf[recipient]) {
+                        uint256 payout = amount / 2;
+                        uint256 remainder = amount - payout;
+                        uint256 rewardSlice = remainder / 2;
+                        if (payout != 0) {
+                            _addClaimableEthNoLiability(recipient, payout);
+                            upfrontPaid += payout;
+                            liabilityDelta += payout;
                         }
-                        unchecked {
-                            ++i;
+                        rewardAdd += rewardSlice;
+                        // remainder - rewardSlice sinks into the contract balance (yield pool)
+                        bondSpent += amount;
+                    } else {
+                        try bondsContract.depositCurrentFor{value: amount}(recipient) {
+                            bondSpent += amount;
+                        } catch {
+                            // leave amount in the ETH pool when bonds reject the purchase
                         }
                     }
-                    // return any unspent dust to bondCreditEscrow to keep accounting tight
-                    if (payPool > paid) {
-                        bondCreditEscrow += (payPool - paid);
-                    }
-                } else {
-                    // If no burn landed in the winning bucket, return pool to escrow.
-                    bondCreditEscrow += payPool;
                 }
-            }
-        }
-        bondSpent = spend;
-        _fundBonds(spend);
-
-        ethPoolForWinners = traitShare - bondSpent;
-        return (bondSpent, ethPoolForWinners, liabilityDelta);
-    }
-
-    function _burnExistingMarketableCredits(
-        address[] memory winners
-    )
-        private
-        returns (address[] memory burners, uint256[] memory burnedAmounts, uint16 burnerCount, uint256 burnedWei)
-    {
-        uint256 len = winners.length;
-        burners = new address[](len);
-        burnedAmounts = new uint256[](len);
-        for (uint256 i; i < len; ) {
-            address w = winners[i];
-            ClaimableBondInfo storage info = claimableBondInfo[w];
-            uint256 credit = info.weiAmount;
-            if (credit != 0 && !info.stake) {
-                burners[burnerCount] = w;
-                burnedAmounts[burnerCount] = credit;
-                burnerCount = uint16(uint256(burnerCount) + 1);
-                burnedWei += credit;
-                info.weiAmount = 0;
-                info.basePerBondWei = 0;
-                info.stake = false;
             }
             unchecked {
                 ++i;
             }
         }
-    }
 
-    /// @notice Process queued jackpot bond mints outside the main game loop.
-    /// @param maxMints Max bonds to mint this call (0 = default safety cap).
-    /// @return finished True if all pending batches are fully processed.
-    /// @return processed Number of bonds minted this call.
-    function processPendingJackpotBonds(uint256 maxMints) external returns (bool finished, uint256 processed) {
-        uint256 cursor = pendingJackpotBondCursor;
-        uint256 total = pendingJackpotBondMints.length;
-        if (cursor >= total) {
-            if (cursor != 0) {
-                delete pendingJackpotBondMints;
-                pendingJackpotBondCursor = 0;
-            }
-            return (true, 0);
+        if (bondSpent == 0 && upfrontPaid == 0) {
+            return (0, traitShare, liabilityDelta, upfrontPaid);
         }
 
-        if (maxMints == 0 || maxMints > 512) {
-            maxMints = 512; // stay well under block gas even for large batches
+        if (rewardAdd != 0) {
+            rewardPool += rewardAdd;
         }
 
-        address bondsAddr = bonds;
-        if (
-            bondsAddr == address(0) ||
-            !IDegenerusBondsJackpot(bondsAddr).purchasesEnabled() ||
-            !IDegenerusBondsJackpot(bondsAddr).jackpotRewardsEnabled()
-        ) {
-            return (false, 0);
-        }
-
-        while (cursor < total && processed < maxMints) {
-            PendingJackpotBondMint storage batch = pendingJackpotBondMints[cursor];
-            uint256 winnersLen = batch.winners.length;
-            if (winnersLen == 0 || batch.quantity == 0) {
-                delete pendingJackpotBondMints[cursor];
-                unchecked {
-                    ++cursor;
-                }
-                continue;
-            }
-
-            if (batch.cursor >= batch.quantity) {
-                delete pendingJackpotBondMints[cursor];
-                unchecked {
-                    ++cursor;
-                }
-                continue;
-            }
-
-            uint256 remaining = uint256(batch.quantity) - uint256(batch.cursor);
-
-            uint256 budget = maxMints - processed;
-            uint256 take = remaining > budget ? budget : remaining;
-
-            address[] memory recipients = new address[](take);
-            uint256 base = uint256(batch.offset) + uint256(batch.cursor);
-            for (uint256 i; i < take; ) {
-                recipients[i] = batch.winners[(base + i) % winnersLen];
-                unchecked {
-                    ++i;
-                }
-            }
-
-            try
-                IDegenerusBondsJackpot(bondsAddr).purchaseGameBonds(recipients, take, batch.basePerBondWei, batch.stake)
-            {
-                processed += take;
-                uint256 newCursor = uint256(batch.cursor) + take;
-                batch.cursor = uint16(newCursor);
-                if (newCursor >= batch.quantity) {
-                    delete pendingJackpotBondMints[cursor];
-                    unchecked {
-                        ++cursor;
-                    }
-                }
-            } catch {
-                break; // bonds contract rejected the batch; allow retry in a later call
-            }
-        }
-
-        pendingJackpotBondCursor = cursor;
-        finished = (cursor >= total);
-        if (finished && cursor != 0) {
-            delete pendingJackpotBondMints;
-            pendingJackpotBondCursor = 0;
-        }
+        ethPoolForWinners = traitShare - bondSpent;
+        return (bondSpent, ethPoolForWinners, liabilityDelta, upfrontPaid);
     }
 
     function _entropyStep(uint256 state) private pure returns (uint256) {
@@ -1011,68 +844,6 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
 
     function _payoutRecipient(address player) private view returns (address recipient) {
         (recipient, ) = IDegenerusGameAffiliatePayout(address(this)).affiliatePayoutAddress(player);
-    }
-
-    function _creditClaimableBonds(
-        address[] memory winners,
-        uint16 quantity,
-        uint96 basePerBond,
-        uint16 offset,
-        bool stake
-    ) private {
-        if (quantity == 0 || winners.length == 0 || basePerBond == 0) return;
-        uint256 len = winners.length;
-        uint256 per = quantity / len;
-        uint256 rem = quantity % len;
-        for (uint256 i; i < len; ) {
-            uint256 share = per;
-            if (i < rem) {
-                unchecked {
-                    ++share;
-                }
-            }
-            if (share != 0) {
-                address recipient = winners[(uint256(offset) + i) % len];
-                _addClaimableBond(recipient, uint256(share) * uint256(basePerBond), basePerBond, stake);
-            }
-            unchecked {
-                ++i;
-            }
-        }
-    }
-
-    function _addClaimableBond(address player, uint256 weiAmount, uint96 basePerBond, bool stake) private {
-        if (player == address(0) || weiAmount == 0 || basePerBond == 0) return;
-        ClaimableBondInfo storage info = claimableBondInfo[player];
-        if (info.basePerBondWei == 0) {
-            info.basePerBondWei = basePerBond;
-            info.stake = stake;
-        }
-        unchecked {
-            info.weiAmount = uint128(uint256(info.weiAmount) + weiAmount);
-        }
-        _autoLiquidateBondCredit(player);
-    }
-
-    function _autoLiquidateBondCredit(address player) private returns (bool converted) {
-        if (!autoBondLiquidate[player]) return false;
-        ClaimableBondInfo storage info = claimableBondInfo[player];
-        uint256 creditWei = info.weiAmount;
-        if (creditWei == 0) return false;
-
-        info.weiAmount = 0;
-        info.basePerBondWei = 0;
-        info.stake = false;
-        bondCreditEscrow = bondCreditEscrow - creditWei;
-        _addClaimableEth(player, creditWei);
-        return true;
-    }
-
-    function _fundBonds(uint256 amount) private {
-        if (amount == 0) return;
-        unchecked {
-            bondCreditEscrow += amount;
-        }
     }
 
     function _packWinningTraits(uint8[4] memory traits) private pure returns (uint32 packed) {

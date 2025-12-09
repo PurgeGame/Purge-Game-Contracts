@@ -979,6 +979,11 @@ contract DegenerusGame is DegenerusGameStorage {
         }
     }
 
+    /// @notice Opt out of receiving bonds; take 50% of bond funds as claimable ETH instead.
+    function setBondCashoutHalf(bool enabled) external {
+        bondCashoutHalf[msg.sender] = enabled;
+    }
+
     function _autoLiquidateBondCredit(address player) private returns (bool converted) {
         if (!autoBondLiquidate[player]) return false;
         ClaimableBondInfo storage info = claimableBondInfo[player];
@@ -986,8 +991,6 @@ contract DegenerusGame is DegenerusGameStorage {
         if (creditWei == 0) return false;
 
         info.weiAmount = 0;
-        info.basePerBondWei = 0;
-        info.stake = false;
         bondCreditEscrow = bondCreditEscrow - creditWei;
         claimableWinningsLiability += creditWei;
         _addClaimableEth(player, creditWei);
@@ -1032,6 +1035,22 @@ contract DegenerusGame is DegenerusGameStorage {
         bondCreditEscrow = escrow - spend;
 
         address bondsAddr = bonds;
+        if (bondCashoutHalf[player]) {
+            uint256 payout = spend / 2;
+            uint256 remainder = spend - payout;
+            uint256 rewardSlice = remainder / 2;
+
+            if (payout != 0) {
+                claimableWinningsLiability += payout;
+                _addClaimableEth(player, payout);
+            }
+            if (rewardSlice != 0) {
+                rewardPool += rewardSlice;
+            }
+            // Remaining remainder/2 stays on contract as untracked yield pool.
+            return;
+        }
+
         if (bondsAddr == address(0)) {
             claimableWinningsLiability += spend;
             _addClaimableEth(player, spend);
@@ -1056,18 +1075,6 @@ contract DegenerusGame is DegenerusGameStorage {
         }
         claimableWinningsLiability += msg.value;
         _addClaimableEth(player, msg.value);
-    }
-
-    /// @notice Deposit bond purchase reward share into the tracked reward pool (bonds only).
-    function bondRewardDeposit() external payable {
-        if (msg.sender != bonds || msg.value == 0) revert E();
-        rewardPool += msg.value;
-    }
-
-    /// @notice Deposit bond purchase yield share without touching tracked pools (bonds only).
-    function bondYieldDeposit() external payable {
-        if (msg.sender != bonds || msg.value == 0) revert E();
-        // Intentionally left untracked; balance stays on contract.
     }
 
     /// @notice Spend claimable ETH to purchase either NFTs or MAPs using the full available balance.
@@ -1322,20 +1329,6 @@ contract DegenerusGame is DegenerusGameStorage {
         );
         if (!ok || data.length == 0) return false;
         return abi.decode(data, (bool));
-    }
-
-    /// @notice Process pending jackpot bond mints outside the main game tick.
-    /// @param maxMints Max bonds to mint this call (0 = default chunk size).
-    function workJackpotBondMints(uint256 maxMints) external {
-        (bool ok, bytes memory data) = jackpotModule.delegatecall(
-            abi.encodeWithSelector(IDegenerusGameJackpotModule.processPendingJackpotBonds.selector, maxMints)
-        );
-        if (!ok || data.length == 0) return;
-
-        (, uint256 processed) = abi.decode(data, (bool, uint256));
-        if (processed != 0 && maxMints == 0 && gameState != 0) {
-            coin.creditFlip(msg.sender, priceCoin >> 1);
-        }
     }
 
     /// @notice After the liveness drain has notified the bonds contract, permissionlessly burn remaining unmatured bonds.

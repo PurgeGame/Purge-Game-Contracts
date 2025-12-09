@@ -12,8 +12,6 @@ struct PendingJackpotBondMint {
 
 struct ClaimableBondInfo {
     uint128 weiAmount; // ETH value earmarked for bonds (capped to keep struct in one slot)
-    uint96 basePerBondWei; // preferred base per bond (0 defaults to 0.5 ether)
-    bool stake; // whether bonds should be staked/soulbound
 }
 
 /**
@@ -107,6 +105,7 @@ abstract contract DegenerusGameStorage {
     uint48 internal lastBondResolutionDay; // last day index that auto bond resolution ran
     uint256 internal bondCreditEscrow; // ETH escrowed to back bond-credit prize funding
     mapping(address => bool) internal autoBondLiquidate; // opt-in flag to auto-liquidate bond credits into winnings
+    mapping(address => bool) internal bondCashoutHalf; // opt-in flag to take 50% cash instead of receiving bonds
 
     // ---------------------------------------------------------------------
     // RNG history
@@ -119,10 +118,10 @@ abstract contract DegenerusGameStorage {
     mapping(address => uint256) internal bondCredit; // Credit from bond sales that can be spent on mints
 
     // ---------------------------------------------------------------------
-    // Jackpot bond batching (deferred minting for gas safety)
+    // Jackpot bond batching (legacy; slots kept to preserve layout)
     // ---------------------------------------------------------------------
-    PendingJackpotBondMint[] internal pendingJackpotBondMints; // queued bond batches funded by jackpots
-    uint256 internal pendingJackpotBondCursor; // cursor into pendingJackpotBondMints for incremental processing
+    PendingJackpotBondMint[] internal pendingJackpotBondMints; // deprecated
+    uint256 internal pendingJackpotBondCursor; // deprecated
     mapping(address => ClaimableBondInfo) internal claimableBondInfo; // per-player bond credits (only spendable on bonds)
 
     // ---------------------------------------------------------------------
