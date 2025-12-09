@@ -64,6 +64,13 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
     uint16 private constant BOND_BPS_MAP = 5000; // 50% of MAP jackpots routed into bonds
     uint16 private constant BOND_BPS_DAILY = 2000; // 20% of daily/early-burn jackpots routed into bonds
 
+    struct JackpotEthCtx {
+        uint256 ethDistributed;
+        uint256 entropyState;
+        uint256 liabilityDelta;
+        uint256 totalPaidEth;
+    }
+
     // Packed parameters for a single jackpot run to keep the call surface lean.
     struct JackpotParams {
         uint24 lvl;
@@ -515,46 +522,49 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
         uint16 bondBps
     ) private returns (uint256 totalPaidEth) {
         // Each trait bucket gets a slice; the last bucket absorbs remainder to avoid dust. totalPaidEth counts ETH plus bond spend.
-        uint256 ethDistributed;
-        uint256 entropyState = entropy;
-        uint256 liabilityDelta;
+        JackpotEthCtx memory ctx;
+        ctx.entropyState = entropy;
 
         for (uint8 traitIdx; traitIdx < 4; ) {
-            uint256 share = _bucketShare(ethPool, shareBps[traitIdx], traitIdx, ethDistributed);
-            uint8 traitId = traitIds[traitIdx];
-            uint16 bucketCount = bucketCounts[traitIdx];
+            uint256 share = _bucketShare(ethPool, shareBps[traitIdx], traitIdx, ctx.ethDistributed);
             if (traitIdx < 3) {
                 unchecked {
-                    ethDistributed += share;
+                    ctx.ethDistributed += share;
                 }
             }
-            uint256 delta;
-            uint256 bondSpent;
-            uint256 bucketLiability;
-            (entropyState, delta, , bondSpent, bucketLiability) = _resolveTraitWinners(
-                coinContract,
-                false,
-                lvl,
-                traitId,
-                traitIdx,
-                share,
-                entropyState,
-                bucketCount,
-                bondsAddr,
-                traitIdx == 0 ? JACKPOT_BOND_BPS_GRAND : (bondBps == 0 ? 0 : JACKPOT_BOND_BPS_OTHER)
-            );
-            totalPaidEth += delta + bondSpent;
-            liabilityDelta += bucketLiability;
+            uint16 bucketBondBps = traitIdx == 0
+                ? JACKPOT_BOND_BPS_GRAND
+                : (bondBps == 0 ? 0 : JACKPOT_BOND_BPS_OTHER);
+            {
+                (uint256 newEntropyState, uint256 ethDelta, , uint256 bondSpent, uint256 bucketLiability) =
+                    _resolveTraitWinners(
+                        coinContract,
+                        false,
+                        lvl,
+                        traitIds[traitIdx],
+                        traitIdx,
+                        share,
+                        ctx.entropyState,
+                        bucketCounts[traitIdx],
+                        bondsAddr,
+                        bucketBondBps
+                    );
+                ctx.entropyState = newEntropyState;
+                ctx.totalPaidEth += ethDelta + bondSpent;
+                ctx.liabilityDelta += bucketLiability;
+            }
             unchecked {
                 ++traitIdx;
             }
         }
 
-        if (liabilityDelta != 0) {
+        if (ctx.liabilityDelta != 0) {
             unchecked {
-                claimablePool += liabilityDelta;
+                claimablePool += ctx.liabilityDelta;
             }
         }
+
+        return ctx.totalPaidEth;
     }
 
     function _distributeJackpotCoin(

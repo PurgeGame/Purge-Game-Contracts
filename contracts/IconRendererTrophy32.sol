@@ -239,76 +239,22 @@ contract IconRendererTrophy32 {
             trophyLabel = "Exterminator Trophy";
         }
 
-        string memory desc;
-        if (exTr == 0xFFFF) {
-            if (lvl == 0) {
-                desc = string.concat("Reserved Degenerus ", trophyLabel, ".");
-            } else {
-                desc = string.concat(
-                    "Reserved for level ",
-                    lvlStr,
-                    " ",
-                    trophyLabel,
-                    "."
-                );
-            }
-        } else if (isAffiliate && exTr == 0xFFFE) {
-            desc = string.concat(
-                "Awarded to the top affiliate for level ",
-                lvlStr
-            );
-            if (affiliateScore != 0) {
-                desc = string.concat(
-                    desc,
-                    " with an affiliate score of ",
-                    _formatCoinAmount(affiliateScore),
-                    "."
-                );
-            } else {
-                desc = string.concat(desc, ".");
-            }
-        } else if (isStake && exTr == 0xFFFD) {
-            desc = string.concat(
-                "Awarded for level ",
-                lvlStr,
-                " largest stake maturation."
-            );
-        } else if (isBaf && exTr == BAF_TRAIT_SENTINEL) {
-            desc = string.concat(
-                "Awarded to the biggest coinflipper in the level ",
-                lvlStr,
-                " BAF."
-            );
-        } else if (isDec && exTr == DECIMATOR_TRAIT_SENTINEL) {
-            desc = string.concat(
-                "Awarded to the biggest winner in the level ",
-                lvlStr,
-                " Decimator."
-            );
-        } else {
-            desc = string.concat("Awarded for level ", lvlStr);
-            desc = string.concat(
-                desc,
-                isMap ? " MAP Jackpot." : " Extermination victory."
-            );
-        }
-
-        if (hasEthAttachment) {
-            desc = string.concat(
-                desc,
-                "\\n",
-                _formatEthAmount(ethAttachment),
-                " ETH claimable."
-            );
-        }
-        if (hasStakedLevel) {
-            desc = string.concat(
-                desc,
-                "\\nStaked for ",
-                stakedDurationStr,
-                " levels."
-            );
-        }
+        string memory desc = _buildDescription(
+            exTr,
+            lvl,
+            lvlStr,
+            trophyLabel,
+            isMap,
+            isAffiliate,
+            isStake,
+            isBaf,
+            isDec,
+            affiliateScore,
+            hasEthAttachment,
+            ethAttachment,
+            hasStakedLevel,
+            stakedDurationStr
+        );
 
         bool includeTraitAttr;
         string memory traitType;
@@ -325,48 +271,17 @@ contract IconRendererTrophy32 {
 
         string memory attrs;
         if (!isBond) {
-            attrs = string(
-                abi.encodePacked(
-                    '[{"trait_type":"Level","value":"',
-                    lvlStr,
-                    '"},{"trait_type":"Trophy","value":"',
-                    trophyType,
-                    '"},{"trait_type":"Eth","value":"',
-                    hasEthAttachment ? "Yes" : "No",
-                    '"}'
-                )
+            attrs = _buildAttributes(
+                lvlStr,
+                trophyType,
+                hasEthAttachment,
+                isAffiliate,
+                affiliateScore,
+                includeTraitAttr,
+                traitType,
+                traitValue,
+                stakeAttrValue
             );
-            if (isAffiliate && affiliateScore != 0) {
-                attrs = string(
-                    abi.encodePacked(
-                        attrs,
-                        ',{"trait_type":"Affiliate Score","value":"',
-                        _formatCoinAmount(affiliateScore),
-                        '"}'
-                    )
-                );
-            }
-            if (includeTraitAttr) {
-                attrs = string(
-                    abi.encodePacked(
-                        attrs,
-                        ',{"trait_type":"',
-                        traitType,
-                        '","value":"',
-                        traitValue,
-                        '"}'
-                    )
-                );
-            }
-            attrs = string(
-                abi.encodePacked(
-                    attrs,
-                    ',{"trait_type":"Staked","value":"',
-                    stakeAttrValue,
-                    '"}'
-                )
-            );
-            attrs = string(abi.encodePacked(attrs, "]"));
         }
 
         uint32 bondProgress = isBond
@@ -559,6 +474,148 @@ contract IconRendererTrophy32 {
                 "data:application/json;base64,",
             Base64.encode(bytes(j))
             );
+    }
+
+    function _buildDescription(
+        uint16 exTr,
+        uint24 lvl,
+        string memory lvlStr,
+        string memory trophyLabel,
+        bool isMap,
+        bool isAffiliate,
+        bool isStake,
+        bool isBaf,
+        bool isDec,
+        uint96 affiliateScore,
+        bool hasEthAttachment,
+        uint256 ethAttachment,
+        bool hasStakedLevel,
+        string memory stakedDurationStr
+    ) private pure returns (string memory desc) {
+        if (exTr == 0xFFFF) {
+            if (lvl == 0) {
+                desc = string.concat("Reserved Degenerus ", trophyLabel, ".");
+            } else {
+                desc = string.concat(
+                    "Reserved for level ",
+                    lvlStr,
+                    " ",
+                    trophyLabel,
+                    "."
+                );
+            }
+        } else if (isAffiliate && exTr == 0xFFFE) {
+            desc = string.concat(
+                "Awarded to the top affiliate for level ",
+                lvlStr
+            );
+            if (affiliateScore != 0) {
+                desc = string.concat(
+                    desc,
+                    " with an affiliate score of ",
+                    _formatCoinAmount(affiliateScore),
+                    "."
+                );
+            } else {
+                desc = string.concat(desc, ".");
+            }
+        } else if (isStake && exTr == 0xFFFD) {
+            desc = string.concat(
+                "Awarded for level ",
+                lvlStr,
+                " largest stake maturation."
+            );
+        } else if (isBaf && exTr == BAF_TRAIT_SENTINEL) {
+            desc = string.concat(
+                "Awarded to the biggest coinflipper in the level ",
+                lvlStr,
+                " BAF."
+            );
+        } else if (isDec && exTr == DECIMATOR_TRAIT_SENTINEL) {
+            desc = string.concat(
+                "Awarded to the biggest winner in the level ",
+                lvlStr,
+                " Decimator."
+            );
+        } else {
+            desc = string.concat("Awarded for level ", lvlStr);
+            desc = string.concat(
+                desc,
+                isMap ? " MAP Jackpot." : " Extermination victory."
+            );
+        }
+
+        if (hasEthAttachment) {
+            desc = string.concat(
+                desc,
+                "\\n",
+                _formatEthAmount(ethAttachment),
+                " ETH claimable."
+            );
+        }
+        if (hasStakedLevel) {
+            desc = string.concat(
+                desc,
+                "\\nStaked for ",
+                stakedDurationStr,
+                " levels."
+            );
+        }
+    }
+
+    function _buildAttributes(
+        string memory lvlStr,
+        string memory trophyType,
+        bool hasEthAttachment,
+        bool isAffiliate,
+        uint96 affiliateScore,
+        bool includeTraitAttr,
+        string memory traitType,
+        string memory traitValue,
+        string memory stakeAttrValue
+    ) private pure returns (string memory attrs) {
+        attrs = string(
+            abi.encodePacked(
+                '[{"trait_type":"Level","value":"',
+                lvlStr,
+                '"},{"trait_type":"Trophy","value":"',
+                trophyType,
+                '"},{"trait_type":"Eth","value":"',
+                hasEthAttachment ? "Yes" : "No",
+                '"}'
+            )
+        );
+        if (isAffiliate && affiliateScore != 0) {
+            attrs = string(
+                abi.encodePacked(
+                    attrs,
+                    ',{"trait_type":"Affiliate Score","value":"',
+                    _formatCoinAmount(affiliateScore),
+                    '"}'
+                )
+            );
+        }
+        if (includeTraitAttr) {
+            attrs = string(
+                abi.encodePacked(
+                    attrs,
+                    ',{"trait_type":"',
+                    traitType,
+                    '","value":"',
+                    traitValue,
+                    '"}'
+                )
+            );
+        }
+        attrs = string(
+            abi.encodePacked(
+                attrs,
+                ',{"trait_type":"Staked","value":"',
+                stakeAttrValue,
+                '"}'
+            )
+        );
+        attrs = string(abi.encodePacked(attrs, "]"));
     }
 
     function _bondAttributes(

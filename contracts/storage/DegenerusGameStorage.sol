@@ -1,29 +1,21 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-struct PendingJackpotBondMint {
-    uint96 basePerBondWei; // win-odds base per bond (capped at 0.5 ETH)
-    uint16 cursor; // how many recipients have been minted from this batch
-    uint16 quantity; // total bonds to mint for this batch
-    uint16 offset; // rotation offset into winners when deriving recipients
-    bool stake; // whether bonds should be staked/soulbound
-    address[] winners; // jackpot winners used to derive bond recipients (keeps ordering deterministic)
-}
-
 /**
  * @title DegenerusGameStorage
  * @notice Shared storage layout between the core game contract and its delegatecall modules.
- *         Keeping all slot definitions in a single contract prevents layout drift.
+ *         Centralizing slot definitions prevents layout drift; keep ordering stable across upgrades.
  *
- * Storage layout summary (slots 0-3):
+ * Slot map:
  * - Slot 0: level timers + airdrop cursors + FSM (level / gameState)
  * - Slot 1: rebuild cursor + jackpot counters + decimator latch
- * - Slot 2: RNG / trait flags (pricing and other scalars pack after the flag block)
+ * - Slot 2: RNG / trait flags
+ * - Slot 3: price (wei) + priceCoin (unit)
  * Everything else starts at slot 4+ (full-width balances, arrays, mappings).
  */
 abstract contract DegenerusGameStorage {
     // ---------------------------------------------------------------------
-    // Packed core state (slots 0-2)
+    // Core packed state (slots 0-2)
     // ---------------------------------------------------------------------
 
     // Slot 0: level timing, airdrop batching, and the main FSM flags.
@@ -45,7 +37,7 @@ abstract contract DegenerusGameStorage {
     bool internal lastPurchaseDay; // true once the map prize target is met; next tick skips daily/jackpot prep
     bool internal decWindowOpen = true; // latch to hold decimator window open until RNG is requested
 
-    // Slot 2: RNG/trait flags + stETH address.
+    // Slot 2: RNG/trait flags.
     bool internal earlyBurnBoostArmed; // true if the next jackpot should apply the boost
     bool internal rngLockedFlag; // true while waiting for VRF fulfillment
     bool internal rngFulfilled = true; // tracks VRF lifecycle; default true pre-first request
@@ -54,13 +46,14 @@ abstract contract DegenerusGameStorage {
     bool internal exterminationInvertFlag; // toggles inversion of exterminator bonus on certain levels
 
     // ---------------------------------------------------------------------
-    // Pricing and pooled balances
+    // Pricing, pooled balances, and treasury pointers
     // ---------------------------------------------------------------------
 
     // Slot 3: price (wei) + priceCoin (unit) packed into one word. Both capped well below uint128.
     uint128 internal price = 0.025 ether;
     uint128 internal priceCoin = 1_000_000_000;
 
+    // Pooled balances (ETH/BURNIE and jackpots)
     uint256 internal lastPrizePool = 125 ether; // prize pool snapshot from the previous level
     uint256 internal currentPrizePool; // active prize pool for the current level
     uint256 internal nextPrizePool; // pre-funded prize pool for the next level
@@ -72,7 +65,8 @@ abstract contract DegenerusGameStorage {
     uint256 internal vrfRequestId; // last VRF request id used to match fulfillments
     uint256 internal bondPool; // ETH dedicated to bond obligations (lives in game unless gameOver flushes to bonds)
     uint256 internal totalFlipReversals; // number of reverse flips purchased against current RNG
-    uint256 internal principalStEth; // deprecated; left for storage layout compatibility
+
+    // External sinks and lifecycle flags
     uint48 public deployTimestamp; // deployment timestamp for long-tail inactivity guard
     address internal bonds; // bonds contract wired once post-deploy
     address internal vault; // reward vault for BURNIE/ETH/stETH routing
@@ -84,7 +78,6 @@ abstract contract DegenerusGameStorage {
     address[] internal pendingMapMints; // queue of players awaiting map mints
     mapping(address => uint32) internal playerMapMintsOwed; // map NFT count owed per player (consumed during batching)
     address[] internal levelExterminators; // per-level exterminator (index = level-1)
-    mapping(uint24 => bool) internal levelExterminatorPaid; // tracks whether exterminator payout was already processed
 
     // ---------------------------------------------------------------------
     // Token / trait state
@@ -96,12 +89,9 @@ abstract contract DegenerusGameStorage {
     uint32[256] internal traitRemaining; // remaining supply per trait id
     mapping(address => uint256) internal mintPacked_; // bit-packed mint history (see DegenerusGame ETH_* constants for layout)
 
-    // Bond maintenance state (formerly bond)
-    uint24 internal lastBondFundingLevel; // tracks the last level where bond funding was performed
-    uint48 internal lastBondResolutionDay; // last day index that auto bond resolution ran
-    // Deprecated: legacy claimable-bond credit escrow and auto-liquidation settings.
-    uint256 internal bondCreditEscrow;
-    mapping(address => bool) internal autoBondLiquidate;
+    // ---------------------------------------------------------------------
+    // Bond maintenance / cashout preferences
+    // ---------------------------------------------------------------------
     mapping(address => bool) internal bondCashoutHalf; // opt-in flag to take 50% cash instead of receiving bonds
 
     // ---------------------------------------------------------------------
@@ -110,24 +100,8 @@ abstract contract DegenerusGameStorage {
     mapping(uint48 => uint256) internal rngWordByDay; // VRF words keyed by dailyIdx; 0 means "not yet recorded"
 
     // ---------------------------------------------------------------------
-    // Bond credits (non-withdrawable)
-    // ---------------------------------------------------------------------
-    mapping(address => uint256) internal bondCredit; // Credit from bond sales that can be spent on mints
-
-    // ---------------------------------------------------------------------
-    // Jackpot bond batching (legacy; slots kept to preserve layout)
-    // ---------------------------------------------------------------------
-    PendingJackpotBondMint[] internal pendingJackpotBondMints; // deprecated
-    uint256 internal pendingJackpotBondCursor; // deprecated
-    // Deprecated: legacy claimable bond credit tracking
-    mapping(address => uint128) internal claimableBondInfo;
-
-    // ---------------------------------------------------------------------
     // Cosmetic trophies
     // ---------------------------------------------------------------------
     address internal trophies; // standalone trophy contract (purely cosmetic)
     address internal affiliateProgramAddr; // cached affiliate program (for trophies)
-
-    // Cached affiliate payout overrides (synthetic MAP players -> affiliate owner)
-    mapping(address => address) internal affiliatePayoutCache;
 }

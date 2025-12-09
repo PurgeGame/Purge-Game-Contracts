@@ -6,7 +6,6 @@ import {IDegenerusGameExternal} from "./IDegenerusGameExternal.sol";
 enum MintPaymentKind {
     DirectEth,
     Claimable,
-    BondCredit,
     Combined
 }
 
@@ -52,8 +51,6 @@ interface IDegenerusGame is IDegenerusGameExternal {
     ) external payable returns (uint256 coinReward);
 
     function rngLocked() external view returns (bool);
-    function bondCreditOf(address player) external view returns (uint256);
-    function addBondCredit(address player, uint256 amount) external payable;
     function creditBondWinnings(address player) external payable;
 
     function burnTokens(uint256[] calldata tokenIds) external;

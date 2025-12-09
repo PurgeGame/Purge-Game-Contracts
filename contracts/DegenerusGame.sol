@@ -17,7 +17,6 @@ import {
 import {MintPaymentKind} from "./interfaces/IDegenerusGame.sol";
 import {DegenerusGameExternalOp} from "./interfaces/IDegenerusGameExternal.sol";
 import {DegenerusGameStorage} from "./storage/DegenerusGameStorage.sol";
-import {DegenerusGameCredit} from "./utils/DegenerusGameCredit.sol";
 
 interface IStETH {
     function submit(address referral) external payable returns (uint256);
@@ -29,11 +28,7 @@ interface IStETH {
 
 interface IDegenerusBonds {
     function depositCurrentFor(address beneficiary) external payable returns (uint256 scoreAwarded);
-    function payBonds(
-        uint256 coinAmount,
-        uint256 stEthAmount,
-        uint256 rngWord
-    ) external payable;
+    function payBonds(uint256 coinAmount, uint256 stEthAmount, uint256 rngWord) external payable;
     function resolveBonds(uint256 rngWord) external returns (bool worked);
     function notifyGameOver() external;
     function finalizeShutdown(uint256 maxIds) external returns (uint256 processedIds, uint256 burned, bool complete);
@@ -95,14 +90,12 @@ contract DegenerusGame is DegenerusGameStorage {
     // Events
     // -----------------------
     event PlayerCredited(address indexed player, address indexed recipient, uint256 amount);
-    event BondCreditAdded(address indexed player, uint256 amount);
     event Jackpot(uint256 traits); // Encodes jackpot metadata
     event Degenerus(address indexed player, uint256[] tokenIds);
     event Advance(uint8 gameState);
     event ReverseFlip(address indexed caller, uint256 totalQueued, uint256 cost);
     event VrfCoordinatorUpdated(address indexed previous, address indexed current);
     event PrizePoolBondBuy(uint256 spendWei, uint256 quantity);
-    event BondCreditLiquidated(address indexed player, uint256 amount);
 
     // -----------------------
     // Immutable Addresses
@@ -371,10 +364,9 @@ contract DegenerusGame is DegenerusGameStorage {
         return uint24((mintPacked_[player] >> ETH_LEVEL_STREAK_SHIFT) & MINT_MASK_24);
     }
 
-    /// @notice Record a mint, funded by ETH (`msg.value`), claimable winnings, or bond credit.
+    /// @notice Record a mint, funded by ETH (`msg.value`) or claimable winnings.
     /// @dev ETH paths require `msg.value == costWei`. Claimable paths deduct from `claimableWinnings` and fund prize pools.
-    ///      Bond credit uses the same `costWei` accounting but does not increase prize pools and must send zero ETH.
-    ///      Combined allows any mix of ETH, claimable, and bond credit (in that order) to cover `costWei`.
+    ///      Combined allows any mix of ETH and claimable winnings (in that order) to cover `costWei`.
     function recordMint(
         address player,
         uint24 lvl,
@@ -412,15 +404,40 @@ contract DegenerusGame is DegenerusGameStorage {
         uint256 amount,
         MintPaymentKind payKind
     ) private returns (uint256 prizeContribution) {
-        (bool ok, uint256 prize, , uint256 claimableUsed) = DegenerusGameCredit.processMintPayment(
-            claimableWinnings,
-            bondCredit,
-            player,
-            amount,
-            payKind,
-            msg.value
-        );
-        if (!ok) revert E();
+        uint256 claimableUsed;
+        if (payKind == MintPaymentKind.DirectEth) {
+            if (msg.value != amount) revert E();
+            prizeContribution = amount;
+        } else if (payKind == MintPaymentKind.Claimable) {
+            if (msg.value != 0) revert E();
+            uint256 claimable = claimableWinnings[player];
+            if (claimable <= amount) revert E();
+            unchecked {
+                claimableWinnings[player] = claimable - amount;
+            }
+            claimableUsed = amount;
+            prizeContribution = amount;
+        } else if (payKind == MintPaymentKind.Combined) {
+            if (msg.value > amount) revert E();
+            uint256 remaining = amount - msg.value;
+            if (remaining != 0) {
+                uint256 claimable = claimableWinnings[player];
+                if (claimable > 1) {
+                    uint256 available = claimable - 1;
+                    claimableUsed = remaining < available ? remaining : available;
+                    if (claimableUsed != 0) {
+                        unchecked {
+                            claimableWinnings[player] = claimable - claimableUsed;
+                        }
+                        remaining -= claimableUsed;
+                    }
+                }
+            }
+            if (remaining != 0) revert E();
+            prizeContribution = msg.value + claimableUsed;
+        } else {
+            revert E();
+        }
         if (claimableUsed != 0) {
             if (claimablePool >= claimableUsed) {
                 claimablePool -= claimableUsed;
@@ -428,7 +445,7 @@ contract DegenerusGame is DegenerusGameStorage {
                 claimablePool = 0;
             }
         }
-        return prize;
+        return prizeContribution;
     }
 
     /// @notice Advances the game state machine. Anyone can call, but standard flows
@@ -540,13 +557,14 @@ contract DegenerusGame is DegenerusGameStorage {
 
                     uint256 totalWeiForBond = rewardPool + currentPrizePool;
                     _bondMaintenanceForMapModule(totalWeiForBond, rngWord, lvl);
+
                     if (bonds != address(0)) {
                         bool bondsResolved = IDegenerusBonds(bonds).resolveBonds(rngWord);
                         if (bondsResolved) {
-                            lastBondResolutionDay = day;
                             break; // bond batch consumed this tick; rerun advanceGame to continue
                         }
                     }
+
                     uint256 mapEffectiveWei = _calcPrizePoolForJackpot(lvl, rngWord);
                     payMapJackpot(lvl, rngWord, mapEffectiveWei);
                     mapJackpotPaid = true;
@@ -874,7 +892,7 @@ contract DegenerusGame is DegenerusGameStorage {
     }
 
     function _bondMaintenanceForMapModule(uint256 totalWei, uint256 rngWord, uint24 lvl) private {
-        (bool ok, bytes memory data) = bondModule.delegatecall(
+        (bool ok, ) = bondModule.delegatecall(
             abi.encodeWithSelector(
                 IDegenerusGameBondModule.bondMaintenanceForMap.selector,
                 bonds,
@@ -956,13 +974,9 @@ contract DegenerusGame is DegenerusGameStorage {
         return stored - 1;
     }
 
-    /// @notice Toggle auto-liquidation of bond credits into claimable winnings (tax applies on withdrawal).
+    /// @notice Toggle auto-liquidation of bond winnings into claimable balance (tax applies on withdrawal).
     function setBondCashoutHalf(bool enabled) external {
         bondCashoutHalf[msg.sender] = enabled;
-    }
-
-    function bondCreditOf(address player) external view returns (uint256) {
-        return bondCredit[player];
     }
 
     /// @notice Credit claimable ETH for a player from bond redemptions (bonds contract only).
@@ -1014,15 +1028,6 @@ contract DegenerusGame is DegenerusGameStorage {
     }
 
     // --- Credits & jackpot helpers ------------------------------------------------------------------
-
-    /// @notice Credit non-withdrawable bond proceeds to a player; callable only by the bonds contract.
-    function addBondCredit(address player, uint256 amount) external {
-        if (msg.sender != bonds || player == address(0) || amount == 0) revert E();
-        unchecked {
-            bondCredit[player] += amount;
-        }
-        emit BondCreditAdded(player, amount);
-    }
 
     /// @notice Credit ETH winnings to a player’s claimable balance and emit an accounting event.
     /// @param beneficiary Player to credit.

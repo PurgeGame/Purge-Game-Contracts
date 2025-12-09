@@ -453,7 +453,7 @@ contract DegenerusGamepieces {
         // ETH purchases optionally bypass payment when in-game credit is used; all flows are forwarded to game logic.
         if (payKind == MintPaymentKind.DirectEth) {
             if (msg.value != costWei) revert E();
-        } else if (payKind == MintPaymentKind.Claimable || payKind == MintPaymentKind.BondCredit) {
+        } else if (payKind == MintPaymentKind.Claimable) {
             if (msg.value != 0) revert E();
         } else if (payKind == MintPaymentKind.Combined) {
             if (msg.value > costWei) revert E();
