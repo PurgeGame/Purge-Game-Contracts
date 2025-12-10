@@ -943,7 +943,7 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         if ((state.completionMask & uint8(1 << slot)) != 0) return (0, false, quest.questType, state.streak, false);
 
         uint8 tier = _questTier(state.baseStreak);
-        if (!_questReady(state, quest, slot, tier, priceUnit, priceWei)) {
+        if (!_questReady(state, quest, slot, tier, priceWei)) {
             return (0, false, quest.questType, state.streak, false);
         }
 
@@ -955,7 +955,6 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         DailyQuest memory quest,
         uint8 slot,
         uint8 tier,
-        uint256 /*priceUnit*/,
         uint256 priceWei
     ) private view returns (bool) {
         if (!_questProgressValid(state, quest, slot, quest.day)) return false;

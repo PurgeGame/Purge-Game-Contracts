@@ -325,7 +325,7 @@ contract DegenerusAffiliate {
         address payable buyer = payable(msg.sender);
         presaleInventoryBase = inventoryBase - amountBase;
         presalePrincipal[buyer] += amountBase;
-        uint256 buyerEarned = presaleCoinEarned[buyer] + amountBase;
+        uint256 buyerEarned = presaleCoinEarned[buyer];
 
         IDegenerusBondsPresale(bonds).ingestPresaleEth{value: costWei}(); // bonds routes 90% to prize pool
 

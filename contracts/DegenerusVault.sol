@@ -167,6 +167,11 @@ contract DegenerusVault {
     address public immutable bonds; // trusted bond contract for deposits
     uint256 public coinReserve; // coin escrowed for future mint (not yet minted)
 
+    modifier onlyBonds() {
+        if (msg.sender != bonds) revert Unauthorized();
+        _;
+    }
+
     // ---------------------------------------------------------------------
     // Constructor
     // ---------------------------------------------------------------------
@@ -191,8 +196,9 @@ contract DegenerusVault {
     // ---------------------------------------------------------------------
     // Deposits (bond-only)
     // ---------------------------------------------------------------------
-    /// @notice Pull ETH (msg.value), stETH, and/or coin from the caller (caller must approve this contract).
-    function deposit(uint256 coinAmount, uint256 stEthAmount) external payable {
+    /// @notice Pull ETH (msg.value), stETH, and/or coin from the bonds contract (caller must approve this contract).
+    /// @dev Access: bonds only.
+    function deposit(uint256 coinAmount, uint256 stEthAmount) external payable onlyBonds {
         if (coinAmount != 0) {
             IVaultCoin(coin).vaultEscrowFrom(msg.sender, coinAmount);
             coinReserve += coinAmount;
@@ -202,11 +208,6 @@ contract DegenerusVault {
     }
 
     receive() external payable {
-        emit Deposit(msg.sender, msg.value, 0, 0);
-    }
-
-    /// @notice Explicit helper to accept pushed ETH (mirrors the receive hook, emits Deposit).
-    function pushEth() external payable {
         emit Deposit(msg.sender, msg.value, 0, 0);
     }
 

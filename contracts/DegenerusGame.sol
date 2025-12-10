@@ -54,7 +54,6 @@ struct VRFRandomWordsRequest {
     uint16 requestConfirmations;
     uint32 callbackGasLimit;
     uint32 numWords;
-    bytes extraArgs;
 }
 
 interface IVRFCoordinator {
@@ -1242,8 +1241,7 @@ contract DegenerusGame is DegenerusGameStorage {
                     subId: vrfSubscriptionId,
                     requestConfirmations: VRF_REQUEST_CONFIRMATIONS,
                     callbackGasLimit: VRF_CALLBACK_GAS_LIMIT,
-                    numWords: 1,
-                    extraArgs: bytes("")
+                    numWords: 1
                 })
             )
         returns (uint256 id) {
@@ -1272,8 +1270,7 @@ contract DegenerusGame is DegenerusGameStorage {
                 subId: vrfSubscriptionId,
                 requestConfirmations: VRF_REQUEST_CONFIRMATIONS,
                 callbackGasLimit: VRF_CALLBACK_GAS_LIMIT,
-                numWords: 1,
-                extraArgs: bytes("")
+                numWords: 1
             })
         );
         vrfRequestId = id;

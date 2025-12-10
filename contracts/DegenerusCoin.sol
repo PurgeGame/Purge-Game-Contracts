@@ -464,8 +464,18 @@ contract DegenerusCoin {
 
     /// @notice Escrow virtual coin to the vault (no token movement); increases mint allowance.
     function vaultEscrowFrom(address from, uint256 amount) external onlyVault {
-        from; // unused (kept for interface compatibility)
         if (amount == 0) return;
+        if (from == address(0)) revert ZeroAddress();
+
+        uint256 allowed = allowance[from][msg.sender];
+        if (allowed != type(uint256).max) {
+            if (allowed < amount) revert Insufficient();
+            allowance[from][msg.sender] = allowed - amount;
+            emit Approval(from, msg.sender, allowance[from][msg.sender]);
+        }
+
+        // Burn escrowed tokens to cap future vault mints to the burned amount.
+        _burn(from, amount);
         vaultMintAllowance += amount;
     }
 

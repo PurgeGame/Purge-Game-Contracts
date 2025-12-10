@@ -23,10 +23,10 @@ interface IDegenerusGameVrf is IDegenerusGameCore {
 }
 
 interface IDegenerusBondsAdmin {
-    function setVault(address vault_) external;
     function setCoin(address coin_) external;
     function setPurchaseToggles(bool externalEnabled, bool gameEnabled) external;
     function wire(address[] calldata addresses, uint256 vrfSubId, bytes32 vrfKeyHash_) external;
+    function armVrfRecovery() external;
 }
 
 interface IDegenerusBondsGameOverFlag {
@@ -296,7 +296,7 @@ contract DegenerusAdmin {
 
     /// @notice Pass-through to set the bonds vault (one-time).
     function setBondsVault(address vault_) external onlyOwner {
-        IDegenerusBondsAdmin(bonds).setVault(vault_);
+        IDegenerusBondsAdmin(bonds).wire(_packBondsWire(address(0), vault_, address(0), address(0)), 0, bytes32(0));
         vault = vault_;
         emit VaultSet(vault_);
     }
@@ -363,6 +363,7 @@ contract DegenerusAdmin {
         try IVRFCoordinatorV2_5Owner(newCoordinator).addConsumer(newSubId, bonds) {
             emit ConsumerAdded(bonds);
         } catch {}
+        IDegenerusBondsAdmin(bonds).armVrfRecovery();
         IDegenerusBondsAdmin(bonds).wire(
             _packBondsWire(address(0), address(0), address(0), newCoordinator),
             newSubId,

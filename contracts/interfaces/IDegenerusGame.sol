@@ -55,8 +55,8 @@ interface IDegenerusGame is IDegenerusGameExternal {
 
     function burnTokens(uint256[] calldata tokenIds) external;
 
-    /// @notice Sample up to 100 trait burn tickets from a random trait and recent level (last 20).
-    function sampleTraitTickets(uint256 entropy) external view returns (uint24 lvl, uint8 trait, address[] memory tickets);
+    /// @notice Sample up to `limit` trait burn tickets from a random trait and recent level (last 20).
+    function sampleTraitTickets(uint256 entropy, uint32 limit) external view returns (uint24 lvl, uint8 trait, address[] memory tickets);
 
     /// @notice Return the exterminator address for a given level (level index is 1-based).
     function levelExterminator(uint24 lvl) external view returns (address);
