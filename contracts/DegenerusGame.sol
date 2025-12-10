@@ -221,27 +221,6 @@ contract DegenerusGame is DegenerusGameStorage {
         return bondPool;
     }
 
-    /// @notice Shutdown path: flush bond pool to the bonds contract and let it resolve internally.
-    /// @dev Access: vrfAdmin acts as an owner surrogate; bonds may also call to complete shutdown.
-    function shutdownBonds() external {
-        address bondsAddr = bonds;
-        if (bondGameOver) revert E();
-        if (msg.sender != bondsAddr) revert E();
-        bondGameOver = true;
-        uint256 ethAmount = address(this).balance;
-        bondPool = 0;
-
-        // Forward all stETH to bonds as part of final settlement.
-        uint256 stAmount = steth.balanceOf(address(this));
-        if (stAmount != 0) {
-            if (!steth.transfer(bondsAddr, stAmount)) revert E();
-        }
-
-        (bool ok, ) = payable(bondsAddr).call{value: ethAmount}("");
-        if (!ok) revert E();
-        IDegenerusBondsGameOver(bondsAddr).gameOver{value: 0}();
-    }
-
     // --- View: lightweight game status -------------------------------------------------
 
     function prizePoolTargetView() external view returns (uint256) {
@@ -467,6 +446,7 @@ contract DegenerusGame is DegenerusGameStorage {
             }
         }
         uint8 _gameState = gameState;
+        if (_gameState == 0) revert NotTimeYet(); // idle/shutdown; nothing to advance
         // Liveness drain
         if (ts - 365 days > lst && _gameState != 0) {
             drainToBonds();
@@ -1141,9 +1121,7 @@ contract DegenerusGame is DegenerusGameStorage {
 
     function drainToBonds() private {
         _drainToBondsModule();
-        uint48 day = _currentDayIndex();
         gameState = 0;
-        _requestRngBestEffort(day);
     }
 
     // --- Reward vault & liquidity -----------------------------------------------------
@@ -1151,7 +1129,7 @@ contract DegenerusGame is DegenerusGameStorage {
     /// @notice Swap ETH <-> stETH with the bonds contract to rebalance liquidity.
     /// @dev Access: bonds only. stEthForEth=true pulls stETH from bonds and sends back ETH; false stakes incoming ETH and forwards minted stETH.
     function swapWithBonds(bool stEthForEth, uint256 amount) external payable {
-        if (msg.sender != bonds || amount == 0) revert E();
+        if (msg.sender != bonds) revert E();
 
         if (stEthForEth) {
             if (msg.value != 0) revert E();
@@ -1233,33 +1211,8 @@ contract DegenerusGame is DegenerusGameStorage {
         return abi.decode(data, (bool));
     }
 
-    function _requestRngBestEffort(uint48 /*day*/) private returns (bool requested) {
-        // Best-effort request that swallows VRF failures (used during idle shutdown).
-        try
-            vrfCoordinator.requestRandomWords(
-                VRFRandomWordsRequest({
-                    keyHash: vrfKeyHash,
-                    subId: vrfSubscriptionId,
-                    requestConfirmations: VRF_REQUEST_CONFIRMATIONS,
-                    callbackGasLimit: VRF_CALLBACK_GAS_LIMIT,
-                    numWords: 1
-                })
-            )
-        returns (uint256 id) {
-            vrfRequestId = id;
-            rngFulfilled = false;
-            rngWordCurrent = 0;
-            rngLockedFlag = true;
-            rngRequestTime = uint48(block.timestamp);
-
-            return true;
-        } catch {
-            return false;
-        }
-    }
-
     function _requestRng(uint8 gameState_, bool isMapJackpotDay, uint24 lvl, uint48 /*day*/) private {
-        bool shouldLockBonds = (gameState_ == 2 && isMapJackpotDay) || (gameState_ == 0);
+        bool shouldLockBonds = (gameState_ == 2 && isMapJackpotDay);
         if (shouldLockBonds) {
             rngLockedFlag = true;
         }

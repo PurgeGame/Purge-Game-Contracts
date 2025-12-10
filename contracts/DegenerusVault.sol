@@ -38,7 +38,7 @@ contract DegenerusVaultShare {
     mapping(address => uint256) public balanceOf;
     mapping(address => mapping(address => uint256)) public allowance;
 
-    address public immutable vault;
+    address private immutable vault;
 
     modifier onlyVault() {
         if (msg.sender != vault) revert Unauthorized();
@@ -152,19 +152,19 @@ contract DegenerusVault {
     string public constant name = "Degenerus Vault";
     string public constant symbol = "DGV";
     uint8 public constant decimals = 18;
-    uint256 public constant INITIAL_SUPPLY = 1_000_000_000 * 1e18; // 1 billion
-    uint256 public constant REFILL_SUPPLY = 1_000_000_000 * 1e18; // 1 billion (used if final share is burned)
+    uint256 private constant INITIAL_SUPPLY = 1_000_000_000 * 1e18; // 1 billion
+    uint256 private constant REFILL_SUPPLY = 1_000_000_000 * 1e18; // 1 billion (used if final share is burned)
 
     // Share classes
-    DegenerusVaultShare public immutable coinShare; // BURNIE-only claims
-    DegenerusVaultShare public immutable ethShare; // ETH/stETH-only claims
+    DegenerusVaultShare private immutable coinShare; // BURNIE-only claims
+    DegenerusVaultShare private immutable ethShare; // ETH/stETH-only claims
 
     // ---------------------------------------------------------------------
     // Wiring
     // ---------------------------------------------------------------------
-    address public immutable coin; // BURNIE coin (or compatible)
-    IStETH public immutable steth; // stETH token
-    address public immutable bonds; // trusted bond contract for deposits
+    address private immutable coin; // BURNIE coin (or compatible)
+    IStETH private immutable steth; // stETH token
+    address private immutable bonds; // trusted bond contract for deposits
     uint256 public coinReserve; // coin escrowed for future mint (not yet minted)
 
     modifier onlyBonds() {
@@ -181,6 +181,8 @@ contract DegenerusVault {
         coin = coin_;
         steth = IStETH(stEth_);
         bonds = bonds_;
+        // Seed reserve to start with 2m BURNIE escrowed (6 decimals on the coin).
+        coinReserve = 2_000_000 * 1e6;
 
         coinShare = new DegenerusVaultShare(
             "Degenerus Vault Coin",

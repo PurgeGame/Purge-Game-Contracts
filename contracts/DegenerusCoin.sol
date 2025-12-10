@@ -11,10 +11,6 @@ import {IDegenerusGame} from "./interfaces/IDegenerusGame.sol";
 import {IDegenerusQuestModule, QuestInfo, PlayerQuestView} from "./interfaces/IDegenerusQuestModule.sol";
 import {IDegenerusJackpots} from "./interfaces/IDegenerusJackpots.sol";
 
-interface IDegenerusBondsAdminView {
-    function admin() external view returns (address);
-}
-
 contract DegenerusCoin {
     // ---------------------------------------------------------------------
     // Events
@@ -87,6 +83,7 @@ contract DegenerusCoin {
     address public jackpots;
     address public vault;
     address public vrfSub;
+    address public immutable bondsAdmin;
 
     // Coinflip accounting keyed by day window (auto daily flips; distinct from long-horizon stakes below).
     mapping(uint48 => mapping(address => uint256)) internal coinflipBalance;
@@ -215,23 +212,19 @@ contract DegenerusCoin {
     // ---------------------------------------------------------------------
     // Constructor
     // ---------------------------------------------------------------------
-    constructor(address bonds_, address payable affiliate_, address regularRenderer_) {
-        if (bonds_ == address(0) || affiliate_ == address(0)) revert ZeroAddress();
+    constructor(
+        address bonds_,
+        address bondsAdmin_,
+        address payable affiliate_,
+        address regularRenderer_,
+        address vault_
+    ) {
+        if (bonds_ == address(0) || bondsAdmin_ == address(0) || affiliate_ == address(0)) revert ZeroAddress();
         bonds = bonds_;
+        bondsAdmin = bondsAdmin_;
         affiliateProgram = DegenerusAffiliate(affiliate_);
         regularRenderer = regularRenderer_;
-        uint256 bondSeed = 2_000_000 * MILLION;
-        _mint(bonds_, bondSeed);
-    }
-
-    function setVault(address vault_) external {
-        address sender = msg.sender;
-        if (sender != address(degenerusGame) && sender != bonds && sender != vault_) revert OnlyGame();
-        if (vault == address(0)) {
-            vault = vault_;
-        } else if (vault_ != vault) {
-            revert AlreadyWired();
-        }
+        vault = vault_;
     }
 
     /// @notice Burn BURNIE to increase the caller’s coinflip stake, applying streak bonuses when eligible.
@@ -362,8 +355,8 @@ contract DegenerusCoin {
     /// @notice Wire game, NFT, quest module, jackpots, and optionally the VRF sub using an address array.
     /// @dev Order: [game, nft, quest module, jackpots, vrfSub]; set-once per slot.
     function wire(address[] calldata addresses) external {
-        address bondsAdmin = IDegenerusBondsAdminView(bonds).admin();
-        if (msg.sender != bonds && msg.sender != bondsAdmin) revert OnlyBonds();
+        address admin = bondsAdmin;
+        if (msg.sender != bonds && msg.sender != admin) revert OnlyBonds();
 
         uint256 len = addresses.length;
         if (len > 0) _setGame(addresses[0]);
@@ -376,10 +369,10 @@ contract DegenerusCoin {
         address gameAddr = addresses.length > 0 ? addresses[0] : address(0);
         if (gameAddr != address(0)) {
             if (addresses.length > 2 && addresses[2] != address(0)) {
-                try IDegenerusQuestModule(addresses[2]).wire(_singleAddrArray(gameAddr)) {} catch {}
+                IDegenerusQuestModule(addresses[2]).wire(_singleAddrArray(gameAddr));
             }
             if (addresses.length > 1 && addresses[1] != address(0)) {
-                try degenerusGamepieces.wire(_singleAddrArray(gameAddr)) {} catch {}
+                degenerusGamepieces.wire(_singleAddrArray(gameAddr));
             }
         }
     }

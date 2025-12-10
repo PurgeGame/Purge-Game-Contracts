@@ -23,10 +23,8 @@ interface IDegenerusGameVrf is IDegenerusGameCore {
 }
 
 interface IDegenerusBondsAdmin {
-    function setCoin(address coin_) external;
     function setPurchaseToggles(bool externalEnabled, bool gameEnabled) external;
     function wire(address[] calldata addresses, uint256 vrfSubId, bytes32 vrfKeyHash_) external;
-    function armVrfRecovery() external;
 }
 
 interface IDegenerusBondsGameOverFlag {
@@ -43,15 +41,7 @@ interface IDegenerusCoinPresaleLink {
     function creditPresaleFromLink(address player, uint256 amount) external;
 }
 
-interface IDegenerusCoinWire {
-    function wire(address[] calldata addresses) external;
-}
-
-interface IDegenerusAffiliateWire {
-    function wire(address[] calldata addresses) external;
-}
-
-interface IDegenerusJackpotsWire {
+interface IWiring {
     function wire(address[] calldata addresses) external;
 }
 
@@ -195,8 +185,9 @@ contract DegenerusAdmin {
 
         game = game_;
 
-        IVRFCoordinatorV2_5Owner(coordinator).addConsumer(subscriptionId, game_);
-        emit ConsumerAdded(game_);
+        try IVRFCoordinatorV2_5Owner(coordinator).addConsumer(subscriptionId, game_) {
+            emit ConsumerAdded(game_);
+        } catch {}
 
         IDegenerusGameVrf(game_).wireVrf(coordinator, subscriptionId);
         IDegenerusBondsAdmin(bonds).wire(_packBondsWire(game_, address(0), address(0), address(0)), 0, bytes32(0));
@@ -235,21 +226,21 @@ contract DegenerusAdmin {
             coinWire[2] = questModule_;
             coinWire[3] = jackpots_;
             coinWire[4] = address(this); // vrfSub (admin) for LINK reward minting
-            try IDegenerusCoinWire(coin_).wire(coinWire) {} catch {}
+            IWiring(coin_).wire(coinWire);
         }
 
         if (affiliate_ != address(0)) {
             address[] memory affWire = new address[](2);
             affWire[0] = coin_;
             affWire[1] = game_;
-            try IDegenerusAffiliateWire(affiliate_).wire(affWire) {} catch {}
+            IWiring(affiliate_).wire(affWire);
         }
 
         if (jackpots_ != address(0)) {
             address[] memory jpWire = new address[](2);
             jpWire[0] = coin_;
             jpWire[1] = game_;
-            try IDegenerusJackpotsWire(jackpots_).wire(jpWire) {} catch {}
+            IWiring(jackpots_).wire(jpWire);
         }
     }
 
@@ -303,7 +294,7 @@ contract DegenerusAdmin {
 
     /// @notice Pass-through to set the bonds coin address.
     function setBondsCoin(address coin_) external onlyOwner {
-        IDegenerusBondsAdmin(bonds).setCoin(coin_);
+        IDegenerusBondsAdmin(bonds).wire(_packBondsWire(address(0), address(0), coin_, address(0)), 0, bytes32(0));
         emit CoinSet(coin_);
     }
 
@@ -335,7 +326,7 @@ contract DegenerusAdmin {
     // Subscription management (stall-gated)
     // -----------------------
 
-    /// @notice On a 3-day VRF stall, migrate to a new coordinator/subscription/key hash. Best-effort cancel + LINK top-up.
+    /// @notice On a 3-day VRF stall, migrate to a new coordinator/subscription/key hash. Cancels the old sub and moves LINK.
     function emergencyRecover(
         address newCoordinator,
         bytes32 newKeyHash
@@ -347,7 +338,6 @@ contract DegenerusAdmin {
         uint256 oldSub = subscriptionId;
         address oldCoord = coordinator;
 
-        // Best-effort cancel old subscription and reclaim LINK to this contract.
         if (oldSub != 0) {
             try IVRFCoordinatorV2_5Owner(oldCoord).cancelSubscription(oldSub, address(this)) {
                 emit SubscriptionCancelled(oldSub, address(this));
@@ -363,7 +353,6 @@ contract DegenerusAdmin {
         try IVRFCoordinatorV2_5Owner(newCoordinator).addConsumer(newSubId, bonds) {
             emit ConsumerAdded(bonds);
         } catch {}
-        IDegenerusBondsAdmin(bonds).armVrfRecovery();
         IDegenerusBondsAdmin(bonds).wire(
             _packBondsWire(address(0), address(0), address(0), newCoordinator),
             newSubId,
@@ -371,7 +360,6 @@ contract DegenerusAdmin {
         );
 
         if (game != address(0)) {
-            // Add the game as consumer; ignore failure to avoid blocking recovery.
             try IVRFCoordinatorV2_5Owner(newCoordinator).addConsumer(newSubId, game) {
                 emit ConsumerAdded(game);
             } catch {}
@@ -379,7 +367,6 @@ contract DegenerusAdmin {
             IDegenerusGameVrf(game).updateVrfCoordinatorAndSub(newCoordinator, newSubId, newKeyHash);
         }
 
-        // Best-effort fund the new subscription with any LINK held here.
         uint256 bal = ILinkTokenLike(linkToken).balanceOf(address(this));
         uint256 funded;
         if (bal != 0) {
@@ -393,7 +380,7 @@ contract DegenerusAdmin {
         emit EmergencyRecovered(newCoordinator, newSubId, funded);
     }
 
-    /// @notice Cancel the VRF subscription and sweep any LINK to the provided target (best-effort).
+    /// @notice Cancel the VRF subscription and sweep any LINK to the provided target.
     /// @dev Callable once endgame is complete to refund unused LINK. No RNG stall required.
     function shutdownAndRefund(address target) external onlyOwner {
         if (target == address(0)) revert ZeroAddress();

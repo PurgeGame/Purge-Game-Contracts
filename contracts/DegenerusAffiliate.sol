@@ -3,10 +3,6 @@ pragma solidity ^0.8.26;
 
 import {IDegenerusGame} from "./interfaces/IDegenerusGame.sol";
 
-interface IDegenerusBondsAdminView {
-    function admin() external view returns (address);
-}
-
 interface IDegenerusCoinAffiliate {
     function balanceOf(address account) external view returns (uint256);
     function presaleDistribute(address buyer, uint256 amountBase) external;
@@ -83,6 +79,7 @@ contract DegenerusAffiliate {
     // Immutable / wiring
     // ---------------------------------------------------------------------
     address public immutable bonds;
+    address public immutable bondsAdmin;
 
     IDegenerusCoinAffiliate private coin;
     IDegenerusGame private degenerusGame;
@@ -155,9 +152,10 @@ contract DegenerusAffiliate {
     // ---------------------------------------------------------------------
     // Constructor
     // ---------------------------------------------------------------------
-    constructor(address bonds_) {
-        if (bonds_ == address(0)) revert ZeroAddress();
+    constructor(address bonds_, address bondsAdmin_) {
+        if (bonds_ == address(0) || bondsAdmin_ == address(0)) revert ZeroAddress();
         bonds = bonds_;
+        bondsAdmin = bondsAdmin_;
     }
 
     // ---------------------------------------------------------------------
@@ -166,8 +164,8 @@ contract DegenerusAffiliate {
     /// @notice Wire coin and game via an address array ([coin, game]).
     /// @dev Each address can be set once; non-zero updates must match the existing value.
     function wire(address[] calldata addresses) external {
-        address bondsAdmin = IDegenerusBondsAdminView(bonds).admin();
-        if (msg.sender != bonds && msg.sender != bondsAdmin) revert OnlyBonds();
+        address admin = bondsAdmin;
+        if (msg.sender != bonds && msg.sender != admin) revert OnlyBonds();
         _setCoin(addresses.length > 0 ? addresses[0] : address(0));
         _setGame(addresses.length > 1 ? addresses[1] : address(0));
     }
