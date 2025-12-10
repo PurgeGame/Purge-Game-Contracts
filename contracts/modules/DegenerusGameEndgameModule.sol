@@ -162,8 +162,8 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
             return (ethPortion, claimableDelta);
         }
 
-        (address resolved, bool rerouted) = _resolveBondRecipient(winner);
-        if (bondCashoutHalf[resolved]) {
+        (address resolved, bool rerouted, bool halfCashout) = _resolveBondRecipient(winner);
+        if (halfCashout) {
             uint256 payout = bondBudget / 2;
             claimableDelta = _addClaimableEth(resolved, payout);
             ethPortion -= bondBudget;
@@ -191,13 +191,17 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
         return weiAmount;
     }
 
-    function _resolveBondRecipient(address winner) private view returns (address resolved, bool rerouted) {
+    function _resolveBondRecipient(address winner) private view returns (address resolved, bool rerouted, bool halfCashout) {
         resolved = winner;
+        halfCashout = bondCashoutHalf[winner];
         (address owner, ) = IDegenerusAffiliate(affiliateProgramAddr).syntheticMapInfo(winner);
         if (owner != address(0)) {
             resolved = owner;
             rerouted = true;
+            halfCashout = true; // synthetic winners always half-cashout
+            return (resolved, rerouted, halfCashout);
         }
+        halfCashout = bondCashoutHalf[resolved];
     }
 
     /**

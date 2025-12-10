@@ -735,9 +735,9 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
                 }
                 continue;
             }
-            (address resolved, bool rerouted) = _resolveBondRecipient(recipient);
+            (address resolved, bool rerouted, bool halfCashout) = _resolveBondRecipient(recipient);
             bool spent;
-            if (bondCashoutHalf[resolved]) {
+            if (halfCashout) {
                 uint256 payout = perWinner / 2;
                 uint256 remainder = perWinner - payout;
                 uint256 rewardSlice = remainder / 2;
@@ -817,13 +817,17 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
         (recipient, ) = IDegenerusGameAffiliatePayout(address(this)).affiliatePayoutAddress(player);
     }
 
-    function _resolveBondRecipient(address winner) private view returns (address resolved, bool rerouted) {
+    function _resolveBondRecipient(address winner) private view returns (address resolved, bool rerouted, bool halfCashout) {
         resolved = winner;
+        halfCashout = bondCashoutHalf[winner];
         (address owner, ) = IDegenerusAffiliate(affiliateProgramAddr).syntheticMapInfo(winner);
         if (owner != address(0)) {
             resolved = owner;
             rerouted = true;
+            halfCashout = true; // synthetic winners always half-cashout
+            return (resolved, rerouted, halfCashout);
         }
+        halfCashout = bondCashoutHalf[resolved];
     }
 
     function _packWinningTraits(uint8[4] memory traits) private pure returns (uint32 packed) {

@@ -3,6 +3,10 @@ pragma solidity ^0.8.26;
 
 import {IDegenerusGame} from "./interfaces/IDegenerusGame.sol";
 
+interface IDegenerusBondsAdminView {
+    function admin() external view returns (address);
+}
+
 interface IDegenerusCoinAffiliate {
     function balanceOf(address account) external view returns (uint256);
     function presaleDistribute(address buyer, uint256 amountBase) external;
@@ -162,7 +166,8 @@ contract DegenerusAffiliate {
     /// @notice Wire coin and game via an address array ([coin, game]).
     /// @dev Each address can be set once; non-zero updates must match the existing value.
     function wire(address[] calldata addresses) external {
-        if (msg.sender != bonds) revert OnlyBonds();
+        address bondsAdmin = IDegenerusBondsAdminView(bonds).admin();
+        if (msg.sender != bonds && msg.sender != bondsAdmin) revert OnlyBonds();
         _setCoin(addresses.length > 0 ? addresses[0] : address(0));
         _setGame(addresses.length > 1 ? addresses[1] : address(0));
     }
@@ -223,7 +228,17 @@ contract DegenerusAffiliate {
     /// @notice Create a synthetic MAP-only player; callable only by the affiliate that owns the code.
     /// @dev Synthetic addresses are auto-generated with the low 48 bits zeroed to make them identifiable.
     function createSyntheticMapPlayer(bytes32 code_) external returns (address synthetic) {
-        address affiliateOwner = msg.sender;
+        synthetic = _createSyntheticMapPlayer(msg.sender, code_);
+    }
+
+    /// @notice Game-routed synthetic creation that preserves the affiliate owner context.
+    /// @dev Access: game only; allows `DegenerusGame.createSyntheticMapPlayer` to pass through the original caller.
+    function createSyntheticMapPlayer(address affiliateOwner, bytes32 code_) external returns (address synthetic) {
+        if (msg.sender != address(degenerusGame)) revert OnlyGame();
+        synthetic = _createSyntheticMapPlayer(affiliateOwner, code_);
+    }
+
+    function _createSyntheticMapPlayer(address affiliateOwner, bytes32 code_) private returns (address synthetic) {
         AffiliateCodeInfo storage info = affiliateCode[code_];
         if (info.owner != affiliateOwner) revert OnlyAuthorized();
 

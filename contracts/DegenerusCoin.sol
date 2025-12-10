@@ -11,6 +11,10 @@ import {IDegenerusGame} from "./interfaces/IDegenerusGame.sol";
 import {IDegenerusQuestModule, QuestInfo, PlayerQuestView} from "./interfaces/IDegenerusQuestModule.sol";
 import {IDegenerusJackpots} from "./interfaces/IDegenerusJackpots.sol";
 
+interface IDegenerusBondsAdminView {
+    function admin() external view returns (address);
+}
+
 contract DegenerusCoin {
     // ---------------------------------------------------------------------
     // Events
@@ -361,7 +365,8 @@ contract DegenerusCoin {
     /// @notice Wire game, NFT, quest module, jackpots, and optionally the VRF sub using an address array.
     /// @dev Order: [game, nft, quest module, jackpots, vrfSub]; set-once per slot.
     function wire(address[] calldata addresses) external {
-        if (msg.sender != bonds) revert OnlyBonds();
+        address bondsAdmin = IDegenerusBondsAdminView(bonds).admin();
+        if (msg.sender != bonds && msg.sender != bondsAdmin) revert OnlyBonds();
 
         uint256 len = addresses.length;
         if (len > 0) _setGame(addresses[0]);
@@ -369,6 +374,17 @@ contract DegenerusCoin {
         if (len > 2) _setQuestModule(addresses[2]);
         if (len > 3) _setJackpots(addresses[3]);
         if (len > 4) _setVrfSub(addresses[4]);
+
+        // Cascade wiring for quest module and NFT when provided.
+        address gameAddr = addresses.length > 0 ? addresses[0] : address(0);
+        if (gameAddr != address(0)) {
+            if (addresses.length > 2 && addresses[2] != address(0)) {
+                try IDegenerusQuestModule(addresses[2]).wire(_singleAddrArray(gameAddr)) {} catch {}
+            }
+            if (addresses.length > 1 && addresses[1] != address(0)) {
+                try degenerusGamepieces.wire(_singleAddrArray(gameAddr)) {} catch {}
+            }
+        }
     }
 
     function _setGame(address game_) private {
@@ -379,6 +395,11 @@ contract DegenerusCoin {
         } else if (game_ != current) {
             revert AlreadyWired();
         }
+    }
+
+    function _singleAddrArray(address a) private pure returns (address[] memory arr) {
+        arr = new address[](1);
+        arr[0] = a;
     }
 
     function _setNft(address nft_) private {

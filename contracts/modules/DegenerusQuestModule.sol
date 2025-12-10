@@ -211,6 +211,7 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
                 fallbackType = quest.questType;
                 (reward, hardMode, questType, streak, completed) = _questHandleMintSlot(
                     state,
+                    quests,
                     quest,
                     slot,
                     quantity,
@@ -265,7 +266,7 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         }
 
         uint256 priceUnit = questGame.coinPriceUnit();
-        return _questComplete(state, slotIndex, quest, priceUnit);
+        return _questCompleteWithPair(state, quests, slotIndex, quest, priceUnit, 0);
     }
 
     /// @notice Handle decimator burns counted in BURNIE base units (6 decimals).
@@ -290,10 +291,10 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         _questSyncProgress(state, slotIndex, currentDay, quest.version);
         state.progress[slotIndex] = _clampedAdd128(state.progress[slotIndex], burnAmount);
         uint256 target = uint256(_questDecimatorTargetTokens(tier, quest.flags, quest.entropy)) * MILLION;
-        if (state.progress[slotIndex] >= target) {
-            return _questComplete(state, slotIndex, quest, priceUnit);
+        if (state.progress[slotIndex] < target) {
+            return (0, false, quest.questType, state.streak, false);
         }
-        return (0, false, quest.questType, state.streak, false);
+        return _questCompleteWithPair(state, quests, slotIndex, quest, priceUnit, 0);
     }
 
     /// @notice Handle bond purchases tracked by the base-per-bond size (wei).
@@ -327,7 +328,7 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         if (state.progress[slotIndex] < target) {
             return (0, false, quest.questType, state.streak, false);
         }
-        return _questComplete(state, slotIndex, quest, priceUnit);
+        return _questCompleteWithPair(state, quests, slotIndex, quest, priceUnit, priceWei);
     }
 
     /// @notice Handle affiliate earnings credited in BURNIE base units (6 decimals).
@@ -352,10 +353,10 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         _questSyncProgress(state, slotIndex, currentDay, quest.version);
         state.progress[slotIndex] = _clampedAdd128(state.progress[slotIndex], amount);
         uint256 target = uint256(_questAffiliateTargetTokens(tier, quest.flags, quest.entropy)) * MILLION;
-        if (state.progress[slotIndex] >= target) {
-            return _questComplete(state, slotIndex, quest, priceUnit);
+        if (state.progress[slotIndex] < target) {
+            return (0, false, quest.questType, state.streak, false);
         }
-        return (0, false, quest.questType, state.streak, false);
+        return _questCompleteWithPair(state, quests, slotIndex, quest, priceUnit, 0);
     }
 
     /// @notice Handle burn quest progress in whole NFTs.
@@ -389,7 +390,7 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
             state.progress[slot] = _clampedAdd128(state.progress[slot], quantity);
             uint32 target = _questBurnTarget(tier, quest.flags, quest.entropy);
             if (state.progress[slot] >= target) {
-                return _questComplete(state, slot, quest, priceUnit);
+                return _questCompleteWithPair(state, quests, slot, quest, priceUnit, 0);
             }
             unchecked {
                 ++slot;
@@ -612,6 +613,7 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
     /// @dev Processes a mint against a given quest slot, updating progress and emitting rewards when complete.
     function _questHandleMintSlot(
         PlayerQuestState storage state,
+        DailyQuest[QUEST_SLOT_COUNT] memory quests,
         DailyQuest memory quest,
         uint8 slot,
         uint32 quantity,
@@ -624,7 +626,7 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
             ? _questMintAnyTarget(tier, quest.flags, quest.entropy)
             : _questMintEthTarget(tier, quest.flags, quest.entropy);
         if (state.progress[slot] >= target) {
-            return _questComplete(state, slot, quest, priceUnit);
+            return _questCompleteWithPair(state, quests, slot, quest, priceUnit, 0);
         }
         return (0, false, quest.questType, state.streak, false);
     }
@@ -894,6 +896,93 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
             rewardShare += _questStreakBonus(newStreak, priceUnit);
         }
         return (rewardShare, isHard, quest.questType, newStreak, true);
+    }
+
+    /// @dev Completes a quest and, if the paired quest is already finished, completes it too in one call.
+    function _questCompleteWithPair(
+        PlayerQuestState storage state,
+        DailyQuest[QUEST_SLOT_COUNT] memory quests,
+        uint8 slot,
+        DailyQuest memory quest,
+        uint256 priceUnit,
+        uint256 priceWei
+    ) private returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) {
+        (reward, hardMode, questType, streak, completed) = _questComplete(state, slot, quest, priceUnit);
+        if (!completed) {
+            return (reward, hardMode, questType, streak, false);
+        }
+
+        // Check the other slot; if it already meets the target, complete it now and aggregate rewards.
+        uint8 otherSlot = slot ^ 1;
+        (
+            uint256 extraReward,
+            bool extraHard,
+            uint8 extraType,
+            uint32 extraStreak,
+            bool extraCompleted
+        ) = _maybeCompleteOther(state, quests, otherSlot, priceUnit, priceWei);
+
+        if (extraCompleted) {
+            reward += extraReward;
+            if (extraHard) hardMode = true;
+            questType = extraType;
+            streak = extraStreak;
+        }
+    }
+
+    function _maybeCompleteOther(
+        PlayerQuestState storage state,
+        DailyQuest[QUEST_SLOT_COUNT] memory quests,
+        uint8 slot,
+        uint256 priceUnit,
+        uint256 priceWei
+    ) private returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) {
+        DailyQuest memory quest = quests[slot];
+        uint48 currentDay = _currentQuestDay(quests);
+        if (quest.day == 0 || quest.day != currentDay) return (0, false, quest.questType, state.streak, false);
+        if ((state.completionMask & uint8(1 << slot)) != 0) return (0, false, quest.questType, state.streak, false);
+
+        uint8 tier = _questTier(state.baseStreak);
+        if (!_questReady(state, quest, slot, tier, priceUnit, priceWei)) {
+            return (0, false, quest.questType, state.streak, false);
+        }
+
+        return _questComplete(state, slot, quest, priceUnit);
+    }
+
+    function _questReady(
+        PlayerQuestState storage state,
+        DailyQuest memory quest,
+        uint8 slot,
+        uint8 tier,
+        uint256 priceUnit,
+        uint256 priceWei
+    ) private view returns (bool) {
+        if (!_questProgressValid(state, quest, slot, quest.day)) return false;
+        uint256 progress = state.progress[slot];
+        if (quest.questType == QUEST_TYPE_MINT_ANY) {
+            return progress >= _questMintAnyTarget(tier, quest.flags, quest.entropy);
+        }
+        if (quest.questType == QUEST_TYPE_MINT_ETH) {
+            return progress >= _questMintEthTarget(tier, quest.flags, quest.entropy);
+        }
+        if (quest.questType == QUEST_TYPE_BURN) {
+            return progress >= _questBurnTarget(tier, quest.flags, quest.entropy);
+        }
+        if (quest.questType == QUEST_TYPE_FLIP) {
+            return progress >= uint256(_questFlipTargetTokens(tier, quest.flags, quest.entropy)) * MILLION;
+        }
+        if (quest.questType == QUEST_TYPE_DECIMATOR) {
+            return progress >= uint256(_questDecimatorTargetTokens(tier, quest.flags, quest.entropy)) * MILLION;
+        }
+        if (quest.questType == QUEST_TYPE_AFFILIATE) {
+            return progress >= uint256(_questAffiliateTargetTokens(tier, quest.flags, quest.entropy)) * MILLION;
+        }
+        if (quest.questType == QUEST_TYPE_BOND) {
+            uint256 weiPrice = priceWei != 0 ? priceWei : questGame.mintPrice();
+            return progress >= _questBondTargetWei(tier, quest.flags, quest.entropy, weiPrice);
+        }
+        return false;
     }
 
     /// @dev Base reward scales with streak tiers and difficulty modifiers, before per-slot split.

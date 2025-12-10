@@ -985,7 +985,7 @@ contract DegenerusGame is DegenerusGameStorage {
     /// @notice Toggle auto-liquidation of bond winnings into claimable balance (tax applies on withdrawal).
     function setBondCashoutHalf(bool enabled) external {
         (address owner, ) = IDegenerusAffiliate(affiliateProgram).syntheticMapInfo(msg.sender);
-        if (owner != address(0) && !enabled) revert E(); // synthetic players cannot disable half cashout
+        if (owner != address(0)) revert E(); // synthetic players always half-cashout (no toggles)
         bondCashoutHalf[msg.sender] = enabled;
     }
 

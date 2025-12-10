@@ -28,6 +28,14 @@ interface IDegenerusBondsAdmin {
     function setVault(address vault_) external;
     function setCoin(address coin_) external;
     function setPurchaseToggles(bool externalEnabled, bool gameEnabled) external;
+    function wire(address[] calldata addresses, uint256 vrfSubId, bytes32 vrfKeyHash_) external;
+    function wireDownstream(
+        address coinAddr,
+        address affiliateAddr,
+        address jackpotsAddr,
+        address questModuleAddr,
+        address nftAddr
+    ) external;
 }
 
 interface ILinkTokenLike {
@@ -37,6 +45,18 @@ interface ILinkTokenLike {
 
 interface IDegenerusCoinPresaleLink {
     function creditPresaleFromLink(address player, uint256 amount) external;
+}
+
+interface IDegenerusCoinWire {
+    function wire(address[] calldata addresses) external;
+}
+
+interface IDegenerusAffiliateWire {
+    function wire(address[] calldata addresses) external;
+}
+
+interface IDegenerusJackpotsWire {
+    function wire(address[] calldata addresses) external;
 }
 
 interface IDegenerusAffiliatePresalePrice {
@@ -173,6 +193,70 @@ contract DegenerusAdmin {
         emit ConsumerAdded(game_);
 
         IDegenerusGameVrf(game_).wireVrf(coordinator, subscriptionId);
+    }
+
+    /// @notice Consolidated wiring helper: creates VRF sub if needed, wires bonds, then downstream modules.
+    /// @dev Order: bonds must be set; coordinator/keyHash are required when creating the sub. Downstream wiring is
+    ///             routed through bonds (coin, affiliate, jackpots, quest module, NFT).
+    function wireAll(
+        address coordinator_,
+        bytes32 bondKeyHash_,
+        address game_,
+        address coin_,
+        address affiliate_,
+        address jackpots_,
+        address questModule_,
+        address nft_,
+        address vault_
+    ) external onlyOwner {
+        if (bonds == address(0)) revert NotWired();
+
+        // Ensure VRF subscription exists and bonds are wired to it.
+        if (subscriptionId == 0) {
+            wire(coordinator_, bondKeyHash_);
+        } else {
+            if (coordinator_ != address(0) && coordinator_ != coordinator) revert AlreadyWired();
+        }
+
+        address coord = coordinator_ == address(0) ? coordinator : coordinator_;
+        IDegenerusBondsAdmin(bonds).wire(_packBondsWire(game_, vault_, coin_, coord), subscriptionId, bondKeyHash_);
+
+        if (coin_ != address(0)) {
+            address[] memory coinWire = new address[](5);
+            coinWire[0] = game_;
+            coinWire[1] = nft_;
+            coinWire[2] = questModule_;
+            coinWire[3] = jackpots_;
+            coinWire[4] = address(0); // vrfSub optional
+            try IDegenerusCoinWire(coin_).wire(coinWire) {} catch {}
+        }
+
+        if (affiliate_ != address(0)) {
+            address[] memory affWire = new address[](2);
+            affWire[0] = coin_;
+            affWire[1] = game_;
+            try IDegenerusAffiliateWire(affiliate_).wire(affWire) {} catch {}
+        }
+
+        if (jackpots_ != address(0)) {
+            address[] memory jpWire = new address[](2);
+            jpWire[0] = coin_;
+            jpWire[1] = game_;
+            try IDegenerusJackpotsWire(jackpots_).wire(jpWire) {} catch {}
+        }
+    }
+
+    function _packBondsWire(
+        address game_,
+        address vault_,
+        address coin_,
+        address coord_
+    ) private pure returns (address[] memory arr) {
+        arr = new address[](4);
+        arr[0] = game_;
+        arr[1] = vault_;
+        arr[2] = coin_;
+        arr[3] = coord_;
     }
 
     /// @notice Wire the coin contract for link-based minting/claiming and optionally update the price unit.

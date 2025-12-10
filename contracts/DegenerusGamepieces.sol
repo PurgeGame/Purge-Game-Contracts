@@ -237,16 +237,14 @@ contract DegenerusGamepieces {
     }
 
     function purchase(PurchaseParams calldata params) external payable {
-        (address synOwner, ) = _syntheticMapInfo(msg.sender);
-        if (synOwner != address(0)) revert E();
-        _routePurchase(msg.sender, params);
+        _routePurchase(msg.sender, msg.sender, params);
     }
 
     /// @notice Affiliate-only entry to purchase MAPs for a registered synthetic player.
-    /// @dev Payment is always direct ETH from the affiliate; synthetic player is map-only.
+    /// @dev Payment is direct ETH from the affiliate; synthetic player is map-only.
     function purchaseMapForSynthetic(address synthetic, uint256 quantity) external payable {
         (address synOwner, bytes32 code) = _syntheticMapInfo(synthetic);
-        if (synOwner == address(0) || synOwner != msg.sender) revert E();
+        if (synOwner != msg.sender) revert E();
         PurchaseParams memory params = PurchaseParams({
             quantity: quantity,
             kind: PurchaseKind.Map,
@@ -254,15 +252,29 @@ contract DegenerusGamepieces {
             payInCoin: false,
             affiliateCode: code
         });
-        _routePurchase(synthetic, params);
+        _routePurchase(synthetic, msg.sender, params);
     }
 
-    function _routePurchase(address buyer, PurchaseParams memory params) private {
+    /// @notice Affiliate-only entry to purchase MAPs for a registered synthetic player using coin.
+    function purchaseMapForSyntheticWithCoin(address synthetic, uint256 quantity) external {
+        (address synOwner, bytes32 code) = _syntheticMapInfo(synthetic);
+        if (synOwner != msg.sender) revert E();
+        PurchaseParams memory params = PurchaseParams({
+            quantity: quantity,
+            kind: PurchaseKind.Map,
+            payKind: MintPaymentKind.DirectEth,
+            payInCoin: true,
+            affiliateCode: code
+        });
+        _routePurchase(synthetic, msg.sender, params);
+    }
+
+    function _routePurchase(address buyer, address payer, PurchaseParams memory params) private {
         bytes32 affiliateCode = params.payKind == MintPaymentKind.DirectEth ? params.affiliateCode : bytes32(0);
         if (params.kind == PurchaseKind.Player) {
-            _purchase(buyer, params.quantity, params.payInCoin, affiliateCode, params.payKind);
+            _purchase(buyer, payer, params.quantity, params.payInCoin, affiliateCode, params.payKind);
         } else if (params.kind == PurchaseKind.Map) {
-            _mintAndBurn(buyer, params.quantity, params.payInCoin, affiliateCode, params.payKind);
+            _mintAndBurn(buyer, payer, params.quantity, params.payInCoin, affiliateCode, params.payKind);
         } else {
             revert E();
         }
@@ -270,6 +282,7 @@ contract DegenerusGamepieces {
 
     function _purchase(
         address buyer,
+        address payer,
         uint256 quantity,
         bool payInCoin,
         bytes32 affiliateCode,
@@ -297,10 +310,10 @@ contract DegenerusGamepieces {
         uint32 levelHundredCount;
         if (!payInCoin && targetLevel == 100) {
             // Level-100 ETH purchases scale price based on ETH mint history and prior level-100 mints.
-            (expectedWei, levelHundredCount) = _levelHundredCost(msg.sender, priceWei, uint32(quantity));
+            (expectedWei, levelHundredCount) = _levelHundredCost(payer, priceWei, uint32(quantity));
         }
         if (!payInCoin) {
-            expectedWei += _initiationFee(targetLevel, msg.sender, priceWei);
+            expectedWei += _initiationFee(targetLevel, payer, priceWei);
         }
 
         uint256 bonus;
@@ -308,10 +321,11 @@ contract DegenerusGamepieces {
 
         if (payInCoin) {
             if (msg.value != 0) revert E();
-            _coinReceive(buyer, uint32(quantity), quantity * priceCoinUnit, targetLevel, 0);
+            _coinReceive(payer, uint32(quantity), quantity * priceCoinUnit, targetLevel, 0);
         } else {
             bonusCoinReward = (quantity / 10) * priceCoinUnit;
             bonus = _processEthPurchase(
+                payer,
                 buyer,
                 quantity * 100,
                 affiliateCode,
@@ -357,20 +371,15 @@ contract DegenerusGamepieces {
 
     function _mintAndBurn(
         address buyer,
+        address payer,
         uint256 quantity,
         bool payInCoin,
         bytes32 affiliateCode,
         MintPaymentKind payKind
     ) private {
         // Map purchase flow: mints 4:1 scaled quantity and immediately queues them for burn draws.
-        (
-            uint24 lvl,
-            uint8 state,
-            bool mapJackpotReady,
-            bool rngLocked_,
-            uint256 priceWei,
-            uint256 priceUnit
-        ) = game.purchaseInfo();
+        (uint24 lvl, uint8 state, bool mapJackpotReady, bool rngLocked_, uint256 priceWei, uint256 priceUnit) = game
+            .purchaseInfo();
         if (state == 3 && payInCoin) revert NotTimeYet();
         if (quantity == 0 || quantity > type(uint32).max) revert InvalidQuantity();
         if (rngLocked_) revert RngNotReady();
@@ -385,10 +394,10 @@ contract DegenerusGamepieces {
         uint32 levelHundredCount;
         if (!payInCoin && lvl == 100) {
             // Level-100 ETH map mints share the same scaling rules as token mints.
-            (expectedWei, levelHundredCount) = _levelHundredCost(buyer, priceWei / 4, uint32(quantity));
+            (expectedWei, levelHundredCount) = _levelHundredCost(payer, priceWei / 4, uint32(quantity));
         }
         if (!payInCoin) {
-            expectedWei += _initiationFee(lvl, buyer, priceWei);
+            expectedWei += _initiationFee(lvl, payer, priceWei);
         }
 
         uint256 bonus;
@@ -396,10 +405,11 @@ contract DegenerusGamepieces {
 
         if (payInCoin) {
             if (msg.value != 0) revert E();
-            _coinReceive(buyer, uint32(quantity), coinCost, lvl, 0);
+            _coinReceive(payer, uint32(quantity), coinCost, lvl, 0);
             bonus = mapRebate;
         } else {
             bonus = _processEthPurchase(
+                payer,
                 buyer,
                 scaledQty,
                 affiliateCode,
@@ -436,11 +446,19 @@ contract DegenerusGamepieces {
         game.enqueueMap(buyer, uint32(quantity));
 
         uint256 costAmount = payInCoin ? coinCost : expectedWei;
-        emit MapPurchase(buyer, uint32(quantity), payInCoin, payKind != MintPaymentKind.DirectEth, costAmount, rebateMint);
+        emit MapPurchase(
+            buyer,
+            uint32(quantity),
+            payInCoin,
+            payKind != MintPaymentKind.DirectEth,
+            costAmount,
+            rebateMint
+        );
     }
 
     function _processEthPurchase(
         address payer,
+        address buyer,
         uint256 scaledQty,
         bytes32 affiliateCode,
         uint24 lvl,
@@ -494,7 +512,7 @@ contract DegenerusGamepieces {
         uint256 rakebackMint;
         address affiliateAddr = affiliateProgram;
         if (affiliateAddr != address(0)) {
-            rakebackMint = IDegenerusAffiliate(affiliateAddr).payAffiliate(affiliateAmount, affiliateCode, payer, lvl);
+            rakebackMint = IDegenerusAffiliate(affiliateAddr).payAffiliate(affiliateAmount, affiliateCode, buyer, lvl);
         }
 
         if (rakebackMint != 0) {
@@ -1061,5 +1079,4 @@ contract DegenerusGamepieces {
     function tokensOwed(address player) external view returns (uint32) {
         return _tokensOwed[player];
     }
-
 }
