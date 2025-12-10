@@ -23,19 +23,10 @@ interface IDegenerusGameVrf is IDegenerusGameCore {
 }
 
 interface IDegenerusBondsAdmin {
-    function wireBondVrf(address coordinator_, uint256 subId, bytes32 keyHash_) external;
-    function wireGame(address game_) external;
     function setVault(address vault_) external;
     function setCoin(address coin_) external;
     function setPurchaseToggles(bool externalEnabled, bool gameEnabled) external;
     function wire(address[] calldata addresses, uint256 vrfSubId, bytes32 vrfKeyHash_) external;
-    function wireDownstream(
-        address coinAddr,
-        address affiliateAddr,
-        address jackpotsAddr,
-        address questModuleAddr,
-        address nftAddr
-    ) external;
 }
 
 interface ILinkTokenLike {
@@ -178,7 +169,11 @@ contract DegenerusAdmin {
         try IVRFCoordinatorV2_5Owner(coordinator).addConsumer(subscriptionId, bonds) {
             emit ConsumerAdded(bonds);
         } catch {}
-        IDegenerusBondsAdmin(bonds).wireBondVrf(coordinator, subscriptionId, bondKeyHash);
+        IDegenerusBondsAdmin(bonds).wire(
+            _packBondsWire(address(0), address(0), address(0), coordinator),
+            subscriptionId,
+            bondKeyHash
+        );
     }
 
     /// @notice Wire the game as a VRF consumer after bonds have been wired.
@@ -193,11 +188,12 @@ contract DegenerusAdmin {
         emit ConsumerAdded(game_);
 
         IDegenerusGameVrf(game_).wireVrf(coordinator, subscriptionId);
+        IDegenerusBondsAdmin(bonds).wire(_packBondsWire(game_, address(0), address(0), address(0)), 0, bytes32(0));
     }
 
-    /// @notice Consolidated wiring helper: creates VRF sub if needed, wires bonds, then downstream modules.
-    /// @dev Order: bonds must be set; coordinator/keyHash are required when creating the sub. Downstream wiring is
-    ///             routed through bonds (coin, affiliate, jackpots, quest module, NFT).
+    /// @notice Consolidated wiring helper: creates VRF sub if needed, wires bonds, then downstream modules directly.
+    /// @dev Order: bonds must be set; coordinator/keyHash are required when creating the sub. Downstream modules
+    ///             are wired here (coin, affiliate, jackpots, quest module, NFT).
     function wireAll(
         address coordinator_,
         bytes32 bondKeyHash_,
@@ -308,7 +304,7 @@ contract DegenerusAdmin {
 
     /// @notice Pass-through to set the bond game address.
     function wireBondsGame(address game_) external onlyOwner {
-        IDegenerusBondsAdmin(bonds).wireGame(game_);
+        IDegenerusBondsAdmin(bonds).wire(_packBondsWire(game_, address(0), address(0), address(0)), 0, bytes32(0));
         emit BondsGameWired(game_);
     }
 
@@ -316,7 +312,11 @@ contract DegenerusAdmin {
     function wireBondsVrf(address coordinator_, bytes32 keyHash_) external onlyOwner {
         uint256 subId = subscriptionId;
         if (subId == 0) revert NotWired();
-        IDegenerusBondsAdmin(bonds).wireBondVrf(coordinator_, subId, keyHash_);
+        IDegenerusBondsAdmin(bonds).wire(
+            _packBondsWire(address(0), address(0), address(0), coordinator_),
+            subId,
+            keyHash_
+        );
         emit BondsVrfWired(coordinator_, subId, keyHash_);
     }
 
@@ -352,7 +352,11 @@ contract DegenerusAdmin {
         try IVRFCoordinatorV2_5Owner(newCoordinator).addConsumer(newSubId, bonds) {
             emit ConsumerAdded(bonds);
         } catch {}
-        IDegenerusBondsAdmin(bonds).wireBondVrf(newCoordinator, newSubId, newKeyHash);
+        IDegenerusBondsAdmin(bonds).wire(
+            _packBondsWire(address(0), address(0), address(0), newCoordinator),
+            newSubId,
+            newKeyHash
+        );
 
         if (game != address(0)) {
             // Add the game as consumer; ignore failure to avoid blocking recovery.

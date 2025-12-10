@@ -40,18 +40,6 @@ interface ICoinLike {
     function transfer(address to, uint256 amount) external returns (bool);
 }
 
-interface IDegenerusCoinWire {
-    function wire(address[] calldata addresses) external;
-}
-
-interface IDegenerusAffiliateWire {
-    function wire(address[] calldata addresses) external;
-}
-
-interface IDegenerusJackpotsWire {
-    function wire(address[] calldata addresses) external;
-}
-
 /**
  * @title BondToken
  * @notice Minimal mintable/burnable ERC20 representing liquid bonds for a specific maturity level.
@@ -255,6 +243,15 @@ contract DegenerusBonds {
         LaneEntry[] entries;
     }
 
+    struct WireConfig {
+        address game;
+        address vault;
+        address coin;
+        address vrfCoordinator;
+        uint256 vrfSubId;
+        bytes32 vrfKeyHash;
+    }
+
     struct BondSeries {
         uint24 maturityLevel;
         uint24 saleStartLevel;
@@ -310,68 +307,34 @@ contract DegenerusBonds {
     // External write API
     // ---------------------------------------------------------------------
 
-    /// @notice Wire bonds like other modules: [game, vault, coin, vrfCoordinator] + subId/keyHash.
+    /// @notice Wire bonds like other modules: [game, vault, coin, vrfCoordinator] + subId/keyHash (partial allowed).
     function wire(address[] calldata addresses, uint256 vrfSubId, bytes32 vrfKeyHash_) external {
         if (msg.sender != admin) revert Unauthorized();
-        _setGame(addresses.length > 0 ? addresses[0] : address(0));
-        _setVault(addresses.length > 1 ? addresses[1] : address(0));
-        _setCoin(addresses.length > 2 ? addresses[2] : address(0));
-        _setVrf(addresses.length > 3 ? addresses[3] : address(0), vrfSubId, vrfKeyHash_);
-    }
-
-    /// @notice Cascade wiring for downstream modules (coin, affiliate, jackpots, quest module, NFT).
-    /// @dev Callable only by the admin; uses bonds' authority to invoke module wire functions.
-    function wireDownstream(
-        address coinAddr,
-        address affiliateAddr,
-        address jackpotsAddr,
-        address questModuleAddr,
-        address nftAddr
-    ) external {
-        if (msg.sender != admin) revert Unauthorized();
-
-        if (coinAddr != address(0)) {
-            _setCoin(coinAddr);
-            address[] memory coinWire = new address[](5);
-            coinWire[0] = address(game);
-            coinWire[1] = nftAddr;
-            coinWire[2] = questModuleAddr;
-            coinWire[3] = jackpotsAddr;
-            coinWire[4] = address(0); // optional vrfSub placeholder (unused)
-            IDegenerusCoinWire(coinAddr).wire(coinWire);
-        }
-
-        if (affiliateAddr != address(0)) {
-            address[] memory affWire = new address[](2);
-            affWire[0] = coinAddr;
-            affWire[1] = address(game);
-            IDegenerusAffiliateWire(affiliateAddr).wire(affWire);
-        }
-
-        if (jackpotsAddr != address(0)) {
-            address[] memory jpWire = new address[](2);
-            jpWire[0] = coinAddr;
-            jpWire[1] = address(game);
-            IDegenerusJackpotsWire(jackpotsAddr).wire(jpWire);
-        }
-    }
-
-    /// @notice One-time wiring of the game address after deployment.
-    function wireGame(address game_) external {
-        if (msg.sender != admin) revert Unauthorized();
-        _setGame(game_);
-    }
-
-    /// @notice One-time VRF wiring for the bond contract (called by the VRF admin/sub owner).
-    function wireBondVrf(address coordinator_, uint256 subId, bytes32 keyHash_) external {
-        if (msg.sender != admin) revert Unauthorized();
-        _setVrf(coordinator_, subId, keyHash_);
+        _wire(
+            WireConfig({
+                game: addresses.length > 0 ? addresses[0] : address(0),
+                vault: addresses.length > 1 ? addresses[1] : address(0),
+                coin: addresses.length > 2 ? addresses[2] : address(0),
+                vrfCoordinator: addresses.length > 3 ? addresses[3] : address(0),
+                vrfSubId: vrfSubId,
+                vrfKeyHash: vrfKeyHash_
+            })
+        );
     }
 
     /// @notice Set the vault to receive excess funds beyond global bond obligations.
     function setVault(address vault_) external {
         if (msg.sender != admin) revert Unauthorized();
-        _setVault(vault_);
+        _wire(
+            WireConfig({
+                game: address(0),
+                vault: vault_,
+                coin: address(0),
+                vrfCoordinator: address(0),
+                vrfSubId: 0,
+                vrfKeyHash: bytes32(0)
+            })
+        );
     }
 
     /// @notice Owner toggle to allow/deny purchases from external callers and the game.
@@ -384,7 +347,16 @@ contract DegenerusBonds {
     /// @notice Set the coin token used for coin jackpots funded by the game.
     function setCoin(address coin_) external {
         if (msg.sender != admin) revert Unauthorized();
-        _setCoin(coin_);
+        _wire(
+            WireConfig({
+                game: address(0),
+                vault: address(0),
+                coin: coin_,
+                vrfCoordinator: address(0),
+                vrfSubId: 0,
+                vrfKeyHash: bytes32(0)
+            })
+        );
     }
 
     /// @notice Unified deposit: external callers route ETH into the current maturity.
@@ -837,6 +809,22 @@ contract DegenerusBonds {
     // ---------------------------------------------------------------------
     // Internals
     // ---------------------------------------------------------------------
+
+    function _wire(WireConfig memory cfg) private {
+        if (cfg.game != address(0)) {
+            _setGame(cfg.game);
+        }
+        if (cfg.vault != address(0)) {
+            _setVault(cfg.vault);
+        }
+        if (cfg.coin != address(0)) {
+            _setCoin(cfg.coin);
+        }
+        // Only touch VRF when any field is provided; _setVrf enforces non-zero coordinator/keyHash.
+        if (cfg.vrfCoordinator != address(0) || cfg.vrfSubId != 0 || cfg.vrfKeyHash != bytes32(0)) {
+            _setVrf(cfg.vrfCoordinator, cfg.vrfSubId, cfg.vrfKeyHash);
+        }
+    }
 
     function _currentLevel() private view returns (uint24) {
         try game.level() returns (uint24 lvl) {
