@@ -495,7 +495,7 @@ contract DegenerusGame is DegenerusGameStorage {
             // Allow dormant cleanup bounty even before the daily gate unlocks. If no work is done,
             // we continue to normal gating and will revert via rngAndTimeGate when not time yet.
             if (_gameState == 1) {
-                (, bool dormantWorked) = nft.processDormant(cap);
+                bool dormantWorked = nft.processDormant(cap);
                 if (dormantWorked) {
                     break;
                 }
@@ -534,8 +534,11 @@ contract DegenerusGame is DegenerusGameStorage {
                 if (!lastPurchaseDay) {
                     bool batchesPending = airdropIndex < pendingMapMints.length;
                     if (batchesPending) {
-                        bool batchesFinished = _processMapBatch(cap);
-                        if (!batchesFinished) break;
+                        uint256 prevIdx = airdropIndex;
+                        uint32 prevProcessed = airdropMapsProcessedCount;
+                        bool batchesFinished = _processMapBatch(cap); // single batch per call; break if any work was done
+                        bool batchWorked = (airdropIndex != prevIdx) || (airdropMapsProcessedCount != prevProcessed);
+                        if (batchWorked || !batchesFinished) break;
                         batchesPending = false;
                     }
                     payDailyJackpot(false, lvl, rngWord);
@@ -548,8 +551,12 @@ contract DegenerusGame is DegenerusGameStorage {
                 }
 
                 if (!mapJackpotPaid) {
-                    if (!_processMapBatch(cap)) {
-                        break;
+                    {
+                        uint256 prevIdx = airdropIndex;
+                        uint32 prevProcessed = airdropMapsProcessedCount;
+                        bool mapFinished = _processMapBatch(cap); // single batch per call; break if any work was done
+                        bool mapWorked = (airdropIndex != prevIdx) || (airdropMapsProcessedCount != prevProcessed);
+                        if (mapWorked || !mapFinished) break;
                     }
                     if (lvl % 100 == 0) {
                         if (!_runDecimatorHundredJackpot(lvl, rngWord)) {
@@ -615,8 +622,11 @@ contract DegenerusGame is DegenerusGameStorage {
             if (_gameState == 3) {
                 bool batchesPending = airdropIndex < pendingMapMints.length;
                 if (batchesPending) {
-                    bool batchesFinished = _processMapBatch(cap);
-                    if (!batchesFinished) break;
+                    uint256 prevIdx = airdropIndex;
+                    uint32 prevProcessed = airdropMapsProcessedCount;
+                    bool batchesFinished = _processMapBatch(cap); // single batch per call; break if any work was done
+                    bool batchWorked = (airdropIndex != prevIdx) || (airdropMapsProcessedCount != prevProcessed);
+                    if (batchWorked || !batchesFinished) break;
                 }
 
                 payDailyJackpot(true, lvl, rngWord);

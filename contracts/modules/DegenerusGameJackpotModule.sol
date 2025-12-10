@@ -60,6 +60,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
     uint256 private constant JACKPOT_BOND_MIN_BASE = 0.02 ether;
     uint16 private constant BOND_BPS_MAP = 5000; // 50% of MAP jackpots routed into bonds
     uint16 private constant BOND_BPS_DAILY = 2000; // 20% of daily/early-burn jackpots routed into bonds
+    uint32 private constant WRITES_BUDGET_MIN = 8; // Clamps low caps so we always clear base overhead and make progress
 
     struct JackpotEthCtx {
         uint256 ethDistributed;
@@ -910,7 +911,11 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
         if (idx >= total) return true;
         uint32 processed = airdropMapsProcessedCount;
 
-        if (writesBudget == 0) writesBudget = WRITES_BUDGET_SAFE;
+        if (writesBudget == 0) {
+            writesBudget = WRITES_BUDGET_SAFE;
+        } else if (writesBudget < WRITES_BUDGET_MIN) {
+            writesBudget = WRITES_BUDGET_MIN;
+        }
         uint24 lvl = level;
         if (gameState == 3) {
             unchecked {

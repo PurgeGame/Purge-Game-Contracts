@@ -46,7 +46,7 @@ interface IDegenerusGamepieces {
     function currentBaseTokenId() external view returns (uint256);
     function processPendingMints(uint32 playersToProcess, uint32 multiplier) external returns (bool finished);
     function tokensOwed(address player) external view returns (uint32);
-    function processDormant(uint32 maxCount) external returns (bool finished, bool worked);
+    function processDormant(uint32 maxCount) external returns (bool worked);
     function clearPlaceholderPadding(uint256 startTokenId, uint256 endTokenId) external;
     function purchase(PurchaseParams calldata params) external payable;
 }
@@ -1048,10 +1048,10 @@ contract DegenerusGamepieces {
     }
 
     /// @notice Emits Transfer events for already-burned dormant ranges to help indexers catch up.
-    /// @dev No-op now that trophy placeholders are removed.
-    function processDormant(uint32 limit) external pure returns (bool finished, bool worked) {
+    /// @dev No-op now that trophy placeholders are removed; returns false to signal no work was done.
+    function processDormant(uint32 limit) external pure returns (bool worked) {
         limit;
-        return (true, false);
+        return false;
     }
 
     function clearPlaceholderPadding(uint256 startTokenId, uint256 endTokenId) external pure {
