@@ -28,6 +28,7 @@ interface IStETH {
 
 interface IDegenerusBonds {
     function depositCurrentFor(address beneficiary) external payable returns (uint256 scoreAwarded);
+    function depositFromGame(address beneficiary, uint256 amount) external payable returns (uint256 scoreAwarded);
     function payBonds(uint256 coinAmount, uint256 stEthAmount, uint256 rngWord) external payable;
     function resolveBonds(uint256 rngWord) external returns (bool worked);
     function notifyGameOver() external;
@@ -211,6 +212,11 @@ contract DegenerusGame is DegenerusGameStorage {
         bondPool += msg.value;
     }
 
+    /// @notice Accept ETH as untracked yield for future bond funding; callable only by bonds.
+    function bondYieldDeposit() external payable onlyBonds {
+        // Intentionally left untracked; yieldPool() treats excess balance as available.
+    }
+
     /// @notice Credit bond winnings into claimable balance and burn from the bond pool.
     function bondCreditToClaimable(address player, uint256 amount) external onlyBonds {
         if (bondGameOver || amount == 0 || amount > bondPool) revert E();
@@ -259,6 +265,7 @@ contract DegenerusGame is DegenerusGameStorage {
     /// @notice Create a synthetic MAP-only player for the caller’s affiliate code.
     function createSyntheticMapPlayer(bytes32 code) external returns (address synthetic) {
         synthetic = IDegenerusAffiliate(affiliateProgram).createSyntheticMapPlayer(msg.sender, code);
+        bondCashoutHalf[synthetic] = true; // default synthetic players to half-cashout mode
     }
 
     /// @notice Resolve the payout recipient for a player, routing synthetic MAP-only players to their affiliate owner.
@@ -307,7 +314,8 @@ contract DegenerusGame is DegenerusGameStorage {
     }
 
     /// @notice One-time wiring of VRF config from the VRF admin contract (on deployment).
-    function wireInitialVrf(address coordinator_, uint256 subId) external {
+    function wireVrf(address coordinator_, uint256 subId) external {
+        if (msg.sender != vrfAdmin) revert E();
         address current = address(vrfCoordinator);
         vrfCoordinator = IVRFCoordinator(coordinator_);
         vrfSubscriptionId = subId;
@@ -976,6 +984,8 @@ contract DegenerusGame is DegenerusGameStorage {
 
     /// @notice Toggle auto-liquidation of bond winnings into claimable balance (tax applies on withdrawal).
     function setBondCashoutHalf(bool enabled) external {
+        (address owner, ) = IDegenerusAffiliate(affiliateProgram).syntheticMapInfo(msg.sender);
+        if (owner != address(0) && !enabled) revert E(); // synthetic players cannot disable half cashout
         bondCashoutHalf[msg.sender] = enabled;
     }
 

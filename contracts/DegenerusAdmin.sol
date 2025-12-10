@@ -19,7 +19,7 @@ interface IVRFCoordinatorV2_5Owner {
 interface IDegenerusGameVrf is IDegenerusGameCore {
     function rngStalledForThreeDays() external view returns (bool);
     function updateVrfCoordinatorAndSub(address newCoordinator, uint256 newSubId, bytes32 newKeyHash) external;
-    function wireInitialVrf(address coordinator_, uint256 subId) external;
+    function wireVrf(address coordinator_, uint256 subId) external;
 }
 
 interface IDegenerusBondsAdmin {
@@ -69,6 +69,7 @@ contract DegenerusAdmin {
     error NotWired();
     error NoSubscription();
     error InvalidAmount();
+    error FeedHealthy();
 
     // -----------------------
     // Events
@@ -86,12 +87,14 @@ contract DegenerusAdmin {
     event VaultSet(address indexed vault);
     event CoinSet(address indexed coin);
     event PurchaseTogglesSet(bool externalEnabled, bool gameEnabled);
+    event BondsGameWired(address indexed game);
+    event BondsVrfWired(address indexed coordinator, uint256 indexed subId, bytes32 keyHash);
 
     // -----------------------
     // Storage
     // -----------------------
-    address public immutable owner;
-    address public immutable bonds;
+    address public immutable creator;
+    address public bonds;
     address public immutable linkToken;
     address public coin;
     address public affiliate;
@@ -100,10 +103,6 @@ contract DegenerusAdmin {
 
     address public coordinator;
     uint256 public subscriptionId;
-    bool public wired; // true once a subscription exists
-    bool public bondsWired; // true once bonds are added as consumer + configured
-    bool public gameWired; // true once the game consumer has been added + configured
-    bool public coinWired; // true once the coin contract is set
     uint256 public linkRewardPriceCoin = 1_000_000_000; // default to game priceCoin unit
     mapping(address => uint256) public pendingLinkCredit;
     address public linkEthPriceFeed; // Chainlink LINK/ETH price feed (optional; zero address disables)
@@ -112,10 +111,9 @@ contract DegenerusAdmin {
     // Constructor
     // -----------------------
 
-    constructor(address bonds_, address linkToken_) {
-        if (bonds_ == address(0) || linkToken_ == address(0)) revert ZeroAddress();
-        owner = msg.sender;
-        bonds = bonds_;
+    constructor(address linkToken_) {
+        if (linkToken_ == address(0)) revert ZeroAddress();
+        creator = msg.sender;
         linkToken = linkToken_;
     }
 
@@ -124,7 +122,7 @@ contract DegenerusAdmin {
     // -----------------------
 
     modifier onlyOwner() {
-        if (msg.sender != owner) revert NotOwner();
+        if (msg.sender != creator) revert NotOwner();
         _;
     }
 
@@ -132,66 +130,56 @@ contract DegenerusAdmin {
     // Wiring
     // -----------------------
 
-    /// @notice Create the subscription (if needed), wire bonds (always), and wire game if provided.
-    /// @dev Bonds are always wired on the first call. If `game_` is nonzero and the game is not yet wired, it will be added as a consumer.
-    function wire(address game_, address coordinator_, bytes32 bondKeyHash) external onlyOwner {
+    /// @notice One-time bonding of the bonds contract address after deploy.
+    function setBonds(address bonds_) external onlyOwner {
+        if (bonds != address(0)) revert AlreadyWired();
+        if (bonds_ == address(0)) revert ZeroAddress();
+        bonds = bonds_;
+    }
+
+    /// @notice Create the subscription (if needed) and wire bonds.
+    function wire(address coordinator_, bytes32 bondKeyHash) external onlyOwner {
+        if (bonds == address(0)) revert NotWired();
         // Create subscription on first call.
-        if (!wired) {
+        if (subscriptionId == 0) {
             if (coordinator_ == address(0) || bondKeyHash == bytes32(0)) revert ZeroAddress();
             uint256 subId = IVRFCoordinatorV2_5Owner(coordinator_).createSubscription();
             coordinator = coordinator_;
             subscriptionId = subId;
-            wired = true;
             emit CoordinatorUpdated(coordinator_, subId);
             emit SubscriptionCreated(subId);
         } else {
             // Prevent accidental re-pointing via a different coordinator.
             if (coordinator_ != address(0) && coordinator_ != coordinator) revert AlreadyWired();
-            // Reuse bondKeyHash from first wire; require nonzero only if bonds not wired yet.
-            if (!bondsWired && bondKeyHash == bytes32(0)) revert ZeroAddress();
+            if (bondKeyHash == bytes32(0)) revert ZeroAddress();
         }
 
         // Wire bonds exactly once.
-        if (!bondsWired) {
-            IVRFCoordinatorV2_5Owner(coordinator).addConsumer(subscriptionId, bonds);
+        try IVRFCoordinatorV2_5Owner(coordinator).addConsumer(subscriptionId, bonds) {
             emit ConsumerAdded(bonds);
-            IDegenerusBondsAdmin(bonds).wireBondVrf(coordinator, subscriptionId, bondKeyHash);
-            bondsWired = true;
-        }
-
-        // Wire game if provided and not yet wired.
-        if (game_ != address(0) && !gameWired) {
-            game = game_;
-            IVRFCoordinatorV2_5Owner(coordinator).addConsumer(subscriptionId, game_);
-            emit ConsumerAdded(game_);
-            IDegenerusGameVrf(game_).wireInitialVrf(coordinator, subscriptionId);
-            gameWired = true;
-        } else if (gameWired && game_ != address(0) && game != game_) {
-            revert AlreadyWired(); // game already set; ignore mismatched wiring attempts
-        }
+        } catch {}
+        IDegenerusBondsAdmin(bonds).wireBondVrf(coordinator, subscriptionId, bondKeyHash);
     }
 
     /// @notice Wire the game as a VRF consumer after bonds have been wired.
     function wireGame(address game_) external onlyOwner {
-        if (!wired) revert NotWired();
-        if (gameWired) revert AlreadyWired();
+        if (subscriptionId == 0) revert NotWired();
+        if (game != address(0)) revert AlreadyWired();
         if (game_ == address(0)) revert ZeroAddress();
 
         game = game_;
-        gameWired = true;
 
         IVRFCoordinatorV2_5Owner(coordinator).addConsumer(subscriptionId, game_);
         emit ConsumerAdded(game_);
 
-        IDegenerusGameVrf(game_).wireInitialVrf(coordinator, subscriptionId);
+        IDegenerusGameVrf(game_).wireVrf(coordinator, subscriptionId);
     }
 
     /// @notice Wire the coin contract for link-based minting/claiming and optionally update the price unit.
     function wireCoin(address coin_, uint256 priceCoinUnit) external onlyOwner {
-        if (coinWired && coin_ != coin) revert AlreadyWired();
+        if (coin != address(0) && coin_ != coin) revert AlreadyWired();
         if (coin_ != address(0)) {
             coin = coin_;
-            coinWired = true;
         }
         if (priceCoinUnit != 0) {
             linkRewardPriceCoin = priceCoinUnit;
@@ -209,6 +197,8 @@ contract DegenerusAdmin {
 
     /// @notice Configure the LINK/ETH price feed used to value LINK donations (zero disables the oracle).
     function setLinkEthPriceFeed(address feed) external onlyOwner {
+        address current = linkEthPriceFeed;
+        if (current != address(0) && _feedHealthy(current)) revert FeedHealthy();
         linkEthPriceFeed = feed;
         emit LinkEthFeedUpdated(feed);
     }
@@ -232,6 +222,20 @@ contract DegenerusAdmin {
         emit PurchaseTogglesSet(externalEnabled, gameEnabled);
     }
 
+    /// @notice Pass-through to set the bond game address.
+    function wireBondsGame(address game_) external onlyOwner {
+        IDegenerusBondsAdmin(bonds).wireGame(game_);
+        emit BondsGameWired(game_);
+    }
+
+    /// @notice Pass-through to (re)wire bond VRF settings.
+    function wireBondsVrf(address coordinator_, bytes32 keyHash_) external onlyOwner {
+        uint256 subId = subscriptionId;
+        if (subId == 0) revert NotWired();
+        IDegenerusBondsAdmin(bonds).wireBondVrf(coordinator_, subId, keyHash_);
+        emit BondsVrfWired(coordinator_, subId, keyHash_);
+    }
+
     // -----------------------
     // Subscription management (stall-gated)
     // -----------------------
@@ -241,8 +245,8 @@ contract DegenerusAdmin {
         address newCoordinator,
         bytes32 newKeyHash
     ) external onlyOwner returns (uint256 newSubId) {
-        if (!wired) revert NotWired();
-        if (gameWired && game != address(0) && !IDegenerusGameVrf(game).rngStalledForThreeDays()) revert NotStalled();
+        if (subscriptionId == 0) revert NotWired();
+        if (game != address(0) && !IDegenerusGameVrf(game).rngStalledForThreeDays()) revert NotStalled();
         if (newCoordinator == address(0) || newKeyHash == bytes32(0)) revert ZeroAddress();
 
         uint256 oldSub = subscriptionId;
@@ -261,13 +265,12 @@ contract DegenerusAdmin {
         emit CoordinatorUpdated(newCoordinator, newSubId);
         emit SubscriptionCreated(newSubId);
 
-        if (bondsWired) {
-            try IVRFCoordinatorV2_5Owner(newCoordinator).addConsumer(newSubId, bonds) {
-                emit ConsumerAdded(bonds);
-            } catch {}
-            IDegenerusBondsAdmin(bonds).wireBondVrf(newCoordinator, newSubId, newKeyHash);
-        }
-        if (gameWired && game != address(0)) {
+        try IVRFCoordinatorV2_5Owner(newCoordinator).addConsumer(newSubId, bonds) {
+            emit ConsumerAdded(bonds);
+        } catch {}
+        IDegenerusBondsAdmin(bonds).wireBondVrf(newCoordinator, newSubId, newKeyHash);
+
+        if (game != address(0)) {
             // Add the game as consumer; ignore failure to avoid blocking recovery.
             try IVRFCoordinatorV2_5Owner(newCoordinator).addConsumer(newSubId, game) {
                 emit ConsumerAdded(game);
@@ -322,7 +325,7 @@ contract DegenerusAdmin {
     function onTokenTransfer(address from, uint256 amount, bytes calldata) external {
         if (msg.sender != linkToken) revert NotAuthorized();
         if (amount == 0) revert InvalidAmount();
-        if (!wired) revert NotWired();
+        if (subscriptionId == 0) revert NotWired();
 
         // Top up subscription.
         try ILinkTokenLike(linkToken).transferAndCall(address(coordinator), amount, abi.encode(subscriptionId)) returns (bool ok) {
@@ -350,7 +353,7 @@ contract DegenerusAdmin {
         uint256 credit = (baseCredit * mult) / 1e18;
         if (credit == 0) return;
 
-        if (coinWired && coin != address(0)) {
+        if (coin != address(0)) {
             IDegenerusCoinPresaleLink(coin).creditPresaleFromLink(from, credit);
             emit LinkCreditRecorded(from, credit, true);
         } else {
@@ -361,7 +364,7 @@ contract DegenerusAdmin {
 
     /// @notice Claim any pending LINK-based credit recorded before the coin was wired.
     function claimPendingLinkCredit() external {
-        if (!coinWired || coin == address(0)) revert NotWired();
+        if (coin == address(0)) revert NotWired();
         address player = msg.sender;
         uint256 credit = pendingLinkCredit[player];
         if (credit == 0) return;
@@ -396,7 +399,7 @@ contract DegenerusAdmin {
 
     /// @dev If the game is not yet wired, try to use the affiliate's presale priceCoin estimate for LINK rewards.
     function _presalePriceCoin() private view returns (uint256 priceCoinUnit) {
-        if (gameWired) return 0;
+        if (game != address(0)) return 0;
         address aff = affiliate;
         if (aff == address(0)) return 0;
         try IDegenerusAffiliatePresalePrice(aff).presalePriceCoinEstimate() returns (uint256 p) {
@@ -417,5 +420,15 @@ contract DegenerusAdmin {
         uint256 excess = subBal - 200 ether;
         uint256 delta2 = (excess * 1e18) / 800 ether;
         return delta2 >= 1e18 ? 0 : 1e18 - delta2;
+    }
+
+    function _feedHealthy(address feed) private view returns (bool) {
+        if (feed == address(0)) return false;
+        try IAggregatorV3(feed).latestRoundData() returns (uint80 roundId, int256 answer, uint256 /*startedAt*/, uint256 updatedAt, uint80 answeredInRound) {
+            if (answer <= 0 || updatedAt == 0 || answeredInRound < roundId) return false;
+            return true;
+        } catch {
+            return false;
+        }
     }
 }

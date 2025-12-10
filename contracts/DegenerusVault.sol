@@ -150,7 +150,7 @@ contract DegenerusVault {
     // ERC20 metadata/state
     // ---------------------------------------------------------------------
     string public constant name = "Degenerus Vault";
-    string public constant symbol = "PGV";
+    string public constant symbol = "DGV";
     uint8 public constant decimals = 18;
     uint256 public constant INITIAL_SUPPLY = 1_000_000_000 * 1e18; // 1 billion
     uint256 public constant REFILL_SUPPLY = 1_000_000_000 * 1e18; // 1 billion (used if final share is burned)
@@ -177,8 +177,14 @@ contract DegenerusVault {
         steth = IStETH(stEth_);
         bonds = bonds_;
 
-        coinShare = new DegenerusVaultShare("Degenerus Vault Coin", "PGVCOIN", address(this), INITIAL_SUPPLY, msg.sender);
-        ethShare = new DegenerusVaultShare("Degenerus Vault Eth", "PGVETH", address(this), INITIAL_SUPPLY, msg.sender);
+        coinShare = new DegenerusVaultShare(
+            "Degenerus Vault Coin",
+            "DGVCOIN",
+            address(this),
+            INITIAL_SUPPLY,
+            msg.sender
+        );
+        ethShare = new DegenerusVaultShare("Degenerus Vault Eth", "DGVETH", address(this), INITIAL_SUPPLY, msg.sender);
         IVaultCoin(coin_).setVault(address(this));
     }
 
@@ -297,7 +303,9 @@ contract DegenerusVault {
 
     /// @notice View the eth-share burn required to withdraw a target ETH-equivalent value.
     /// @dev Value is measured as ethOut + stEthOut.
-    function previewBurnForEthOut(uint256 targetValue) external view returns (uint256 burnAmount, uint256 ethOut, uint256 stEthOut) {
+    function previewBurnForEthOut(
+        uint256 targetValue
+    ) external view returns (uint256 burnAmount, uint256 ethOut, uint256 stEthOut) {
         uint256 supply = ethShare.totalSupply();
         uint256 ethBal = address(this).balance;
         uint256 stBal = _tokenBalance(address(steth));

@@ -21,6 +21,7 @@ interface IDegenerusGameTraitJackpot {
 
 interface IDegenerusBondsJackpot {
     function depositCurrentFor(address beneficiary) external payable returns (uint256 scoreAwarded);
+    function depositFromGame(address beneficiary, uint256 amount) external payable returns (uint256 scoreAwarded);
     function purchasesEnabled() external view returns (bool);
 }
 
@@ -34,6 +35,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
     // Custom Errors / Events
     // -----------------------
     event PlayerCredited(address indexed player, address indexed recipient, uint256 amount);
+    event BondReroutedToAffiliate(address indexed synthetic, address indexed affiliateOwner, uint256 amount);
 
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
     uint16 private constant BOND_BPS_HALF = 5000;
@@ -160,15 +162,19 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
             return (ethPortion, claimableDelta);
         }
 
-        if (bondCashoutHalf[winner]) {
+        (address resolved, bool rerouted) = _resolveBondRecipient(winner);
+        if (bondCashoutHalf[resolved]) {
             uint256 payout = bondBudget / 2;
-            claimableDelta = _addClaimableEth(winner, payout);
+            claimableDelta = _addClaimableEth(resolved, payout);
             ethPortion -= bondBudget;
             return (ethPortion, claimableDelta);
         }
 
-        try IDegenerusBondsJackpot(bonds).depositCurrentFor{value: bondBudget}(winner) {
+        try IDegenerusBondsJackpot(bonds).depositFromGame{value: bondBudget}(resolved, bondBudget) {
             ethPortion -= bondBudget;
+            if (rerouted) {
+                emit BondReroutedToAffiliate(winner, resolved, bondBudget);
+            }
         } catch {
             // leave bondBudget in ethPortion to pay out as ETH on failure
         }
@@ -183,6 +189,15 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
         }
         emit PlayerCredited(beneficiary, recipient, weiAmount);
         return weiAmount;
+    }
+
+    function _resolveBondRecipient(address winner) private view returns (address resolved, bool rerouted) {
+        resolved = winner;
+        (address owner, ) = IDegenerusAffiliate(affiliateProgramAddr).syntheticMapInfo(winner);
+        if (owner != address(0)) {
+            resolved = owner;
+            rerouted = true;
+        }
     }
 
     /**
