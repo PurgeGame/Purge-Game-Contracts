@@ -17,11 +17,11 @@ contract MockGameBondBank {
         return lvl;
     }
 
-    function bondDeposit() external payable {}
-
-    function bondYieldDeposit() external payable {}
+    function bondDeposit(bool) external payable {}
 
     function bondCreditToClaimable(address, uint256) external {}
+
+    function bondCreditToClaimableBatch(address[] calldata, uint256[] calldata) external {}
 
     function bondAvailable() external view returns (uint256) {
         return available;

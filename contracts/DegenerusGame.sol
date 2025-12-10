@@ -30,7 +30,7 @@ interface IDegenerusBonds {
     function depositCurrentFor(address beneficiary) external payable returns (uint256 scoreAwarded);
     function depositFromGame(address beneficiary, uint256 amount) external payable returns (uint256 scoreAwarded);
     function payBonds(uint256 coinAmount, uint256 stEthAmount, uint256 rngWord) external payable;
-    function bondMaintenance(uint256 rngWord) external;
+    function bondMaintenance(uint256 rngWord, uint32 workCapOverride) external returns (bool worked);
     function notifyGameOver() external;
     function purchasesEnabled() external view returns (bool);
 }
@@ -197,22 +197,46 @@ contract DegenerusGame is DegenerusGameStorage {
         _;
     }
 
-    /// @notice Accept ETH for bond obligations; callable only by the bond contract.
-    function bondDeposit() external payable onlyBonds {
-        bondPool += msg.value;
-    }
-
-    /// @notice Accept ETH as untracked yield for future bond funding; callable only by bonds.
-    function bondYieldDeposit() external payable onlyBonds {
-        // Intentionally left untracked; yieldPool() treats excess balance as available.
+    /// @notice Accept ETH for bond obligations or untracked yield; callable only by the bond contract.
+    /// @param trackPool If true, credit to the tracked bondPool; if false, leave untracked as yield.
+    function bondDeposit(bool trackPool) external payable onlyBonds {
+        if (trackPool) {
+            bondPool += msg.value;
+        }
+        // Untracked deposits fall through; yieldPool() treats excess balance as available.
     }
 
     /// @notice Credit bond winnings into claimable balance and burn from the bond pool.
     function bondCreditToClaimable(address player, uint256 amount) external onlyBonds {
-        if (bondGameOver || amount == 0 || amount > bondPool) revert E();
         bondPool -= amount;
         claimablePool += amount;
         _addClaimableEth(player, amount);
+    }
+
+    /// @notice Batch credit bond winnings into claimable balance, burning from the bond pool once.
+    function bondCreditToClaimableBatch(address[] calldata players, uint256[] calldata amounts) external onlyBonds {
+        uint256 len = players.length;
+        if (len != amounts.length) revert E();
+
+        uint256 total;
+        for (uint256 i; i < len; ) {
+            uint256 amt = amounts[i];
+            address player = players[i];
+            if (amt != 0 && player != address(0)) {
+                _addClaimableEth(player, amt);
+                unchecked {
+                    total += amt;
+                }
+            }
+            unchecked {
+                ++i;
+            }
+        }
+
+        if (total != 0) {
+            bondPool -= total;
+            claimablePool += total;
+        }
     }
 
     /// @notice View helper for bonds to know available ETH in the game-held bond pool.
@@ -536,10 +560,8 @@ contract DegenerusGame is DegenerusGameStorage {
                     uint256 totalWeiForBond = rewardPool + currentPrizePool;
                     _bondMaintenanceForMapModule(totalWeiForBond, rngWord, lvl);
 
-                    if (bonds != address(0)) {
-                        IDegenerusBonds(bonds).bondMaintenance(rngWord);
-                        break; // bond batch consumed this tick; rerun advanceGame to continue
-                    }
+                    bool bondWorked = IDegenerusBonds(bonds).bondMaintenance(rngWord, cap);
+                    if (bondWorked) break; // bond batch consumed this tick; rerun advanceGame to continue
 
                     uint256 mapEffectiveWei = _calcPrizePoolForJackpot(lvl, rngWord);
                     payMapJackpot(lvl, rngWord, mapEffectiveWei);
@@ -914,13 +936,54 @@ contract DegenerusGame is DegenerusGameStorage {
     function applyExternalOp(DegenerusGameExternalOp op, address account, uint256 amount, uint24 lvl) external {
         lvl;
         if (op == DegenerusGameExternalOp.DecJackpotClaim) {
+            _applyDecJackpotClaim(account, amount);
+            return;
+        }
+        revert E();
+    }
+
+    /// @notice Batch variant for external modules to aggregate claimable accounting.
+    function applyExternalOpBatch(
+        DegenerusGameExternalOp op,
+        address[] calldata accounts,
+        uint256[] calldata amounts,
+        uint24 lvl
+    ) external {
+        lvl;
+        if (op == DegenerusGameExternalOp.DecJackpotClaim) {
+            uint256 len = accounts.length;
+            if (len != amounts.length) revert E();
             address jackpotsAddr = jackpots;
             if (jackpotsAddr == address(0) || msg.sender != jackpotsAddr) revert E();
-            claimablePool += amount;
-            _addClaimableEth(account, amount);
-        } else {
-            revert E();
+
+            uint256 total;
+            for (uint256 i; i < len; ) {
+                uint256 amt = amounts[i];
+                address account = accounts[i];
+                if (amt != 0 && account != address(0)) {
+                    _addClaimableEth(account, amt);
+                    unchecked {
+                        total += amt;
+                    }
+                }
+                unchecked {
+                    ++i;
+                }
+            }
+            if (total != 0) {
+                claimablePool += total;
+            }
+            return;
         }
+        revert E();
+    }
+
+    function _applyDecJackpotClaim(address account, uint256 amount) private {
+        address jackpotsAddr = jackpots;
+        if (jackpotsAddr == address(0) || msg.sender != jackpotsAddr) revert E();
+        if (amount == 0 || account == address(0)) return;
+        claimablePool += amount;
+        _addClaimableEth(account, amount);
     }
 
     // --- Claiming winnings (ETH) --------------------------------------------------------------------
@@ -935,12 +998,8 @@ contract DegenerusGame is DegenerusGameStorage {
         unchecked {
             claimableWinnings[player] = 1;
             payout = amount - 1;
-            if (claimablePool >= payout) {
-                claimablePool -= payout;
-            } else {
-                claimablePool = 0;
-            }
         }
+        claimablePool -= payout;
         _payoutWithStethFallback(player, payout);
     }
 
@@ -955,17 +1014,6 @@ contract DegenerusGame is DegenerusGameStorage {
         (address owner, ) = IDegenerusAffiliate(affiliateProgram).syntheticMapInfo(msg.sender);
         if (owner != address(0)) revert E(); // synthetic players always half-cashout (no toggles)
         bondCashoutHalf[msg.sender] = enabled;
-    }
-
-    /// @notice Credit claimable ETH for a player from bond redemptions (bonds contract only).
-    function creditBondWinnings(address player) external payable {
-        if (msg.sender != bonds || player == address(0) || msg.value == 0) revert E();
-        if (player == address(this)) {
-            currentPrizePool += msg.value;
-            return;
-        }
-        claimablePool += msg.value;
-        _addClaimableEth(player, msg.value);
     }
 
     /// @notice Spend claimable ETH to purchase either NFTs or MAPs using the full available balance.
@@ -1012,7 +1060,11 @@ contract DegenerusGame is DegenerusGameStorage {
     /// @param beneficiary Player to credit.
     /// @param weiAmount   Amount in wei to add.
     function _addClaimableEth(address beneficiary, uint256 weiAmount) internal {
-        (address recipient, ) = affiliatePayoutAddress(beneficiary);
+        address recipient = beneficiary;
+        // Synthetic MAP players have the low 48 bits zeroed; only they need the affiliate lookup.
+        if ((uint160(beneficiary) & ((uint160(1) << 48) - 1)) == 0) {
+            (recipient, ) = affiliatePayoutAddress(beneficiary);
+        }
         unchecked {
             claimableWinnings[recipient] += weiAmount;
         }

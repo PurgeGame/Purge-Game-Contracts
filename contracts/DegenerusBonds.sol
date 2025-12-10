@@ -8,9 +8,9 @@ interface IDegenerusGameLevel {
 
 /// @notice Minimal view into the game for bond banking (ETH pooling + claim credit).
 interface IDegenerusGameBondBank is IDegenerusGameLevel {
-    function bondDeposit() external payable;
-    function bondYieldDeposit() external payable;
+    function bondDeposit(bool trackPool) external payable;
     function bondCreditToClaimable(address player, uint256 amount) external;
+    function bondCreditToClaimableBatch(address[] calldata players, uint256[] calldata amounts) external;
     function bondAvailable() external view returns (uint256);
 }
 
@@ -217,6 +217,8 @@ contract DegenerusBonds {
     // ---------------------------------------------------------------------
     // Constants
     // ---------------------------------------------------------------------
+    // Default work budget for maintenance; each unit roughly covers one series tick or archive step.
+    uint32 private constant BOND_MAINT_WORK_CAP = 3;
     uint8 private constant JACKPOT_SPOTS = 100;
     uint8 private constant JACKPOT_DAYS = 255; // effectively unlimited; guarded by payoutBudget remaining
     uint8 private constant TOP_PCT_1 = 20;
@@ -567,7 +569,7 @@ contract DegenerusBonds {
         }
 
         if (bondShare != 0) {
-            IDegenerusGameBondBank(address(game)).bondYieldDeposit{value: bondShare}();
+            IDegenerusGameBondBank(address(game)).bondDeposit{value: bondShare}(false);
         }
 
         if (rewardShare != 0) {
@@ -595,7 +597,12 @@ contract DegenerusBonds {
 
     /// @notice Run bond maintenance for the current level (create series, run jackpots, resolve funded maturities).
     /// @param rngWord Entropy used for jackpots and lane selection.
-    function bondMaintenance(uint256 rngWord) external onlyGame {
+    /// @param workCapOverride Optional work budget override; 0 uses the built-in default.
+    ///        Budget units are coarse “work ticks” (series iterations/archive steps), not gas.
+    /// @return worked True if any maintenance action was performed this call.
+    function bondMaintenance(uint256 rngWord, uint32 workCapOverride) external onlyGame returns (bool worked) {
+        uint32 workCap = workCapOverride == 0 ? BOND_MAINT_WORK_CAP : workCapOverride;
+        uint32 workUsed;
         uint24 currLevel = _currentLevel();
 
         // Ensure the active series exists and precreate the next maturity when we are 10 levels out.
@@ -615,8 +622,11 @@ contract DegenerusBonds {
         // Run jackpots and resolve matured series.
         uint24 len = uint24(maturities.length);
         for (uint24 i = activeMaturityIndex; i < len; i++) {
+            if (_bondMaintWorkExceeded(workUsed, workCap)) return;
+
             BondSeries storage s = series[maturities[i]];
             if (s.maturityLevel == 0 || s.resolved) continue;
+            bool consumedWork;
 
             if (
                 currLevel >= s.saleStartLevel &&
@@ -626,6 +636,8 @@ contract DegenerusBonds {
             ) {
                 _runJackpotsForDay(s, rollingEntropy, currLevel);
                 rollingEntropy = uint256(keccak256(abi.encode(rollingEntropy, s.maturityLevel, s.jackpotsRun)));
+                consumedWork = true;
+                worked = true;
             }
 
             if (currLevel >= s.maturityLevel && !s.resolved) {
@@ -633,27 +645,49 @@ contract DegenerusBonds {
                     bool resolved = _resolveSeries(s, rollingEntropy);
                     if (resolved) {
                         rollingEntropy = uint256(keccak256(abi.encode(rollingEntropy, s.maturityLevel, "resolve")));
+                        worked = true;
                     } else {
                         backlogPending = true;
                     }
                 } else {
                     backlogPending = true; // enforce oldest-first resolution
                 }
+                consumedWork = true;
+            }
+
+            if (consumedWork) {
+                unchecked {
+                    ++workUsed;
+                }
             }
         }
 
         // Archive fully resolved series to save gas on future iterations
         while (activeMaturityIndex < len) {
+            if (_bondMaintWorkExceeded(workUsed, workCap)) return;
+
             BondSeries storage s = series[maturities[activeMaturityIndex]];
             if (s.resolved) {
                 resolvedUnclaimedTotal += s.unclaimedBudget;
                 activeMaturityIndex++;
+                unchecked {
+                    ++workUsed;
+                }
+                worked = true;
             } else {
                 break;
             }
         }
 
+        if (_bondMaintWorkExceeded(workUsed, workCap)) return;
+
         _sweepExcessToVault();
+        // Treat sweep as work only if we had capacity to reach it; likely already true.
+        worked = true;
+    }
+
+    function _bondMaintWorkExceeded(uint32 used, uint32 cap) private pure returns (bool exceeded) {
+        return used >= cap;
     }
 
     /// @notice Burn DGNS0 (levels ending in 0) to enter the active jackpot for that digit.
@@ -1229,6 +1263,15 @@ contract DegenerusBonds {
                     buckets[j] = ones;
                 }
 
+                address[] memory payoutWinners;
+                uint256[] memory payoutAmounts;
+                uint256 payoutCount;
+                bool liveGame = !gameOverStarted;
+                if (liveGame) {
+                    payoutWinners = new address[](14);
+                    payoutAmounts = new uint256[](14);
+                }
+
                 uint256 localEntropy = rngWord;
                 for (uint8 k = 0; k < 14; ) {
                     uint256 prize = buckets[k];
@@ -1240,9 +1283,19 @@ contract DegenerusBonds {
                     address winner = _weightedLanePick(chosen, localEntropy);
                     if (winner == address(0)) continue;
                     paid += prize;
-                    if (!_creditPayout(winner, prize)) {
+                    if (liveGame) {
+                        payoutWinners[payoutCount] = winner;
+                        payoutAmounts[payoutCount] = prize;
+                        unchecked {
+                            ++payoutCount;
+                        }
+                    } else if (!_creditPayout(winner, prize)) {
                         paid -= prize;
                     }
+                }
+
+                if (liveGame && payoutCount != 0) {
+                    _creditPayoutBatch(payoutWinners, payoutAmounts, payoutCount);
                 }
             }
         }
@@ -1288,6 +1341,15 @@ contract DegenerusBonds {
             }
         }
         return true;
+    }
+
+    function _creditPayoutBatch(address[] memory winners, uint256[] memory amounts, uint256 count) private {
+        if (count == 0) return;
+        assembly {
+            mstore(winners, count)
+            mstore(amounts, count)
+        }
+        IDegenerusGameBondBank(address(game)).bondCreditToClaimableBatch(winners, amounts);
     }
 
     function _upperBound(uint256[] storage arr, uint256 target) private view returns (uint256 idx) {

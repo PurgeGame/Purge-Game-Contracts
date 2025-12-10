@@ -810,6 +810,20 @@ contract DegenerusJackpots is IDegenerusJackpots {
         degenerusGame.applyExternalOp(DegenerusGameExternalOp.DecJackpotClaim, msg.sender, amountWei, lvl);
     }
 
+    function claimDecimatorJackpotBatch(address[] calldata players, uint24 lvl) external {
+        uint256 len = players.length;
+        if (len == 0) return;
+        uint256[] memory amounts = new uint256[](len);
+        for (uint256 i; i < len; ) {
+            uint256 amountWei = _consumeDecClaim(players[i], lvl);
+            amounts[i] = amountWei;
+            unchecked {
+                ++i;
+            }
+        }
+        degenerusGame.applyExternalOpBatch(DegenerusGameExternalOp.DecJackpotClaim, players, amounts, lvl);
+    }
+
     function decClaimable(address player, uint24 lvl) external view override returns (uint256 amountWei, bool winner) {
         DecClaimRound storage round = decClaimRound[lvl];
         return _decClaimable(round, player, lvl);

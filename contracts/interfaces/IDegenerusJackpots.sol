@@ -18,6 +18,7 @@ interface IDegenerusJackpots {
 
     function consumeDecClaim(address player, uint24 lvl) external returns (uint256 amountWei);
     function claimDecimatorJackpot(uint24 lvl) external;
+    function claimDecimatorJackpotBatch(address[] calldata players, uint24 lvl) external;
 
     function decClaimable(address player, uint24 lvl) external view returns (uint256 amountWei, bool winner);
 

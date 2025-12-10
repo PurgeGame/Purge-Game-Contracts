@@ -13,4 +13,16 @@ interface IDegenerusGameExternal {
     /// @param amount  Amount in wei to apply for the operation.
     /// @param lvl     Level context for the request (used by callers for bookkeeping).
     function applyExternalOp(DegenerusGameExternalOp op, address account, uint256 amount, uint24 lvl) external;
+
+    /// @notice Batched variant of applyExternalOp to aggregate accounting updates.
+    /// @param op       Operation selector.
+    /// @param accounts Recipients to credit.
+    /// @param amounts  Wei amounts to apply per recipient.
+    /// @param lvl      Level context for the request (used by callers for bookkeeping).
+    function applyExternalOpBatch(
+        DegenerusGameExternalOp op,
+        address[] calldata accounts,
+        uint256[] calldata amounts,
+        uint24 lvl
+    ) external;
 }

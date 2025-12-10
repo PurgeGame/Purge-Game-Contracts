@@ -51,7 +51,6 @@ interface IDegenerusGame is IDegenerusGameExternal {
     ) external payable returns (uint256 coinReward);
 
     function rngLocked() external view returns (bool);
-    function creditBondWinnings(address player) external payable;
 
     function burnTokens(uint256[] calldata tokenIds) external;
 
