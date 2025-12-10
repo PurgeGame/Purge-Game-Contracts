@@ -55,7 +55,7 @@ contract DegenerusCoin {
     // ERC20 state
     // ---------------------------------------------------------------------
     // Minimal ERC20 metadata/state; transfers are unchecked beyond underflow protection in Solidity 0.8.
-    string public name = "Burnie";
+    string public name = "Burnies";
     string public symbol = "BURNIE";
     uint256 public totalSupply;
     mapping(address => uint256) public balanceOf;
@@ -289,7 +289,19 @@ contract DegenerusCoin {
         // Burn first to anchor the amount used for bonuses.
         _burn(caller, amount);
 
+        IDegenerusQuestModule module = questModule;
         uint256 effectiveAmount = amount;
+
+        // Quest module can also grant extra dec burn weight; fold into the base record to save gas.
+        (uint256 reward, bool hardMode, uint8 questType, uint32 streak2, bool completed) = module.handleDecimator(
+            caller,
+            amount
+        );
+        uint256 questReward = _questApplyReward(caller, reward, hardMode, questType, streak2, completed);
+        if (questReward != 0) {
+            effectiveAmount += questReward;
+        }
+
         // Trophies can boost the effective contribution.
         // Bucket logic selects how many people share a jackpot slice; special every DECIMATOR_SPECIAL_LEVEL.
         bool specialDec = (lvl % DECIMATOR_SPECIAL_LEVEL) == 0;
@@ -298,7 +310,6 @@ contract DegenerusCoin {
             : _decBucketDenominator(degenerusGame.ethMintStreakCount(caller));
         uint8 bucketUsed = IDegenerusJackpots(moduleAddr).recordDecBurn(caller, lvl, bucket, effectiveAmount);
 
-        IDegenerusQuestModule module = questModule;
         (uint32 streak, , , ) = module.playerQuestStates(caller);
         if (streak != 0) {
             // Quest streak: bonus contribution capped at 25%.
@@ -306,16 +317,6 @@ contract DegenerusCoin {
             if (bonusBps > 2500) bonusBps = 2500; // cap at 25%
             uint256 streakBonus = (effectiveAmount * bonusBps) / BPS_DENOMINATOR;
             IDegenerusJackpots(moduleAddr).recordDecBurn(caller, lvl, bucketUsed, streakBonus);
-        }
-
-        // Quest module can also grant extra flip credit from a decimator burn.
-        (uint256 reward, bool hardMode, uint8 questType, uint32 streak2, bool completed) = module.handleDecimator(
-            caller,
-            amount
-        );
-        uint256 questReward = _questApplyReward(caller, reward, hardMode, questType, streak2, completed);
-        if (questReward != 0) {
-            addFlip(caller, questReward, false, false);
         }
 
         emit DecimatorBurn(caller, amount, bucketUsed);
@@ -343,11 +344,6 @@ contract DegenerusCoin {
                 --remaining;
             }
         }
-    }
-
-    function _claimFlipsAndStakes(address player) internal returns (uint256) {
-        // Stakes removed; only process coinflip claims.
-        return _claimCoinflipsInternal(player);
     }
 
     /// @notice Burn BURNIE to open a future stake targeting `targetLevel` with a risk radius.
@@ -809,7 +805,7 @@ contract DegenerusCoin {
     /// @param bountyEligible       If true, this deposit can arm the bounty (entire amount is considered).
     function addFlip(address player, uint256 coinflipDeposit, bool canArmBounty, bool bountyEligible) internal {
         // Auto-claim older flip/stake winnings (without mint) so deposits net against pending payouts.
-        uint256 totalClaimed = _claimFlipsAndStakes(player);
+        uint256 totalClaimed = _claimCoinflipsInternal(player);
         if (totalClaimed != 0) {
             playerLuckbox[player] += totalClaimed;
         }

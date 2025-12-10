@@ -992,7 +992,7 @@ contract DegenerusGame is DegenerusGameStorage {
     /// @param mapPurchase If true, purchase MAPs; otherwise purchase NFTs.
     // Credit-based purchase entrypoints handled directly on the NFT contract to keep the game slimmer.
 
-    /// @notice Sample up to 100 trait burn tickets from a random trait and recent level (last 20 levels).
+    /// @notice Sample up to 4 trait burn tickets from a random trait and recent level (last 20 levels).
     /// @param entropy Random seed used to select level, trait, and starting offset.
     function sampleTraitTickets(
         uint256 entropy
@@ -1014,7 +1014,8 @@ contract DegenerusGame is DegenerusGameStorage {
             return (lvlSel, traitSel, new address[](0));
         }
 
-        uint256 take = len < 100 ? len : 100;
+        uint256 cap = 4; // only need a small sample for scatter draws
+        uint256 take = len < cap ? len : cap;
         tickets = new address[](take);
         uint256 start = uint256(keccak256(abi.encode(entropy, traitSel))) % len;
         for (uint256 i; i < take; ) {

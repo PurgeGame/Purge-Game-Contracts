@@ -273,6 +273,8 @@ contract DegenerusBonds {
     // ---------------------------------------------------------------------
     mapping(uint24 => BondSeries) internal series;
     uint24[] internal maturities;
+    uint24 public activeMaturityIndex;
+    uint256 public resolvedUnclaimedTotal;
     IDegenerusGameLevel public game;
     address public immutable admin;
     uint256 public lastIssuanceRaise;
@@ -423,7 +425,7 @@ contract DegenerusBonds {
 
     function _selectActiveSeries(uint24 currLevel) private view returns (BondSeries storage s, uint24 maturityLevel) {
         uint24 len = uint24(maturities.length);
-        for (uint24 i = 0; i < len; i++) {
+        for (uint24 i = activeMaturityIndex; i < len; i++) {
             BondSeries storage iter = series[maturities[i]];
             if (iter.maturityLevel == 0 || iter.resolved) continue;
             // Consider unresolved series that can still accept burns (before maturity) or are in grace window.
@@ -472,7 +474,7 @@ contract DegenerusBonds {
         uint24 partialMaturity;
 
         uint24 len = uint24(maturities.length);
-        for (uint24 i = 0; i < len; i++) {
+        for (uint24 i = activeMaturityIndex; i < len; i++) {
             BondSeries storage s = series[maturities[i]];
             if (s.maturityLevel == 0 || s.resolved) continue;
 
@@ -502,7 +504,7 @@ contract DegenerusBonds {
         }
 
         // Mark any remaining series as resolved and nuke their tokens.
-        for (uint24 j = 0; j < len; j++) {
+        for (uint24 j = activeMaturityIndex; j < len; j++) {
             BondSeries storage rem = series[maturities[j]];
             if (rem.maturityLevel == 0 || rem.resolved) continue;
             rem.resolved = true;
@@ -512,8 +514,8 @@ contract DegenerusBonds {
         uint256 remainingStEth = _stEthBalance();
         uint256 spent = (initialEth + initialStEth) - (remainingEth + remainingStEth);
 
-        uint256 totalReserved;
-        for (uint24 k = 0; k < len; k++) {
+        uint256 totalReserved = resolvedUnclaimedTotal;
+        for (uint24 k = activeMaturityIndex; k < len; k++) {
             totalReserved += series[maturities[k]].unclaimedBudget;
         }
 
@@ -636,7 +638,7 @@ contract DegenerusBonds {
         bool backlogPending;
         // Run jackpots and resolve matured series.
         uint24 len = uint24(maturities.length);
-        for (uint24 i = 0; i < len; i++) {
+        for (uint24 i = activeMaturityIndex; i < len; i++) {
             BondSeries storage s = series[maturities[i]];
             if (s.maturityLevel == 0 || s.resolved) continue;
 
@@ -661,6 +663,17 @@ contract DegenerusBonds {
                 } else {
                     backlogPending = true; // enforce oldest-first resolution
                 }
+            }
+        }
+
+        // Archive fully resolved series to save gas on future iterations
+        while (activeMaturityIndex < len) {
+            BondSeries storage s = series[maturities[activeMaturityIndex]];
+            if (s.resolved) {
+                resolvedUnclaimedTotal += s.unclaimedBudget;
+                activeMaturityIndex++;
+            } else {
+                break;
             }
         }
 
@@ -692,10 +705,28 @@ contract DegenerusBonds {
         s.lanes[lane].burnedAmount[msg.sender] = 0;
         uint256 payout = (burned * price) / 1e18;
 
+        uint256 budgetBefore = s.unclaimedBudget;
         if (s.unclaimedBudget >= payout) {
             s.unclaimedBudget -= payout;
         } else {
             s.unclaimedBudget = 0;
+        }
+
+        uint256 delta = budgetBefore - s.unclaimedBudget;
+        if (delta != 0) {
+            // If this series is archived (skipped in main loops), update the global tracker.
+            bool isArchived = false;
+            uint24 head = activeMaturityIndex;
+            if (head > 0) {
+                if (head == maturities.length) {
+                    isArchived = true;
+                } else if (maturityLevel < series[maturities[head]].maturityLevel) {
+                    isArchived = true;
+                }
+            }
+            if (isArchived) {
+                resolvedUnclaimedTotal -= delta;
+            }
         }
 
         if (!_creditPayout(msg.sender, payout)) {
@@ -851,7 +882,7 @@ contract DegenerusBonds {
     function _isFunded(BondSeries storage s) private view returns (bool) {
         uint24 currLevel = _currentLevel();
         uint256 available = _availableBank();
-        (uint256 totalRequired, ) = _requiredCoverTotals(s, currLevel);
+        (uint256 totalRequired, ) = _requiredCoverTotalsCapped(s, currLevel, available);
         return available >= totalRequired;
     }
 
@@ -872,14 +903,28 @@ contract DegenerusBonds {
         BondSeries storage target,
         uint24 currLevel
     ) private view returns (uint256 total, uint256 current) {
+        return _requiredCoverTotalsCapped(target, currLevel, 0);
+    }
+
+    function _requiredCoverTotalsCapped(
+        BondSeries storage target,
+        uint24 currLevel,
+        uint256 stopAt
+    ) private view returns (uint256 total, uint256 current) {
+        total = resolvedUnclaimedTotal;
         uint24 len = uint24(maturities.length);
         uint24 targetMat = target.maturityLevel;
-        for (uint24 i = 0; i < len; i++) {
+        for (uint24 i = activeMaturityIndex; i < len; i++) {
             BondSeries storage iter = series[maturities[i]];
             uint256 req = _requiredCover(iter, currLevel);
             total += req;
             if (iter.maturityLevel == targetMat) {
                 current = req;
+            }
+            if (stopAt != 0 && total > stopAt) {
+                // Signal that we already exceed the available cover; caller will bail early.
+                uint256 capped = stopAt == type(uint256).max ? stopAt : stopAt + 1;
+                return (capped, current);
             }
         }
     }
@@ -908,15 +953,19 @@ contract DegenerusBonds {
         if (v == address(0)) return;
         if (!gameOverStarted) return;
 
-        uint256 required;
+        uint256 required = resolvedUnclaimedTotal;
+        uint256 bal = address(this).balance;
+        if (bal <= required) return;
         uint24 currLevel = _currentLevel();
         uint24 len = uint24(maturities.length);
-        for (uint24 i = 0; i < len; i++) {
+        for (uint24 i = activeMaturityIndex; i < len; i++) {
             BondSeries storage s = series[maturities[i]];
             required += _requiredCover(s, currLevel);
+            if (required >= bal) {
+                return;
+            }
         }
 
-        uint256 bal = address(this).balance;
         if (bal <= required) return;
 
         uint256 excess = bal - required;
@@ -1149,14 +1198,14 @@ contract DegenerusBonds {
         if (s.resolved) return true;
         uint24 currLevel = _currentLevel();
         (uint256 burned, ) = _obligationTotals(s);
-        uint256 payoutCap = s.payoutBudget;
         uint256 available = _availableBank();
-        (uint256 totalRequired, uint256 currentRequired) = _requiredCoverTotals(s, currLevel);
+        (uint256 totalRequired, uint256 currentRequired) = _requiredCoverTotalsCapped(s, currLevel, available);
         if (available < totalRequired) return false;
 
         uint256 otherRequired = totalRequired - currentRequired;
         uint256 maxSpend = available - otherRequired;
-        uint256 payout = payoutCap > maxSpend ? maxSpend : payoutCap;
+        uint256 payout = burned;
+        if (payout > maxSpend) return false;
 
         if (burned == 0) {
             s.resolved = true;
@@ -1164,7 +1213,6 @@ contract DegenerusBonds {
             emit BondSeriesResolved(s.maturityLevel, 0, 0, 0);
             return true;
         }
-        if (payout < burned) return false;
 
         uint256 distributable = burned;
 
