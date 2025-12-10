@@ -5,9 +5,7 @@ import {DegenerusGameStorage} from "../storage/DegenerusGameStorage.sol";
 
 interface IBonds {
     function payBonds(uint256 coinAmount, uint256 stEthAmount, uint256 rngWord) external payable;
-    function resolveBonds(uint256 rngWord) external returns (bool worked);
     function notifyGameOver() external;
-    function stakeRateBps() external view returns (uint16);
     function requiredCoverNext() external view returns (uint256 required);
 }
 
@@ -95,7 +93,7 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
     }
 
     /// @notice Stake excess reward pool into stETH based on bonds-configured ratio.
-    function stakeForTargetRatio(address bondsAddr, address stethAddr, uint24 lvl) external {
+    function stakeForTargetRatio(address /*bondsAddr*/, address /*stethAddr*/, uint24 lvl) external view {
         // Skip only for levels ending in 99 or 00 to avoid endgame edge cases.
         uint24 cycle = lvl % 100;
         if (cycle == 99 || cycle == 0) return;
@@ -103,25 +101,7 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
         uint256 pool = rewardPool;
         if (pool == 0) return;
 
-        uint256 rateBps = 10_000;
-
-        rateBps = IBonds(bondsAddr).stakeRateBps();
-
-        if (rateBps == 0) return;
-
-        uint256 targetSt = (pool * rateBps) / 10_000; // stake against configured share of reward pool
-        uint256 stBal = IStETHLite(stethAddr).balanceOf(address(this));
-        if (stBal >= targetSt) return;
-
-        uint256 stakeAmount = targetSt - stBal;
-        if (stakeAmount < REWARD_POOL_MIN_STAKE) return;
-
-        // Best-effort staking; skip if stETH deposits are paused or unavailable.
-        try IStETHLite(stethAddr).submit{value: stakeAmount}(address(0)) returns (uint256 minted) {
-            minted;
-        } catch {
-            return;
-        }
+        // Staking disabled: bonds no longer expose a target rate.
     }
 
     /// @notice Inform bonds of shutdown and transfer all assets to it.

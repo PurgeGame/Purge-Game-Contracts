@@ -30,18 +30,9 @@ interface IDegenerusBonds {
     function depositCurrentFor(address beneficiary) external payable returns (uint256 scoreAwarded);
     function depositFromGame(address beneficiary, uint256 amount) external payable returns (uint256 scoreAwarded);
     function payBonds(uint256 coinAmount, uint256 stEthAmount, uint256 rngWord) external payable;
-    function resolveBonds(uint256 rngWord) external returns (bool worked);
+    function bondMaintenance(uint256 rngWord) external;
     function notifyGameOver() external;
-    function finalizeShutdown(uint256 maxIds) external returns (uint256 processedIds, uint256 burned, bool complete);
-    function setTransfersLocked(bool locked, uint48 rngDay) external;
-    function stakeRateBps() external view returns (uint16);
     function purchasesEnabled() external view returns (bool);
-    function purchaseGameBonds(
-        address[] calldata recipients,
-        uint256 quantity,
-        uint256 basePerBondWei,
-        bool stake
-    ) external returns (uint256 startTokenId);
 }
 
 interface IDegenerusBondsGameOver {
@@ -235,8 +226,8 @@ contract DegenerusGame is DegenerusGameStorage {
     /// @dev Access: vrfAdmin acts as an owner surrogate; bonds may also call to complete shutdown.
     function shutdownBonds() external {
         address bondsAddr = bonds;
-        if (bondsAddr == address(0) || bondGameOver) revert E();
-        if (msg.sender != vrfAdmin && msg.sender != bondsAddr) revert E();
+        if (bondGameOver) revert E();
+        if (msg.sender != bondsAddr) revert E();
         bondGameOver = true;
         uint256 ethAmount = address(this).balance;
         bondPool = 0;
@@ -567,10 +558,8 @@ contract DegenerusGame is DegenerusGameStorage {
                     _bondMaintenanceForMapModule(totalWeiForBond, rngWord, lvl);
 
                     if (bonds != address(0)) {
-                        bool bondsResolved = IDegenerusBonds(bonds).resolveBonds(rngWord);
-                        if (bondsResolved) {
-                            break; // bond batch consumed this tick; rerun advanceGame to continue
-                        }
+                        IDegenerusBonds(bonds).bondMaintenance(rngWord);
+                        break; // bond batch consumed this tick; rerun advanceGame to continue
                     }
 
                     uint256 mapEffectiveWei = _calcPrizePoolForJackpot(lvl, rngWord);
@@ -1244,16 +1233,7 @@ contract DegenerusGame is DegenerusGameStorage {
         return abi.decode(data, (bool));
     }
 
-    /// @notice After the liveness drain has notified the bonds contract, permissionlessly burn remaining unmatured bonds.
-    /// @param maxIds Number of token ids to scan in this call (0 = default chunk size in bonds).
-    /// @return processedIds Token ids scanned.
-    /// @return burned Bonds burned.
-    /// @return complete True if shutdown burning is finished.
-    function finalizeBondShutdown(uint256 maxIds) public returns (uint256 processedIds, uint256 burned, bool complete) {
-        return IDegenerusBonds(bonds).finalizeShutdown(maxIds);
-    }
-
-    function _requestRngBestEffort(uint48 day) private returns (bool requested) {
+    function _requestRngBestEffort(uint48 /*day*/) private returns (bool requested) {
         // Best-effort request that swallows VRF failures (used during idle shutdown).
         try
             vrfCoordinator.requestRandomWords(
@@ -1267,7 +1247,6 @@ contract DegenerusGame is DegenerusGameStorage {
                 })
             )
         returns (uint256 id) {
-            IDegenerusBonds(bonds).setTransfersLocked(true, day);
             vrfRequestId = id;
             rngFulfilled = false;
             rngWordCurrent = 0;
@@ -1280,10 +1259,10 @@ contract DegenerusGame is DegenerusGameStorage {
         }
     }
 
-    function _requestRng(uint8 gameState_, bool isMapJackpotDay, uint24 lvl, uint48 day) private {
+    function _requestRng(uint8 gameState_, bool isMapJackpotDay, uint24 lvl, uint48 /*day*/) private {
         bool shouldLockBonds = (gameState_ == 2 && isMapJackpotDay) || (gameState_ == 0);
         if (shouldLockBonds) {
-            IDegenerusBonds(bonds).setTransfersLocked(true, day);
+            rngLockedFlag = true;
         }
 
         // Hard revert if Chainlink request fails; this intentionally halts game progress until VRF funding/config is fixed.

@@ -955,7 +955,7 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         DailyQuest memory quest,
         uint8 slot,
         uint8 tier,
-        uint256 priceUnit,
+        uint256 /*priceUnit*/,
         uint256 priceWei
     ) private view returns (bool) {
         if (!_questProgressValid(state, quest, slot, quest.day)) return false;

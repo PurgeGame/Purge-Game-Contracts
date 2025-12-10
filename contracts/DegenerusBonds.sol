@@ -26,6 +26,7 @@ interface IVRFCoordinatorV2Like {
 }
 
 interface IStETHLike {
+    function balanceOf(address account) external view returns (uint256);
     function transferFrom(address from, address to, uint256 amount) external returns (bool);
     function transfer(address to, uint256 amount) external returns (bool);
 }
@@ -181,11 +182,8 @@ contract DegenerusBonds {
     error InvalidMaturity();
     error SaleClosed();
     error InsufficientScore();
-    error NextSeriesUnavailable();
     error AlreadyResolved();
     error AlreadySet();
-    error NotResolved();
-    error InsufficientReserve();
     error BankCallFailed();
     error PurchasesDisabled();
 
@@ -209,7 +207,6 @@ contract DegenerusBonds {
         uint256 payoutEth,
         uint256 remainingToken
     );
-    event BondRolled(address indexed player, uint24 indexed fromMaturity, uint24 indexed toMaturity, uint256 amount);
     event BondGameOver(uint256 poolSpent, uint24 partialMaturity);
     event BondCoinJackpot(address indexed player, uint256 amount, uint24 maturityLevel, uint8 lane);
 
@@ -258,8 +255,6 @@ contract DegenerusBonds {
         uint256 payoutBudget;
         uint256 mintedBudget;
         uint256 raised;
-        uint256 carryPot; // ETH carried in from previous series rollovers (unused with shared tokens)
-        uint256 rolloverReserve; // legacy: held for per-series outstanding; unused with shared tokens
         uint8 jackpotsRun;
         uint24 lastJackpotLevel;
         uint256 totalScore;
@@ -286,20 +281,23 @@ contract DegenerusBonds {
     uint256 private vrfPendingWord;
     bool private vrfRequestPending;
     bool public gameOverStarted; // true after game signals shutdown; disables new deposits and bank pushes
+    bool public gameOverEntropyAttempted; // true after gameOver() attempts to fetch entropy (request or failure)
     bool public externalPurchasesEnabled = true; // owner toggle for non-game purchases
     bool public gamePurchasesEnabled = true; // owner toggle for game-routed purchases
     address public vault;
     address public coin;
-    uint256 private coinJackpotPot;
     BondToken private tokenDGNS0;
     BondToken private tokenDGNS5;
+    address public immutable steth;
 
     // ---------------------------------------------------------------------
     // Constructor
     // ---------------------------------------------------------------------
-    constructor(address admin_, uint256 initialPayoutBudget_) {
+    constructor(address admin_, address steth_, uint256 initialPayoutBudget_) {
         if (admin_ == address(0)) revert Unauthorized();
+        if (steth_ == address(0)) revert Unauthorized();
         admin = admin_;
+        steth = steth_;
         initialPayoutBudget = initialPayoutBudget_;
     }
 
@@ -378,109 +376,53 @@ contract DegenerusBonds {
     /// @notice Funding shim used by the game to route yield/coin into bonds and run upkeep.
     function payBonds(uint256 coinAmount, uint256 stEthAmount, uint256 rngWord) external payable {
         address vaultAddr = vault;
+        address stEthToken = steth;
         uint256 vaultShare = (coinAmount * 60) / 100;
         uint256 jackpotShare = coinAmount - vaultShare;
-
-        if (vaultAddr != address(0) && vaultShare != 0) {
-            try IVaultLike(vaultAddr).deposit{value: 0}(vaultShare, 0) {} catch {}
+        bool shutdown = gameOverStarted;
+        if (stEthAmount != 0) {
+            IStETHLike(stEthToken).transferFrom(msg.sender, address(this), stEthAmount);
         }
-
-        // Pull stETH yield from the caller and convert via the vault; fallback to parking the stETH if conversion fails.
-        if (stEthAmount != 0 && vaultAddr != address(0)) {
-            address stEthToken = IVaultLike(vaultAddr).steth();
-            if (stEthToken != address(0)) {
-                bool pulled;
-                try IStETHLike(stEthToken).transferFrom(msg.sender, address(this), stEthAmount) returns (bool ok) {
-                    pulled = ok;
-                } catch {}
-                if (pulled) {
-                    bool converted;
-                    try IVaultLike(vaultAddr).swapWithBonds{value: 0}(true, stEthAmount) {
-                        converted = true;
-                    } catch {}
-                    if (!converted) {
-                        try IVaultLike(vaultAddr).deposit{value: 0}(0, stEthAmount) {
-                            converted = true;
-                        } catch {}
-                    }
-                    if (!converted) {
-                        try IStETHLike(stEthToken).transfer(msg.sender, stEthAmount) {} catch {}
-                    }
-                }
-            }
+        // Route ETH + coin share to the vault while live; keep ETH on bonds during shutdown.
+        if (!shutdown) {
+            uint256 ethIn = msg.value;
+            (, bool eligible) = _payCoinJackpot(jackpotShare, rngWord);
+            if (!eligible) vaultShare += jackpotShare;
+            IVaultLike(vaultAddr).deposit{value: ethIn}(vaultShare, stEthAmount);
+            return;
         }
-
-        // While funds are banked inside the game, immediately push all ETH back into the game’s bond pool.
-        if (!gameOverStarted) {
-            uint256 bal = address(this).balance;
-            if (bal != 0) {
-                try IDegenerusGameBondBank(address(game)).bondDeposit{value: bal}() {} catch {
-                    revert BankCallFailed();
-                }
-            }
-        }
-
-        uint256 pot = jackpotShare;
-        if (coinJackpotPot != 0) {
-            pot += coinJackpotPot;
-            coinJackpotPot = 0;
-        }
-        if (pot != 0) {
-            bool paid = _payCoinJackpot(pot, rngWord);
-            if (!paid) {
-                coinJackpotPot = pot; // carry forward if no eligible lane or transfer failed
-            }
-        }
-    }
-
-    /// @notice Run jackpots and resolution using the latest entropy.
-    function resolveBonds(uint256 rngWord) external returns (bool worked) {
-        bondMaintenance(rngWord);
-        return true;
-    }
-
-    function purchaseGameBonds(
-        address[] calldata recipients,
-        uint256 /*quantity*/,
-        uint256 /*basePerBondWei*/,
-        bool /*stake*/
-    ) external pure returns (uint256 startTokenId) {
-        if (recipients.length != 0) {
-            // No tokens minted; return a dummy start id.
-            return 1;
-        }
-        return 0;
     }
 
     // ---------------------------------------------------------------------
     // Internals (coin jackpot)
     // ---------------------------------------------------------------------
 
-    function _payCoinJackpot(uint256 amount, uint256 rngWord) private returns (bool paid) {
-        if (amount == 0 || rngWord == 0) return false;
+    function _payCoinJackpot(uint256 amount, uint256 rngWord) private returns (bool paid, bool eligible) {
+        if (amount == 0 || rngWord == 0) return (false, false);
         address coinAddr = coin;
-        if (coinAddr == address(0)) return false;
+        if (coinAddr == address(0)) return (false, false);
 
         uint24 currLevel = _currentLevel();
         (BondSeries storage target, uint24 targetMat) = _selectActiveSeries(currLevel);
-        if (targetMat == 0) return false;
+        if (targetMat == 0) return (false, false);
 
         // Pick a lane with entries.
         uint8 lane = uint8(rngWord & 1);
         if (target.lanes[lane].total == 0 && target.lanes[1 - lane].total != 0) {
             lane = 1 - lane;
         }
-        if (target.lanes[lane].total == 0) return false;
+        if (target.lanes[lane].total == 0) return (false, false);
 
         address winner = _weightedLanePick(target.lanes[lane], rngWord);
-        if (winner == address(0)) return false;
+        if (winner == address(0)) return (false, false);
+        eligible = true;
 
         bool ok = ICoinLike(coinAddr).transfer(winner, amount);
         if (ok) {
             emit BondCoinJackpot(winner, amount, targetMat, lane);
-            return true;
+            return (true, true);
         }
-        return false;
+        return (false, true);
     }
 
     function _selectActiveSeries(uint24 currLevel) private view returns (BondSeries storage s, uint24 maturityLevel) {
@@ -504,37 +446,26 @@ contract DegenerusBonds {
         gameOverStarted = true;
     }
 
-    function finalizeShutdown(
-        uint256 /*maxIds*/
-    ) external pure returns (uint256 processedIds, uint256 burned, bool complete) {
-        return (0, 0, true);
-    }
-
-    function setTransfersLocked(bool /*locked*/, uint48 /*rngDay*/) external {}
-
-    function stakeRateBps() external pure returns (uint16) {
-        return 0;
-    }
-
     function purchasesEnabled() external view returns (bool) {
         return !gameOverStarted && gamePurchasesEnabled;
     }
 
-    /// @notice Emergency shutdown path: consume all ETH and resolve maturities in order, partially paying the last one.
+    /// @notice Emergency shutdown path: consume all ETH/stETH and resolve maturities in order, partially paying the last one.
     /// @dev If no entropy is ready, this requests VRF (if configured) and exits; call again once fulfilled.
     function gameOver() external payable {
         if (msg.sender != address(game)) revert Unauthorized();
         gameOverStarted = true;
 
         (uint256 entropy, bool requested) = _prepareEntropy(0);
+        gameOverEntropyAttempted = true;
         if (entropy == 0) {
             // Either VRF was requested or not configured; no entropy to proceed yet.
             if (requested) return;
             return;
         }
 
-        uint256 initialPool = address(this).balance;
-        uint256 pool = initialPool;
+        uint256 initialEth = address(this).balance;
+        uint256 initialStEth = _stEthBalance();
         uint256 rollingEntropy = entropy;
         uint24 partialMaturity;
 
@@ -546,18 +477,21 @@ contract DegenerusBonds {
             (uint256 burned, ) = _obligationTotals(s);
             if (burned == 0) {
                 s.resolved = true;
-                _nukeToken(s);
                 continue;
             }
 
-            uint256 payout = burned <= pool ? burned : pool;
+            uint256 availableValue = address(this).balance + _stEthBalance();
+            if (availableValue == 0) {
+                partialMaturity = s.maturityLevel;
+                s.resolved = true;
+                break;
+            }
+
+            uint256 payout = burned <= availableValue ? burned : availableValue;
             uint256 paid = _resolveSeriesGameOver(s, rollingEntropy, payout);
-            pool = pool >= paid ? pool - paid : 0;
             rollingEntropy = uint256(keccak256(abi.encode(rollingEntropy, s.maturityLevel, "go")));
 
             s.resolved = true;
-            s.rolloverReserve = 0;
-            _nukeToken(s);
 
             if (paid < burned) {
                 partialMaturity = s.maturityLevel;
@@ -570,16 +504,16 @@ contract DegenerusBonds {
             BondSeries storage rem = series[maturities[j]];
             if (rem.maturityLevel == 0 || rem.resolved) continue;
             rem.resolved = true;
-            rem.rolloverReserve = 0;
-            _nukeToken(rem);
         }
 
-        uint256 spent = initialPool - pool;
+        uint256 remainingEth = address(this).balance;
+        uint256 remainingStEth = _stEthBalance();
+        uint256 spent = (initialEth + initialStEth) - (remainingEth + remainingStEth);
         // Any surplus after resolving in order is forwarded to the vault if configured.
-        if (pool != 0 && vault != address(0)) {
-            (bool ok, ) = payable(vault).call{value: pool}("");
+        if (remainingEth != 0 && vault != address(0)) {
+            (bool ok, ) = payable(vault).call{value: remainingEth}("");
             if (ok) {
-                pool = 0;
+                remainingEth = 0;
             }
         }
 
@@ -720,7 +654,7 @@ contract DegenerusBonds {
         if (amount == 0) revert InsufficientScore();
 
         uint24 currLevel = _currentLevel();
-        uint24 targetMat = _baseMaturityForDigit(isFive, currLevel);
+        uint24 targetMat = _baseMaturityForDigit(isFive);
         (BondSeries storage target, uint24 resolvedTargetMat) = _nextActiveSeries(targetMat, currLevel);
         if (target.resolved) revert AlreadyResolved();
 
@@ -744,7 +678,7 @@ contract DegenerusBonds {
         }
     }
 
-    function _baseMaturityForDigit(bool isFive, uint24 currLevel) private view returns (uint24 maturityLevel) {
+    function _baseMaturityForDigit(bool isFive) private view returns (uint24 maturityLevel) {
         maturityLevel = _activeMaturity();
         if (isFive) {
             if (maturityLevel % 10 == 0) {
@@ -780,11 +714,6 @@ contract DegenerusBonds {
             s.totalScore += amount;
             boosted = true;
         }
-    }
-
-    /// @notice Burn remaining coins from a resolved series to enter the next series jackpot and move reserved ETH.
-    function rollToNext(uint24 fromMaturity, uint256 amount) external {
-        revert InsufficientReserve(); // Legacy path removed with shared DGNS tokens
     }
 
     // ---------------------------------------------------------------------
@@ -913,6 +842,14 @@ contract DegenerusBonds {
             }
         }
         return address(this).balance;
+    }
+
+    function _stEthBalance() private view returns (uint256 bal) {
+        try IStETHLike(steth).balanceOf(address(this)) returns (uint256 b) {
+            return b;
+        } catch {
+            return 0;
+        }
     }
 
     function _sweepExcessToVault() private {
@@ -1140,15 +1077,11 @@ contract DegenerusBonds {
         }
     }
 
-    function _nukeToken(BondSeries storage s) private {
-        // No-op: shared DGNS0/DGNS5 tokens stay active across maturities.
-    }
-
     function _resolveSeries(BondSeries storage s, uint256 rngWord) private returns (bool resolved) {
         if (s.resolved) return true;
         uint24 currLevel = _currentLevel();
         (uint256 burned, ) = _obligationTotals(s);
-        uint256 payoutCap = s.payoutBudget + s.carryPot;
+        uint256 payoutCap = s.payoutBudget;
         uint256 available = _availableBank();
         (uint256 totalRequired, uint256 currentRequired) = _requiredCoverTotals(s, currLevel);
         if (available < totalRequired) return false;
@@ -1166,7 +1099,6 @@ contract DegenerusBonds {
         if (payout < burned) return false;
 
         uint256 distributable = burned;
-        s.rolloverReserve = 0; // unused with shared tokens
 
         uint8 lane = uint8(rngWord & 1);
         if (s.lanes[lane].total == 0 && s.lanes[1 - lane].total != 0) {
@@ -1258,8 +1190,24 @@ contract DegenerusBonds {
                 return false;
             }
         }
-        (bool ok, ) = player.call{value: amount}("");
-        return ok;
+        uint256 remaining = amount;
+        uint256 ethBal = address(this).balance;
+        if (ethBal != 0) {
+            uint256 toSend = ethBal >= remaining ? remaining : ethBal;
+            (bool sent, ) = player.call{value: toSend}("");
+            if (sent) {
+                remaining -= toSend;
+            }
+        }
+        if (remaining != 0) {
+            address stEthToken = steth;
+            try IStETHLike(stEthToken).transfer(player, remaining) returns (bool ok) {
+                if (!ok) return false;
+            } catch {
+                return false;
+            }
+        }
+        return true;
     }
 
     function _weightedPick(BondSeries storage s, uint256 entropy) private view returns (address) {
@@ -1301,24 +1249,5 @@ contract DegenerusBonds {
         if (randomWords.length == 0) return;
         vrfRequestPending = false;
         vrfPendingWord = randomWords[0];
-    }
-
-    function _u24ToString(uint24 value) private pure returns (string memory str) {
-        if (value == 0) return "0";
-        uint24 temp = value;
-        uint8 digits;
-        while (temp != 0) {
-            digits++;
-            temp /= 10;
-        }
-        bytes memory buffer = new bytes(digits);
-        uint8 index = digits;
-        temp = value;
-        while (temp != 0) {
-            index--;
-            buffer[index] = bytes1(uint8(48 + (temp % 10)));
-            temp /= 10;
-        }
-        str = string(buffer);
     }
 }

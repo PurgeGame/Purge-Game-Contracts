@@ -29,6 +29,11 @@ interface IDegenerusBondsAdmin {
     function wire(address[] calldata addresses, uint256 vrfSubId, bytes32 vrfKeyHash_) external;
 }
 
+interface IDegenerusBondsGameOverFlag {
+    function gameOverEntropyAttempted() external view returns (bool);
+    function gameOverStarted() external view returns (bool);
+}
+
 interface ILinkTokenLike {
     function balanceOf(address account) external view returns (uint256);
     function transferAndCall(address to, uint256 value, bytes calldata data) external returns (bool);
@@ -78,8 +83,10 @@ contract DegenerusAdmin {
     error NotStalled();
     error AlreadyWired();
     error NotWired();
+    error BondsNotReady();
     error NoSubscription();
     error InvalidAmount();
+    error GameOver();
     error FeedHealthy();
 
     // -----------------------
@@ -150,6 +157,10 @@ contract DegenerusAdmin {
 
     /// @notice Create the subscription (if needed) and wire bonds.
     function wire(address coordinator_, bytes32 bondKeyHash) external onlyOwner {
+        _wire(coordinator_, bondKeyHash);
+    }
+
+    function _wire(address coordinator_, bytes32 bondKeyHash) private {
         if (bonds == address(0)) revert NotWired();
         // Create subscription on first call.
         if (subscriptionId == 0) {
@@ -209,7 +220,7 @@ contract DegenerusAdmin {
 
         // Ensure VRF subscription exists and bonds are wired to it.
         if (subscriptionId == 0) {
-            wire(coordinator_, bondKeyHash_);
+            _wire(coordinator_, bondKeyHash_);
         } else {
             if (coordinator_ != address(0) && coordinator_ != coordinator) revert AlreadyWired();
         }
@@ -223,7 +234,7 @@ contract DegenerusAdmin {
             coinWire[1] = nft_;
             coinWire[2] = questModule_;
             coinWire[3] = jackpots_;
-            coinWire[4] = address(0); // vrfSub optional
+            coinWire[4] = address(this); // vrfSub (admin) for LINK reward minting
             try IDegenerusCoinWire(coin_).wire(coinWire) {} catch {}
         }
 
@@ -387,6 +398,7 @@ contract DegenerusAdmin {
         if (target == address(0)) revert ZeroAddress();
         uint256 subId = subscriptionId;
         if (subId == 0) revert NoSubscription();
+        if (!IDegenerusBondsGameOverFlag(bonds).gameOverEntropyAttempted()) revert BondsNotReady();
 
         // Cancel the subscription; LINK refunds go to the provided target.
         try IVRFCoordinatorV2_5Owner(coordinator).cancelSubscription(subId, target) {
@@ -414,6 +426,9 @@ contract DegenerusAdmin {
         if (msg.sender != linkToken) revert NotAuthorized();
         if (amount == 0) revert InvalidAmount();
         if (subscriptionId == 0) revert NotWired();
+        if (bonds != address(0)) {
+            if (IDegenerusBondsGameOverFlag(bonds).gameOverStarted()) revert GameOver();
+        }
 
         // Top up subscription.
         try ILinkTokenLike(linkToken).transferAndCall(address(coordinator), amount, abi.encode(subscriptionId)) returns (bool ok) {

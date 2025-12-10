@@ -109,8 +109,9 @@ contract DegenerusCoin {
         address player = msg.sender;
         return _viewClaimableCoin(player);
     }
-    // Tracks remaining presale claim allocation minted to this contract.
+    // Tracks total unclaimed presale allocation across all sources; minted on claim.
     uint256 public presaleClaimableRemaining;
+    bool private presaleEscrowInitialized;
 
     // Bounty state; bounty is credited as future coinflip stake for the owed player.
     uint128 public currentBounty = 1_000_000_000;
@@ -269,9 +270,9 @@ contract DegenerusCoin {
     function claimPresaleAffiliateBonus() external {
         uint256 amount = affiliateProgram.consumePresaleCoin(msg.sender);
         if (amount == 0) return;
-        // Pull from presale escrow minted to this contract.
+        if (amount > presaleClaimableRemaining) revert Insufficient();
         presaleClaimableRemaining -= amount;
-        _transfer(address(this), msg.sender, amount);
+        _mint(msg.sender, amount);
     }
 
     /// @notice Burn BURNIE during an active Decimator window to accrue weighted participation.
@@ -446,12 +447,12 @@ contract DegenerusCoin {
     /// @notice One-time presale mint from the affiliate contract; callable only by affiliate.
     function affiliatePrimePresale() external {
         if (msg.sender != address(affiliateProgram)) revert OnlyAffiliate();
-        if (presaleClaimableRemaining != 0) revert AlreadyWired();
+        if (presaleEscrowInitialized) revert AlreadyWired();
+        presaleEscrowInitialized = true;
         uint256 presaleTotal = affiliateProgram.presaleClaimableTotal();
         if (presaleTotal == 0) return;
-        // Mint once to this contract; players later pull via `claimPresaleAffiliateBonus`.
-        presaleClaimableRemaining = presaleTotal;
-        _mint(address(this), presaleTotal);
+        // Record escrow only; tokens are minted lazily on claim.
+        presaleClaimableRemaining += presaleTotal;
     }
 
     /// @notice Burn BURNIE on behalf of an affiliate flow (synthetic cap unlocks).
@@ -490,7 +491,6 @@ contract DegenerusCoin {
         if (player == address(0) || amount == 0) return;
         affiliateProgram.addPresaleLinkCredit(player, amount);
         presaleClaimableRemaining += amount;
-        _mint(address(this), amount);
         emit PresaleLinkCredit(player, amount);
     }
 
@@ -646,7 +646,10 @@ contract DegenerusCoin {
 
     /// @notice Record the stake resolution day for a level (invoked by DegenerusGame at end of state 1).
     /// @dev The first call at the start of level 2 is considered the level-1 resolution.
-    function recordStakeResolution(uint24 level, uint48 day) external view onlyDegenerusGameContract returns (address topStakeWinner) {
+    function recordStakeResolution(
+        uint24 level,
+        uint48 day
+    ) external view onlyDegenerusGameContract returns (address topStakeWinner) {
         level;
         day;
         return address(0); // staking removed

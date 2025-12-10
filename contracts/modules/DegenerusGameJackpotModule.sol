@@ -15,12 +15,6 @@ interface IStETHView {
 }
 
 interface IDegenerusBondsJackpot {
-    function purchaseGameBonds(
-        address[] calldata recipients,
-        uint256 quantity,
-        uint256 basePerBondWei,
-        bool stake
-    ) external returns (uint256 startTokenId);
     function purchasesEnabled() external view returns (bool);
     function depositCurrentFor(address beneficiary) external payable returns (uint256 scoreAwarded);
     function depositFromGame(address beneficiary, uint256 amount) external payable returns (uint256 scoreAwarded);
