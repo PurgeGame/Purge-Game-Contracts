@@ -49,6 +49,8 @@ interface IDegenerusGamepieces {
     function processDormant(uint32 maxCount) external returns (bool worked);
     function clearPlaceholderPadding(uint256 startTokenId, uint256 endTokenId) external;
     function purchase(PurchaseParams calldata params) external payable;
+    function purchaseMapForAffiliate(address buyer, uint256 quantity) external;
+    function purchaseMapForSynthetic(address synthetic, uint256 quantity, bool payInCoin) external payable;
 }
 
 /// @title DegenerusGamepieces
@@ -240,33 +242,27 @@ contract DegenerusGamepieces {
         _routePurchase(msg.sender, msg.sender, params);
     }
 
-    /// @notice Affiliate-only entry to purchase MAPs for a registered synthetic player.
-    /// @dev Payment is direct ETH from the affiliate; synthetic player is map-only.
-    function purchaseMapForSynthetic(address synthetic, uint256 quantity) external payable {
+    /// @notice Affiliate-only entry to purchase MAPs for a registered synthetic player (ETH or coin).
+    function purchaseMapForSynthetic(address synthetic, uint256 quantity, bool payInCoin) external payable {
         (address synOwner, bytes32 code) = _syntheticMapInfo(synthetic);
         if (synOwner != msg.sender) revert E();
         PurchaseParams memory params = PurchaseParams({
             quantity: quantity,
             kind: PurchaseKind.Map,
             payKind: MintPaymentKind.DirectEth,
-            payInCoin: false,
+            payInCoin: payInCoin,
             affiliateCode: code
         });
         _routePurchase(synthetic, msg.sender, params);
     }
 
-    /// @notice Affiliate-only entry to purchase MAPs for a registered synthetic player using coin.
-    function purchaseMapForSyntheticWithCoin(address synthetic, uint256 quantity) external {
-        (address synOwner, bytes32 code) = _syntheticMapInfo(synthetic);
-        if (synOwner != msg.sender) revert E();
-        PurchaseParams memory params = PurchaseParams({
-            quantity: quantity,
-            kind: PurchaseKind.Map,
-            payKind: MintPaymentKind.DirectEth,
-            payInCoin: true,
-            affiliateCode: code
-        });
-        _routePurchase(synthetic, msg.sender, params);
+    /// @notice MAP purchase for affiliate rewards (affiliate-only, zero bonus/payout).
+    /// @dev Access: affiliate program only; bypasses payments and just enqueues maps.
+    function purchaseMapForAffiliate(address buyer, uint256 quantity) external {
+        if (msg.sender != affiliateProgram) revert OnlyCoin();
+        game.enqueueMap(buyer, uint32(quantity));
+
+        emit MapPurchase(buyer, uint32(quantity), true, true, 0, 0);
     }
 
     function _routePurchase(address buyer, address payer, PurchaseParams memory params) private {
@@ -290,7 +286,6 @@ contract DegenerusGamepieces {
     ) private {
         // Primary entry for player token purchases; pricing and bonuses are sourced from the game contract.
         if (quantity == 0 || quantity > type(uint32).max) revert InvalidQuantity();
-        if (payInCoin && payKind != MintPaymentKind.DirectEth) revert E();
 
         (
             uint24 targetLevel,
@@ -383,8 +378,6 @@ contract DegenerusGamepieces {
         if (state == 3 && payInCoin) revert NotTimeYet();
         if (quantity == 0 || quantity > type(uint32).max) revert InvalidQuantity();
         if (rngLocked_) revert RngNotReady();
-        if (payInCoin && payKind != MintPaymentKind.DirectEth) revert E();
-
         uint256 coinCost = quantity * (priceUnit / 4);
         uint256 scaledQty = quantity * 25;
         uint256 mapRebate = (quantity / 4) * (priceUnit / 10);
@@ -406,7 +399,8 @@ contract DegenerusGamepieces {
         if (payInCoin) {
             if (msg.value != 0) revert E();
             _coinReceive(payer, uint32(quantity), coinCost, lvl, 0);
-            bonus = mapRebate;
+            // Affiliate coin-triggered mints should not earn rebates/bonuses.
+            bonus = payKind == MintPaymentKind.Claimable ? 0 : mapRebate;
         } else {
             bonus = _processEthPurchase(
                 payer,

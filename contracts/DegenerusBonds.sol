@@ -187,7 +187,7 @@ contract BondToken {
  * @title DegenerusBonds
  * @notice Bond system wired for the Degenerus game:
  *         - Bonds created every 5 levels; sales open 10 levels before maturity.
- *         - Payout budget = last issuance raise * growthBps (default 1.5x), with a configurable first-round seed.
+ *         - Payout budget = last issuance raise * growthBps (default 1.5x), seeded by presale raise for the first round.
  *         - Deposits award a score (multiplier stub) used for jackpots.
  *         - Five jackpot days mint a maturity-specific ERC20; total mint equals payout budget.
  *         - Burning the ERC20 enters a two-lane final jackpot at maturity; payout ~pro-rata to burned amount.
@@ -206,7 +206,6 @@ contract DegenerusBonds {
     error PurchasesDisabled();
     error MinimumDeposit();
     error NotExpired();
-    error InvalidGrowth();
     error VrfLocked();
     error NotReady();
 
@@ -232,7 +231,6 @@ contract DegenerusBonds {
     event BondGameOver(uint256 poolSpent, uint24 partialMaturity);
     event BondCoinJackpot(address indexed player, uint256 amount, uint24 maturityLevel, uint8 lane);
     event ExpiredSweep(uint256 ethAmount, uint256 stEthAmount);
-    event PayoutGrowthUpdated(uint256 previousBps, uint256 newBps);
 
     // ---------------------------------------------------------------------
     // Constants
@@ -246,7 +244,6 @@ contract DegenerusBonds {
     uint8 private constant TOP_PCT_3 = 5;
     uint8 private constant TOP_PCT_4 = 5;
     uint256 private constant MIN_DEPOSIT = 0.01 ether;
-    uint256 private constant DEFAULT_PAYOUT_GROWTH_BPS = 15000; // 150%
     uint32 private constant VRF_CALLBACK_GAS_LIMIT = 200_000;
     uint16 private constant VRF_REQUEST_CONFIRMATIONS = 10;
 
@@ -304,8 +301,6 @@ contract DegenerusBonds {
     IDegenerusGameLevel private game;
     address private immutable admin;
     uint256 private lastIssuanceRaise;
-    uint256 private immutable initialPayoutBudget;
-    uint256 private payoutGrowthBps;
     address private vrfCoordinator;
     bytes32 private vrfKeyHash;
     uint256 private vrfSubscriptionId;
@@ -329,13 +324,11 @@ contract DegenerusBonds {
     // ---------------------------------------------------------------------
     // Constructor
     // ---------------------------------------------------------------------
-    constructor(address admin_, address steth_, uint256 initialPayoutBudget_) {
+    constructor(address admin_, address steth_) {
         if (admin_ == address(0)) revert Unauthorized();
         if (steth_ == address(0)) revert Unauthorized();
         admin = admin_;
         steth = steth_;
-        initialPayoutBudget = initialPayoutBudget_;
-        payoutGrowthBps = DEFAULT_PAYOUT_GROWTH_BPS;
 
         // Predeploy the two shared bond tokens (DGNS0 for maturities ending in 0, DGNS5 for ending in 5).
         tokenDGNS0 = new BondToken("Degenerus Bond DGNS0", "DGNS0", address(this), 0);
@@ -372,15 +365,6 @@ contract DegenerusBonds {
         if (msg.sender != admin) revert Unauthorized();
         externalPurchasesEnabled = externalEnabled;
         gamePurchasesEnabled = gameEnabled;
-    }
-
-    /// @notice Admin-controlled growth factor (in basis points) for the next series payout budget vs. last raise.
-    function setPayoutGrowthBps(uint256 newGrowthBps) external {
-        if (msg.sender != admin) revert Unauthorized();
-        if (newGrowthBps == 0) revert InvalidGrowth();
-        uint256 prev = payoutGrowthBps;
-        payoutGrowthBps = newGrowthBps;
-        emit PayoutGrowthUpdated(prev, newGrowthBps);
     }
 
     /// @notice Close presale and lock the first maturity (level 10) budget to presale raise * growth factor.
@@ -1045,9 +1029,8 @@ contract DegenerusBonds {
         s.maturityLevel = maturityLevel;
         s.saleStartLevel = maturityLevel > 10 ? maturityLevel - 10 : 0;
 
-        // Start each new maturity at growthBps of the previous raise (or the configured initial budget for the first series).
-        uint256 growthBps = payoutGrowthBps;
-        uint256 budget = lastIssuanceRaise == 0 ? initialPayoutBudget : (lastIssuanceRaise * growthBps) / 10000;
+        // Seed budget from the last raise; the first series starts at 0 and grows with presale deposits.
+        uint256 budget = lastIssuanceRaise;
         s.payoutBudget = budget;
 
         // Only two ERC20s are ever used: DGNS0 (maturities ending in 0) and DGNS5 (ending in 5).
@@ -1188,7 +1171,7 @@ contract DegenerusBonds {
     // Piecewise sliding multiplier: 3x at 0.5x prior raise, 2x at 1x, 1x at 2x; clamped outside.
     function _growthMultiplierBps(uint256 raised) private view returns (uint256) {
         uint256 prev = lastIssuanceRaise;
-        if (prev == 0 || raised == 0) return payoutGrowthBps; // fallback for first series or empty raise
+        if (prev == 0 || raised == 0) return 20000; // default 2.0x when no prior raise data
 
         uint256 ratio = (raised * 1e18) / prev; // 1e18 == 1.0
         if (ratio <= 5e17) return 30000; // <=0.5x -> 3.0x

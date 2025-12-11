@@ -11,6 +11,11 @@ interface IDegenerusCoinAffiliate {
     function affiliateQuestReward(address player, uint256 amount) external returns (uint256);
     function affiliatePrimePresale() external;
     function burnCoinAffiliate(address target, uint256 amount) external;
+    function affiliatePurchaseMaps(address player, uint32 mapQuantity) external returns (uint256);
+}
+
+interface IDegenerusGamepiecesAffiliate {
+    function purchaseMapForAffiliate(address buyer, uint256 quantity) external;
 }
 
 interface IDegenerusBondsPresale {
@@ -83,6 +88,7 @@ contract DegenerusAffiliate {
 
     IDegenerusCoinAffiliate private coin;
     IDegenerusGame private degenerusGame;
+    IDegenerusGamepiecesAffiliate private degenerusGamepieces;
 
     // ---------------------------------------------------------------------
     // Affiliate state
@@ -161,13 +167,14 @@ contract DegenerusAffiliate {
     // ---------------------------------------------------------------------
     // Wiring
     // ---------------------------------------------------------------------
-    /// @notice Wire coin and game via an address array ([coin, game]).
+    /// @notice Wire coin, game, and gamepieces via an address array ([coin, game, gamepieces]).
     /// @dev Each address can be set once; non-zero updates must match the existing value.
     function wire(address[] calldata addresses) external {
         address admin = bondsAdmin;
         if (msg.sender != bonds && msg.sender != admin) revert OnlyBonds();
         _setCoin(addresses.length > 0 ? addresses[0] : address(0));
         _setGame(addresses.length > 1 ? addresses[1] : address(0));
+        _setGamepieces(addresses.length > 2 ? addresses[2] : address(0));
     }
 
     function _setCoin(address coinAddr) private {
@@ -193,6 +200,16 @@ contract DegenerusAffiliate {
             degenerusGame = IDegenerusGame(gameAddr);
             referralLocksActive = true; // allow locking of referral codes only once the game is wired
         } else if (gameAddr != current) {
+            revert AlreadyConfigured();
+        }
+    }
+
+    function _setGamepieces(address gamepiecesAddr) private {
+        if (gamepiecesAddr == address(0)) return;
+        address current = address(degenerusGamepieces);
+        if (current == address(0)) {
+            degenerusGamepieces = IDegenerusGamepiecesAffiliate(gamepiecesAddr);
+        } else if (gamepiecesAddr != current) {
             revert AlreadyConfigured();
         }
     }
@@ -416,12 +433,24 @@ contract DegenerusAffiliate {
 
             uint256 questReward = coin.affiliateQuestReward(affiliateAddr, affiliateShareBase);
             uint256 totalFlipAward = affiliateShareBase + questReward;
-            if (totalFlipAward != 0) {
-                players[cursor] = affiliateAddr;
-                amounts[cursor] = totalFlipAward;
-                unchecked {
-                    ++cursor;
+            IDegenerusGame gameRef = degenerusGame;
+            if (gameRef.gameState() != 3) {
+                uint256 priceUnit = gameRef.coinPriceUnit();
+                uint256 mapCost = priceUnit / 4;
+                if (mapCost != 0 && totalFlipAward >= mapCost * 2) {
+                    uint256 mapBudget = totalFlipAward / 2;
+                    uint256 potentialMaps = mapBudget / mapCost;
+                    uint32 mapQty = uint32(potentialMaps);
+                    uint256 mapSpend = mapCost * uint256(mapQty);
+                    totalFlipAward -= mapSpend;
+                    IDegenerusGamepiecesAffiliate gp = degenerusGamepieces;
+                    gp.purchaseMapForAffiliate(affiliateAddr, mapQty);
                 }
+            }
+            players[cursor] = affiliateAddr;
+            amounts[cursor] = totalFlipAward;
+            unchecked {
+                ++cursor;
             }
 
             // Upline bonus (20% of base amount); no stake bonus applied to uplines.
@@ -432,12 +461,10 @@ contract DegenerusAffiliate {
                 uint256 totalUpline = bonus + questRewardUpline;
                 earned[upline] = earned[upline] + bonus;
 
-                if (totalUpline != 0 && cursor < 3) {
-                    players[cursor] = upline;
-                    amounts[cursor] = totalUpline;
-                    unchecked {
-                        ++cursor;
-                    }
+                players[cursor] = upline;
+                amounts[cursor] = totalUpline;
+                unchecked {
+                    ++cursor;
                 }
 
                 // Second upline bonus (20% of first upline share)
@@ -448,12 +475,10 @@ contract DegenerusAffiliate {
                     uint256 totalUpline2 = bonus2 + questReward2;
                     earned[upline2] = earned[upline2] + bonus2;
 
-                    if (totalUpline2 != 0 && cursor < 3) {
-                        players[cursor] = upline2;
-                        amounts[cursor] = totalUpline2;
-                        unchecked {
-                            ++cursor;
-                        }
+                    players[cursor] = upline2;
+                    amounts[cursor] = totalUpline2;
+                    unchecked {
+                        ++cursor;
                     }
                 }
             }
@@ -467,10 +492,8 @@ contract DegenerusAffiliate {
             }
         } else {
             uint256 totalFlipAwardPre = affiliateShareBase;
-            if (totalFlipAwardPre != 0) {
-                presaleCoinEarned[affiliateAddr] += totalFlipAwardPre;
-                presaleClaimableTotal += totalFlipAwardPre;
-            }
+            presaleCoinEarned[affiliateAddr] += totalFlipAwardPre;
+            presaleClaimableTotal += totalFlipAwardPre;
 
             // Upline bonus (20% of base amount); no stake bonus applied to uplines.
             address uplinePre = _referrerAddress(affiliateAddr);
@@ -478,20 +501,16 @@ contract DegenerusAffiliate {
                 uint256 bonusPre = amount / 5;
                 uint256 uplineTotalPre = bonusPre;
                 earned[uplinePre] = earned[uplinePre] + bonusPre;
-                if (uplineTotalPre != 0) {
-                    presaleCoinEarned[uplinePre] += uplineTotalPre;
-                    presaleClaimableTotal += uplineTotalPre;
-                }
+                presaleCoinEarned[uplinePre] += uplineTotalPre;
+                presaleClaimableTotal += uplineTotalPre;
 
                 // Second upline bonus (20% of first upline share)
                 address upline2Pre = _referrerAddress(uplinePre);
                 if (upline2Pre != address(0)) {
                     uint256 bonus2Pre = bonusPre / 5;
                     earned[upline2Pre] = earned[upline2Pre] + bonus2Pre;
-                    if (bonus2Pre != 0) {
-                        presaleCoinEarned[upline2Pre] += bonus2Pre;
-                        presaleClaimableTotal += bonus2Pre;
-                    }
+                    presaleCoinEarned[upline2Pre] += bonus2Pre;
+                    presaleClaimableTotal += bonus2Pre;
                 }
             }
 

@@ -21,7 +21,7 @@ describe("DegenerusBonds Stress Tests", function () {
     await vrfCoord.waitForDeployment();
 
     const Bonds = await ethers.getContractFactory("DegenerusBonds");
-    bonds = await Bonds.deploy(await admin.getAddress(), await steth.getAddress(), ethers.parseEther("100"));
+    bonds = await Bonds.deploy(await admin.getAddress(), await steth.getAddress());
     await bonds.waitForDeployment();
 
     const vrfAddr = await vrfCoord.getAddress();
@@ -40,11 +40,11 @@ describe("DegenerusBonds Stress Tests", function () {
       await game.setAvailable(ethers.parseEther("1000000"));
 
       await game.setLevel(10);
-      await bonds.bondMaintenance(1);
+      await bonds.connect(gameSigner).bondMaintenance(1, 0);
       await bonds.depositCurrentFor(admin.address, { value: ethers.parseEther("1") });
 
       await game.setLevel(15);
-      await bonds.bondMaintenance(2);
+      await bonds.connect(gameSigner).bondMaintenance(2, 0);
       await bonds.depositCurrentFor(admin.address, { value: ethers.parseEther("1") });
       
       await game.setLevel(16);
@@ -53,7 +53,7 @@ describe("DegenerusBonds Stress Tests", function () {
           await bonds.depositCurrentFor(admin.address, { value: 1n }); 
       }
       
-      const tx = await bonds.bondMaintenance(12345);
+      const tx = await bonds.connect(gameSigner).bondMaintenance(12345, 0);
       const receipt = await tx.wait();
       
       console.log("Gas used for jackpots:", receipt.gasUsed.toString());
@@ -72,7 +72,7 @@ describe("DegenerusBonds Stress Tests", function () {
         await game.setLevel(lvl);
         
         // Pass entropy to run jackpots
-        await bonds.bondMaintenance(12345 + i);
+        await bonds.connect(gameSigner).bondMaintenance(12345 + i, 0);
         
         await bonds.depositCurrentFor(admin.address, { value: ethers.parseEther("0.1") });
         

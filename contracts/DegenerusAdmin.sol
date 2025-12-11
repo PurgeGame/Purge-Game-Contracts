@@ -242,9 +242,10 @@ contract DegenerusAdmin {
         }
 
         if (affiliate_ != address(0)) {
-            address[] memory affWire = new address[](2);
+            address[] memory affWire = new address[](3);
             affWire[0] = coin_;
             affWire[1] = game_;
+            affWire[2] = nft_;
             IWiring(affiliate_).wire(affWire);
         }
 

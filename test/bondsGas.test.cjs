@@ -14,15 +14,17 @@ describe("DegenerusBonds gas", function () {
     await steth.waitForDeployment();
 
     const Bonds = await ethers.getContractFactory("DegenerusBonds");
-    const bonds = await Bonds.deploy(await admin.getAddress(), await steth.getAddress(), ethers.parseEther("1"));
+    const bonds = await Bonds.deploy(await admin.getAddress(), await steth.getAddress());
     await bonds.waitForDeployment();
 
     // Wire game only; vault/coin/vrf omitted.
     await bonds.wire([await game.getAddress()], 0, ethers.ZeroHash);
+    const gameSigner = await ethers.getImpersonatedSigner(await game.getAddress());
+    await admin.sendTransaction({ to: await game.getAddress(), value: ethers.parseEther("1") });
 
     // Seed series creation at level 10 (maturity 20).
     await game.setLevel(10);
-    await bonds.bondMaintenance(123);
+    await bonds.connect(gameSigner).bondMaintenance(123, 0);
 
     const depositCount = 500;
     for (let i = 0; i < depositCount; i++) {
@@ -32,7 +34,7 @@ describe("DegenerusBonds gas", function () {
     // Advance level so jackpots run once for the populated day.
     await game.setLevel(11);
 
-    const gas = await bonds.bondMaintenance.estimateGas(456);
+    const gas = await bonds.connect(gameSigner).bondMaintenance.estimateGas(456, 0);
     expect(gas).to.be.lt(14_000_000n);
   });
 });
