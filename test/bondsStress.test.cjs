@@ -76,13 +76,8 @@ describe("DegenerusBonds Stress Tests", function () {
         
         await bonds.depositCurrentFor(admin.address, { value: ethers.parseEther("0.1") });
         
-        // Try to burn tokens if we have any
-        // We need to find the token addresses first.
-        // We can get them from series.
-        // But let's just try to get them from the contract if possible? No public getter for tokenDGNS0.
-        // But `seriesToken(maturity)` works.
-        // Series created at `i*5`. Maturity `i*5 + 10`.
-        // Maturity 15, 20...
+        // Try to burn tokens if we have any.
+        // Series created at `i*5`. Maturity `i*5 + 10` (15, 20, ...).
         
         let createdMat = lvl + 10;
         let tokenAddr = await bonds.seriesToken(createdMat);
@@ -91,21 +86,10 @@ describe("DegenerusBonds Stress Tests", function () {
             const Token = await ethers.getContractAt("BondToken", tokenAddr);
             const bal = await Token.balanceOf(admin.address);
             if (bal > 0n) {
-                // Determine if it's DGNS0 or DGNS5
-                // The token name or just try burnDGNS0/5
-                // Actually `burnDGNS0` burns `tokenDGNS0`.
-                // If `tokenAddr` is `tokenDGNS0`, we call `burnDGNS0`.
-                // Mat % 10 == 0 -> DGNS0? No.
-                // Constructor: 
-                // token = maturityLevel % 10 == 5 ? _ensureDGNSToken(true) : _ensureDGNSToken(false);
-                // Mat 15 -> DGNS5.
-                // Mat 20 -> DGNS0.
+                // Determine if it's DGNS0 or DGNS5 by maturity digit.
                 
-                if (createdMat % 10 === 5) {
-                    await bonds.burnDGNS5(bal);
-                } else {
-                    await bonds.burnDGNS0(bal);
-                }
+                const isFive = createdMat % 10 === 5;
+                await bonds.burnDGNS(isFive, bal);
             }
         }
     }
