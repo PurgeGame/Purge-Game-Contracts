@@ -113,7 +113,7 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
 
     function _isCoinOrAdmin(address sender) private view returns (bool) {
         if (sender == coin) return true;
-        return sender == IDegenerusCoin(coin).bondsAdmin();
+        return sender == IDegenerusCoin(coin).admin();
     }
 
     /// @notice Roll the daily quest set using VRF entropy.

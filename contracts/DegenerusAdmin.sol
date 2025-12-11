@@ -171,7 +171,7 @@ contract DegenerusAdmin {
             emit ConsumerAdded(bonds);
         } catch {}
         IDegenerusBondsAdmin(bonds).wire(
-            _packBondsWire(address(0), address(0), address(0), coordinator),
+            _packBondsWire(address(0), address(0), address(0), coordinator, address(0), address(0)),
             subscriptionId,
             bondKeyHash
         );
@@ -190,12 +190,16 @@ contract DegenerusAdmin {
         } catch {}
 
         IDegenerusGameVrf(game_).wireVrf(coordinator, subscriptionId);
-        IDegenerusBondsAdmin(bonds).wire(_packBondsWire(game_, address(0), address(0), address(0)), 0, bytes32(0));
+        IDegenerusBondsAdmin(bonds).wire(
+            _packBondsWire(game_, address(0), address(0), address(0), address(0), address(0)),
+            0,
+            bytes32(0)
+        );
     }
 
     /// @notice Consolidated wiring helper: creates VRF sub if needed, wires bonds, then downstream modules directly.
     /// @dev Order: bonds must be set; coordinator/keyHash are required when creating the sub. Downstream modules
-    ///             are wired here (coin, affiliate, jackpots, quest module, NFT).
+    ///             are wired here (coin, affiliate, jackpots, quest module, trophies, NFT).
     function wireAll(
         address coordinator_,
         bytes32 bondKeyHash_,
@@ -204,6 +208,7 @@ contract DegenerusAdmin {
         address affiliate_,
         address jackpots_,
         address questModule_,
+        address trophies_,
         address nft_,
         address vault_
     ) external onlyOwner {
@@ -217,15 +222,18 @@ contract DegenerusAdmin {
         }
 
         address coord = coordinator_ == address(0) ? coordinator : coordinator_;
-        IDegenerusBondsAdmin(bonds).wire(_packBondsWire(game_, vault_, coin_, coord), subscriptionId, bondKeyHash_);
+        IDegenerusBondsAdmin(bonds).wire(
+            _packBondsWire(game_, vault_, coin_, coord, questModule_, trophies_),
+            subscriptionId,
+            bondKeyHash_
+        );
 
         if (coin_ != address(0)) {
-            address[] memory coinWire = new address[](5);
+            address[] memory coinWire = new address[](4);
             coinWire[0] = game_;
             coinWire[1] = nft_;
             coinWire[2] = questModule_;
             coinWire[3] = jackpots_;
-            coinWire[4] = address(this); // vrfSub (admin) for LINK reward minting
             IWiring(coin_).wire(coinWire);
         }
 
@@ -261,13 +269,17 @@ contract DegenerusAdmin {
         address game_,
         address vault_,
         address coin_,
-        address coord_
+        address coord_,
+        address questModule_,
+        address trophies_
     ) private pure returns (address[] memory arr) {
-        arr = new address[](4);
+        arr = new address[](6);
         arr[0] = game_;
         arr[1] = vault_;
         arr[2] = coin_;
         arr[3] = coord_;
+        arr[4] = questModule_;
+        arr[5] = trophies_;
     }
 
     /// @notice Wire the coin contract for link-based minting/claiming and optionally update the price unit.
@@ -300,14 +312,22 @@ contract DegenerusAdmin {
 
     /// @notice Pass-through to set the bonds vault (one-time).
     function setBondsVault(address vault_) external onlyOwner {
-        IDegenerusBondsAdmin(bonds).wire(_packBondsWire(address(0), vault_, address(0), address(0)), 0, bytes32(0));
+        IDegenerusBondsAdmin(bonds).wire(
+            _packBondsWire(address(0), vault_, address(0), address(0), address(0), address(0)),
+            0,
+            bytes32(0)
+        );
         vault = vault_;
         emit VaultSet(vault_);
     }
 
     /// @notice Pass-through to set the bonds coin address.
     function setBondsCoin(address coin_) external onlyOwner {
-        IDegenerusBondsAdmin(bonds).wire(_packBondsWire(address(0), address(0), coin_, address(0)), 0, bytes32(0));
+        IDegenerusBondsAdmin(bonds).wire(
+            _packBondsWire(address(0), address(0), coin_, address(0), address(0), address(0)),
+            0,
+            bytes32(0)
+        );
         emit CoinSet(coin_);
     }
 
@@ -319,7 +339,11 @@ contract DegenerusAdmin {
 
     /// @notice Pass-through to set the bond game address.
     function wireBondsGame(address game_) external onlyOwner {
-        IDegenerusBondsAdmin(bonds).wire(_packBondsWire(game_, address(0), address(0), address(0)), 0, bytes32(0));
+        IDegenerusBondsAdmin(bonds).wire(
+            _packBondsWire(game_, address(0), address(0), address(0), address(0), address(0)),
+            0,
+            bytes32(0)
+        );
         emit BondsGameWired(game_);
     }
 
@@ -328,7 +352,7 @@ contract DegenerusAdmin {
         uint256 subId = subscriptionId;
         if (subId == 0) revert NotWired();
         IDegenerusBondsAdmin(bonds).wire(
-            _packBondsWire(address(0), address(0), address(0), coordinator_),
+            _packBondsWire(address(0), address(0), address(0), coordinator_, address(0), address(0)),
             subId,
             keyHash_
         );
@@ -367,7 +391,7 @@ contract DegenerusAdmin {
             emit ConsumerAdded(bonds);
         } catch {}
         IDegenerusBondsAdmin(bonds).wire(
-            _packBondsWire(address(0), address(0), address(0), newCoordinator),
+            _packBondsWire(address(0), address(0), address(0), newCoordinator, address(0), address(0)),
             newSubId,
             newKeyHash
         );

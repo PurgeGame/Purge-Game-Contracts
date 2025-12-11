@@ -5,7 +5,7 @@ import {IDegenerusCoinModule} from "./DegenerusGameModuleInterfaces.sol";
 import {QuestInfo, PlayerQuestView} from "./IDegenerusQuestModule.sol";
 
 interface IDegenerusCoin is IDegenerusCoinModule {
-    function bondsAdmin() external view returns (address);
+    function admin() external view returns (address);
     function jackpots() external view returns (address);
     function affiliateProgram() external view returns (address);
 

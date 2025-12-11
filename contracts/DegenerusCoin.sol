@@ -25,7 +25,6 @@ contract DegenerusCoin {
     event BountyPaid(address indexed to, uint256 amount);
     event DailyQuestRolled(uint48 indexed day, uint8 questType, bool highDifficulty);
     event QuestCompleted(address indexed player, uint8 questType, uint32 streak, uint256 reward, bool hardMode);
-    event VrfSubWired(address vrfSub);
     event PresaleLinkCredit(address indexed player, uint256 amount);
 
     // ---------------------------------------------------------------------
@@ -46,13 +45,14 @@ contract DegenerusCoin {
     error OnlyBonds();
     error OnlyAffiliate();
     error AlreadyWired();
+    error OnlyNft();
 
     // ---------------------------------------------------------------------
     // ERC20 state
     // ---------------------------------------------------------------------
     // Minimal ERC20 metadata/state; transfers are unchecked beyond underflow protection in Solidity 0.8.
-    string public name = "Burnies";
-    string public symbol = "BURNIE";
+    string public constant name = "Burnies";
+    string public constant symbol = "BURNIE";
     uint256 public totalSupply;
     mapping(address => uint256) public balanceOf;
     mapping(address => mapping(address => uint256)) public allowance;
@@ -82,8 +82,7 @@ contract DegenerusCoin {
     DegenerusAffiliate public immutable affiliateProgram;
     address public jackpots;
     address public vault;
-    address public vrfSub;
-    address public immutable bondsAdmin;
+    address public immutable admin;
 
     // Coinflip accounting keyed by day window (auto daily flips; distinct from long-horizon stakes below).
     mapping(uint48 => mapping(address => uint256)) internal coinflipBalance;
@@ -91,6 +90,7 @@ contract DegenerusCoin {
     mapping(address => uint48) internal lastCoinflipClaim;
     mapping(address => uint256) public playerLuckbox;
     uint48 internal flipsClaimableDay; // Last day that has been opened for claims (active day = flipsClaimableDay)
+    bool private presaleEscrowInitialized; // packed with flipsClaimableDay to save a slot
 
     // Vault escrow: tracks coin reserved for the vault; minted only when vault pays out.
     uint256 public vaultMintAllowance;
@@ -106,16 +106,19 @@ contract DegenerusCoin {
         address player = msg.sender;
         return _viewClaimableCoin(player);
     }
+
+    /// @notice Total supply including uncirculated vault allowance.
+    function supplyIncUncirculated() external view returns (uint256) {
+        return totalSupply + vaultMintAllowance;
+    }
     // Tracks total unclaimed presale allocation across all sources; minted on claim.
     uint256 public presaleClaimableRemaining;
-    bool private presaleEscrowInitialized;
 
     // Bounty state; bounty is credited as future coinflip stake for the owed player.
     uint128 public currentBounty = 1_000_000_000;
     uint128 public biggestFlipEver = 1_000_000_000;
     address internal bountyOwedTo;
     address public immutable bonds;
-    address public immutable regularRenderer;
 
     // ---------------------------------------------------------------------
     // ERC20 state
@@ -214,16 +217,14 @@ contract DegenerusCoin {
     // ---------------------------------------------------------------------
     constructor(
         address bonds_,
-        address bondsAdmin_,
+        address admin_,
         address payable affiliate_,
-        address regularRenderer_,
         address vault_
     ) {
-        if (bonds_ == address(0) || bondsAdmin_ == address(0) || affiliate_ == address(0)) revert ZeroAddress();
+        if (bonds_ == address(0) || admin_ == address(0) || affiliate_ == address(0)) revert ZeroAddress();
         bonds = bonds_;
-        bondsAdmin = bondsAdmin_;
+        admin = admin_;
         affiliateProgram = DegenerusAffiliate(affiliate_);
-        regularRenderer = regularRenderer_;
         vault = vault_;
     }
 
@@ -339,19 +340,18 @@ contract DegenerusCoin {
         }
     }
 
-    /// @notice Wire game, NFT, quest module, jackpots, and optionally the VRF sub using an address array.
-    /// @dev Order: [game, nft, quest module, jackpots, vrfSub]; set-once per slot. Downstream modules are
+    /// @notice Wire game, NFT, quest module, jackpots using an address array.
+    /// @dev Order: [game, nft, quest module, jackpots]; set-once per slot. Downstream modules are
     ///      wired directly by the admin rather than being cascaded here.
     function wire(address[] calldata addresses) external {
-        address admin = bondsAdmin;
-        if (msg.sender != bonds && msg.sender != admin) revert OnlyBonds();
+        address adminAddr = admin;
+        if (msg.sender != adminAddr) revert OnlyBonds();
 
         uint256 len = addresses.length;
         if (len > 0) _setGame(addresses[0]);
         if (len > 1) _setNft(addresses[1]);
         if (len > 2) _setQuestModule(addresses[2]);
         if (len > 3) _setJackpots(addresses[3]);
-        if (len > 4) _setVrfSub(addresses[4]);
     }
 
     function _setGame(address game_) private {
@@ -363,7 +363,6 @@ contract DegenerusCoin {
             revert AlreadyWired();
         }
     }
-
 
     function _setNft(address nft_) private {
         if (nft_ == address(0)) return;
@@ -391,17 +390,6 @@ contract DegenerusCoin {
         if (current == address(0)) {
             jackpots = jackpots_;
         } else if (jackpots_ != current) {
-            revert AlreadyWired();
-        }
-    }
-
-    function _setVrfSub(address vrfSub_) private {
-        if (vrfSub_ == address(0)) return;
-        address current = vrfSub;
-        if (current == address(0)) {
-            vrfSub = vrfSub_;
-            emit VrfSubWired(vrfSub_);
-        } else if (vrfSub_ != current) {
             revert AlreadyWired();
         }
     }
@@ -457,9 +445,9 @@ contract DegenerusCoin {
         addFlip(player, amount, false, false);
     }
 
-    /// @notice Credit presale allocation from LINK funding (VRF sub).
+    /// @notice Credit presale allocation from LINK funding (admin).
     function creditPresaleFromLink(address player, uint256 amount) external {
-        if (msg.sender != vrfSub) revert OnlyBonds();
+        if (msg.sender != admin) revert OnlyBonds();
         if (player == address(0) || amount == 0) return;
         affiliateProgram.addPresaleLinkCredit(player, amount);
         presaleClaimableRemaining += amount;
@@ -483,7 +471,7 @@ contract DegenerusCoin {
     /// @notice Compute affiliate quest rewards while preserving quest module access control.
     /// @dev Access: affiliate contract only.
     function affiliateQuestReward(address player, uint256 amount) external returns (uint256 questReward) {
-        if (msg.sender != address(affiliateProgram)) revert OnlyGame();
+        if (msg.sender != address(affiliateProgram)) revert OnlyAffiliate();
         IDegenerusQuestModule module = questModule;
         if (address(module) == address(0) || player == address(0) || amount == 0) return 0;
         (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleAffiliate(
@@ -545,7 +533,8 @@ contract DegenerusCoin {
         module.normalizeActiveBurnQuests();
     }
 
-    function notifyQuestMint(address player, uint32 quantity, bool paidWithEth) external onlyGameplayContracts {
+    function notifyQuestMint(address player, uint32 quantity, bool paidWithEth) external {
+        if (msg.sender != address(degenerusGamepieces)) revert OnlyNft();
         IDegenerusQuestModule module = questModule;
         (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleMint(
             player,
@@ -572,7 +561,8 @@ contract DegenerusCoin {
         }
     }
 
-    function notifyQuestBurn(address player, uint32 quantity) external onlyGameplayContracts {
+    function notifyQuestBurn(address player, uint32 quantity) external {
+        if (msg.sender != address(degenerusGame)) revert OnlyGame();
         IDegenerusQuestModule module = questModule;
         (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleBurn(
             player,
@@ -612,7 +602,7 @@ contract DegenerusCoin {
     }
 
     function coinflipAmount(address player) external view returns (uint256) {
-        uint48 day = _currentDay();
+        uint48 day = _targetFlipDay();
         return coinflipBalance[day][player];
     }
 
@@ -628,7 +618,7 @@ contract DegenerusCoin {
     }
 
     function _claimCoinflipsInternal(address player) internal returns (uint256 claimed) {
-        uint48 latest = _latestClaimableDay();
+        uint48 latest = flipsClaimableDay;
         uint48 start = lastCoinflipClaim[player];
         if (start >= latest) return 0;
 
@@ -669,15 +659,9 @@ contract DegenerusCoin {
         }
     }
 
-    function _latestClaimableDay() internal view returns (uint48) {
-        return flipsClaimableDay;
-    }
-
-    function _currentDay() internal view returns (uint48) {
-        uint256 ts = block.timestamp;
-
-        // Day 0 starts after JACKPOT_RESET_TIME, then increments every 24h.
-        return uint48((ts - JACKPOT_RESET_TIME) / 1 days);
+    function _targetFlipDay() internal view returns (uint48) {
+        // Day 0 starts after JACKPOT_RESET_TIME, then increments every 24h; target is always the next day.
+        return uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days) + 1;
     }
 
     /// @notice Progress coinflip payouts for the current level in bounded slices.
@@ -792,15 +776,10 @@ contract DegenerusCoin {
             _mint(player, mintRemainder);
         }
 
-        // Determine which future day this stake applies to, skipping locked RNG windows.
-        uint48 settleDay = _currentDay();
+        // Determine which future day this stake applies to (always the next window).
         bool rngLocked = degenerusGame.rngLocked();
+        uint48 targetDay = _targetFlipDay();
         uint24 currLevel = degenerusGame.level();
-        uint48 targetDay = settleDay + (rngLocked ? 2 : 1);
-        uint48 currentDay = settleDay;
-        if (targetDay <= currentDay) {
-            targetDay = currentDay + 1;
-        }
 
         uint256 prevStake = coinflipBalance[targetDay][player];
 

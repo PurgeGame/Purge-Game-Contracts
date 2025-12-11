@@ -32,6 +32,10 @@ interface IStETHLike {
     function transfer(address to, uint256 amount) external returns (bool);
 }
 
+interface IERC721BalanceOf {
+    function balanceOf(address owner) external view returns (uint256);
+}
+
 interface IVaultLike {
     function deposit(uint256 coinAmount, uint256 stEthAmount) external payable;
     function swapWithBonds(bool stEthForEth, uint256 amount) external payable;
@@ -48,6 +52,10 @@ interface ICoinAffiliateLike is ICoinLike {
 
 interface IAffiliatePresaleShutdown {
     function shutdownPresale() external;
+}
+
+interface IAffiliatePresaleStatus {
+    function presaleActive() external view returns (bool);
 }
 
 interface IDegenerusQuestView {
@@ -205,6 +213,7 @@ contract DegenerusBonds {
     error BankCallFailed();
     error PurchasesDisabled();
     error MinimumDeposit();
+    error PresaleClosed();
     error NotExpired();
     error VrfLocked();
     error NotReady();
@@ -231,6 +240,12 @@ contract DegenerusBonds {
     event BondGameOver(uint256 poolSpent, uint24 partialMaturity);
     event BondCoinJackpot(address indexed player, uint256 amount, uint24 maturityLevel, uint8 lane);
     event ExpiredSweep(uint256 ethAmount, uint256 stEthAmount);
+    event PresaleBondDeposit(
+        address indexed buyer,
+        uint256 amount,
+        uint256 mintedDgns0,
+        uint256 mintedDgns5
+    );
 
     // ---------------------------------------------------------------------
     // Constants
@@ -270,6 +285,7 @@ contract DegenerusBonds {
         uint256 vrfSubId;
         bytes32 vrfKeyHash;
         address questModule;
+        address trophies;
     }
 
     struct BondSeries {
@@ -315,11 +331,14 @@ contract DegenerusBonds {
     bool public gamePurchasesEnabled = true; // owner toggle for game-routed purchases
     address private vault;
     address private coin;
+    address private affiliate;
     IDegenerusQuestView private questModule;
+    address private trophies;
     BondToken private tokenDGNS0;
     BondToken private tokenDGNS5;
     address private immutable steth;
     bool private vrfRecoveryArmed;
+    uint256 public presaleDgnsMinted;
 
     // ---------------------------------------------------------------------
     // Constructor
@@ -344,7 +363,7 @@ contract DegenerusBonds {
     // External write API
     // ---------------------------------------------------------------------
 
-    /// @notice Wire bonds like other modules: [game, vault, coin, vrfCoordinator, questModule] + subId/keyHash (partial allowed).
+    /// @notice Wire bonds like other modules: [game, vault, coin, vrfCoordinator, questModule, trophies] + subId/keyHash (partial allowed).
     function wire(address[] calldata addresses, uint256 vrfSubId, bytes32 vrfKeyHash_) external {
         if (msg.sender != admin) revert Unauthorized();
         _wire(
@@ -354,6 +373,7 @@ contract DegenerusBonds {
                 coin: addresses.length > 2 ? addresses[2] : address(0),
                 vrfCoordinator: addresses.length > 3 ? addresses[3] : address(0),
                 questModule: addresses.length > 4 ? addresses[4] : address(0),
+                trophies: addresses.length > 5 ? addresses[5] : address(0),
                 vrfSubId: vrfSubId,
                 vrfKeyHash: vrfKeyHash_
             })
@@ -365,6 +385,55 @@ contract DegenerusBonds {
         if (msg.sender != admin) revert Unauthorized();
         externalPurchasesEnabled = externalEnabled;
         gamePurchasesEnabled = gameEnabled;
+    }
+
+    /// @notice Presale-only bond purchase; splits ETH 30% vault / 50% rewardPool / 20% yieldPool and mints DGNS0/5 1:1.
+    /// @dev Gated by the affiliate presale flag; callable before full wiring when presale bonuses pay out in synthetic coin.
+    function presaleDeposit(address beneficiary) external payable returns (uint256 minted0, uint256 minted5) {
+        if (gameOverStarted) revert SaleClosed();
+        uint256 amount = msg.value;
+        if (amount < MIN_DEPOSIT) revert MinimumDeposit();
+
+        address aff = affiliate;
+        if (aff == address(0)) {
+            address coinAddr = coin;
+            if (coinAddr == address(0)) revert NotReady();
+            aff = ICoinAffiliateLike(coinAddr).affiliateProgram();
+            affiliate = aff;
+        }
+        if (aff == address(0) || !IAffiliatePresaleStatus(aff).presaleActive()) revert PresaleClosed();
+
+        address vaultAddr = vault;
+        address gameAddr = address(game);
+        if (vaultAddr == address(0) || gameAddr == address(0)) revert NotReady();
+
+        uint256 vaultShare = (amount * 30) / 100;
+        uint256 rewardShare = (amount * 50) / 100;
+        uint256 yieldShare = amount - vaultShare - rewardShare; // 20%
+
+        if (vaultShare != 0) {
+            (bool sentVault, ) = payable(vaultAddr).call{value: vaultShare}("");
+            if (!sentVault) revert BankCallFailed();
+        }
+        if (rewardShare != 0) {
+            (bool sentReward, ) = payable(gameAddr).call{value: rewardShare}("");
+            if (!sentReward) revert BankCallFailed();
+        }
+        if (yieldShare != 0) {
+            IDegenerusGameBondBank(gameAddr).bondDeposit{value: yieldShare}(false);
+        }
+
+        address ben = beneficiary == address(0) ? msg.sender : beneficiary;
+        minted0 = amount >> 1;
+        minted5 = amount - minted0;
+        tokenDGNS0.mint(ben, minted0);
+        tokenDGNS5.mint(ben, minted5);
+
+        unchecked {
+            presaleDgnsMinted += amount;
+        }
+
+        emit PresaleBondDeposit(ben, amount, minted0, minted5);
     }
 
     /// @notice Close presale and lock the first maturity (level 10) budget to presale raise * growth factor.
@@ -878,6 +947,7 @@ contract DegenerusBonds {
         _setVault(cfg.vault);
         _setCoin(cfg.coin);
         _setQuestModule(cfg.questModule);
+        _setTrophies(cfg.trophies);
         _setVrf(cfg.vrfCoordinator, cfg.vrfSubId, cfg.vrfKeyHash);
     }
 
@@ -902,7 +972,15 @@ contract DegenerusBonds {
         }
 
         uint256 bonusBps = (mintStreak * 100) + (questStreak * 50); // 1% per mint streak, 0.5% per quest streak
-        return 10000 + bonusBps; // base 1.0x (10000 bps) plus bonuses up to +50%
+        address trophyAddr = trophies;
+        if (trophyAddr != address(0)) {
+            try IERC721BalanceOf(trophyAddr).balanceOf(player) returns (uint256 bal) {
+                if (bal != 0) {
+                    bonusBps += 500; // +5% boost for trophy owners
+                }
+            } catch {}
+        }
+        return 10000 + bonusBps; // base 1.0x (10000 bps) plus streak/trophy bonuses
     }
 
     function _scoreWithMultiplier(address player, uint256 baseScore) private view returns (uint256) {
@@ -1059,6 +1137,7 @@ contract DegenerusBonds {
         address current = coin;
         if (current != address(0)) revert AlreadySet();
         coin = coin_;
+        affiliate = ICoinAffiliateLike(coin_).affiliateProgram();
     }
 
     function _setQuestModule(address questModule_) private {
@@ -1066,6 +1145,13 @@ contract DegenerusBonds {
         address current = address(questModule);
         if (current != address(0)) revert AlreadySet();
         questModule = IDegenerusQuestView(questModule_);
+    }
+
+    function _setTrophies(address trophies_) private {
+        if (trophies_ == address(0)) return;
+        address current = trophies;
+        if (current != address(0)) revert AlreadySet();
+        trophies = trophies_;
     }
 
     function _setVrf(address coordinator_, uint256 subId, bytes32 keyHash_) private {

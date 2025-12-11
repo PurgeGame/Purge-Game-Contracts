@@ -925,7 +925,7 @@ contract DegenerusGamepieces {
     function _isCoinOrAdmin() private view returns (bool) {
         address sender = msg.sender;
         if (sender == address(coin)) return true;
-        return sender == coin.bondsAdmin();
+        return sender == coin.admin();
     }
 
     /// @notice Wire the game module using an address array ([game]); set-once per slot.

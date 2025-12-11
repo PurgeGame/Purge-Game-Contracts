@@ -6,6 +6,7 @@ interface IDegenerusAffiliate {
     function createSyntheticMapPlayer(address affiliateOwner, bytes32 code) external returns (address synthetic);
 
     function affiliateTop(uint24 lvl) external view returns (address player, uint96 score);
+    function presaleActive() external view returns (bool);
 
     function getReferrer(address player) external view returns (address);
     function syntheticMapInfo(address synthetic) external view returns (address owner, bytes32 code);

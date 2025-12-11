@@ -299,6 +299,11 @@ contract DegenerusAffiliate {
         return _referrerAddress(player);
     }
 
+    /// @notice True while presale is open and coin wiring has not finalized.
+    function presaleActive() external view returns (bool) {
+        return preCoinActive && !presaleShutdown;
+    }
+
     /// @notice Allow the bonds contract to permanently close presale sales.
     function shutdownPresale() external {
         if (msg.sender != bonds) revert OnlyBonds();
