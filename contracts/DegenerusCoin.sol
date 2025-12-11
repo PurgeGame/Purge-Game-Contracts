@@ -260,7 +260,7 @@ contract DegenerusCoin {
     }
 
     /// @notice Claim presale/early affiliate bonuses that were deferred to the affiliate contract.
-    function claimPresaleAffiliateBonus() external {
+    function claimPresale() external {
         uint256 amount = affiliateProgram.consumePresaleCoin(msg.sender);
         if (amount == 0) return;
         if (amount > presaleClaimableRemaining) revert Insufficient();
@@ -339,21 +339,9 @@ contract DegenerusCoin {
         }
     }
 
-    /// @notice Burn BURNIE to open a future stake targeting `targetLevel` with a risk radius.
-    /// @dev
-    /// - `burnAmt` must be at least 250e6 base units (token has 6 decimals).
-    /// - `targetLevel` must be ahead of the current effective game level.
-    /// - `risk` must be between 1 and `MAX_RISK` and cannot exceed the distance to `targetLevel`.
-    /// - Records the stake with its distance, risk, original principal, and modified weighting used for prize splits.
-    function stake(uint256 burnAmt, uint24 targetLevel, uint8 risk) external pure {
-        burnAmt;
-        targetLevel;
-        risk;
-        revert BettingPaused(); // staking removed
-    }
-
     /// @notice Wire game, NFT, quest module, jackpots, and optionally the VRF sub using an address array.
-    /// @dev Order: [game, nft, quest module, jackpots, vrfSub]; set-once per slot.
+    /// @dev Order: [game, nft, quest module, jackpots, vrfSub]; set-once per slot. Downstream modules are
+    ///      wired directly by the admin rather than being cascaded here.
     function wire(address[] calldata addresses) external {
         address admin = bondsAdmin;
         if (msg.sender != bonds && msg.sender != admin) revert OnlyBonds();
@@ -364,17 +352,6 @@ contract DegenerusCoin {
         if (len > 2) _setQuestModule(addresses[2]);
         if (len > 3) _setJackpots(addresses[3]);
         if (len > 4) _setVrfSub(addresses[4]);
-
-        // Cascade wiring for quest module and NFT when provided.
-        address gameAddr = addresses.length > 0 ? addresses[0] : address(0);
-        if (gameAddr != address(0)) {
-            if (addresses.length > 2 && addresses[2] != address(0)) {
-                IDegenerusQuestModule(addresses[2]).wire(_singleAddrArray(gameAddr));
-            }
-            if (addresses.length > 1 && addresses[1] != address(0)) {
-                degenerusGamepieces.wire(_singleAddrArray(gameAddr));
-            }
-        }
     }
 
     function _setGame(address game_) private {
@@ -387,10 +364,6 @@ contract DegenerusCoin {
         }
     }
 
-    function _singleAddrArray(address a) private pure returns (address[] memory arr) {
-        arr = new address[](1);
-        arr[0] = a;
-    }
 
     function _setNft(address nft_) private {
         if (nft_ == address(0)) return;

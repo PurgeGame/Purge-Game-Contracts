@@ -42,6 +42,14 @@ interface ICoinLike {
     function transfer(address to, uint256 amount) external returns (bool);
 }
 
+interface ICoinAffiliateLike is ICoinLike {
+    function affiliateProgram() external view returns (address);
+}
+
+interface IAffiliatePresaleShutdown {
+    function shutdownPresale() external;
+}
+
 interface IDegenerusQuestView {
     function playerQuestStates(
         address player
@@ -179,7 +187,7 @@ contract BondToken {
  * @title DegenerusBonds
  * @notice Bond system wired for the Degenerus game:
  *         - Bonds created every 5 levels; sales open 10 levels before maturity.
- *         - Payout budget = 1.25x the last issuance raise (configurable for the first round).
+ *         - Payout budget = last issuance raise * growthBps (default 1.5x), with a configurable first-round seed.
  *         - Deposits award a score (multiplier stub) used for jackpots.
  *         - Five jackpot days mint a maturity-specific ERC20; total mint equals payout budget.
  *         - Burning the ERC20 enters a two-lane final jackpot at maturity; payout ~pro-rata to burned amount.
@@ -198,7 +206,9 @@ contract DegenerusBonds {
     error PurchasesDisabled();
     error MinimumDeposit();
     error NotExpired();
+    error InvalidGrowth();
     error VrfLocked();
+    error NotReady();
 
     // ---------------------------------------------------------------------
     // Events
@@ -222,6 +232,7 @@ contract DegenerusBonds {
     event BondGameOver(uint256 poolSpent, uint24 partialMaturity);
     event BondCoinJackpot(address indexed player, uint256 amount, uint24 maturityLevel, uint8 lane);
     event ExpiredSweep(uint256 ethAmount, uint256 stEthAmount);
+    event PayoutGrowthUpdated(uint256 previousBps, uint256 newBps);
 
     // ---------------------------------------------------------------------
     // Constants
@@ -235,6 +246,7 @@ contract DegenerusBonds {
     uint8 private constant TOP_PCT_3 = 5;
     uint8 private constant TOP_PCT_4 = 5;
     uint256 private constant MIN_DEPOSIT = 0.01 ether;
+    uint256 private constant DEFAULT_PAYOUT_GROWTH_BPS = 15000; // 150%
     uint32 private constant VRF_CALLBACK_GAS_LIMIT = 200_000;
     uint16 private constant VRF_REQUEST_CONFIRMATIONS = 10;
 
@@ -293,12 +305,14 @@ contract DegenerusBonds {
     address private immutable admin;
     uint256 private lastIssuanceRaise;
     uint256 private immutable initialPayoutBudget;
+    uint256 private payoutGrowthBps;
     address private vrfCoordinator;
     bytes32 private vrfKeyHash;
     uint256 private vrfSubscriptionId;
     uint256 private vrfRequestId;
     uint256 private vrfPendingWord;
     bool private vrfRequestPending;
+    bool private firstSeriesBudgetFinalized;
     bool public gameOverStarted; // true after game signals shutdown; disables new deposits and bank pushes
     uint48 public gameOverTimestamp; // timestamp when game over was triggered
     bool public gameOverEntropyAttempted; // true after gameOver() attempts to fetch entropy (request or failure)
@@ -321,6 +335,7 @@ contract DegenerusBonds {
         admin = admin_;
         steth = steth_;
         initialPayoutBudget = initialPayoutBudget_;
+        payoutGrowthBps = DEFAULT_PAYOUT_GROWTH_BPS;
 
         // Predeploy the two shared bond tokens (DGNS0 for maturities ending in 0, DGNS5 for ending in 5).
         tokenDGNS0 = new BondToken("Degenerus Bond DGNS0", "DGNS0", address(this), 0);
@@ -357,6 +372,40 @@ contract DegenerusBonds {
         if (msg.sender != admin) revert Unauthorized();
         externalPurchasesEnabled = externalEnabled;
         gamePurchasesEnabled = gameEnabled;
+    }
+
+    /// @notice Admin-controlled growth factor (in basis points) for the next series payout budget vs. last raise.
+    function setPayoutGrowthBps(uint256 newGrowthBps) external {
+        if (msg.sender != admin) revert Unauthorized();
+        if (newGrowthBps == 0) revert InvalidGrowth();
+        uint256 prev = payoutGrowthBps;
+        payoutGrowthBps = newGrowthBps;
+        emit PayoutGrowthUpdated(prev, newGrowthBps);
+    }
+
+    /// @notice Close presale and lock the first maturity (level 10) budget to presale raise * growth factor.
+    /// @dev Calls affiliate.shutdownPresale() (best effort) and finalizes once; reverts if no presale raise.
+    function shutdownPresale() external {
+        if (msg.sender != admin) revert Unauthorized();
+        if (firstSeriesBudgetFinalized) revert AlreadySet();
+
+        // Attempt to close presale on the affiliate contract.
+        address coinAddr = coin;
+        if (coinAddr == address(0)) revert NotReady();
+        address affiliate = ICoinAffiliateLike(coinAddr).affiliateProgram();
+        if (affiliate != address(0)) {
+            try IAffiliatePresaleShutdown(affiliate).shutdownPresale() {} catch {}
+        }
+
+        BondSeries storage s = _getOrCreateSeries(10);
+        uint256 raised = s.raised;
+        if (raised == 0) revert NotReady();
+
+        uint256 target = _targetBudgetForSeries(s);
+        if (target > s.payoutBudget) {
+            s.payoutBudget = target;
+        }
+        firstSeriesBudgetFinalized = true;
     }
 
     /// @notice Unified deposit: external callers route ETH into the current maturity.
@@ -996,8 +1045,9 @@ contract DegenerusBonds {
         s.maturityLevel = maturityLevel;
         s.saleStartLevel = maturityLevel > 10 ? maturityLevel - 10 : 0;
 
-        // Start each new maturity at 150% of the previous raise (or the configured initial budget for the first series).
-        uint256 budget = lastIssuanceRaise == 0 ? initialPayoutBudget : (lastIssuanceRaise * 150) / 100;
+        // Start each new maturity at growthBps of the previous raise (or the configured initial budget for the first series).
+        uint256 growthBps = payoutGrowthBps;
+        uint256 budget = lastIssuanceRaise == 0 ? initialPayoutBudget : (lastIssuanceRaise * growthBps) / 10000;
         s.payoutBudget = budget;
 
         // Only two ERC20s are ever used: DGNS0 (maturities ending in 0) and DGNS5 (ending in 5).
@@ -1076,16 +1126,30 @@ contract DegenerusBonds {
     }
 
     function _runJackpotsForDay(BondSeries storage s, uint256 rngWord, uint24 currLevel) private {
+        uint8 maxRuns = _maxEmissionRuns(s.maturityLevel);
+        bool isFinalRun = (s.jackpotsRun + 1 == maxRuns);
+
+        // For early runs, keep payout budget tracked to raised so remaining stays non-negative.
+        // On the final run, compute the true growth-adjusted budget once and sweep the remainder.
+        if (isFinalRun) {
+            uint256 finalBudget = _targetBudgetForSeries(s);
+            if (finalBudget > s.payoutBudget) {
+                s.payoutBudget = finalBudget;
+            }
+        } else if (s.payoutBudget < s.raised) {
+            s.payoutBudget = s.raised;
+        }
+
         if (s.payoutBudget == 0 || s.mintedBudget >= s.payoutBudget) return;
 
         uint256 pct = _emissionPct(s.maturityLevel, s.jackpotsRun);
         if (pct == 0) return;
 
-        uint256 targetTotal = (s.payoutBudget * pct) / 100;
         uint256 remainingBudget = s.payoutBudget - s.mintedBudget;
-        if (targetTotal > remainingBudget) {
-            targetTotal = remainingBudget;
-        }
+
+        // Early runs mint against actual ETH raised; final run mints the remaining budget (growth-adjusted).
+        uint256 baseForRun = isFinalRun ? s.payoutBudget : s.raised;
+        uint256 targetTotal = isFinalRun ? remainingBudget : _min((baseForRun * pct) / 100, remainingBudget);
 
         uint256 primaryMint = targetTotal;
 
@@ -1102,23 +1166,54 @@ contract DegenerusBonds {
     function _emissionPct(uint24 maturityLevel, uint8 run) private pure returns (uint256) {
         // Special-case the first series (maturity 10) to emit only four days; day 1 combines level0/level1 share.
         if (maturityLevel == 10) {
-            if (run == 0) return 10;
+            if (run == 0) return 20;
             if (run == 1) return 10;
             if (run == 2) return 10;
-            if (run == 3) return 70;
+            if (run == 3) return 60;
             return 0;
         }
 
-        if (run == 0) return 5;
-        if (run == 1) return 5;
+        if (run == 0) return 10;
+        if (run == 1) return 10;
         if (run == 2) return 10;
         if (run == 3) return 10;
-        if (run == 4) return 70;
+        if (run == 4) return 60;
         return 0;
     }
 
     function _maxEmissionRuns(uint24 maturityLevel) private pure returns (uint8) {
         return maturityLevel == 10 ? 4 : 5;
+    }
+
+    // Piecewise sliding multiplier: 3x at 0.5x prior raise, 2x at 1x, 1x at 2x; clamped outside.
+    function _growthMultiplierBps(uint256 raised) private view returns (uint256) {
+        uint256 prev = lastIssuanceRaise;
+        if (prev == 0 || raised == 0) return payoutGrowthBps; // fallback for first series or empty raise
+
+        uint256 ratio = (raised * 1e18) / prev; // 1e18 == 1.0
+        if (ratio <= 5e17) return 30000; // <=0.5x -> 3.0x
+        if (ratio <= 1e18) {
+            // Linear from 3.0x at 0.5 to 2.0x at 1.0: 4 - 2r
+            return 40000 - (20000 * ratio) / 1e18;
+        }
+        if (ratio <= 2e18) {
+            // Linear from 2.0x at 1.0 to 1.0x at 2.0: 3 - r
+            return 20000 - (10000 * (ratio - 1e18)) / 1e18;
+        }
+        return 10000; // >=2x -> 1.0x
+    }
+
+    function _targetBudgetForSeries(BondSeries storage s) private view returns (uint256) {
+        uint256 growthBps = _growthMultiplierBps(s.raised);
+        uint256 target = (s.raised * growthBps) / 10000;
+        if (target < s.raised) {
+            target = s.raised;
+        }
+        return target;
+    }
+
+    function _min(uint256 a, uint256 b) private pure returns (uint256) {
+        return a < b ? a : b;
     }
 
     function _runMintJackpot(BondSeries storage s, uint256 rngWord, uint256 toMint) private {

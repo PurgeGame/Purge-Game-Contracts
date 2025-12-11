@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import "../interfaces/IDegenerusQuestModule.sol";
 import "../interfaces/IDegenerusGame.sol";
+import "../interfaces/IDegenerusCoin.sol";
 
 /// @title DegenerusQuestModule
 /// @notice Tracks two rotating daily quests and validates player progress against Degenerus game actions.
@@ -86,7 +87,7 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
     }
 
     /// @notice Wire the Degenerus game contract using an address array ([game]); set-once per slot.
-    function wire(address[] calldata addresses) external onlyCoin {
+    function wire(address[] calldata addresses) external onlyCoinOrAdmin {
         _setGame(addresses.length > 0 ? addresses[0] : address(0));
     }
 
@@ -103,6 +104,16 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
     modifier onlyCoin() {
         if (msg.sender != coin) revert OnlyCoin();
         _;
+    }
+
+    modifier onlyCoinOrAdmin() {
+        if (!_isCoinOrAdmin(msg.sender)) revert OnlyCoin();
+        _;
+    }
+
+    function _isCoinOrAdmin(address sender) private view returns (bool) {
+        if (sender == coin) return true;
+        return sender == IDegenerusCoin(coin).bondsAdmin();
     }
 
     /// @notice Roll the daily quest set using VRF entropy.

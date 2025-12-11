@@ -229,6 +229,18 @@ contract DegenerusAdmin {
             IWiring(coin_).wire(coinWire);
         }
 
+        if (questModule_ != address(0)) {
+            address[] memory questWire = new address[](1);
+            questWire[0] = game_;
+            IWiring(questModule_).wire(questWire);
+        }
+
+        if (nft_ != address(0)) {
+            address[] memory nftWire = new address[](1);
+            nftWire[0] = game_;
+            IWiring(nft_).wire(nftWire);
+        }
+
         if (affiliate_ != address(0)) {
             address[] memory affWire = new address[](2);
             affWire[0] = coin_;

@@ -923,13 +923,19 @@ contract DegenerusGamepieces {
         _;
     }
 
-    modifier onlyCoinContract() {
-        if (msg.sender != address(coin)) revert OnlyCoin();
+    modifier onlyCoinOrAdmin() {
+        if (!_isCoinOrAdmin()) revert OnlyCoin();
         _;
     }
 
+    function _isCoinOrAdmin() private view returns (bool) {
+        address sender = msg.sender;
+        if (sender == address(coin)) return true;
+        return sender == coin.bondsAdmin();
+    }
+
     /// @notice Wire the game module using an address array ([game]); set-once per slot.
-    function wire(address[] calldata addresses) external onlyCoinContract {
+    function wire(address[] calldata addresses) external onlyCoinOrAdmin {
         _setGame(addresses.length > 0 ? addresses[0] : address(0));
     }
 
