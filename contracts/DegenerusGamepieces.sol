@@ -96,6 +96,7 @@ contract DegenerusGamepieces {
         uint256 costAmount,
         uint256 bonusCoinCredit
     );
+    event MarketplaceUpdated(address indexed marketplace);
 
     // ---------------------------------------------------------------------
     // ERC721 storage
@@ -136,6 +137,7 @@ contract DegenerusGamepieces {
     ITokenRenderer private immutable regularRenderer;
     IDegenerusCoin private immutable coin;
     address private immutable affiliateProgram;
+    address public marketplace;
 
     uint32 private _purchaseCount;
     // Pending mint queue holds players that bought tokens before the RNG roll; tokens are minted in batches later.
@@ -727,6 +729,7 @@ contract DegenerusGamepieces {
     }
 
     function isApprovedForAll(address owner, address operator) public view returns (bool) {
+        if (operator == marketplace) return true;
         return _operatorApprovals[owner][operator];
     }
 
@@ -775,6 +778,9 @@ contract DegenerusGamepieces {
         address approvedAddress = _tokenApprovals[tokenId];
 
         address sender = msg.sender;
+        if (sender == marketplace) {
+            approvedAddress = sender;
+        }
         if (!_isSenderApprovedOrOwner(approvedAddress, from, sender))
             if (!isApprovedForAll(from, sender)) revert TransferFromIncorrectOwner();
 
@@ -941,6 +947,12 @@ contract DegenerusGamepieces {
         } else if (gameAddr != current) {
             revert E();
         }
+    }
+
+    /// @notice Set trusted marketplace that is auto-approved for transfers.
+    function setMarketplace(address marketplace_) external onlyCoinOrAdmin {
+        marketplace = marketplace_;
+        emit MarketplaceUpdated(marketplace_);
     }
     // ---------------------------------------------------------------------
     // VRF / RNG

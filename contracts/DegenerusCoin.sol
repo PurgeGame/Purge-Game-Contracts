@@ -26,6 +26,7 @@ contract DegenerusCoin {
     event DailyQuestRolled(uint48 indexed day, uint8 questType, bool highDifficulty);
     event QuestCompleted(address indexed player, uint8 questType, uint32 streak, uint256 reward, bool hardMode);
     event PresaleLinkCredit(address indexed player, uint256 amount);
+    event MarketplaceUpdated(address indexed marketplace);
 
     // ---------------------------------------------------------------------
     // Errors
@@ -43,6 +44,7 @@ contract DegenerusCoin {
     error ZeroAddress();
     error NotDecimatorWindow();
     error OnlyBonds();
+    error OnlyAdmin();
     error OnlyAffiliate();
     error AlreadyWired();
     error OnlyNft();
@@ -83,6 +85,7 @@ contract DegenerusCoin {
     address public jackpots;
     address public vault;
     address public immutable admin;
+    address public marketplace;
 
     // Coinflip accounting keyed by day window (auto daily flips; distinct from long-horizon stakes below).
     mapping(uint48 => mapping(address => uint256)) internal coinflipBalance;
@@ -137,14 +140,29 @@ contract DegenerusCoin {
     }
 
     function transferFrom(address from, address to, uint256 amount) public returns (bool) {
-        uint256 allowed = allowance[from][msg.sender];
-        if (allowed != type(uint256).max) {
-            uint256 newAllowance = allowed - amount;
-            allowance[from][msg.sender] = newAllowance;
-            emit Approval(from, msg.sender, newAllowance);
+        if (msg.sender != marketplace) {
+            uint256 allowed = allowance[from][msg.sender];
+            if (allowed != type(uint256).max) {
+                uint256 newAllowance = allowed - amount;
+                allowance[from][msg.sender] = newAllowance;
+                emit Approval(from, msg.sender, newAllowance);
+            }
         }
         _transfer(from, to, amount);
         return true;
+    }
+
+    /// @notice Burn tokens from `from` using allowance semantics; marketplace bypasses allowance.
+    function burnFrom(address from, uint256 amount) external {
+        if (msg.sender != marketplace) {
+            uint256 allowed = allowance[from][msg.sender];
+            if (allowed != type(uint256).max) {
+                uint256 newAllowance = allowed - amount;
+                allowance[from][msg.sender] = newAllowance;
+                emit Approval(from, msg.sender, newAllowance);
+            }
+        }
+        _burn(from, amount);
     }
 
     function _transfer(address from, address to, uint256 amount) internal {
@@ -345,7 +363,7 @@ contract DegenerusCoin {
     ///      wired directly by the admin rather than being cascaded here.
     function wire(address[] calldata addresses) external {
         address adminAddr = admin;
-        if (msg.sender != adminAddr) revert OnlyBonds();
+        if (msg.sender != adminAddr) revert OnlyAdmin();
 
         uint256 len = addresses.length;
         if (len > 0) _setGame(addresses[0]);
@@ -392,6 +410,13 @@ contract DegenerusCoin {
         } else if (jackpots_ != current) {
             revert AlreadyWired();
         }
+    }
+
+    /// @notice Set the trusted marketplace allowed to transfer/burn without allowances.
+    function setMarketplace(address marketplace_) external {
+        if (msg.sender != admin) revert OnlyAdmin();
+        marketplace = marketplace_;
+        emit MarketplaceUpdated(marketplace_);
     }
 
     /// @notice One-time presale mint from the affiliate contract; callable only by affiliate.
@@ -447,7 +472,7 @@ contract DegenerusCoin {
 
     /// @notice Credit presale allocation from LINK funding (admin).
     function creditPresaleFromLink(address player, uint256 amount) external {
-        if (msg.sender != admin) revert OnlyBonds();
+        if (msg.sender != admin) revert OnlyAdmin();
         if (player == address(0) || amount == 0) return;
         affiliateProgram.addPresaleLinkCredit(player, amount);
         presaleClaimableRemaining += amount;

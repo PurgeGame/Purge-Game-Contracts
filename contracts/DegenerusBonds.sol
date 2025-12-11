@@ -445,9 +445,9 @@ contract DegenerusBonds {
         // Attempt to close presale on the affiliate contract.
         address coinAddr = coin;
         if (coinAddr == address(0)) revert NotReady();
-        address affiliate = ICoinAffiliateLike(coinAddr).affiliateProgram();
-        if (affiliate != address(0)) {
-            try IAffiliatePresaleShutdown(affiliate).shutdownPresale() {} catch {}
+        address affiliateAddr = ICoinAffiliateLike(coinAddr).affiliateProgram();
+        if (affiliateAddr != address(0)) {
+            try IAffiliatePresaleShutdown(affiliateAddr).shutdownPresale() {} catch {}
         }
 
         BondSeries storage s = _getOrCreateSeries(10);
