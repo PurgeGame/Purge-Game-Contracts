@@ -18,10 +18,6 @@ interface IDegenerusGamepiecesAffiliate {
     function purchaseMapForAffiliate(address buyer, uint256 quantity) external;
 }
 
-interface IDegenerusBondsPresale {
-    function ingestPresaleEth() external payable;
-}
-
 contract DegenerusAffiliate {
     // ---------------------------------------------------------------------
     // Events
@@ -39,8 +35,6 @@ contract DegenerusAffiliate {
     error Insufficient();
     error InvalidRakeback();
     error ZeroAddress();
-    error PresaleExceedsRemaining();
-    error PresalePerTxLimit();
     error PresaleClosed();
     error OnlyGame();
     error SyntheticCap();
@@ -68,14 +62,6 @@ contract DegenerusAffiliate {
     // ---------------------------------------------------------------------
     uint256 private constant MILLION = 1e6; // token has 6 decimals
     bytes32 private constant REF_CODE_LOCKED = bytes32(uint256(1));
-    uint256 private constant PRESALE_SUPPLY_TOKENS = 10_000_000;
-    uint256 private constant PRESALE_DECAY_CUTOFF_TOKENS = 3_000_000;
-    uint256 private constant PRESALE_PRICE_START_1000 = 0.01 ether; // price per 1,000 tokens
-    uint256 private constant PRESALE_PRICE_INC_PER_ETH_1000 = 0.0005 ether; // bump per 1 ETH sold (per 1,000 tokens)
-    uint256 private constant PRESALE_PRICE_DECAY_1000 = 0.0005 ether; // daily decay (per 1,000 tokens)
-    uint256 private constant PRESALE_PRICE_DIVISOR = 1000; // pricePer1000 / 1000 = price per token
-    uint256 private constant PRESALE_PRICE_FLOOR_1000 = 0.0075 ether; // minimum price per 1,000 tokens
-    uint256 private constant PRESALE_MAX_ETH_PER_TX = 1 ether;
     uint256 private constant SYNTH_BASE_COST = 1500 * MILLION; // base 10 slots after level > 3
     uint256 private constant SYNTH_TOPUP_COST = 2500 * MILLION; // per +10 slots
     uint32 private constant SYNTH_BATCH = 10;
@@ -98,62 +84,13 @@ contract DegenerusAffiliate {
     mapping(address => bytes32) private playerReferralCode;
     mapping(address => address) public syntheticMapOwner; // synthetic player -> affiliate owner
     mapping(address => uint256) public presaleCoinEarned;
-    mapping(address => uint256) public presalePrincipal; // principal bought while coin is unwired
     mapping(uint24 => PlayerScore) private affiliateTopByLevel;
     mapping(address => SyntheticCapInfo) private syntheticCap;
     uint256 public presaleClaimableTotal;
-    uint256 private presaleInventoryBase = PRESALE_SUPPLY_TOKENS * MILLION; // used before coin is wired
-    uint256 private presalePricePer1000 = PRESALE_PRICE_START_1000;
-    uint96 public totalPresaleSold;
     uint64 private syntheticNonce;
-    uint48 private presaleLastDay;
     bool private preCoinActive = true;
-    bool private presaleShutdown; // permanently stops new presale purchases once coin is wired
-    bool private presaleIncreasedToday;
+    bool private presaleShutdown; // permanently stops presale-era flows once coin is wired or manually closed
     bool private referralLocksActive;
-
-    function _applyPresaleDecay() private returns (uint256 pricePer1000) {
-        uint48 day = uint48(block.timestamp / 1 days);
-        uint48 last = presaleLastDay;
-        // Stop decay entirely after the cutoff supply is sold.
-        if (uint256(totalPresaleSold) / MILLION >= PRESALE_DECAY_CUTOFF_TOKENS) {
-            presaleLastDay = day;
-            presaleIncreasedToday = false;
-            return presalePricePer1000;
-        }
-        if (last == 0) {
-            presaleLastDay = day;
-            return presalePricePer1000;
-        }
-        if (day > last) {
-            uint256 daysElapsed = uint256(day) - uint256(last);
-            if (presaleIncreasedToday && daysElapsed != 0) {
-                unchecked {
-                    --daysElapsed; // skip one day of decay if price increased last day
-                }
-            }
-            if (daysElapsed != 0) {
-                uint256 decay = daysElapsed * PRESALE_PRICE_DECAY_1000;
-                uint256 p = presalePricePer1000;
-                if (decay >= p || p - decay < PRESALE_PRICE_FLOOR_1000) {
-                    presalePricePer1000 = PRESALE_PRICE_FLOOR_1000;
-                } else {
-                    presalePricePer1000 = p - decay;
-                }
-            }
-            presaleLastDay = day;
-            presaleIncreasedToday = false;
-        }
-        return presalePricePer1000;
-    }
-
-    function _bumpPresalePrice(uint256 ethPaid) private {
-        if (ethPaid == 0) return;
-        uint256 bump = (ethPaid * PRESALE_PRICE_INC_PER_ETH_1000) / 1 ether;
-        if (bump == 0) return;
-        presalePricePer1000 += bump;
-        presaleIncreasedToday = true;
-    }
 
     // ---------------------------------------------------------------------
     // Constructor
@@ -310,68 +247,9 @@ contract DegenerusAffiliate {
         presaleShutdown = true;
     }
 
-    /// @notice Presale purchase flow (ETH -> BURNIE) with linear price ramp and deferred bonuses.
-    function presale() external payable returns (uint256 amountBase) {
-        if (presaleShutdown) revert PresaleClosed();
-        uint256 ethIn = msg.value;
-        if (ethIn < 0.001 ether) revert Insufficient();
-        if (ethIn > PRESALE_MAX_ETH_PER_TX) revert PresalePerTxLimit();
-
-        if (!preCoinActive) revert PresaleExceedsRemaining();
-        uint256 pricePer1000 = _applyPresaleDecay();
-        uint256 inventoryBase = presaleInventoryBase;
-        uint256 inventoryTokens = inventoryBase / MILLION;
-        if (inventoryTokens == 0) revert PresaleExceedsRemaining();
-
-        // price per token = pricePer1000 / 1000
-        uint256 tokensOut;
-        unchecked {
-            tokensOut = (ethIn * PRESALE_PRICE_DIVISOR) / pricePer1000;
-        }
-        if (tokensOut == 0) revert Insufficient();
-        if (tokensOut > inventoryTokens) {
-            tokensOut = inventoryTokens;
-        }
-
-        uint256 costWei;
-        unchecked {
-            costWei = (tokensOut * pricePer1000) / PRESALE_PRICE_DIVISOR;
-        }
-        uint256 refund = ethIn - costWei;
-
-        amountBase = tokensOut * MILLION;
-        totalPresaleSold = uint96(uint256(totalPresaleSold) + amountBase);
-
-        address payable buyer = payable(msg.sender);
-        presaleInventoryBase = inventoryBase - amountBase;
-        presalePrincipal[buyer] += amountBase;
-        uint256 buyerEarned = presaleCoinEarned[buyer];
-
-        IDegenerusBondsPresale(bonds).ingestPresaleEth{value: costWei}(); // bonds routes 90% to prize pool
-
-        if (refund != 0) {
-            (bool refundOk, ) = buyer.call{value: refund}("");
-            if (!refundOk) revert Insufficient();
-        }
-
-        _bumpPresalePrice(costWei);
-
-        address affiliateAddr = _referrerAddress(buyer);
-        uint256 claimableDelta = amountBase;
-        if (affiliateAddr != address(0) && affiliateAddr != buyer) {
-            uint256 affiliateBonus = (amountBase * 5) / 100;
-            uint256 buyerBonus = (amountBase * 2) / 100;
-            if (affiliateBonus != 0) {
-                presaleCoinEarned[affiliateAddr] += affiliateBonus;
-                claimableDelta += affiliateBonus;
-            }
-            if (buyerBonus != 0) {
-                buyerEarned += buyerBonus;
-                claimableDelta += buyerBonus;
-            }
-        }
-        presaleCoinEarned[buyer] = buyerEarned;
-        presaleClaimableTotal += claimableDelta;
+    /// @notice Presale direct purchases for ETH have been removed; always reverts.
+    function presale() external payable returns (uint256) {
+        revert PresaleClosed();
     }
 
     // ---------------------------------------------------------------------
@@ -533,10 +411,9 @@ contract DegenerusAffiliate {
     /// @dev Access: coin only.
     function consumePresaleCoin(address player) external returns (uint256 amount) {
         if (msg.sender != address(coin)) revert OnlyAuthorized();
-        amount = presaleCoinEarned[player] + presalePrincipal[player];
+        amount = presaleCoinEarned[player];
         if (amount != 0) {
             presaleCoinEarned[player] = 0;
-            presalePrincipal[player] = 0;
             if (amount <= presaleClaimableTotal) {
                 presaleClaimableTotal -= amount;
             } else {
@@ -569,41 +446,9 @@ contract DegenerusAffiliate {
         return (stored.player, stored.score);
     }
 
-    /// @notice Estimate the current priceCoin-equivalent rate for presale (coin units per 1 ETH) using decay rules.
-    /// @dev Uses a read-only version of the decay logic; does not mutate price state.
-    function presalePriceCoinEstimate() external view returns (uint256 priceCoinUnit) {
-        uint256 pricePer1000 = _presalePricePer1000View();
-        if (pricePer1000 == 0) return 0;
-        uint256 tokensPerEth = (1 ether * PRESALE_PRICE_DIVISOR) / pricePer1000;
-        return tokensPerEth * MILLION;
-    }
-
-    /// @notice View-only helper mirroring `_applyPresaleDecay` without modifying storage.
-    function _presalePricePer1000View() private view returns (uint256 pricePer1000) {
-        pricePer1000 = presalePricePer1000;
-        if (uint256(totalPresaleSold) / MILLION >= PRESALE_DECAY_CUTOFF_TOKENS) {
-            return pricePer1000;
-        }
-
-        uint48 day = uint48(block.timestamp / 1 days);
-        uint48 last = presaleLastDay;
-        if (last == 0) return pricePer1000;
-        if (day > last) {
-            uint256 daysElapsed = uint256(day) - uint256(last);
-            if (presaleIncreasedToday && daysElapsed != 0) {
-                unchecked {
-                    --daysElapsed; // skip first decay day if price bumped today
-                }
-            }
-            if (daysElapsed != 0) {
-                uint256 decay = daysElapsed * PRESALE_PRICE_DECAY_1000;
-                if (decay >= pricePer1000 || pricePer1000 - decay < PRESALE_PRICE_FLOOR_1000) {
-                    pricePer1000 = PRESALE_PRICE_FLOOR_1000;
-                } else {
-                    pricePer1000 -= decay;
-                }
-            }
-        }
+    /// @notice Presale pricing via ETH is disabled; return zero to signal no rate.
+    function presalePriceCoinEstimate() external pure returns (uint256 priceCoinUnit) {
+        return 0;
     }
 
     /// @notice Return synthetic map info (affiliate owner and locked code) for a synthetic player.

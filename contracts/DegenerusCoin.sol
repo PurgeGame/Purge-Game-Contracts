@@ -233,12 +233,7 @@ contract DegenerusCoin {
     // ---------------------------------------------------------------------
     // Constructor
     // ---------------------------------------------------------------------
-    constructor(
-        address bonds_,
-        address admin_,
-        address payable affiliate_,
-        address vault_
-    ) {
+    constructor(address bonds_, address admin_, address payable affiliate_, address vault_) {
         if (bonds_ == address(0) || admin_ == address(0) || affiliate_ == address(0)) revert ZeroAddress();
         bonds = bonds_;
         admin = admin_;
@@ -629,17 +624,6 @@ contract DegenerusCoin {
     function coinflipAmount(address player) external view returns (uint256) {
         uint48 day = _targetFlipDay();
         return coinflipBalance[day][player];
-    }
-
-    /// @notice Record the stake resolution day for a level (invoked by DegenerusGame at end of state 1).
-    /// @dev The first call at the start of level 2 is considered the level-1 resolution.
-    function recordStakeResolution(
-        uint24 level,
-        uint48 day
-    ) external view onlyDegenerusGameContract returns (address topStakeWinner) {
-        level;
-        day;
-        return address(0); // staking removed
     }
 
     function _claimCoinflipsInternal(address player) internal returns (uint256 claimed) {
