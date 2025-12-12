@@ -31,12 +31,9 @@ interface IDegenerusBonds {
     function depositFromGame(address beneficiary, uint256 amount) external payable returns (uint256 scoreAwarded);
     function payBonds(uint256 coinAmount, uint256 stEthAmount, uint256 rngWord) external payable;
     function bondMaintenance(uint256 rngWord, uint32 workCapOverride) external returns (bool worked);
+    function setRngLock(bool locked) external;
     function notifyGameOver() external;
     function purchasesEnabled() external view returns (bool);
-}
-
-interface IDegenerusBondsGameOver {
-    function gameOver() external payable;
 }
 
 /**
@@ -73,7 +70,6 @@ contract DegenerusGame is DegenerusGameStorage {
     error NotTimeYet(); // Called in a phase where the action is not permitted
     error RngNotReady(); // VRF request still pending
     error RngLocked(); // RNG is already locked; nudge not allowed
-    error BondsNotResolved(); // Pending bond resolution must be completed before requesting new RNG
     error InvalidQuantity(); // Invalid quantity or token count for the action
     error VrfUpdateNotReady(); // VRF swap not allowed yet (not stuck long enough or randomness already received)
 
@@ -81,12 +77,10 @@ contract DegenerusGame is DegenerusGameStorage {
     // Events
     // -----------------------
     event PlayerCredited(address indexed player, address indexed recipient, uint256 amount);
-    event Jackpot(uint256 traits); // Encodes jackpot metadata
     event Degenerus(address indexed player, uint256[] tokenIds);
     event Advance(uint8 gameState);
     event ReverseFlip(address indexed caller, uint256 totalQueued, uint256 cost);
     event VrfCoordinatorUpdated(address indexed previous, address indexed current);
-    event PrizePoolBondBuy(uint256 spendWei, uint256 quantity);
 
     // -----------------------
     // Immutable Addresses
@@ -479,8 +473,7 @@ contract DegenerusGame is DegenerusGameStorage {
 
         uint24 lvl = level;
 
-        bool lastPurchase = (_gameState == 2) ? lastPurchaseDay : false;
-        bool mapRngDay = (_gameState == 2) && lastPurchase;
+        bool lastPurchase = (_gameState == 2) && lastPurchaseDay;
 
         uint48 gateIdx = dailyIdx;
         uint32 currentDay = uint32(day);
@@ -502,7 +495,7 @@ contract DegenerusGame is DegenerusGameStorage {
                 }
             }
 
-            uint256 rngWord = rngAndTimeGate(day, lvl, mapRngDay);
+            uint256 rngWord = rngAndTimeGate(day, lvl, lastPurchase);
             if (rngWord == 1) {
                 break;
             }
@@ -514,11 +507,6 @@ contract DegenerusGame is DegenerusGameStorage {
             // --- State 1 - Pregame ---
             if (_gameState == 1) {
                 _runEndgameModule(lvl, rngWord); // handles payouts, wipes, endgame dist, and jackpots
-                address topStake = coinContract.recordStakeResolution(lvl, day);
-                if (topStake != address(0)) {
-                    IDegenerusTrophies(trophies).mintStake(topStake, lvl);
-                }
-
                 if (lastExterminatedTrait != TRAIT_ID_TIMEOUT) {
                     payDailyJackpot(false, level, rngWord);
                 }
@@ -550,8 +538,7 @@ contract DegenerusGame is DegenerusGameStorage {
                         }
                     }
 
-                    uint256 totalWeiForBond = rewardPool + currentPrizePool;
-                    _bondSetup(totalWeiForBond, rngWord, lvl);
+                    _bondSetup(lvl, rngWord);
 
                     bool bondWorked = IDegenerusBonds(bonds).bondMaintenance(rngWord, cap);
                     if (bondWorked) break; // bond batch consumed this tick; rerun advanceGame to continue
@@ -875,7 +862,7 @@ contract DegenerusGame is DegenerusGameStorage {
         if (!ok) return;
     }
 
-    function _bondSetup(uint256 totalWei, uint256 rngWord, uint24 lvl) private {
+    function _bondSetup(uint24 lvl, uint256 rngWord) private {
         (bool ok, ) = bondModule.delegatecall(
             abi.encodeWithSelector(
                 IDegenerusGameBondModule.bondMaintenanceForMap.selector,
@@ -883,7 +870,6 @@ contract DegenerusGame is DegenerusGameStorage {
                 address(steth),
                 address(coin),
                 lvl,
-                totalWei,
                 rngWord
             )
         );
@@ -893,13 +879,6 @@ contract DegenerusGame is DegenerusGameStorage {
     function _stakeForTargetRatioModule(uint24 lvl) private {
         (bool ok, ) = bondModule.delegatecall(
             abi.encodeWithSelector(IDegenerusGameBondModule.stakeForTargetRatio.selector, bonds, address(steth), lvl)
-        );
-        if (!ok) return;
-    }
-
-    function _gameOverDrainToBondsModule() private {
-        (bool ok, ) = bondModule.delegatecall(
-            abi.encodeWithSelector(IDegenerusGameBondModule.drainToBonds.selector, bonds, address(steth))
         );
         if (!ok) return;
     }
@@ -1006,22 +985,26 @@ contract DegenerusGame is DegenerusGameStorage {
             return (0, 0, new address[](0));
         }
 
-        uint24 maxOffset = currentLvl > 20 ? 20 : currentLvl - 1;
-        uint256 levelEntropy = uint256(keccak256(abi.encode(entropy, currentLvl)));
-        uint24 offset = uint24((levelEntropy % maxOffset) + 1); // 1..maxOffset
-        lvlSel = currentLvl - offset;
+        uint24 maxOffset = currentLvl - 1;
+        if (maxOffset > 20) maxOffset = 20;
 
-        traitSel = uint8(uint256(keccak256(abi.encode(entropy, lvlSel))) & 0xFF);
+        uint256 word = entropy;
+        uint24 offset;
+        unchecked {
+            offset = uint24(word % maxOffset) + 1; // 1..maxOffset
+            lvlSel = currentLvl - offset;
+        }
+
+        traitSel = uint8(word >> 24); // use a disjoint byte from the VRF word
         address[] storage arr = traitBurnTicket[lvlSel][traitSel];
         uint256 len = arr.length;
         if (len == 0) {
             return (lvlSel, traitSel, new address[](0));
         }
 
-        uint256 cap = 4; // only need a small sample for scatter draws
-        uint256 take = len < cap ? len : cap;
+        uint256 take = len > 4 ? 4 : len; // only need a small sample for scatter draws
         tickets = new address[](take);
-        uint256 start = uint256(keccak256(abi.encode(entropy, traitSel))) % len;
+        uint256 start = (word >> 40) % len; // consume another slice for the start offset
         for (uint256 i; i < take; ) {
             tickets[i] = arr[(start + i) % len];
             unchecked {
@@ -1148,7 +1131,10 @@ contract DegenerusGame is DegenerusGameStorage {
     }
 
     function gameOverDrainToBonds() private {
-        _gameOverDrainToBondsModule();
+        (bool ok, ) = bondModule.delegatecall(
+            abi.encodeWithSelector(IDegenerusGameBondModule.drainToBonds.selector, bonds, address(steth))
+        );
+        if (!ok) return;
         gameState = 0;
     }
 
@@ -1252,7 +1238,7 @@ contract DegenerusGame is DegenerusGameStorage {
     function _requestRng(uint8 gameState_, bool isMapJackpotDay, uint24 lvl, uint48 /*day*/) private {
         bool shouldLockBonds = (gameState_ == 2 && isMapJackpotDay);
         if (shouldLockBonds) {
-            rngLockedFlag = true;
+            IDegenerusBonds(bonds).setRngLock(true);
         }
 
         // Hard revert if Chainlink request fails; this intentionally halts game progress until VRF funding/config is fixed.

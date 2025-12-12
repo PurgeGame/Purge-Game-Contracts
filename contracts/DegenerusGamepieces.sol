@@ -725,7 +725,6 @@ contract DegenerusGamepieces {
     /// @dev Resolve packed ownership; reverts for invalid or burned tokens. Backtracks to find the last initialized slot.
     function _isLiveState() private view returns (bool) {
         IDegenerusGame g = game;
-        if (address(g) == address(0)) return false;
         return g.gameState() == 3;
     }
 

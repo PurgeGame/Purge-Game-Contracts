@@ -47,10 +47,10 @@ interface IDegenerusGameBondModule {
     function bondMaintenanceForMap(
         address bondsAddr,
         address stethAddr,
+        address coinAddr,
         uint24 lvl,
-        uint256 totalWei,
         uint256 rngWord
-    ) external returns (bool worked);
+    ) external;
     function stakeForTargetRatio(address bondsAddr, address stethAddr, uint24 lvl) external;
     function drainToBonds(address bondsAddr, address stethAddr) external;
 }

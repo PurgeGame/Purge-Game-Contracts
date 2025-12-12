@@ -23,8 +23,6 @@ interface IDegenerusCoin is IDegenerusCoinModule {
         uint256 priceCoinUnit
     ) external returns (bool);
 
-    function recordStakeResolution(uint24 level, uint48 day) external returns (address topStakeWinner);
-
     function addToBounty(uint256 amount) external;
 
     function normalizeActiveBurnQuests() external;

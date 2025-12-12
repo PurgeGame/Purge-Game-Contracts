@@ -225,6 +225,7 @@ contract DegenerusBonds {
     error NotExpired();
     error VrfLocked();
     error NotReady();
+    error InvalidBps();
 
     // ---------------------------------------------------------------------
     // Events
@@ -249,6 +250,7 @@ contract DegenerusBonds {
     event BondCoinJackpot(address indexed player, uint256 amount, uint24 maturityLevel, uint8 lane);
     event ExpiredSweep(uint256 ethAmount, uint256 stEthAmount);
     event PresaleBondDeposit(address indexed buyer, uint256 amount, uint256 mintedDgns0, uint256 mintedDgns5);
+    event RewardStakeTargetUpdated(uint16 bps);
 
     // ---------------------------------------------------------------------
     // Constants
@@ -331,8 +333,10 @@ contract DegenerusBonds {
     bool public gameOverStarted; // true after game signals shutdown; disables new deposits and bank pushes
     uint48 public gameOverTimestamp; // timestamp when game over was triggered
     bool public gameOverEntropyAttempted; // true after gameOver() attempts to fetch entropy (request or failure)
+    bool public rngLock; // true while game has locked RNG usage (pauses deposits/burns)
     bool public externalPurchasesEnabled = true; // owner toggle for non-game purchases
     bool public gamePurchasesEnabled = true; // owner toggle for game-routed purchases
+    uint16 public rewardStakeTargetBps; // target share of stETH (in bps) for game-held reward liquidity
     address private vault;
     address private coin;
     address private affiliate;
@@ -391,12 +395,26 @@ contract DegenerusBonds {
         gamePurchasesEnabled = gameEnabled;
     }
 
+    /// @notice Configure the target stETH share (in bps) for game-held liquidity; 0 disables staking.
+    function setRewardStakeTargetBps(uint16 bps) external {
+        if (msg.sender != admin) revert Unauthorized();
+        if (bps > 10_000) revert InvalidBps();
+        rewardStakeTargetBps = bps;
+        emit RewardStakeTargetUpdated(bps);
+    }
+
+    /// @notice Game hook to pause/resume bond purchases and burns while RNG is locked for jackpots.
+    function setRngLock(bool locked) external onlyGame {
+        rngLock = locked;
+    }
+
     /// @notice Presale-only bond purchase; splits ETH 30% vault / 50% rewardPool / 20% yieldPool and mints DGNS0/5 1:1.
     /// @dev Gated by the affiliate presale flag; callable before full wiring when presale bonuses pay out in synthetic coin.
     function presaleDeposit(address beneficiary) external payable returns (uint256 minted0, uint256 minted5) {
         if (gameOverStarted) revert SaleClosed();
         uint256 amount = msg.value;
         if (amount < MIN_DEPOSIT) revert MinimumDeposit();
+        if (rngLock) revert PurchasesDisabled();
 
         address aff = affiliate;
         if (aff == address(0)) {
@@ -555,7 +573,7 @@ contract DegenerusBonds {
     }
 
     function purchasesEnabled() external view returns (bool) {
-        return !gameOverStarted && gamePurchasesEnabled;
+        return !gameOverStarted && gamePurchasesEnabled && !rngLock;
     }
 
     /// @notice Emergency shutdown path: consume all ETH/stETH and resolve maturities in order, partially paying the last one.
@@ -669,6 +687,7 @@ contract DegenerusBonds {
         if (amount == 0) revert SaleClosed();
         if (!fromGame && amount < MIN_DEPOSIT) revert MinimumDeposit();
         if (gameOverStarted) revert SaleClosed();
+        if (rngLock) revert PurchasesDisabled();
         if (fromGame) {
             if (!gamePurchasesEnabled) revert PurchasesDisabled();
         } else {
@@ -730,6 +749,7 @@ contract DegenerusBonds {
         uint32 workCap = workCapOverride == 0 ? BOND_MAINT_WORK_CAP : workCapOverride;
         uint32 workUsed;
         uint24 currLevel = _currentLevel();
+        bool hitCap;
 
         // Ensure the active series exists and precreate the next maturity when we are 10 levels out.
         uint24 nextMat = currLevel < 10 ? 10 : ((currLevel / 5) + 1) * 5;
@@ -745,7 +765,10 @@ contract DegenerusBonds {
         // Run jackpots and resolve matured series.
         uint24 len = uint24(maturities.length);
         for (uint24 i = activeMaturityIndex; i < len; i++) {
-            if (_bondMaintWorkExceeded(workUsed, workCap)) return worked;
+            if (_bondMaintWorkExceeded(workUsed, workCap)) {
+                hitCap = true;
+                break;
+            }
 
             BondSeries storage s = series[maturities[i]];
             if (s.maturityLevel == 0 || s.resolved) continue;
@@ -788,8 +811,11 @@ contract DegenerusBonds {
         }
 
         // Archive fully resolved series to save gas on future iterations
-        while (activeMaturityIndex < len) {
-            if (_bondMaintWorkExceeded(workUsed, workCap)) return worked;
+        while (!hitCap && activeMaturityIndex < len) {
+            if (_bondMaintWorkExceeded(workUsed, workCap)) {
+                hitCap = true;
+                break;
+            }
 
             BondSeries storage s = series[maturities[activeMaturityIndex]];
             if (s.resolved) {
@@ -803,10 +829,16 @@ contract DegenerusBonds {
             }
         }
 
-        if (_bondMaintWorkExceeded(workUsed, workCap)) return worked;
-
         // Sweep excess if possible; does not affect work flag.
-        _sweepExcessToVault();
+        if (!hitCap) {
+            _sweepExcessToVault();
+        }
+
+        // When all maintenance for this RNG word is done (no backlog and not capped), release the bond-side lock.
+        if (rngLock && !hitCap && !backlogPending) {
+            rngLock = false;
+        }
+        return worked;
     }
 
     function _bondMaintWorkExceeded(uint32 used, uint32 cap) private pure returns (bool exceeded) {
@@ -816,6 +848,7 @@ contract DegenerusBonds {
     /// @notice Burn DGNS for a digit lane (false = DGNS0, true = DGNS5) to enter the active jackpot.
     function burnDGNS(bool isFive, uint256 amount) external {
         if (amount == 0) revert InsufficientScore();
+        if (rngLock) revert PurchasesDisabled();
 
         uint24 currLevel = _currentLevel();
         uint24 targetMat = _baseMaturityForDigit(isFive);

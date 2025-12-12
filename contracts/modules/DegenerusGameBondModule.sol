@@ -7,6 +7,7 @@ interface IBonds {
     function payBonds(uint256 coinAmount, uint256 stEthAmount, uint256 rngWord) external payable;
     function notifyGameOver() external;
     function requiredCoverNext() external view returns (uint256 required);
+    function rewardStakeTargetBps() external view returns (uint16);
 }
 
 interface IVaultEscrowCoin {
@@ -15,6 +16,7 @@ interface IVaultEscrowCoin {
 
 interface IStETHLite {
     function balanceOf(address account) external view returns (uint256);
+    function submit(address referral) external payable returns (uint256);
 }
 
 /**
@@ -23,7 +25,7 @@ interface IStETHLite {
  *         The storage layout mirrors the core contract so writes land in the parent via `delegatecall`.
  */
 contract DegenerusGameBondModule is DegenerusGameStorage {
-    uint256 private constant REWARD_POOL_MIN_STAKE = 0.5 ether;
+    uint256 private constant MIN_STAKE = 0.01 ether;
 
     /// @notice Handle bond funding/resolve work during map jackpot prep.
     function bondMaintenanceForMap(
@@ -31,11 +33,9 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
         address stethAddr,
         address coinAddr,
         uint24 lvl,
-        uint256 totalWei,
         uint256 rngWord
     ) external {
         IBonds bondContract = IBonds(bondsAddr);
-        totalWei; // silence unused warning (coin now based on nextPrizePool)
 
         uint256 stBal = IStETHLite(stethAddr).balanceOf(address(this));
         uint256 ethBal = address(this).balance;
@@ -95,16 +95,42 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
         total = combined > obligations ? combined - obligations : 0;
     }
 
-    /// @notice Stake excess reward pool into stETH based on bonds-configured ratio.
-    function stakeForTargetRatio(address /*bondsAddr*/, address /*stethAddr*/, uint24 lvl) external view {
-        // Skip only for levels ending in 99 or 00 to avoid endgame edge cases.
+    /// @notice Stake excess ETH into stETH to approach the bonds-configured target ratio.
+    function stakeForTargetRatio(address bondsAddr, address stethAddr, uint24 lvl) external {
         uint24 cycle = lvl % 100;
         if (cycle == 99 || cycle == 0) return;
 
-        uint256 pool = rewardPool;
-        if (pool == 0) return;
+        uint16 targetBps = IBonds(bondsAddr).rewardStakeTargetBps();
+        if (targetBps > 10_000) return;
+        if (targetBps == 0) targetBps = 10_000; // default to fully staking non-reserved ETH
 
-        // Staking disabled: bonds no longer expose a target rate.
+        uint256 stBal = IStETHLite(stethAddr).balanceOf(address(this));
+        uint256 ethBal = address(this).balance;
+        if (ethBal == 0) return;
+
+        // Keep claimable winnings liquid in ETH; everything else can be staked subject to the ratio target.
+        uint256 ethReserve = claimablePool;
+        if (ethBal <= ethReserve) return;
+        uint256 ethStakeable = ethBal - ethReserve;
+
+        // Work with the stakeable ETH plus existing stETH to hit the target ratio.
+        uint256 totalStakeable = stBal + ethStakeable;
+        if (totalStakeable == 0) return;
+
+        uint256 targetSt = (totalStakeable * uint256(targetBps)) / 10_000;
+        if (targetSt <= stBal) return;
+
+        uint256 needed = targetSt - stBal;
+        if (needed == 0) return;
+
+        uint256 stakeAmt = needed < ethStakeable ? needed : ethStakeable;
+        if (stakeAmt < MIN_STAKE) return;
+
+        try IStETHLite(stethAddr).submit{value: stakeAmt}(address(0)) returns (uint256) {
+            // mint amount ignored; accounting tracks notional via rewardPool/obligations
+        } catch {
+            // Swallow failures to avoid blocking advanceGame.
+        }
     }
 
     /// @notice Inform bonds of shutdown and transfer all assets to it.
