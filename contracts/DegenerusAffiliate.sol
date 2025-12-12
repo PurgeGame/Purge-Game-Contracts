@@ -329,7 +329,11 @@ contract DegenerusAffiliate {
             uint256 questReward = coin.affiliateQuestReward(affiliateAddr, affiliateShareBase);
             uint256 totalFlipAward = affiliateShareBase + questReward;
             IDegenerusGame gameRef = degenerusGame;
-            if (gameRef.gameState() != 3) {
+
+            uint8 gameState = gameRef.gameState();
+            bool rngLocked = gameRef.rngLocked();
+
+            if (gameState != 3 && !rngLocked) {
                 uint256 priceUnit = gameRef.coinPriceUnit();
                 uint256 mapCost = priceUnit / 4;
                 if (mapCost != 0 && totalFlipAward >= mapCost * 2) {

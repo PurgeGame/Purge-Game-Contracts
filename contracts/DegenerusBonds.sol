@@ -58,6 +58,14 @@ interface ICoinAffiliateLike is ICoinLike {
     function affiliateProgram() external view returns (address);
 }
 
+interface IDegenerusGamePricing {
+    function mintPrice() external view returns (uint256);
+}
+
+interface IAffiliatePayer {
+    function payAffiliate(uint256 amount, bytes32 code, address sender, uint24 lvl) external returns (uint256);
+}
+
 interface IAffiliatePresaleShutdown {
     function shutdownPresale() external;
 }
@@ -337,6 +345,10 @@ contract DegenerusBonds {
     bool public externalPurchasesEnabled = true; // owner toggle for non-game purchases
     bool public gamePurchasesEnabled = true; // owner toggle for game-routed purchases
     uint16 public rewardStakeTargetBps; // target share of stETH (in bps) for game-held reward liquidity
+    uint16 private constant AFFILIATE_BOND_BPS = 300; // 3% on bond purchases
+    uint16 private constant AFFILIATE_PRESALE_BPS = 1000; // 10% on presale bond purchases
+    uint256 private constant PRICE_WEI = 0.025 ether;
+    uint256 private constant PRICE_COIN_UNIT = 1_000_000_000;
     address private vault;
     address private coin;
     address private affiliate;
@@ -446,6 +458,7 @@ contract DegenerusBonds {
         }
 
         address ben = beneficiary == address(0) ? msg.sender : beneficiary;
+        _payAffiliateReward(ben, amount, AFFILIATE_PRESALE_BPS);
         minted0 = amount >> 1;
         minted5 = amount - minted0;
         tokenDGNS0.mint(ben, minted0);
@@ -719,6 +732,7 @@ contract DegenerusBonds {
         }
 
         scoreAwarded = _scoreWithMultiplier(beneficiary, amount);
+        _payAffiliateReward(beneficiary, amount, AFFILIATE_BOND_BPS);
 
         // Append new weight slice for jackpot selection (append-only cumulative for O(log N) sampling).
         _recordJackpotScore(s, beneficiary, scoreAwarded);
@@ -729,6 +743,29 @@ contract DegenerusBonds {
         }
 
         emit BondDeposit(beneficiary, maturityLevel, amount, scoreAwarded);
+    }
+
+    function _payAffiliateReward(address buyer, uint256 ethAmount, uint16 bps) private {
+        if (bps == 0 || ethAmount == 0) return;
+        address aff = affiliate;
+        if (aff == address(0)) return;
+
+        uint256 priceWei = PRICE_WEI;
+        address gameAddr = address(game);
+        if (gameAddr != address(0)) {
+            try IDegenerusGamePricing(gameAddr).mintPrice() returns (uint256 p) {
+                if (p != 0) {
+                    priceWei = p;
+                }
+            } catch {}
+        }
+
+        uint256 coinEquivalent = (ethAmount * PRICE_COIN_UNIT) / priceWei;
+        uint256 reward = (coinEquivalent * uint256(bps)) / 10_000;
+        if (reward == 0) return;
+        try IAffiliatePayer(aff).payAffiliate(reward, bytes32(0), buyer, _currentLevel()) {
+            // ignore returned rakeback; affiliate contract handles distribution
+        } catch {}
     }
 
     function _activeMaturity() private view returns (uint24 maturityLevel) {
@@ -848,6 +885,7 @@ contract DegenerusBonds {
     /// @notice Burn DGNS for a digit lane (false = DGNS0, true = DGNS5) to enter the active jackpot.
     function burnDGNS(bool isFive, uint256 amount) external {
         if (amount == 0) revert InsufficientScore();
+        if (gameOverStarted) revert SaleClosed();
         if (rngLock) revert PurchasesDisabled();
 
         uint24 currLevel = _currentLevel();

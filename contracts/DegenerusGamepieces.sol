@@ -315,6 +315,7 @@ contract DegenerusGamepieces {
     /// @dev Access: affiliate program only; bypasses payments and just enqueues maps.
     function purchaseMapForAffiliate(address buyer, uint256 quantity) external {
         if (msg.sender != affiliateProgram) revert OnlyCoin();
+        if (game.rngLocked()) revert RngNotReady();
         game.enqueueMap(buyer, uint32(quantity));
 
         emit MapPurchase(buyer, uint32(quantity), true, true, 0, 0);
@@ -352,7 +353,7 @@ contract DegenerusGamepieces {
         ) = game.purchaseInfo();
 
         if ((targetLevel % 20) == 16) revert NotTimeYet();
-        if (rngLocked_ && state == 2 && mapJackpotReady) revert RngNotReady();
+        if (rngLocked_) revert RngNotReady();
 
         uint256 coinCost = quantity * priceCoinUnit;
         uint256 expectedWei = priceWei * quantity;
