@@ -137,14 +137,7 @@ contract DegenerusVault {
     event Transfer(address indexed from, address indexed to, uint256 amount);
     event Approval(address indexed owner, address indexed spender, uint256 amount);
     event Deposit(address indexed from, uint256 ethAmount, uint256 stEthAmount, uint256 coinAmount);
-    event Claim(
-        address indexed from,
-        address indexed to,
-        uint256 sharesBurned,
-        uint256 ethOut,
-        uint256 stEthOut,
-        uint256 coinOut
-    );
+    event Claim(address indexed from, uint256 sharesBurned, uint256 ethOut, uint256 stEthOut, uint256 coinOut);
 
     // ---------------------------------------------------------------------
     // ERC20 metadata/state
@@ -235,8 +228,7 @@ contract DegenerusVault {
     // Claims via burn
     // ---------------------------------------------------------------------
     /// @notice Burn coin-share tokens to redeem the proportional slice of BURNIE.
-    function burnCoin(uint256 amount, address to) external returns (uint256 coinOut) {
-        if (to == address(0)) revert ZeroAddress();
+    function burnCoin(uint256 amount) external returns (uint256 coinOut) {
         DegenerusVaultShare share = coinShare;
         uint256 bal = share.balanceOf(msg.sender);
         if (amount == 0 || amount > bal) revert Insufficient();
@@ -252,13 +244,12 @@ contract DegenerusVault {
             share.vaultMint(msg.sender, REFILL_SUPPLY);
         }
 
-        emit Claim(msg.sender, to, amount, 0, 0, coinOut);
-        if (coinOut != 0) IVaultCoin(coin).vaultMintTo(to, coinOut);
+        emit Claim(msg.sender, amount, 0, 0, coinOut);
+        if (coinOut != 0) IVaultCoin(coin).vaultMintTo(msg.sender, coinOut);
     }
 
     /// @notice Burn eth-share tokens to redeem the proportional slice of ETH and stETH.
-    function burnEth(uint256 amount, address to) external returns (uint256 ethOut, uint256 stEthOut) {
-        if (to == address(0)) revert ZeroAddress();
+    function burnEth(uint256 amount) external returns (uint256 ethOut, uint256 stEthOut) {
         DegenerusVaultShare share = ethShare;
         uint256 bal = share.balanceOf(msg.sender);
         if (amount == 0 || amount > bal) revert Insufficient();
@@ -282,9 +273,9 @@ contract DegenerusVault {
             share.vaultMint(msg.sender, REFILL_SUPPLY);
         }
 
-        emit Claim(msg.sender, to, amount, ethOut, stEthOut, 0);
-        if (ethOut != 0) _payEth(to, ethOut);
-        if (stEthOut != 0) _payToken(address(steth), to, stEthOut);
+        emit Claim(msg.sender, amount, ethOut, stEthOut, 0);
+        if (ethOut != 0) _payEth(msg.sender, ethOut);
+        if (stEthOut != 0) _payToken(address(steth), msg.sender, stEthOut);
     }
 
     /// @notice View the coin-share burn required to withdraw a target amount of BURNIE.

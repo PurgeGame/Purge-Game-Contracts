@@ -38,7 +38,7 @@ interface ILinkTokenLike {
 }
 
 interface IDegenerusCoinPresaleLink {
-    function creditPresaleFromLink(address player, uint256 amount) external;
+    function creditLinkReward(address player, uint256 amount) external;
 }
 
 interface IWiring {
@@ -47,6 +47,11 @@ interface IWiring {
 
 interface IDegenerusAffiliatePresalePrice {
     function presalePriceCoinEstimate() external view returns (uint256);
+}
+
+interface IDegenerusAffiliateLink {
+    function presaleActive() external view returns (bool);
+    function addPresaleLinkCredit(address player, uint256 amount) external;
 }
 
 /// @notice Minimal Chainlink price feed surface (used for LINK/ETH conversion).
@@ -481,13 +486,20 @@ contract DegenerusAdmin {
         uint256 credit = (baseCredit * mult) / 1e18;
         if (credit == 0) return;
 
-        if (coin != address(0)) {
-            IDegenerusCoinPresaleLink(coin).creditPresaleFromLink(from, credit);
-            emit LinkCreditRecorded(from, credit, true);
+        // If affiliate/presale is live, record with affiliate (no coin mint). Otherwise mint directly via coin.
+        address aff = affiliate;
+        bool minted;
+        if (aff != address(0) && IDegenerusAffiliateLink(aff).presaleActive()) {
+            IDegenerusAffiliateLink(aff).addPresaleLinkCredit(from, credit);
+            minted = false;
+        } else if (coin != address(0)) {
+            IDegenerusCoinPresaleLink(coin).creditLinkReward(from, credit);
+            minted = true;
         } else {
             pendingLinkCredit[from] += credit;
-            emit LinkCreditRecorded(from, credit, false);
+            minted = false;
         }
+        emit LinkCreditRecorded(from, credit, minted);
     }
 
     /// @notice Claim any pending LINK-based credit recorded before the coin was wired.
@@ -497,8 +509,16 @@ contract DegenerusAdmin {
         uint256 credit = pendingLinkCredit[player];
         if (credit == 0) return;
         pendingLinkCredit[player] = 0;
-        IDegenerusCoinPresaleLink(coin).creditPresaleFromLink(player, credit);
-        emit LinkCreditRecorded(player, credit, true);
+        address aff = affiliate;
+        bool minted;
+        if (aff != address(0) && IDegenerusAffiliateLink(aff).presaleActive()) {
+            IDegenerusAffiliateLink(aff).addPresaleLinkCredit(player, credit);
+            minted = false;
+        } else {
+            IDegenerusCoinPresaleLink(coin).creditLinkReward(player, credit);
+            minted = true;
+        }
+        emit LinkCreditRecorded(player, credit, minted);
     }
 
     /// @dev Convert LINK amount to equivalent ETH using the configured price feed. Returns 0 on missing/invalid feed.

@@ -82,6 +82,7 @@ contract DegenerusAffiliate {
     mapping(bytes32 => AffiliateCodeInfo) public affiliateCode;
     mapping(uint24 => mapping(address => uint256)) public affiliateCoinEarned;
     mapping(address => bytes32) private playerReferralCode;
+    mapping(address => uint24) public referralJoinLevel; // level recorded when a referral code is set
     mapping(address => address) public syntheticMapOwner; // synthetic player -> affiliate owner
     mapping(address => uint256) public presaleCoinEarned;
     mapping(uint24 => PlayerScore) private affiliateTopByLevel;
@@ -174,6 +175,10 @@ contract DegenerusAffiliate {
         bytes32 existing = playerReferralCode[msg.sender];
         if (existing != bytes32(0)) revert Insufficient();
         playerReferralCode[msg.sender] = code_;
+        address gameAddr = address(degenerusGame);
+        if (gameAddr != address(0)) {
+            _recordReferralJoinLevel(msg.sender, degenerusGame.level());
+        }
         emit Affiliate(0, code_, msg.sender); // 0 = player referred
     }
 
@@ -225,6 +230,7 @@ contract DegenerusAffiliate {
         if (capInfo.minted >= cap) revert SyntheticCap();
         syntheticMapOwner[synthetic] = affiliateOwner;
         playerReferralCode[synthetic] = code_;
+        _recordReferralJoinLevel(synthetic, degenerusGame.level());
         unchecked {
             ++capInfo.minted;
         }
@@ -283,11 +289,15 @@ contract DegenerusAffiliate {
             playerReferralCode[sender] = code;
             info = candidate;
             storedCode = code;
+            _recordReferralJoinLevel(sender, lvl);
         } else {
             info = affiliateCode[storedCode];
             if (info.owner == address(0)) {
                 playerReferralCode[sender] = referralLocksActive ? REF_CODE_LOCKED : bytes32(0);
                 return 0;
+            }
+            if (referralJoinLevel[sender] == 0) {
+                _recordReferralJoinLevel(sender, lvl);
             }
         }
 
@@ -299,10 +309,12 @@ contract DegenerusAffiliate {
         uint8 rakebackPct = info.rakeback;
 
         mapping(address => uint256) storage earned = affiliateCoinEarned[lvl];
+        uint256 rewardScaleBps = _referralRewardScaleBps(sender, lvl);
+        uint256 scaledAmount = rewardScaleBps == 10_000 ? amount : (amount * rewardScaleBps) / 10_000;
 
         // Pay direct affiliate (score based on base amount).
-        uint256 rakebackShare = (amount * uint256(rakebackPct)) / 100;
-        uint256 affiliateShareBase = amount - rakebackShare;
+        uint256 rakebackShare = (scaledAmount * uint256(rakebackPct)) / 100;
+        uint256 affiliateShareBase = scaledAmount - rakebackShare;
         uint256 newTotal = earned[affiliateAddr] + affiliateShareBase; // score ignores stake bonus
         earned[affiliateAddr] = newTotal;
 
@@ -339,7 +351,8 @@ contract DegenerusAffiliate {
             // Upline bonus (20% of base amount); no stake bonus applied to uplines.
             address upline = _referrerAddress(affiliateAddr);
             if (upline != address(0) && upline != sender) {
-                uint256 bonus = amount / 5;
+                uint256 baseBonus = scaledAmount / 5;
+                uint256 bonus = baseBonus;
                 uint256 questRewardUpline = coin.affiliateQuestReward(upline, bonus);
                 uint256 totalUpline = bonus + questRewardUpline;
                 earned[upline] = earned[upline] + bonus;
@@ -353,7 +366,7 @@ contract DegenerusAffiliate {
                 // Second upline bonus (20% of first upline share)
                 address upline2 = _referrerAddress(upline);
                 if (upline2 != address(0)) {
-                    uint256 bonus2 = bonus / 5;
+                    uint256 bonus2 = baseBonus / 5;
                     uint256 questReward2 = coin.affiliateQuestReward(upline2, bonus2);
                     uint256 totalUpline2 = bonus2 + questReward2;
                     earned[upline2] = earned[upline2] + bonus2;
@@ -381,7 +394,8 @@ contract DegenerusAffiliate {
             // Upline bonus (20% of base amount); no stake bonus applied to uplines.
             address uplinePre = _referrerAddress(affiliateAddr);
             if (uplinePre != address(0) && uplinePre != sender) {
-                uint256 bonusPre = amount / 5;
+                uint256 baseBonusPre = scaledAmount / 5;
+                uint256 bonusPre = baseBonusPre;
                 uint256 uplineTotalPre = bonusPre;
                 earned[uplinePre] = earned[uplinePre] + bonusPre;
                 presaleCoinEarned[uplinePre] += uplineTotalPre;
@@ -390,7 +404,7 @@ contract DegenerusAffiliate {
                 // Second upline bonus (20% of first upline share)
                 address upline2Pre = _referrerAddress(uplinePre);
                 if (upline2Pre != address(0)) {
-                    uint256 bonus2Pre = bonusPre / 5;
+                    uint256 bonus2Pre = baseBonusPre / 5;
                     earned[upline2Pre] = earned[upline2Pre] + bonus2Pre;
                     presaleCoinEarned[upline2Pre] += bonus2Pre;
                     presaleClaimableTotal += bonus2Pre;
@@ -425,7 +439,7 @@ contract DegenerusAffiliate {
     /// @notice Credit presale coin from LINK funding (VRF sub); callable by coin/bonds.
     function addPresaleLinkCredit(address player, uint256 amount) external {
         address caller = msg.sender;
-        if (caller != address(coin) && caller != bonds) revert OnlyAuthorized();
+        if (caller != address(coin) && caller != bonds && caller != bondsAdmin) revert OnlyAuthorized();
         if (player == address(0) || amount == 0) return;
         presaleCoinEarned[player] += amount;
         presaleClaimableTotal += amount;
@@ -514,6 +528,29 @@ contract DegenerusAffiliate {
         bytes32 code = _referralCode(player);
         if (code == bytes32(0)) return address(0);
         return affiliateCode[code].owner;
+    }
+
+    function _recordReferralJoinLevel(address player, uint24 lvl) private {
+        if (player == address(0) || lvl == 0) return;
+        if (referralJoinLevel[player] == 0) {
+            referralJoinLevel[player] = lvl;
+        }
+    }
+
+    function _referralRewardScaleBps(address player, uint24 currentLevel) private view returns (uint256 scaleBps) {
+        uint24 joinLevel = referralJoinLevel[player];
+        if (joinLevel == 0 || currentLevel <= joinLevel) return 10_000;
+
+        uint256 delta = uint256(currentLevel - joinLevel);
+        if (delta <= 50) return 10_000;
+        if (delta >= 150) return 2_500;
+
+        uint256 decayLevels = delta - 50; // 0 -> start of decay window
+        uint256 reduction = decayLevels * 75; // 0.75% per level (100% → 25% over 100 levels)
+        scaleBps = 10_000 - reduction;
+        if (scaleBps < 2_500) {
+            scaleBps = 2_500;
+        }
     }
 
     function _score96(uint256 s) private pure returns (uint96) {

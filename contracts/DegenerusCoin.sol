@@ -30,7 +30,7 @@ contract DegenerusCoin {
     event BountyPaid(address indexed to, uint256 amount);
     event DailyQuestRolled(uint48 indexed day, uint8 questType, bool highDifficulty);
     event QuestCompleted(address indexed player, uint8 questType, uint32 streak, uint256 reward, bool hardMode);
-    event PresaleLinkCredit(address indexed player, uint256 amount);
+    event LinkCredit(address indexed player, uint256 amount);
 
     // ---------------------------------------------------------------------
     // Errors
@@ -194,7 +194,7 @@ contract DegenerusCoin {
         _;
     }
 
-    modifier onlyBurnAuthorized() {
+    modifier onlyTrustedContracts() {
         address sender = msg.sender;
         if (
             sender != address(degenerusGame) &&
@@ -204,12 +204,13 @@ contract DegenerusCoin {
         _;
     }
 
-    modifier onlyFlipContracts() {
+    modifier onlyFlipCreditors() {
         address sender = msg.sender;
         if (
             sender != address(degenerusGame) &&
             sender != address(degenerusGamepieces) &&
-            sender != address(affiliateProgram)
+            sender != address(affiliateProgram) &&
+            sender != bonds
         ) revert OnlyGame();
         _;
     }
@@ -425,24 +426,23 @@ contract DegenerusCoin {
         _mint(to, amount);
     }
 
-    /// @notice Credit a coinflip stake from authorized contracts (game, NFT, affiliate).
-    /// @dev Access: DegenerusGame, NFT, or affiliate module only. Zero address is ignored.
-    function creditFlip(address player, uint256 amount) external onlyFlipContracts {
+    /// @notice Credit a coinflip stake from authorized contracts (game, NFT, affiliate, bonds).
+    /// @dev Zero address is ignored.
+    function creditFlip(address player, uint256 amount) external onlyFlipCreditors {
         if (player == address(0) || amount == 0) return;
         addFlip(player, amount, false, false);
     }
 
-    /// @notice Credit presale allocation from LINK funding (admin).
-    function creditPresaleFromLink(address player, uint256 amount) external {
+    /// @notice Credit LINK-funded bonus directly (admin-triggered, not presale).
+    function creditLinkReward(address player, uint256 amount) external {
         if (msg.sender != admin) revert OnlyAdmin();
         if (player == address(0) || amount == 0) return;
-        affiliateProgram.addPresaleLinkCredit(player, amount);
-        presaleClaimableRemaining += amount;
-        emit PresaleLinkCredit(player, amount);
+        _mint(player, amount);
+        emit LinkCredit(player, amount);
     }
 
     /// @notice Batch credit up to three flip stakes in a single call.
-    function creditFlipBatch(address[3] calldata players, uint256[3] calldata amounts) external onlyFlipContracts {
+    function creditFlipBatch(address[3] calldata players, uint256[3] calldata amounts) external onlyFlipCreditors {
         for (uint256 i; i < 3; ) {
             address player = players[i];
             uint256 amount = amounts[i];
@@ -584,7 +584,7 @@ contract DegenerusCoin {
 
     /// @notice Burn BURNIE from `target` during gameplay/affiliate flows (purchases, fees, synthetic caps).
     /// @dev Access: DegenerusGame, NFT, or affiliate. OZ ERC20 `_burn` reverts on zero address or insufficient balance.
-    function burnCoin(address target, uint256 amount) external onlyBurnAuthorized {
+    function burnCoin(address target, uint256 amount) external onlyTrustedContracts {
         _burn(target, amount);
     }
 
@@ -698,8 +698,11 @@ contract DegenerusCoin {
         // Move the active window forward; the resolved day becomes claimable.
         flipsClaimableDay = epoch == 0 ? 0 : epoch - 1;
 
-        _addToBounty(priceCoinUnit);
-        if (level != 0 && !topFlipRewardPaid[level]) {
+        unchecked {
+            // Gas-optimized: wraps on overflow, which would effectively reset the bounty.
+            currentBounty += uint128(priceCoinUnit);
+        }
+        if (!topFlipRewardPaid[level]) {
             PlayerScore memory entry = coinflipTopByLevel[level];
             if (entry.player != address(0)) {
                 // Credit lands as future flip stake; no direct mint.
@@ -710,11 +713,6 @@ contract DegenerusCoin {
 
         emit CoinflipFinished(win);
         return true;
-    }
-
-    function addToBounty(uint256 amount) external onlyDegenerusGameContract {
-        if (amount == 0) return;
-        _addToBounty(amount);
     }
 
     /// @notice Return the top coinflip bettor recorded for a given level.
@@ -786,16 +784,6 @@ contract DegenerusCoin {
                     }
                 }
             }
-        }
-    }
-
-    /// @notice Increase the global bounty pool.
-    /// @dev Uses unchecked addition; will wrap on overflow.
-    /// @param amount Amount of BURNIE to add to the bounty pool.
-    function _addToBounty(uint256 amount) internal {
-        unchecked {
-            // Gas-optimized: wraps on overflow, which would effectively reset the bounty.
-            currentBounty += uint128(amount);
         }
     }
 

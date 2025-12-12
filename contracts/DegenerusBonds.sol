@@ -50,6 +50,10 @@ interface ICoinLike {
     function transfer(address to, uint256 amount) external returns (bool);
 }
 
+interface ICoinFlipCreditor {
+    function creditFlip(address player, uint256 amount) external;
+}
+
 interface ICoinAffiliateLike is ICoinLike {
     function affiliateProgram() external view returns (address);
 }
@@ -314,6 +318,7 @@ contract DegenerusBonds {
     uint24 private activeMaturityIndex;
     uint256 private resolvedUnclaimedTotal;
     IDegenerusGameLevel private game;
+    uint256 public coinOwed; // running total of BURNIE owed for bond jackpots
     address private immutable admin;
     uint256 private lastIssuanceRaise;
     address private vrfCoordinator;
@@ -476,12 +481,15 @@ contract DegenerusBonds {
         scoreAwarded = _processDeposit(ben, amount, true);
     }
 
-    /// @notice Funding shim used by the game to route jackpot coin into bonds; ETH/stETH still go to the vault.
+    /// @notice Funding shim used by the game to accrue jackpot coin for bonds; ETH/stETH still go to the vault.
     function payBonds(uint256 coinAmount, uint256 stEthAmount, uint256 rngWord) external payable onlyGame {
         if (stEthAmount != 0) {
             try IStETHLike(steth).transferFrom(msg.sender, address(this), stEthAmount) {} catch {}
         }
-        _payCoinJackpot(coinAmount, rngWord);
+        if (coinAmount != 0) {
+            coinOwed += coinAmount;
+        }
+        _runCoinJackpot(rngWord);
         IVaultLike(vault).deposit{value: msg.value}(0, stEthAmount);
     }
 
@@ -489,7 +497,17 @@ contract DegenerusBonds {
     // Internals (coin jackpot)
     // ---------------------------------------------------------------------
 
-    function _payCoinJackpot(uint256 amount, uint256 rngWord) private returns (bool eligible) {
+    function _runCoinJackpot(uint256 rngWord) private {
+        if (rngWord == 0) return;
+        uint256 bankroll = coinOwed >> 1; // pay half of the accrued coin
+        if (bankroll == 0) return;
+        bool paid = _payCoinJackpot(bankroll, rngWord);
+        if (paid) {
+            coinOwed -= bankroll;
+        }
+    }
+
+    function _payCoinJackpot(uint256 amount, uint256 rngWord) private returns (bool paid) {
         if (amount == 0 || rngWord == 0) return false;
         address coinAddr = coin;
 
@@ -506,13 +524,9 @@ contract DegenerusBonds {
 
         address winner = _weightedLanePick(target.lanes[lane], rngWord);
         if (winner == address(0)) return false;
-        eligible = true;
 
-        bool ok = ICoinLike(coinAddr).transfer(winner, amount);
-        if (ok) {
-            emit BondCoinJackpot(winner, amount, targetMat, lane);
-            return true;
-        }
+        ICoinFlipCreditor(coinAddr).creditFlip(winner, amount);
+        emit BondCoinJackpot(winner, amount, targetMat, lane);
         return true;
     }
 
