@@ -39,7 +39,11 @@ struct PurchaseParams {
 interface IDegenerusGamepieces {
     function tokenTraitsPacked(uint256 tokenId) external view returns (uint32);
     function purchaseCount() external view returns (uint32);
-    function processPendingMints(uint32 playersToProcess, uint32 multiplier, uint256 rngWord) external returns (bool finished);
+    function processPendingMints(
+        uint32 playersToProcess,
+        uint32 multiplier,
+        uint256 rngWord
+    ) external returns (bool finished);
     function advanceBase() external;
     function nextTokenId() external view returns (uint256);
     function burnFromGame(address owner, uint256[] calldata tokenIds) external;
@@ -152,7 +156,6 @@ contract DegenerusGamepieces {
 
     uint256 private _currentIndex;
     uint256 private _burnCounter;
-    uint256 private _virtualBurnCount;
     uint256 private _baseTokenId = BASE_TOKEN_START;
 
     string private _name = "Degenerus";
@@ -170,6 +173,7 @@ contract DegenerusGamepieces {
     ITokenRenderer private immutable regularRenderer;
     IDegenerusCoin private immutable coin;
     IBurnieToken private immutable burnie;
+    address private immutable vault;
     address private immutable affiliateProgram;
 
     uint32 private _purchaseCount;
@@ -206,25 +210,32 @@ contract DegenerusGamepieces {
         return _currentIndex;
     }
 
-    constructor(address regularRenderer_, address coin_) {
+    constructor(address regularRenderer_, address coin_, address affiliateProgram_, address vault_) {
         regularRenderer = ITokenRenderer(regularRenderer_);
         coin = IDegenerusCoin(coin_);
         burnie = IBurnieToken(coin_);
-        affiliateProgram = IDegenerusCoin(coin_).affiliateProgram();
-        _mint(msg.sender, 1); // Mint the eternal token #0 to deployer
+        affiliateProgram = affiliateProgram_;
+        vault = vault_;
+        _mint(vault, 1); // Mint the eternal token #0 to vault
     }
 
-    /// @notice Total supply = minted tokens (including the eternal token #0) minus burned tokens
-    ///         and tokens retired via base advancement.
+    /// @notice Total supply = minted tokens (including the eternal token #0) minus burned tokens.
     function totalSupply() external view returns (uint256) {
+        if (!_isLiveState()) {
+            return 1;
+        }
         uint256 minted = _currentIndex;
-        uint256 burned = _burnCounter + _virtualBurnCount;
-        return minted > burned ? minted - burned : 0;
+        uint256 burned = _burnCounter;
+        return minted - burned;
     }
 
     /// @notice Returns balance for standard ERC721 semantics.
     function balanceOf(address owner) external view returns (uint256) {
         if (owner == address(0)) revert Zero();
+        if (!_isLiveState()) {
+            if (owner == vault) return 1;
+            return 0;
+        }
         return _packedAddressData[owner] & _BITMASK_ADDRESS_DATA_ENTRY;
     }
 
@@ -712,31 +723,14 @@ contract DegenerusGamepieces {
     }
 
     /// @dev Resolve packed ownership; reverts for invalid or burned tokens. Backtracks to find the last initialized slot.
-    function _packedOwnershipOf(uint256 tokenId) private view returns (uint256 packed) {
-        if (tokenId >= _currentIndex) revert InvalidToken();
-
-        packed = _packedOwnerships[tokenId];
-        if (packed == 0) {
-            unchecked {
-                uint256 curr = tokenId;
-                while (curr > 0) {
-                    --curr;
-                    packed = _packedOwnerships[curr];
-                    if (packed != 0) break;
-                }
-            }
-        }
-
-        // Token 0 is always valid; all other tokens must be >= current base pointer.
-        if (tokenId != SPECIAL_TOKEN_ID && tokenId < _currentBaseTokenId()) revert InvalidToken();
-
-        if (packed & _BITMASK_BURNED != 0 || (packed & _BITMASK_ADDRESS) == 0) {
-            revert InvalidToken();
-        }
-        return packed;
+    function _isLiveState() private view returns (bool) {
+        IDegenerusGame g = game;
+        if (address(g) == address(0)) return false;
+        return g.gameState() == 3;
     }
 
-    function _packedOwnershipOfUnchecked(uint256 tokenId) private view returns (uint256 packed) {
+    function _packedOwnershipOf(uint256 tokenId) private view returns (uint256 packed) {
+        if (tokenId != SPECIAL_TOKEN_ID && tokenId < _currentBaseTokenId()) revert InvalidToken();
         if (tokenId >= _currentIndex) revert InvalidToken();
 
         packed = _packedOwnerships[tokenId];
@@ -783,6 +777,9 @@ contract DegenerusGamepieces {
 
     /// @dev Lightweight existence check used by approval getters; trophies and game-owned placeholders are handled.
     function _exists(uint256 tokenId) internal view returns (bool) {
+        if (!_isLiveState()) {
+            return tokenId == SPECIAL_TOKEN_ID;
+        }
         if (tokenId == SPECIAL_TOKEN_ID) return true;
         if (tokenId < _currentBaseTokenId()) return false;
 
@@ -879,12 +876,7 @@ contract DegenerusGamepieces {
             }
     }
 
-    function _marketTransfer(
-        address from,
-        address to,
-        uint256 tokenId,
-        uint256 prevOwnershipPacked
-    ) private {
+    function _marketTransfer(address from, address to, uint256 tokenId, uint256 prevOwnershipPacked) private {
         if (address(uint160(prevOwnershipPacked)) != from) revert TransferFromIncorrectOwner();
         if (to == address(0)) revert Zero();
         if (_tokenApprovals[tokenId] != address(0)) {
@@ -1143,14 +1135,8 @@ contract DegenerusGamepieces {
     }
     /// @notice Retire all tokens below `newBaseTokenId` (except token 0) at level transition.
     function advanceBase() external onlyGame {
-        uint256 newBaseTokenId = _currentIndex;
-        uint256 currentBase = _baseTokenId;
-        if (newBaseTokenId <= currentBase || newBaseTokenId > _currentIndex) revert E();
-        uint256 delta = newBaseTokenId - currentBase;
-        unchecked {
-            _virtualBurnCount += delta;
-        }
-        _baseTokenId = newBaseTokenId;
+        _baseTokenId = _currentIndex;
+        _burnCounter = _currentIndex - 1;
     }
 
     /// @notice Burn a batch of player tokens (never trophies) owned by `owner`; trophies burned are tallied separately.

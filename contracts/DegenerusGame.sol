@@ -825,12 +825,10 @@ contract DegenerusGame is DegenerusGameStorage {
     /// @notice Delegatecall into the endgame module to resolve slow settlement paths.
     function _runEndgameModule(uint24 lvl, uint256 rngWord) internal {
         // Endgame settlement logic lives in DegenerusGameEndgameModule (delegatecall keeps state on this contract).
-        (bool ok, bytes memory data) = endgameModule.delegatecall(
+        (bool ok, ) = endgameModule.delegatecall(
             abi.encodeWithSelector(IDegenerusGameEndgameModule.finalizeEndgame.selector, lvl, rngWord, jackpots)
         );
-        if (!ok) {
-            _revertWith(data);
-        }
+        if (!ok) return;
         gameState = 2; // Endgame is fully settled; move directly into the purchase/airdrop state.
     }
 
@@ -845,7 +843,7 @@ contract DegenerusGame is DegenerusGameStorage {
         (bool ok, bytes memory data) = mintModule.delegatecall(
             abi.encodeWithSelector(IDegenerusGameMintModule.recordMintData.selector, player, lvl, coinMint, mintUnits)
         );
-        if (!ok || data.length == 0) revert E();
+        if (!ok || data.length == 0) return 0;
         return abi.decode(data, (uint256));
     }
 
@@ -853,7 +851,7 @@ contract DegenerusGame is DegenerusGameStorage {
         (bool ok, bytes memory data) = mintModule.delegatecall(
             abi.encodeWithSelector(IDegenerusGameMintModule.calculateAirdropMultiplier.selector, purchaseCount, lvl)
         );
-        if (!ok || data.length == 0) revert E();
+        if (!ok || data.length == 0) return 1;
         return abi.decode(data, (uint32));
     }
 
@@ -861,7 +859,7 @@ contract DegenerusGame is DegenerusGameStorage {
         (bool ok, bytes memory data) = mintModule.delegatecall(
             abi.encodeWithSelector(IDegenerusGameMintModule.purchaseTargetCountFromRaw.selector, rawCount)
         );
-        if (!ok || data.length == 0) revert E();
+        if (!ok || data.length == 0) return rawCount;
         return abi.decode(data, (uint32));
     }
 
@@ -874,7 +872,7 @@ contract DegenerusGame is DegenerusGameStorage {
                 baseTokenId
             )
         );
-        if (!ok) revert E();
+        if (!ok) return;
     }
 
     function _bondSetup(uint256 totalWei, uint256 rngWord, uint24 lvl) private {
@@ -889,32 +887,21 @@ contract DegenerusGame is DegenerusGameStorage {
                 rngWord
             )
         );
-        if (!ok) revert E();
+        if (!ok) return;
     }
 
     function _stakeForTargetRatioModule(uint24 lvl) private {
-        (bool ok, bytes memory data) = bondModule.delegatecall(
+        (bool ok, ) = bondModule.delegatecall(
             abi.encodeWithSelector(IDegenerusGameBondModule.stakeForTargetRatio.selector, bonds, address(steth), lvl)
         );
-        if (!ok) {
-            _revertWith(data);
-        }
+        if (!ok) return;
     }
 
     function _gameOverDrainToBondsModule() private {
-        (bool ok, bytes memory data) = bondModule.delegatecall(
+        (bool ok, ) = bondModule.delegatecall(
             abi.encodeWithSelector(IDegenerusGameBondModule.drainToBonds.selector, bonds, address(steth))
         );
-        if (!ok) {
-            _revertWith(data);
-        }
-    }
-
-    function _revertWith(bytes memory data) private pure {
-        if (data.length == 0) revert E();
-        assembly ("memory-safe") {
-            revert(add(data, 0x20), mload(data))
-        }
+        if (!ok) return;
     }
 
     /// @notice Unified external hook for trusted modules to adjust DegenerusGame accounting.
@@ -943,7 +930,7 @@ contract DegenerusGame is DegenerusGameStorage {
             uint256 len = accounts.length;
             if (len != amounts.length) revert E();
             address jackpotsAddr = jackpots;
-            if (jackpotsAddr == address(0) || msg.sender != jackpotsAddr) revert E();
+            if (msg.sender != jackpotsAddr) revert E();
 
             uint256 total;
             for (uint256 i; i < len; ) {
