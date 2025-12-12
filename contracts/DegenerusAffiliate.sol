@@ -10,7 +10,7 @@ interface IDegenerusCoinAffiliate {
     function creditFlipBatch(address[3] calldata players, uint256[3] calldata amounts) external;
     function affiliateQuestReward(address player, uint256 amount) external returns (uint256);
     function affiliatePrimePresale() external;
-    function burnCoinAffiliate(address target, uint256 amount) external;
+    function burnCoin(address target, uint256 amount) external;
     function affiliatePurchaseMaps(address player, uint32 mapQuantity) external returns (uint256);
 }
 
@@ -491,7 +491,7 @@ contract DegenerusAffiliate {
 
         if (cost != 0) {
             if (address(coin) == address(0)) revert ZeroAddress();
-            coin.burnCoinAffiliate(affiliateOwner, cost);
+            coin.burnCoin(affiliateOwner, cost);
         }
     }
 

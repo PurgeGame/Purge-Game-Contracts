@@ -905,6 +905,7 @@ contract DegenerusGame is DegenerusGameStorage {
                 IDegenerusGameBondModule.bondMaintenanceForMap.selector,
                 bonds,
                 address(steth),
+                address(coin),
                 lvl,
                 totalWei,
                 rngWord

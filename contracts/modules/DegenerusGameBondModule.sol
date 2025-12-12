@@ -9,13 +9,12 @@ interface IBonds {
     function requiredCoverNext() external view returns (uint256 required);
 }
 
-interface IStETHLite {
-    function submit(address referral) external payable returns (uint256);
-    function balanceOf(address account) external view returns (uint256);
+interface IVaultEscrowCoin {
+    function vaultEscrow(uint256 amount) external;
 }
 
-interface IVault {
-    function deposit(uint256 coinAmount, uint256 stEthAmount) external payable;
+interface IStETHLite {
+    function balanceOf(address account) external view returns (uint256);
 }
 
 /**
@@ -30,11 +29,13 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
     function bondMaintenanceForMap(
         address bondsAddr,
         address stethAddr,
+        address coinAddr,
         uint24 lvl,
         uint256 totalWei,
         uint256 rngWord
     ) external {
         IBonds bondContract = IBonds(bondsAddr);
+        totalWei; // silence unused warning (coin now based on nextPrizePool)
 
         uint256 stBal = IStETHLite(stethAddr).balanceOf(address(this));
         uint256 ethBal = address(this).balance;
@@ -48,8 +49,9 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
         uint256 combined = ethBal + stBal;
         uint256 yieldTotal = combined > obligations ? combined - obligations : 0;
 
-        // Mintable coin from map jackpot: 5% of totalWei (priced in DEGEN); send full amount to bonds.
-        uint256 bondCoin = (totalWei * priceCoin) / (20 * price);
+        // Mintable coin: each of vault and bonds receives 5% of the nextPrizePool value (priced in coin units).
+        uint256 coinSlice = (nextPrizePool * priceCoin) / price; // coin equivalent of nextPrizePool
+        coinSlice = coinSlice / 20; // 5%
 
         uint256 bondSkim = yieldTotal / 4; // 25% to bonds
         uint256 rewardTopUp = yieldTotal / 20; // 5% to reward pool
@@ -71,7 +73,8 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
                 ethSpend = gap <= ethBal ? gap : ethBal;
             }
         }
-        bondContract.payBonds{value: ethSpend}(bondCoin, stSpend, rngWord);
+        IVaultEscrowCoin(coinAddr).vaultEscrow(coinSlice);
+        bondContract.payBonds{value: ethSpend}(coinSlice, stSpend, rngWord);
         rewardPool += rewardTopUp;
     }
 

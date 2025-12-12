@@ -97,7 +97,7 @@ describe("DegenerusBonds Stress Tests", function () {
     // Now we should have burns registered in lanes.
     
     await bonds.connect(gameSigner).notifyGameOver();
-    await bonds.payBonds(0, 0, 0, { value: ethers.parseEther("100") });
+  await bonds.payBonds(0, 0, 0, { value: ethers.parseEther("100") });
     
     await bonds.connect(gameSigner).gameOver();
     

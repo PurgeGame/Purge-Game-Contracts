@@ -42,6 +42,10 @@ interface IVaultLike {
     function steth() external view returns (address);
 }
 
+interface IVaultCoin {
+    function vaultEscrow(uint256 amount) external;
+}
+
 interface ICoinLike {
     function transfer(address to, uint256 amount) external returns (bool);
 }
@@ -240,12 +244,7 @@ contract DegenerusBonds {
     event BondGameOver(uint256 poolSpent, uint24 partialMaturity);
     event BondCoinJackpot(address indexed player, uint256 amount, uint24 maturityLevel, uint8 lane);
     event ExpiredSweep(uint256 ethAmount, uint256 stEthAmount);
-    event PresaleBondDeposit(
-        address indexed buyer,
-        uint256 amount,
-        uint256 mintedDgns0,
-        uint256 mintedDgns5
-    );
+    event PresaleBondDeposit(address indexed buyer, uint256 amount, uint256 mintedDgns0, uint256 mintedDgns5);
 
     // ---------------------------------------------------------------------
     // Constants
@@ -477,55 +476,44 @@ contract DegenerusBonds {
         scoreAwarded = _processDeposit(ben, amount, true);
     }
 
-    /// @notice Funding shim used by the game to route yield/coin into bonds and run upkeep.
+    /// @notice Funding shim used by the game to route jackpot coin into bonds; ETH/stETH still go to the vault.
     function payBonds(uint256 coinAmount, uint256 stEthAmount, uint256 rngWord) external payable onlyGame {
-        address vaultAddr = vault;
-        address stEthToken = steth;
-        uint256 vaultShare = (coinAmount * 60) / 100;
-        uint256 jackpotShare = coinAmount - vaultShare;
-        bool shutdown = gameOverStarted;
         if (stEthAmount != 0) {
-            try IStETHLike(stEthToken).transferFrom(msg.sender, address(this), stEthAmount) {} catch {}
+            try IStETHLike(steth).transferFrom(msg.sender, address(this), stEthAmount) {} catch {}
         }
-        // Route ETH + coin share to the vault while live; keep ETH on bonds during shutdown.
-        if (!shutdown) {
-            uint256 ethIn = msg.value;
-            (, bool eligible) = _payCoinJackpot(jackpotShare, rngWord);
-            if (!eligible) vaultShare += jackpotShare;
-            IVaultLike(vaultAddr).deposit{value: ethIn}(vaultShare, stEthAmount);
-            return;
-        }
+        _payCoinJackpot(coinAmount, rngWord);
+        IVaultLike(vault).deposit{value: msg.value}(0, stEthAmount);
     }
 
     // ---------------------------------------------------------------------
     // Internals (coin jackpot)
     // ---------------------------------------------------------------------
 
-    function _payCoinJackpot(uint256 amount, uint256 rngWord) private returns (bool paid, bool eligible) {
-        if (amount == 0 || rngWord == 0) return (false, false);
+    function _payCoinJackpot(uint256 amount, uint256 rngWord) private returns (bool eligible) {
+        if (amount == 0 || rngWord == 0) return false;
         address coinAddr = coin;
 
         uint24 currLevel = _currentLevel();
         (BondSeries storage target, uint24 targetMat) = _selectActiveSeries(currLevel);
-        if (targetMat == 0) return (false, false);
+        if (targetMat == 0) return false;
 
         // Pick a lane with entries.
         uint8 lane = uint8(rngWord & 1);
         if (target.lanes[lane].total == 0 && target.lanes[1 - lane].total != 0) {
             lane = 1 - lane;
         }
-        if (target.lanes[lane].total == 0) return (false, false);
+        if (target.lanes[lane].total == 0) return false;
 
         address winner = _weightedLanePick(target.lanes[lane], rngWord);
-        if (winner == address(0)) return (false, false);
+        if (winner == address(0)) return false;
         eligible = true;
 
         bool ok = ICoinLike(coinAddr).transfer(winner, amount);
         if (ok) {
             emit BondCoinJackpot(winner, amount, targetMat, lane);
-            return (true, true);
+            return true;
         }
-        return (false, true);
+        return true;
     }
 
     function _selectActiveSeries(uint24 currLevel) private view returns (BondSeries storage s, uint24 maturityLevel) {

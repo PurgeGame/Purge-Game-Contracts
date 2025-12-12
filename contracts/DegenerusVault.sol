@@ -15,7 +15,7 @@ interface IStETH {
 }
 
 interface IVaultCoin {
-    function vaultEscrowFrom(address from, uint256 amount) external;
+    function vaultEscrow(uint256 amount) external;
     function vaultMintTo(address to, uint256 amount) external;
     function vaultMintAllowance() external view returns (uint256);
     function setVault(address vault_) external;
@@ -165,7 +165,6 @@ contract DegenerusVault {
     address private immutable coin; // BURNIE coin (or compatible)
     IStETH private immutable steth; // stETH token
     address private immutable bonds; // trusted bond contract for deposits
-    uint256 public coinReserve; // coin escrowed for future mint (not yet minted)
 
     modifier onlyBonds() {
         if (msg.sender != bonds) revert Unauthorized();
@@ -181,29 +180,25 @@ contract DegenerusVault {
         coin = coin_;
         steth = IStETH(stEth_);
         bonds = bonds_;
-        // Seed reserve to start with 2m BURNIE escrowed (6 decimals on the coin).
-        coinReserve = 2_000_000 * 1e6;
-
         coinShare = new DegenerusVaultShare(
-            "Degenerus Vault Coin",
-            "DGVCOIN",
+            "Degenerus Vault Burnie",
+            "DGVB",
             address(this),
             INITIAL_SUPPLY,
             msg.sender
         );
-        ethShare = new DegenerusVaultShare("Degenerus Vault Eth", "DGVETH", address(this), INITIAL_SUPPLY, msg.sender);
+        ethShare = new DegenerusVaultShare("Degenerus Vault Eth", "DGVE", address(this), INITIAL_SUPPLY, msg.sender);
         IVaultCoin(coin_).setVault(address(this));
     }
 
     // ---------------------------------------------------------------------
     // Deposits (bond-only)
     // ---------------------------------------------------------------------
-    /// @notice Pull ETH (msg.value), stETH, and/or coin from the bonds contract (caller must approve this contract).
-    /// @dev Access: bonds only.
+    /// @notice Pull ETH (msg.value) and/or stETH from the bonds contract and escrow virtual coin on the coin contract.
+    /// @dev Access: bonds only. coinAmount bumps the coin’s vault mint allowance; no coin transfer occurs.
     function deposit(uint256 coinAmount, uint256 stEthAmount) external payable onlyBonds {
         if (coinAmount != 0) {
-            IVaultCoin(coin).vaultEscrowFrom(msg.sender, coinAmount);
-            coinReserve += coinAmount;
+            IVaultCoin(coin).vaultEscrow(coinAmount);
         }
         _pullToken(address(steth), msg.sender, stEthAmount);
         emit Deposit(msg.sender, msg.value, stEthAmount, coinAmount);
@@ -247,7 +242,7 @@ contract DegenerusVault {
         if (amount == 0 || amount > bal) revert Insufficient();
 
         uint256 supplyBefore = share.totalSupply();
-        uint256 coinBal = coinReserve;
+        uint256 coinBal = IVaultCoin(coin).vaultMintAllowance();
         coinOut = (coinBal * amount) / supplyBefore;
         if (coinOut > coinBal) revert Insufficient();
 
@@ -258,10 +253,7 @@ contract DegenerusVault {
         }
 
         emit Claim(msg.sender, to, amount, 0, 0, coinOut);
-        if (coinOut != 0) {
-            coinReserve = coinBal - coinOut;
-            IVaultCoin(coin).vaultMintTo(to, coinOut);
-        }
+        if (coinOut != 0) IVaultCoin(coin).vaultMintTo(to, coinOut);
     }
 
     /// @notice Burn eth-share tokens to redeem the proportional slice of ETH and stETH.
@@ -297,7 +289,7 @@ contract DegenerusVault {
 
     /// @notice View the coin-share burn required to withdraw a target amount of BURNIE.
     function previewBurnForCoinOut(uint256 coinOut) external view returns (uint256 burnAmount) {
-        uint256 reserve = coinReserve;
+        uint256 reserve = IVaultCoin(coin).vaultMintAllowance();
         if (coinOut == 0 || coinOut > reserve) revert Insufficient();
         uint256 supply = coinShare.totalSupply();
         // ceil(coinOut * supply / reserve)
@@ -331,7 +323,7 @@ contract DegenerusVault {
     function previewCoin(uint256 amount) external view returns (uint256 coinOut) {
         uint256 supply = coinShare.totalSupply();
         if (amount == 0 || amount > supply) revert Insufficient();
-        uint256 coinBal = coinReserve;
+        uint256 coinBal = IVaultCoin(coin).vaultMintAllowance();
         coinOut = (coinBal * amount) / supply;
     }
 

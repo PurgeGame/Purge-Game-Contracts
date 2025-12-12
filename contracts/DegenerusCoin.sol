@@ -2,14 +2,19 @@
 pragma solidity ^0.8.26;
 
 /// @title DegenerusCoin
-/// @notice ERC20-style game token (BURNIE) that doubles as accounting for coinflip wagers, stakes, quests, and jackpots.
-/// @dev Acts as the hub for gameplay modules (game, NFTs, quests, jackpots). Mint/burn only occurs
-///      through explicit gameplay flows; there is intentionally no public mint.
+/// @notice ERC20-style game token (BURNIE) that doubles as accounting for coinflip wagers, quests, and jackpots.
+/// @dev Acts as the hub for gameplay modules (game, NFTs, quests, jackpots). Mint/burn only occurs through explicit
+///      gameplay flows; there is intentionally no public mint.
 import {DegenerusGamepieces} from "./DegenerusGamepieces.sol";
-import {DegenerusAffiliate} from "./DegenerusAffiliate.sol";
 import {IDegenerusGame} from "./interfaces/IDegenerusGame.sol";
 import {IDegenerusQuestModule, QuestInfo, PlayerQuestView} from "./interfaces/IDegenerusQuestModule.sol";
 import {IDegenerusJackpots} from "./interfaces/IDegenerusJackpots.sol";
+
+interface IDegenerusAffiliateCoin {
+    function consumePresaleCoin(address player) external returns (uint256 amount);
+    function presaleClaimableTotal() external view returns (uint256);
+    function addPresaleLinkCredit(address player, uint256 amount) external;
+}
 
 contract DegenerusCoin {
     // ---------------------------------------------------------------------
@@ -26,7 +31,6 @@ contract DegenerusCoin {
     event DailyQuestRolled(uint48 indexed day, uint8 questType, bool highDifficulty);
     event QuestCompleted(address indexed player, uint8 questType, uint32 streak, uint256 reward, bool hardMode);
     event PresaleLinkCredit(address indexed player, uint256 amount);
-    event MarketplaceUpdated(address indexed marketplace);
 
     // ---------------------------------------------------------------------
     // Errors
@@ -34,13 +38,8 @@ contract DegenerusCoin {
     // Short, custom errors to save gas and keep branch intent explicit.
     error OnlyGame();
     error OnlyVault();
-    error BettingPaused();
-    error Zero();
     error Insufficient();
     error AmountLTMin();
-    error E();
-    error InvalidKind();
-    error StakeInvalid();
     error ZeroAddress();
     error NotDecimatorWindow();
     error OnlyBonds();
@@ -81,22 +80,21 @@ contract DegenerusCoin {
     IDegenerusGame internal degenerusGame;
     DegenerusGamepieces internal degenerusGamepieces;
     IDegenerusQuestModule internal questModule;
-    DegenerusAffiliate public immutable affiliateProgram;
-    address public jackpots;
-    address public vault;
-    address public immutable admin;
-    address public marketplace;
+    IDegenerusAffiliateCoin private immutable affiliateProgram;
+    address private jackpots;
+    address private vault;
+    address private immutable admin;
 
-    // Coinflip accounting keyed by day window (auto daily flips; distinct from long-horizon stakes below).
+    // Coinflip accounting keyed by day window (auto daily flips).
     mapping(uint48 => mapping(address => uint256)) internal coinflipBalance;
     mapping(uint48 => CoinflipDayResult) internal coinflipDayResult;
     mapping(address => uint48) internal lastCoinflipClaim;
-    mapping(address => uint256) public playerLuckbox;
     uint48 internal flipsClaimableDay; // Last day that has been opened for claims (active day = flipsClaimableDay)
     bool private presaleEscrowInitialized; // packed with flipsClaimableDay to save a slot
 
     // Vault escrow: tracks coin reserved for the vault; minted only when vault pays out.
-    uint256 public vaultMintAllowance;
+    // Virtual supply the vault is authorized to mint (not yet circulated). Seeded to 2m BURNIE.
+    uint256 private vaultMintAllowance = 2_000_000 * 1e6;
 
     // Track whether the top-flip bonus has been paid for a given level (once per level).
     mapping(uint24 => bool) internal topFlipRewardPaid;
@@ -121,7 +119,7 @@ contract DegenerusCoin {
     uint128 public currentBounty = 1_000_000_000;
     uint128 public biggestFlipEver = 1_000_000_000;
     address internal bountyOwedTo;
-    address public immutable bonds;
+    address private immutable bonds;
 
     // ---------------------------------------------------------------------
     // ERC20 state
@@ -140,7 +138,7 @@ contract DegenerusCoin {
     }
 
     function transferFrom(address from, address to, uint256 amount) public returns (bool) {
-        if (msg.sender != marketplace) {
+        if (msg.sender != address(degenerusGame)) {
             uint256 allowed = allowance[from][msg.sender];
             if (allowed != type(uint256).max) {
                 uint256 newAllowance = allowed - amount;
@@ -150,19 +148,6 @@ contract DegenerusCoin {
         }
         _transfer(from, to, amount);
         return true;
-    }
-
-    /// @notice Burn tokens from `from` using allowance semantics; marketplace bypasses allowance.
-    function burnFrom(address from, uint256 amount) external {
-        if (msg.sender != marketplace) {
-            uint256 allowed = allowance[from][msg.sender];
-            if (allowed != type(uint256).max) {
-                uint256 newAllowance = allowed - amount;
-                allowance[from][msg.sender] = newAllowance;
-                emit Approval(from, msg.sender, newAllowance);
-            }
-        }
-        _burn(from, amount);
     }
 
     function _transfer(address from, address to, uint256 amount) internal {
@@ -196,7 +181,7 @@ contract DegenerusCoin {
     uint16 private constant BPS_DENOMINATOR = 10_000; // basis point math helper
     uint24 private constant DECIMATOR_SPECIAL_LEVEL = 100; // special bucket rules every 100 levels
     uint48 private constant JACKPOT_RESET_TIME = 82620; // anchor timestamp for day indexing
-    uint8 private constant COIN_CLAIM_DAYS = 30; // claim window for flips/stakes
+    uint8 private constant COIN_CLAIM_DAYS = 30; // claim window for flips
 
     // ---------------------------------------------------------------------
     // Immutables / external wiring
@@ -209,9 +194,13 @@ contract DegenerusCoin {
         _;
     }
 
-    modifier onlyGameplayContracts() {
+    modifier onlyBurnAuthorized() {
         address sender = msg.sender;
-        if (sender != address(degenerusGame) && sender != address(degenerusGamepieces)) revert OnlyGame();
+        if (
+            sender != address(degenerusGame) &&
+            sender != address(degenerusGamepieces) &&
+            sender != address(affiliateProgram)
+        ) revert OnlyGame();
         _;
     }
 
@@ -233,11 +222,11 @@ contract DegenerusCoin {
     // ---------------------------------------------------------------------
     // Constructor
     // ---------------------------------------------------------------------
-    constructor(address bonds_, address admin_, address payable affiliate_, address vault_) {
+    constructor(address bonds_, address admin_, address affiliate_, address vault_) {
         if (bonds_ == address(0) || admin_ == address(0) || affiliate_ == address(0)) revert ZeroAddress();
         bonds = bonds_;
         admin = admin_;
-        affiliateProgram = DegenerusAffiliate(affiliate_);
+        affiliateProgram = IDegenerusAffiliateCoin(affiliate_);
         vault = vault_;
     }
 
@@ -407,13 +396,6 @@ contract DegenerusCoin {
         }
     }
 
-    /// @notice Set the trusted marketplace allowed to transfer/burn without allowances.
-    function setMarketplace(address marketplace_) external {
-        if (msg.sender != admin) revert OnlyAdmin();
-        marketplace = marketplace_;
-        emit MarketplaceUpdated(marketplace_);
-    }
-
     /// @notice One-time presale mint from the affiliate contract; callable only by affiliate.
     function affiliatePrimePresale() external {
         if (msg.sender != address(affiliateProgram)) revert OnlyAffiliate();
@@ -425,27 +407,12 @@ contract DegenerusCoin {
         presaleClaimableRemaining += presaleTotal;
     }
 
-    /// @notice Burn BURNIE on behalf of an affiliate flow (synthetic cap unlocks).
-    /// @dev Access: affiliate contract only.
-    function burnCoinAffiliate(address target, uint256 amount) external {
-        if (msg.sender != address(affiliateProgram)) revert OnlyAffiliate();
-        _burn(target, amount);
-    }
-
     /// @notice Escrow virtual coin to the vault (no token movement); increases mint allowance.
-    function vaultEscrowFrom(address from, uint256 amount) external onlyVault {
+    /// @dev Access: vault, bonds, or game when routing coin share without touching the vault.
+    function vaultEscrow(uint256 amount) external {
         if (amount == 0) return;
-        if (from == address(0)) revert ZeroAddress();
-
-        uint256 allowed = allowance[from][msg.sender];
-        if (allowed != type(uint256).max) {
-            if (allowed < amount) revert Insufficient();
-            allowance[from][msg.sender] = allowed - amount;
-            emit Approval(from, msg.sender, allowance[from][msg.sender]);
-        }
-
-        // Burn escrowed tokens to cap future vault mints to the burned amount.
-        _burn(from, amount);
+        address sender = msg.sender;
+        if (sender != vault && sender != bonds && sender != address(degenerusGame)) revert OnlyVault();
         vaultMintAllowance += amount;
     }
 
@@ -615,9 +582,9 @@ contract DegenerusCoin {
         return module.getPlayerQuestView(player);
     }
 
-    /// @notice Burn BURNIE from `target` during gameplay flows (purchases, fees).
-    /// @dev Access: DegenerusGame or NFT only. OZ ERC20 `_burn` reverts on zero address or insufficient balance.
-    function burnCoin(address target, uint256 amount) external onlyGameplayContracts {
+    /// @notice Burn BURNIE from `target` during gameplay/affiliate flows (purchases, fees, synthetic caps).
+    /// @dev Access: DegenerusGame, NFT, or affiliate. OZ ERC20 `_burn` reverts on zero address or insufficient balance.
+    function burnCoin(address target, uint256 amount) external onlyBurnAuthorized {
         _burn(target, amount);
     }
 
@@ -675,10 +642,10 @@ contract DegenerusCoin {
 
     /// @notice Progress coinflip payouts for the current level in bounded slices.
     /// @dev Called by DegenerusGame; runs in three phases per settlement:
-    ///      1. Record the stake resolution day for the level being processed.
+    ///      1. Record the flip resolution day for the level being processed.
     ///      2. Arm bounties on the first payout window.
     ///      3. Perform cleanup and reopen betting (flip claims happen lazily per player).
-    /// @param level Current DegenerusGame level (used to gate 1/run and propagate stakes).
+    /// @param level Current DegenerusGame level (used to gate 1/run and propagate flip stakes).
     /// @param bonusFlip Adds 6 percentage points to the payout roll for the last flip of the purchase phase.
     /// @return finished True when all payouts and cleanup are complete.
     function processCoinflipPayouts(
@@ -763,11 +730,8 @@ contract DegenerusCoin {
     /// @param canArmBounty         If true, a sufficiently large deposit may arm a bounty.
     /// @param bountyEligible       If true, this deposit can arm the bounty (entire amount is considered).
     function addFlip(address player, uint256 coinflipDeposit, bool canArmBounty, bool bountyEligible) internal {
-        // Auto-claim older flip/stake winnings (without mint) so deposits net against pending payouts.
+        // Auto-claim older flip winnings (without mint) so deposits net against pending payouts.
         uint256 totalClaimed = _claimCoinflipsInternal(player);
-        if (totalClaimed != 0) {
-            playerLuckbox[player] += totalClaimed;
-        }
         uint256 mintRemainder;
 
         if (coinflipDeposit > totalClaimed) {

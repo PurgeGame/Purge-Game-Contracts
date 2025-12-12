@@ -12,7 +12,6 @@ interface IDegenerusCoin is IDegenerusCoinModule {
     function creditFlipBatch(address[3] calldata players, uint256[3] calldata amounts) external;
 
     function burnCoin(address target, uint256 amount) external;
-    function burnCoinAffiliate(address target, uint256 amount) external;
 
     function claimPresaleAffiliateBonus() external;
 

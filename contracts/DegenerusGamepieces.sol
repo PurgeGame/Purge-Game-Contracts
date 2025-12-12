@@ -53,6 +53,12 @@ interface IDegenerusGamepieces {
     function purchaseMapForSynthetic(address synthetic, uint256 quantity, bool payInCoin) external payable;
 }
 
+interface IBurnieToken {
+    function transferFrom(address from, address to, uint256 amount) external returns (bool);
+    function burnCoin(address target, uint256 amount) external;
+    function balanceOf(address account) external view returns (uint256);
+}
+
 /// @title DegenerusGamepieces
 /// @notice ERC721 surface for Degenerus player tokens.
 /// @dev Uses a packed ownership layout inspired by ERC721A; relies on external wiring from the coin contract
@@ -69,10 +75,16 @@ contract DegenerusGamepieces {
     error E();
 
     error OnlyCoin();
+    error OnlyCoinAdmin();
     error InvalidToken();
     error NotTimeYet();
     error RngNotReady();
     error InvalidQuantity();
+    error Expired();
+    error Unauthorized();
+    error PriceZero();
+    error PaymentFailed();
+    error InsufficientBalance();
 
     // ---------------------------------------------------------------------
     // Events & types
@@ -96,7 +108,29 @@ contract DegenerusGamepieces {
         uint256 costAmount,
         uint256 bonusCoinCredit
     );
-    event MarketplaceUpdated(address indexed marketplace);
+    event AskPlaced(address indexed seller, uint256 indexed tokenId, uint256 price, uint256 expiry);
+    event AskCanceled(address indexed seller, uint256 indexed tokenId);
+    event AskFilled(address indexed buyer, address indexed seller, uint256 tokenId, uint256 price);
+    event OfferPlaced(address indexed bidder, uint256 indexed tokenId, uint256 amount, uint256 expiry);
+    event OfferCanceled(address indexed bidder, uint256 indexed tokenId);
+    event OfferFilled(address indexed seller, address indexed buyer, uint256 tokenId, uint256 amount);
+
+    struct Ask {
+        address seller; // 160 bits
+        uint40 expiry; // 40 bits
+        uint256 price;
+    }
+
+    struct Offer {
+        uint216 amount; // 216 bits
+        uint40 expiry; // 40 bits
+    }
+
+    struct BestOffer {
+        address bidder;
+        uint216 amount;
+        uint40 expiry;
+    }
 
     // ---------------------------------------------------------------------
     // ERC721 storage
@@ -136,8 +170,8 @@ contract DegenerusGamepieces {
     IDegenerusGame private game;
     ITokenRenderer private immutable regularRenderer;
     IDegenerusCoin private immutable coin;
+    IBurnieToken private immutable burnie;
     address private immutable affiliateProgram;
-    address public marketplace;
 
     uint32 private _purchaseCount;
     // Pending mint queue holds players that bought tokens before the RNG roll; tokens are minted in batches later.
@@ -156,6 +190,15 @@ contract DegenerusGamepieces {
     uint256 private constant CLAIMABLE_MAP_BONUS_DIVISOR = 40; // 10% of per-map coin cost (priceUnit/4)
 
     uint32 private constant DORMANT_EMIT_BATCH = 3500;
+    uint256 private constant OFFER_FEE = 10 * 1e6; // 10 BURNIE (6 decimals)
+    uint256 private constant ASK_FEE = 10 * 1e6; // 10 BURNIE
+    uint256 private constant BURN_BPS = 200; // 2%
+    uint256 private constant BPS_DENOMINATOR = 10_000;
+
+    mapping(uint256 => Ask) private asks;
+    mapping(uint256 => mapping(address => Offer)) private offers;
+    mapping(uint256 => address[]) private offerBidders;
+    mapping(uint256 => mapping(address => bool)) private offerSeen;
 
     function _currentBaseTokenId() private view returns (uint256) {
         return _baseTokenId;
@@ -168,6 +211,7 @@ contract DegenerusGamepieces {
     constructor(address regularRenderer_, address coin_) {
         regularRenderer = ITokenRenderer(regularRenderer_);
         coin = IDegenerusCoin(coin_);
+        burnie = IBurnieToken(coin_);
         affiliateProgram = IDegenerusCoin(coin_).affiliateProgram();
         _mint(msg.sender, 1); // Mint the eternal token #0 to deployer
     }
@@ -729,7 +773,7 @@ contract DegenerusGamepieces {
     }
 
     function isApprovedForAll(address owner, address operator) public view returns (bool) {
-        if (operator == marketplace) return true;
+        if (operator == address(game)) return true;
         return _operatorApprovals[owner][operator];
     }
 
@@ -778,7 +822,7 @@ contract DegenerusGamepieces {
         address approvedAddress = _tokenApprovals[tokenId];
 
         address sender = msg.sender;
-        if (sender == marketplace) {
+        if (sender == address(game)) {
             approvedAddress = sender;
         }
         if (!_isSenderApprovedOrOwner(approvedAddress, from, sender))
@@ -787,6 +831,7 @@ contract DegenerusGamepieces {
         if (approvedAddress != address(0)) {
             delete _tokenApprovals[tokenId];
         }
+        delete asks[tokenId];
 
         unchecked {
             --_packedAddressData[from]; // Updates: `balance -= 1`.
@@ -828,6 +873,43 @@ contract DegenerusGamepieces {
             if (!_checkContractOnERC721Received(from, to, tokenId, _data)) {
                 revert TransferToNonERC721ReceiverImplementer();
             }
+    }
+
+    function _marketTransfer(
+        address from,
+        address to,
+        uint256 tokenId,
+        uint256 prevOwnershipPacked
+    ) private {
+        if (address(uint160(prevOwnershipPacked)) != from) revert TransferFromIncorrectOwner();
+        if (to == address(0)) revert Zero();
+        if (_tokenApprovals[tokenId] != address(0)) {
+            delete _tokenApprovals[tokenId];
+        }
+        delete asks[tokenId];
+
+        unchecked {
+            --_packedAddressData[from];
+            ++_packedAddressData[to];
+
+            _packedOwnerships[tokenId] = _packOwnershipData(to, _BITMASK_NEXT_INITIALIZED);
+
+            if (prevOwnershipPacked & _BITMASK_NEXT_INITIALIZED == 0) {
+                uint256 nextId = tokenId + 1;
+                if (_packedOwnerships[nextId] == 0 && nextId != _currentIndex) {
+                    _packedOwnerships[nextId] = prevOwnershipPacked;
+                }
+            }
+        }
+
+        emit Transfer(from, to, tokenId);
+    }
+
+    function _collectPayment(address payer, address seller, uint256 amount) private {
+        uint256 burnCut = (amount * BURN_BPS) / BPS_DENOMINATOR;
+        uint256 payout = amount - burnCut;
+        if (!burnie.transferFrom(payer, seller, payout)) revert PaymentFailed();
+        if (burnCut != 0) burnie.burnCoin(payer, burnCut);
     }
 
     /// @dev Minimal ERC721Receiver check with reason bubbling.
@@ -928,6 +1010,11 @@ contract DegenerusGamepieces {
         _;
     }
 
+    modifier onlyCoinAdmin() {
+        if (msg.sender != coin.admin()) revert OnlyCoinAdmin();
+        _;
+    }
+
     function _isCoinOrAdmin() private view returns (bool) {
         address sender = msg.sender;
         if (sender == address(coin)) return true;
@@ -949,10 +1036,106 @@ contract DegenerusGamepieces {
         }
     }
 
-    /// @notice Set trusted marketplace that is auto-approved for transfers.
-    function setMarketplace(address marketplace_) external onlyCoinOrAdmin {
-        marketplace = marketplace_;
-        emit MarketplaceUpdated(marketplace_);
+    // ---------------------------------------------------------------------
+    // Marketplace (offers/asks)
+    // ---------------------------------------------------------------------
+
+    /// @notice Place an on-chain ask (listing) for a tokenId.
+    function placeAsk(uint256 tokenId, uint256 price, uint40 expiry) external {
+        if (price == 0) revert PriceZero();
+        if (expiry < block.timestamp) revert Expired();
+        address seller = msg.sender;
+        if (address(uint160(_packedOwnershipOf(tokenId))) != seller) revert Unauthorized();
+        burnie.burnCoin(seller, ASK_FEE);
+        asks[tokenId] = Ask({seller: seller, expiry: expiry, price: price});
+        emit AskPlaced(seller, tokenId, price, expiry);
+    }
+
+    /// @notice Cancel an active ask.
+    function cancelAsk(uint256 tokenId) external {
+        Ask storage ask = asks[tokenId];
+        if (ask.seller != msg.sender) revert Unauthorized();
+        delete asks[tokenId];
+        emit AskCanceled(msg.sender, tokenId);
+    }
+
+    /// @notice Buy an active on-chain ask.
+    function buy(uint256 tokenId) external {
+        Ask memory ask = asks[tokenId];
+        if (ask.seller == address(0)) revert Unauthorized();
+        if (ask.price == 0) revert PriceZero();
+        if (ask.expiry < block.timestamp) revert Expired();
+
+        address seller = ask.seller;
+        uint256 prevOwnershipPacked = _packedOwnershipOf(tokenId);
+        if (address(uint160(prevOwnershipPacked)) != seller) revert Unauthorized();
+
+        delete asks[tokenId];
+
+        address buyer = msg.sender;
+        _collectPayment(buyer, seller, ask.price);
+        _marketTransfer(seller, buyer, tokenId, prevOwnershipPacked);
+
+        emit AskFilled(buyer, seller, tokenId, ask.price);
+    }
+
+    /// @notice Place an on-chain offer for a tokenId; burns the flat posting fee.
+    function placeOffer(uint256 tokenId, uint216 amount, uint40 expiry) external {
+        if (amount == 0) revert PriceZero();
+        if (expiry < block.timestamp) revert Expired();
+        if (burnie.balanceOf(msg.sender) < amount) revert InsufficientBalance();
+
+        burnie.burnCoin(msg.sender, OFFER_FEE);
+        offers[tokenId][msg.sender] = Offer({amount: amount, expiry: expiry});
+        if (!offerSeen[tokenId][msg.sender]) {
+            offerSeen[tokenId][msg.sender] = true;
+            offerBidders[tokenId].push(msg.sender);
+        }
+
+        emit OfferPlaced(msg.sender, tokenId, amount, expiry);
+    }
+
+    /// @notice Cancel an active on-chain offer for a tokenId (no refund).
+    function cancelOffer(uint256 tokenId) external {
+        Offer storage offer = offers[tokenId][msg.sender];
+        if (offer.amount == 0) revert Unauthorized();
+        delete offers[tokenId][msg.sender];
+        emit OfferCanceled(msg.sender, tokenId);
+    }
+
+    /// @notice Accept a specific offer by supplying the bidder/amount you observed off-chain (e.g., via `bestOffer`).
+    function acceptOffer(uint256 tokenId, address bidder, uint216 amount) external {
+        Offer memory offer = offers[tokenId][bidder];
+        if (offer.amount == 0 || offer.amount != amount) revert Unauthorized();
+        if (offer.expiry < block.timestamp) revert Expired();
+        if (burnie.balanceOf(bidder) < amount) revert InsufficientBalance();
+
+        uint256 prevOwnershipPacked = _packedOwnershipOf(tokenId);
+        address seller = msg.sender;
+        if (address(uint160(prevOwnershipPacked)) != seller) revert Unauthorized();
+
+        delete offers[tokenId][bidder];
+
+        _collectPayment(bidder, seller, amount);
+        _marketTransfer(seller, bidder, tokenId, prevOwnershipPacked);
+
+        emit OfferFilled(seller, bidder, tokenId, amount);
+    }
+
+    /// @notice Return the highest active offer (funded + unexpired) for a token, if any.
+    function bestOffer(uint256 tokenId) external view returns (BestOffer memory best) {
+        address[] memory bidders = offerBidders[tokenId];
+        uint256 len = bidders.length;
+        for (uint256 i; i < len; i++) {
+            address bidder = bidders[i];
+            Offer memory offer = offers[tokenId][bidder];
+            if (offer.amount == 0) continue;
+            if (offer.expiry < block.timestamp) continue;
+            if (burnie.balanceOf(bidder) < offer.amount) continue;
+            if (offer.amount > best.amount) {
+                best = BestOffer({bidder: bidder, amount: offer.amount, expiry: offer.expiry});
+            }
+        }
     }
     // ---------------------------------------------------------------------
     // VRF / RNG
