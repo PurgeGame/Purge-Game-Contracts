@@ -39,12 +39,11 @@ struct PurchaseParams {
 interface IDegenerusGamepieces {
     function tokenTraitsPacked(uint256 tokenId) external view returns (uint32);
     function purchaseCount() external view returns (uint32);
-    function finalizePurchasePhase(uint32 minted, uint256 rngWord) external;
+    function processPendingMints(uint32 playersToProcess, uint32 multiplier, uint256 rngWord) external returns (bool finished);
     function advanceBase() external;
     function nextTokenId() external view returns (uint256);
     function burnFromGame(address owner, uint256[] calldata tokenIds) external;
     function currentBaseTokenId() external view returns (uint256);
-    function processPendingMints(uint32 playersToProcess, uint32 multiplier) external returns (bool finished);
     function tokensOwed(address player) external view returns (uint32);
     function processDormant(uint32 maxCount) external returns (bool worked);
     function clearPlaceholderPadding(uint256 startTokenId, uint256 endTokenId) external;
@@ -178,7 +177,6 @@ contract DegenerusGamepieces {
     address[] private _pendingMintQueue;
     mapping(address => uint32) private _tokensOwed;
     uint256 private _mintQueueIndex; // Tracks # of queue entries fully processed during airdrop rotation
-    uint256 private _mintQueueStartOffset;
 
     // Tracks how many level-100 mints (tokens + maps) a player has purchased with ETH for price scaling.
     mapping(address => uint32) private _levelHundredMintCount;
@@ -633,14 +631,20 @@ contract DegenerusGamepieces {
     }
 
     /// @notice Batch-mint queued purchases, respecting an airdrop cap and optional multiplier for reward mints.
-    /// @dev Called by the game contract; will rotate through the queue deterministically based on `_mintQueueStartOffset`.
-    function processPendingMints(uint32 playersToProcess, uint32 multiplier) external onlyGame returns (bool finished) {
+    /// @dev Called by the game contract; rotates through the queue using a VRF-provided offset for this airdrop.
+    function processPendingMints(
+        uint32 playersToProcess,
+        uint32 multiplier,
+        uint256 rngWord
+    ) external onlyGame returns (bool finished) {
         uint256 total = _pendingMintQueue.length;
 
         uint256 index = _mintQueueIndex;
         if (index >= total) {
             finished = true;
         } else {
+            uint256 offset = total > 1 ? (rngWord % total) : 0;
+
             uint32 players = playersToProcess == 0 ? MINT_AIRDROP_PLAYER_BATCH_SIZE : playersToProcess;
             uint256 end = index + players;
             if (end > total) {
@@ -650,7 +654,7 @@ contract DegenerusGamepieces {
             uint32 minted;
             if (multiplier == 0) multiplier = 1;
             while (index < end) {
-                uint256 rawIdx = (index + _mintQueueStartOffset) % total;
+                uint256 rawIdx = (index + offset) % total;
                 address player = _pendingMintQueue[rawIdx];
                 uint32 owed = _tokensOwed[player];
                 if (owed == 0) {
@@ -699,7 +703,7 @@ contract DegenerusGamepieces {
         if (finished) {
             delete _pendingMintQueue;
             _mintQueueIndex = 0;
-            _mintQueueStartOffset = 0;
+            _purchaseCount = 0;
         }
     }
 
@@ -1137,27 +1141,6 @@ contract DegenerusGamepieces {
             }
         }
     }
-    // ---------------------------------------------------------------------
-    // VRF / RNG
-    // ---------------------------------------------------------------------
-
-    function _setSeasonMintedSnapshot(uint256 minted) private pure {
-        minted;
-    }
-
-    /// @notice Called by game when a purchase phase ends; snapshots minted count and shuffles pending mint order.
-    function finalizePurchasePhase(uint32 minted, uint256 rngWord) external onlyGame {
-        _setSeasonMintedSnapshot(minted);
-        _purchaseCount = 0;
-        _mintQueueIndex = 0;
-        uint256 queueLength = _pendingMintQueue.length;
-        if (queueLength > 1) {
-            _mintQueueStartOffset = ((rngWord % (queueLength - 1)) + 1);
-        } else {
-            _mintQueueStartOffset = 0;
-        }
-    }
-
     /// @notice Retire all tokens below `newBaseTokenId` (except token 0) at level transition.
     function advanceBase() external onlyGame {
         uint256 newBaseTokenId = _currentIndex;

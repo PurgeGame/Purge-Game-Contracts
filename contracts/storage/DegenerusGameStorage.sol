@@ -30,7 +30,7 @@ abstract contract DegenerusGameStorage {
 
     // Slot 1: actor pointers and sub-state cursors.
     uint32 internal traitRebuildCursor; // progress cursor when reseeding trait counts
-    uint32 internal airdropMultiplier = 1; // airdrop bonus multiplier (scaled integer)
+    uint32 internal airdropMultiplier; // airdrop bonus multiplier (scaled integer)
     uint8 internal jackpotCounter; // jackpots processed within the current level
     uint8 internal earlyBurnPercent; // % of previous prize pool carried into early burn reward (0-255)
     bool internal mapJackpotPaid; // true once the map jackpot has been executed for the current purchase phase

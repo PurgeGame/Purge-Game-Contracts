@@ -142,7 +142,7 @@ contract DegenerusGame is DegenerusGameStorage {
      * @param endgameModule_    Delegate module handling endgame settlement
      * @param jackpotModule_    Delegate module handling jackpot distribution
      * @param mintModule_       Delegate module handling mint packing and trait rebuild helpers
-     * @param bondModule_       Delegate module handling bond upkeep, staking, and shutdown drains
+     * @param bondModule_       Delegate module handling bond upkeep, staking, and shutdown gameOvers
      * @param vrfCoordinator_   Chainlink VRF coordinator
      * @param vrfKeyHash_       VRF key hash
      * @param stEthToken_       stETH token address
@@ -460,22 +460,23 @@ contract DegenerusGame is DegenerusGameStorage {
         uint48 day = _currentDayIndex();
         IDegenerusCoin coinContract = coin;
         uint48 lst = levelStartTime;
+        bool gameOver;
+        uint8 _gameState = gameState;
+        if (_gameState == 0) revert NotTimeYet(); //shutdown;
+        // Liveness gameOver
         if (lst == LEVEL_START_SENTINEL) {
             uint48 deployTs = deployTimestamp;
-            if (
-                deployTs != 0 && uint256(ts) >= uint256(deployTs) + DEPLOY_IDLE_TIMEOUT // uint256 to avoid uint48 overflow
-            ) {
-                drainToBonds();
-                return;
+            if (deployTs != 0 && uint256(ts) >= uint256(deployTs) + DEPLOY_IDLE_TIMEOUT) {
+                gameOver = true;
             }
+        } else if (ts - 365 days > lst && _gameState != 0) {
+            gameOver = true;
         }
-        uint8 _gameState = gameState;
-        if (_gameState == 0) revert NotTimeYet(); // idle/shutdown; nothing to advance
-        // Liveness drain
-        if (ts - 365 days > lst && _gameState != 0) {
-            drainToBonds();
+        if (gameOver) {
+            gameOverDrainToBonds();
             return;
         }
+
         uint24 lvl = level;
 
         bool lastPurchase = (_gameState == 2) ? lastPurchaseDay : false;
@@ -506,15 +507,18 @@ contract DegenerusGame is DegenerusGameStorage {
                 break;
             }
 
+            // Always run a map batch upfront; it no-ops when nothing is queued.
+            (bool batchWorked, bool batchesFinished) = _runProcessMapBatch(cap); // single batch per call; break if any work was done
+            if (batchWorked || !batchesFinished) break;
+
             // --- State 1 - Pregame ---
             if (_gameState == 1) {
                 _runEndgameModule(lvl, rngWord); // handles payouts, wipes, endgame dist, and jackpots
-                if (lvl != 0) {
-                    address topStake = coinContract.recordStakeResolution(lvl, day);
-                    if (topStake != address(0)) {
-                        IDegenerusTrophies(trophies).mintStake(topStake, lvl);
-                    }
+                address topStake = coinContract.recordStakeResolution(lvl, day);
+                if (topStake != address(0)) {
+                    IDegenerusTrophies(trophies).mintStake(topStake, lvl);
                 }
+
                 if (lastExterminatedTrait != TRAIT_ID_TIMEOUT) {
                     payDailyJackpot(false, level, rngWord);
                 }
@@ -532,32 +536,14 @@ contract DegenerusGame is DegenerusGameStorage {
             // --- State 2 - Purchase / Airdrop ---
             if (_gameState == 2) {
                 if (!lastPurchaseDay) {
-                    bool batchesPending = airdropIndex < pendingMapMints.length;
-                    if (batchesPending) {
-                        uint256 prevIdx = airdropIndex;
-                        uint32 prevProcessed = airdropMapsProcessedCount;
-                        bool batchesFinished = _processMapBatch(cap); // single batch per call; break if any work was done
-                        bool batchWorked = (airdropIndex != prevIdx) || (airdropMapsProcessedCount != prevProcessed);
-                        if (batchWorked || !batchesFinished) break;
-                        batchesPending = false;
-                    }
                     payDailyJackpot(false, lvl, rngWord);
-                    if (!batchesPending && nextPrizePool >= lastPrizePool) {
-                        airdropMultiplier = _calculateAirdropMultiplierModule(nft.purchaseCount(), lvl);
+                    if (nextPrizePool >= lastPrizePool) {
                         lastPurchaseDay = true;
                     }
                     _unlockRng(day);
                     break;
                 }
-
                 if (!mapJackpotPaid) {
-                    {
-                        uint256 prevIdx = airdropIndex;
-                        uint32 prevProcessed = airdropMapsProcessedCount;
-                        bool mapFinished = _processMapBatch(cap); // single batch per call; break if any work was done
-                        bool mapWorked = (airdropIndex != prevIdx) || (airdropMapsProcessedCount != prevProcessed);
-                        if (mapWorked || !mapFinished) break;
-                    }
                     if (lvl % 100 == 0) {
                         if (!_runDecimatorHundredJackpot(lvl, rngWord)) {
                             break; // keep working this jackpot slice before moving on
@@ -565,7 +551,7 @@ contract DegenerusGame is DegenerusGameStorage {
                     }
 
                     uint256 totalWeiForBond = rewardPool + currentPrizePool;
-                    _bondMaintenanceForMapModule(totalWeiForBond, rngWord, lvl);
+                    _bondSetup(totalWeiForBond, rngWord, lvl);
 
                     bool bondWorked = IDegenerusBonds(bonds).bondMaintenance(rngWord, cap);
                     if (bondWorked) break; // bond batch consumed this tick; rerun advanceGame to continue
@@ -582,9 +568,12 @@ contract DegenerusGame is DegenerusGameStorage {
                 }
 
                 uint32 purchaseCountRaw = nft.purchaseCount();
+                if (airdropMultiplier == 0) {
+                    airdropMultiplier = _calculateAirdropMultiplierModule(purchaseCountRaw, lvl);
+                }
                 if (!traitCountsSeedQueued) {
                     uint32 multiplier_ = airdropMultiplier;
-                    if (!nft.processPendingMints(cap, multiplier_)) {
+                    if (!nft.processPendingMints(cap, multiplier_, rngWord)) {
                         break;
                     }
                     if (purchaseCountRaw != 0) {
@@ -604,10 +593,8 @@ contract DegenerusGame is DegenerusGameStorage {
                     traitCountsSeedQueued = false;
                 }
 
-                uint32 mintedCount = _purchaseTargetCountFromRawModule(purchaseCountRaw);
-                nft.finalizePurchasePhase(mintedCount, rngWordCurrent);
                 traitRebuildCursor = 0;
-                airdropMultiplier = 1;
+                airdropMultiplier = 0;
                 earlyBurnPercent = 0;
                 levelStartTime = ts;
                 gameState = 3;
@@ -620,15 +607,6 @@ contract DegenerusGame is DegenerusGameStorage {
 
             // --- State 3 - Degenerus ---
             if (_gameState == 3) {
-                bool batchesPending = airdropIndex < pendingMapMints.length;
-                if (batchesPending) {
-                    uint256 prevIdx = airdropIndex;
-                    uint32 prevProcessed = airdropMapsProcessedCount;
-                    bool batchesFinished = _processMapBatch(cap); // single batch per call; break if any work was done
-                    bool batchWorked = (airdropIndex != prevIdx) || (airdropMapsProcessedCount != prevProcessed);
-                    if (batchWorked || !batchesFinished) break;
-                }
-
                 payDailyJackpot(true, lvl, rngWord);
                 if (!_handleJackpotLevelCap()) break;
                 _unlockRng(day);
@@ -899,7 +877,7 @@ contract DegenerusGame is DegenerusGameStorage {
         if (!ok) revert E();
     }
 
-    function _bondMaintenanceForMapModule(uint256 totalWei, uint256 rngWord, uint24 lvl) private {
+    function _bondSetup(uint256 totalWei, uint256 rngWord, uint24 lvl) private {
         (bool ok, ) = bondModule.delegatecall(
             abi.encodeWithSelector(
                 IDegenerusGameBondModule.bondMaintenanceForMap.selector,
@@ -923,7 +901,7 @@ contract DegenerusGame is DegenerusGameStorage {
         }
     }
 
-    function _drainToBondsModule() private {
+    function _gameOverDrainToBondsModule() private {
         (bool ok, bytes memory data) = bondModule.delegatecall(
             abi.encodeWithSelector(IDegenerusGameBondModule.drainToBonds.selector, bonds, address(steth))
         );
@@ -1182,8 +1160,8 @@ contract DegenerusGame is DegenerusGameStorage {
         return true;
     }
 
-    function drainToBonds() private {
-        _drainToBondsModule();
+    function gameOverDrainToBonds() private {
+        _gameOverDrainToBondsModule();
         gameState = 0;
     }
 
@@ -1272,6 +1250,16 @@ contract DegenerusGame is DegenerusGameStorage {
         );
         if (!ok || data.length == 0) return false;
         return abi.decode(data, (bool));
+    }
+
+    /// @dev Helper to run one map batch and detect whether any progress was made.
+    /// @return worked True if airdropIndex or airdropMapsProcessedCount changed.
+    /// @return finished True if all pending map mints have been fully processed.
+    function _runProcessMapBatch(uint32 writesBudget) private returns (bool worked, bool finished) {
+        uint32 prevIdx = airdropIndex;
+        uint32 prevProcessed = airdropMapsProcessedCount;
+        finished = _processMapBatch(writesBudget);
+        worked = (airdropIndex != prevIdx) || (airdropMapsProcessedCount != prevProcessed);
     }
 
     function _requestRng(uint8 gameState_, bool isMapJackpotDay, uint24 lvl, uint48 /*day*/) private {
