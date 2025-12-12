@@ -276,7 +276,8 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
             }
         }
         if (winnersArr.length != 0) {
-            try IDegenerusTrophies(trophyAddr).mintBaf(winnersArr[0], lvl) {} catch {}
+            address trophyRecipient = _payoutRecipient(winnersArr[0]);
+            try IDegenerusTrophies(trophyAddr).mintBaf(trophyRecipient, lvl) {} catch {}
         }
         netSpend = poolWei - refund;
         return (netSpend, claimableDelta);

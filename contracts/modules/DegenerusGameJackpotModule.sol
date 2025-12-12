@@ -53,7 +53,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
     uint16 private constant DAILY_JACKPOT_BPS_7 = 1085;
     uint16 private constant DAILY_JACKPOT_BPS_8 = 1153;
     uint16 private constant DAILY_JACKPOT_BPS_9 = 1225;
-    uint32 private constant WRITES_BUDGET_SAFE = 800;
+    uint32 private constant WRITES_BUDGET_SAFE = 780;
     uint64 private constant MAP_LCG_MULT = 0x5851F42D4C957F2D;
     uint16 private constant JACKPOT_BOND_BPS_GRAND = 5000; // 50% skim for the top bucket
     uint16 private constant JACKPOT_BOND_BPS_OTHER = 1000; // 10% skim for other buckets

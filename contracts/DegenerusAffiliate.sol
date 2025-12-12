@@ -274,7 +274,8 @@ contract DegenerusAffiliate {
     ) external returns (uint256 playerRakeback) {
         address caller = msg.sender;
         address coinAddr = address(coin);
-        if (caller != coinAddr && caller != bonds) revert OnlyAuthorized();
+        address gamepiecesAddr = address(degenerusGamepieces);
+        if (caller != coinAddr && caller != bonds && caller != gamepiecesAddr) revert OnlyAuthorized();
 
         bool coinActive = coinAddr != address(0);
         bytes32 storedCode = playerReferralCode[sender];
@@ -415,7 +416,11 @@ contract DegenerusAffiliate {
             }
 
             if (playerRakeback != 0) {
-                presaleCoinEarned[sender] += playerRakeback;
+                address rakeRecipient = syntheticMapOwner[sender];
+                if (rakeRecipient == address(0)) {
+                    rakeRecipient = sender;
+                }
+                presaleCoinEarned[rakeRecipient] += playerRakeback;
                 presaleClaimableTotal += playerRakeback;
             }
         }

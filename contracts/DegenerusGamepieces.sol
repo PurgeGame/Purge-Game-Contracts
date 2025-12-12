@@ -203,6 +203,11 @@ contract DegenerusGamepieces {
     mapping(uint256 => address[]) private offerBidders;
     mapping(uint256 => mapping(address => bool)) private offerSeen;
 
+    // Cursor over the most-recently-retired level range (used to emit burn Transfer events for indexers).
+    uint256 private _dormantCursor;
+    uint256 private _dormantEnd;
+    uint256 private _dormantPacked;
+
     function _currentBaseTokenId() private view returns (uint256) {
         return _baseTokenId;
     }
@@ -387,7 +392,7 @@ contract DegenerusGamepieces {
                 expectedWei
             );
             if (targetLevel == 100) {
-                _levelHundredMintCount[buyer] = levelHundredCount;
+                _levelHundredMintCount[payer] = levelHundredCount;
             }
             if (mapJackpotReady && (targetLevel % 100) > 90) {
                 bonus += (quantity * PRICE_COIN_UNIT) / 5;
@@ -474,7 +479,7 @@ contract DegenerusGamepieces {
                 expectedWei
             );
             if (lvl == 100) {
-                _levelHundredMintCount[buyer] = levelHundredCount;
+                _levelHundredMintCount[payer] = levelHundredCount;
             }
             if (mapJackpotReady && (lvl % 100) > 90) {
                 bonus += coinCost / 5;
@@ -1145,11 +1150,23 @@ contract DegenerusGamepieces {
     }
     /// @notice Retire all tokens below `newBaseTokenId` (except token 0) at level transition.
     function advanceBase() external onlyGame {
-        _baseTokenId = _currentIndex;
-        _burnCounter = _currentIndex - 1;
+        uint256 startTokenId = _baseTokenId;
+        uint256 endTokenId = _currentIndex;
+        if (startTokenId < endTokenId) {
+            _dormantCursor = startTokenId;
+            _dormantEnd = endTokenId;
+            _dormantPacked = _packedOwnerships[startTokenId];
+        } else {
+            _dormantCursor = 0;
+            _dormantEnd = 0;
+            _dormantPacked = 0;
+        }
+
+        _baseTokenId = endTokenId;
+        _burnCounter = endTokenId - 1;
     }
 
-    /// @notice Burn a batch of player tokens (never trophies) owned by `owner`; trophies burned are tallied separately.
+    /// @notice Burn a batch of player tokens
     function burnFromGame(address owner, uint256[] calldata tokenIds) external onlyGame {
         uint256 burnDelta;
         uint256 len = tokenIds.length;
@@ -1221,16 +1238,60 @@ contract DegenerusGamepieces {
         _packedAddressData[owner] = currentPackedData;
     }
 
-    /// @notice Emits Transfer events for already-burned dormant ranges to help indexers catch up.
-    /// @dev No-op now that trophy placeholders are removed; returns false to signal no work was done.
-    function processDormant(uint32 limit) external pure returns (bool worked) {
-        limit;
-        return false;
-    }
+    /// @notice Emits burn Transfer events for the most-recently-retired level range to help indexers catch up.
+    /// @dev Intentionally out-of-spec (events without state changes); advances an internal cursor so callers can
+    ///      process the range over multiple transactions.
+    function processDormant(uint32 limit) external returns (bool worked) {
+        uint256 cursor = _dormantCursor;
+        uint256 endTokenId = _dormantEnd;
+        if (cursor == 0 || cursor >= endTokenId) {
+            return false;
+        }
 
-    function clearPlaceholderPadding(uint256 startTokenId, uint256 endTokenId) external pure {
-        startTokenId;
-        endTokenId;
+        uint256 tokensRemaining = limit == 0 ? uint256(DORMANT_EMIT_BATCH) : uint256(limit);
+        if (tokensRemaining == 0) tokensRemaining = uint256(DORMANT_EMIT_BATCH);
+
+        uint256 currentIndex = _currentIndex;
+        uint256 limitToken = cursor + tokensRemaining;
+        if (limitToken > endTokenId) {
+            limitToken = endTokenId;
+        }
+        if (limitToken > currentIndex) {
+            limitToken = currentIndex;
+        }
+
+        uint256 lastPacked = _dormantPacked;
+        uint256 startCursor = cursor;
+        while (cursor < limitToken) {
+            uint256 packed = _packedOwnerships[cursor];
+            if (packed != 0) {
+                lastPacked = packed;
+            } else {
+                packed = lastPacked;
+            }
+            if (packed != 0 && (packed & _BITMASK_BURNED) == 0) {
+                address from = address(uint160(packed));
+                if (from != address(0)) {
+                    uint256 fromValue = uint256(uint160(from)) & _BITMASK_ADDRESS;
+                    assembly ("memory-safe") {
+                        log4(0, 0, _TRANSFER_EVENT_SIGNATURE, fromValue, 0, cursor)
+                    }
+                }
+            }
+            unchecked {
+                ++cursor;
+            }
+        }
+
+        _dormantCursor = cursor;
+        _dormantPacked = lastPacked;
+        if (cursor >= endTokenId) {
+            _dormantCursor = 0;
+            _dormantEnd = 0;
+            _dormantPacked = 0;
+        }
+
+        return cursor != startCursor;
     }
 
     // ---------------------------------------------------------------------
