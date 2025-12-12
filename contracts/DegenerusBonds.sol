@@ -60,10 +60,21 @@ interface ICoinAffiliateLike is ICoinLike {
 
 interface IDegenerusGamePricing {
     function mintPrice() external view returns (uint256);
+    function purchaseInfo()
+        external
+        view
+        returns (uint24 lvl, uint8 gameState, bool lastPurchaseDay, bool rngLocked, uint256 priceWei);
 }
 
 interface IAffiliatePayer {
-    function payAffiliate(uint256 amount, bytes32 code, address sender, uint24 lvl) external returns (uint256);
+    function payAffiliate(
+        uint256 amount,
+        bytes32 code,
+        address sender,
+        uint24 lvl,
+        uint8 gameState,
+        bool rngLocked
+    ) external returns (uint256);
 }
 
 interface IAffiliatePresaleShutdown {
@@ -357,7 +368,6 @@ contract DegenerusBonds {
     BondToken private tokenDGNS0;
     BondToken private tokenDGNS5;
     address private immutable steth;
-    bool private vrfRecoveryArmed;
     uint256 public presaleDgnsMinted;
 
     // ---------------------------------------------------------------------
@@ -398,6 +408,22 @@ contract DegenerusBonds {
                 vrfKeyHash: vrfKeyHash_
             })
         );
+    }
+
+    /// @notice Emergency VRF rewire; callable only by the admin contract.
+    /// @dev Intended to be called from the admin's emergencyRecover flow once the game has been declared stalled.
+    function emergencySetVrf(address coordinator_, uint256 subId, bytes32 keyHash_) external {
+        if (msg.sender != admin) revert Unauthorized();
+        if (coordinator_ == address(0) || keyHash_ == bytes32(0) || subId == 0) revert Unauthorized();
+
+        vrfCoordinator = coordinator_;
+        vrfSubscriptionId = subId;
+        vrfKeyHash = keyHash_;
+
+        // Clear any pending request from a dead coordinator so a fresh request can be issued.
+        vrfRequestPending = false;
+        vrfRequestId = 0;
+        vrfPendingWord = 0;
     }
 
     /// @notice Owner toggle to allow/deny purchases from external callers and the game.
@@ -586,7 +612,7 @@ contract DegenerusBonds {
     }
 
     function purchasesEnabled() external view returns (bool) {
-        return !gameOverStarted && gamePurchasesEnabled && !rngLock;
+        return !gameOverStarted && gamePurchasesEnabled;
     }
 
     /// @notice Emergency shutdown path: consume all ETH/stETH and resolve maturities in order, partially paying the last one.
@@ -700,11 +726,10 @@ contract DegenerusBonds {
         if (amount == 0) revert SaleClosed();
         if (!fromGame && amount < MIN_DEPOSIT) revert MinimumDeposit();
         if (gameOverStarted) revert SaleClosed();
-        if (rngLock) revert PurchasesDisabled();
         if (fromGame) {
             if (!gamePurchasesEnabled) revert PurchasesDisabled();
         } else {
-            if (!externalPurchasesEnabled) revert PurchasesDisabled();
+            if (!externalPurchasesEnabled || rngLock) revert PurchasesDisabled();
         }
 
         uint24 maturityLevel = _activeMaturity();
@@ -750,22 +775,21 @@ contract DegenerusBonds {
         address aff = affiliate;
         if (aff == address(0)) return;
 
-        uint256 priceWei = PRICE_WEI;
+        uint24 level;
+        uint256 priceWei;
+        uint8 gameState;
+        bool rngLocked;
         address gameAddr = address(game);
         if (gameAddr != address(0)) {
-            try IDegenerusGamePricing(gameAddr).mintPrice() returns (uint256 p) {
-                if (p != 0) {
-                    priceWei = p;
-                }
-            } catch {}
+            (level, gameState, , rngLocked, priceWei) = IDegenerusGamePricing(gameAddr).purchaseInfo();
+        } else {
+            priceWei = PRICE_WEI;
         }
 
         uint256 coinEquivalent = (ethAmount * PRICE_COIN_UNIT) / priceWei;
         uint256 reward = (coinEquivalent * uint256(bps)) / 10_000;
-        if (reward == 0) return;
-        try IAffiliatePayer(aff).payAffiliate(reward, bytes32(0), buyer, _currentLevel()) {
-            // ignore returned rakeback; affiliate contract handles distribution
-        } catch {}
+
+        IAffiliatePayer(aff).payAffiliate(reward, bytes32(0), buyer, level, gameState, rngLocked);
     }
 
     function _activeMaturity() private view returns (uint24 maturityLevel) {
@@ -871,10 +895,7 @@ contract DegenerusBonds {
             _sweepExcessToVault();
         }
 
-        // When all maintenance for this RNG word is done (no backlog and not capped), release the bond-side lock.
-        if (rngLock && !hitCap && !backlogPending) {
-            rngLock = false;
-        }
+        // Note: rngLock is controlled by the game to prevent post-RNG manipulation windows.
         return worked;
     }
 
@@ -1248,7 +1269,7 @@ contract DegenerusBonds {
             return;
         }
 
-        revert VrfLocked(); // Rewiring after initial set is disallowed; use admin emergency path.
+        revert VrfLocked(); // Rewiring after initial set is disallowed; use the admin emergency path.
     }
 
     function _getOrCreateSeries(uint24 maturityLevel) private returns (BondSeries storage s) {

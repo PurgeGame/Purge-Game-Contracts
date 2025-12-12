@@ -19,8 +19,7 @@ interface IDegenerusCoin is IDegenerusCoinModule {
         uint24 level,
         bool bonusFlip,
         uint256 rngWord,
-        uint48 epoch,
-        uint256 priceCoinUnit
+        uint48 epoch
     ) external returns (bool);
 
     function addToBounty(uint256 amount) external;

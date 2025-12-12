@@ -190,6 +190,7 @@ contract DegenerusGamepieces {
 
     uint256 private constant CLAIMABLE_BONUS_DIVISOR = 10; // 10% of token coin cost
     uint256 private constant CLAIMABLE_MAP_BONUS_DIVISOR = 40; // 10% of per-map coin cost (priceUnit/4)
+    uint256 private constant PRICE_COIN_UNIT = 1_000_000_000;
 
     uint32 private constant DORMANT_EMIT_BATCH = 3500;
     uint256 private constant OFFER_FEE = 10 * 1e6; // 10 BURNIE (6 decimals)
@@ -343,19 +344,17 @@ contract DegenerusGamepieces {
         // Primary entry for player token purchases; pricing and bonuses are sourced from the game contract.
         if (quantity == 0 || quantity > type(uint32).max) revert InvalidQuantity();
 
-        (
-            uint24 targetLevel,
-            uint8 state,
-            bool mapJackpotReady,
-            bool rngLocked_,
-            uint256 priceWei,
-            uint256 priceCoinUnit
-        ) = game.purchaseInfo();
+        uint24 targetLevel;
+        uint8 state;
+        bool mapJackpotReady;
+        bool rngLocked_;
+        uint256 priceWei;
+        (targetLevel, state, mapJackpotReady, rngLocked_, priceWei) = game.purchaseInfo();
 
         if ((targetLevel % 20) == 16) revert NotTimeYet();
         if (rngLocked_) revert RngNotReady();
 
-        uint256 coinCost = quantity * priceCoinUnit;
+        uint256 coinCost = quantity * PRICE_COIN_UNIT;
         uint256 expectedWei = priceWei * quantity;
 
         uint32 levelHundredCount;
@@ -372,9 +371,9 @@ contract DegenerusGamepieces {
 
         if (payInCoin) {
             if (msg.value != 0) revert E();
-            _coinReceive(payer, uint32(quantity), quantity * priceCoinUnit, targetLevel, 0);
+            _coinReceive(payer, uint32(quantity), quantity * PRICE_COIN_UNIT, targetLevel, 0);
         } else {
-            bonusCoinReward = (quantity / 10) * priceCoinUnit;
+            bonusCoinReward = (quantity / 10) * PRICE_COIN_UNIT;
             bonus = _processEthPurchase(
                 payer,
                 buyer,
@@ -382,22 +381,22 @@ contract DegenerusGamepieces {
                 affiliateCode,
                 targetLevel,
                 state,
+                rngLocked_,
                 false,
                 payKind,
-                expectedWei,
-                priceCoinUnit
+                expectedWei
             );
             if (targetLevel == 100) {
                 _levelHundredMintCount[buyer] = levelHundredCount;
             }
             if (mapJackpotReady && (targetLevel % 100) > 90) {
-                bonus += (quantity * priceCoinUnit) / 5;
+                bonus += (quantity * PRICE_COIN_UNIT) / 5;
             }
         }
 
         if (payKind != MintPaymentKind.DirectEth) {
             unchecked {
-                bonus += (quantity * priceCoinUnit) / CLAIMABLE_BONUS_DIVISOR;
+                bonus += (quantity * PRICE_COIN_UNIT) / CLAIMABLE_BONUS_DIVISOR;
             }
         }
 
@@ -429,15 +428,19 @@ contract DegenerusGamepieces {
         MintPaymentKind payKind
     ) private {
         // Map purchase flow: mints 4:1 scaled quantity and immediately queues them for burn draws.
-        (uint24 lvl, uint8 state, bool mapJackpotReady, bool rngLocked_, uint256 priceWei, uint256 priceUnit) = game
-            .purchaseInfo();
+        uint24 lvl;
+        uint8 state;
+        bool mapJackpotReady;
+        bool rngLocked_;
+        uint256 priceWei;
+        (lvl, state, mapJackpotReady, rngLocked_, priceWei) = game.purchaseInfo();
         if (state == 3 && payInCoin) revert NotTimeYet();
         if (quantity == 0 || quantity > type(uint32).max) revert InvalidQuantity();
         if (rngLocked_) revert RngNotReady();
-        uint256 coinCost = quantity * (priceUnit / 4);
+        uint256 coinCost = quantity * (PRICE_COIN_UNIT / 4);
         uint256 scaledQty = quantity * 25;
-        uint256 mapRebate = (quantity / 4) * (priceUnit / 10);
-        uint256 mapBonus = (quantity / 40) * priceUnit;
+        uint256 mapRebate = (quantity / 4) * (PRICE_COIN_UNIT / 10);
+        uint256 mapBonus = (quantity / 40) * PRICE_COIN_UNIT;
         uint256 expectedWei = (priceWei * quantity) / 4;
 
         uint32 levelHundredCount;
@@ -465,10 +468,10 @@ contract DegenerusGamepieces {
                 affiliateCode,
                 lvl,
                 state,
+                rngLocked_,
                 true,
                 payKind,
-                expectedWei,
-                priceUnit
+                expectedWei
             );
             if (lvl == 100) {
                 _levelHundredMintCount[buyer] = levelHundredCount;
@@ -513,10 +516,10 @@ contract DegenerusGamepieces {
         bytes32 affiliateCode,
         uint24 lvl,
         uint8 gameState,
+        bool rngLocked,
         bool mapPurchase,
         MintPaymentKind payKind,
-        uint256 costWei,
-        uint256 priceUnit
+        uint256 costWei
     ) private returns (uint256 bonusMint) {
         // ETH purchases optionally bypass payment when in-game credit is used; all flows are forwarded to game logic.
         if (payKind == MintPaymentKind.DirectEth) {
@@ -550,9 +553,9 @@ contract DegenerusGamepieces {
         uint256 affiliateAmount;
         if (lvl > 40) {
             uint256 pct = gameState != 3 ? 30 : 5;
-            affiliateAmount = (priceUnit * pct) / 100;
+            affiliateAmount = (PRICE_COIN_UNIT * pct) / 100;
         } else {
-            affiliateAmount = priceUnit / 10; // 0.1 priceCoin
+            affiliateAmount = PRICE_COIN_UNIT / 10; // 0.1 priceCoin
             bool affiliateBonus = lvl <= 3 || gameState != 3; // first 3 levels or any purchase phase
             if (affiliateBonus) {
                 affiliateAmount = (affiliateAmount * 250) / 100; // +150% => 0.25 priceCoin
@@ -562,7 +565,14 @@ contract DegenerusGamepieces {
         uint256 rakebackMint;
         address affiliateAddr = affiliateProgram;
         if (affiliateAddr != address(0)) {
-            rakebackMint = IDegenerusAffiliate(affiliateAddr).payAffiliate(affiliateAmount, affiliateCode, buyer, lvl);
+            rakebackMint = IDegenerusAffiliate(affiliateAddr).payAffiliate(
+                affiliateAmount,
+                affiliateCode,
+                buyer,
+                lvl,
+                gameState,
+                rngLocked
+            );
         }
 
         if (rakebackMint != 0) {

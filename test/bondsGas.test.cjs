@@ -13,12 +13,16 @@ describe("DegenerusBonds gas", function () {
     const steth = await MockStETH.deploy();
     await steth.waitForDeployment();
 
+    const MockVault = await ethers.getContractFactory("MockVault");
+    const vault = await MockVault.deploy(await steth.getAddress());
+    await vault.waitForDeployment();
+
     const Bonds = await ethers.getContractFactory("DegenerusBonds");
     const bonds = await Bonds.deploy(await admin.getAddress(), await steth.getAddress());
     await bonds.waitForDeployment();
 
-    // Wire game only; vault/coin/vrf omitted.
-    await bonds.wire([await game.getAddress()], 0, ethers.ZeroHash);
+    // Wire game + vault; coin/vrf omitted.
+    await bonds.wire([await game.getAddress(), await vault.getAddress()], 0, ethers.ZeroHash);
     const gameSigner = await ethers.getImpersonatedSigner(await game.getAddress());
     await admin.sendTransaction({ to: await game.getAddress(), value: ethers.parseEther("1") });
 
@@ -28,7 +32,7 @@ describe("DegenerusBonds gas", function () {
 
     const depositCount = 500;
     for (let i = 0; i < depositCount; i++) {
-      await bonds.depositCurrentFor(admin.address, { value: 1 });
+      await bonds.connect(gameSigner).depositFromGame(admin.address, 1, { value: 1 });
     }
 
     // Advance level so jackpots run once for the populated day.

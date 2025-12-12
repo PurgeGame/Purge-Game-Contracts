@@ -61,6 +61,7 @@ contract DegenerusAffiliate {
     // Constants
     // ---------------------------------------------------------------------
     uint256 private constant MILLION = 1e6; // token has 6 decimals
+    uint256 private constant PRICE_COIN_UNIT = 1_000_000_000;
     bytes32 private constant REF_CODE_LOCKED = bytes32(uint256(1));
     uint256 private constant SYNTH_BASE_COST = 1500 * MILLION; // base 10 slots after level > 3
     uint256 private constant SYNTH_TOPUP_COST = 2500 * MILLION; // per +10 slots
@@ -267,7 +268,9 @@ contract DegenerusAffiliate {
         uint256 amount,
         bytes32 code,
         address sender,
-        uint24 lvl
+        uint24 lvl,
+        uint8 gameState,
+        bool rngLocked
     ) external returns (uint256 playerRakeback) {
         address caller = msg.sender;
         address coinAddr = address(coin);
@@ -328,22 +331,18 @@ contract DegenerusAffiliate {
 
             uint256 questReward = coin.affiliateQuestReward(affiliateAddr, affiliateShareBase);
             uint256 totalFlipAward = affiliateShareBase + questReward;
-            IDegenerusGame gameRef = degenerusGame;
-
-            uint8 gameState = gameRef.gameState();
-            bool rngLocked = gameRef.rngLocked();
-
             if (gameState != 3 && !rngLocked) {
-                uint256 priceUnit = gameRef.coinPriceUnit();
-                uint256 mapCost = priceUnit / 4;
-                if (mapCost != 0 && totalFlipAward >= mapCost * 2) {
-                    uint256 mapBudget = totalFlipAward / 2;
-                    uint256 potentialMaps = mapBudget / mapCost;
-                    uint32 mapQty = uint32(potentialMaps);
-                    uint256 mapSpend = mapCost * uint256(mapQty);
-                    totalFlipAward -= mapSpend;
-                    IDegenerusGamepiecesAffiliate gp = degenerusGamepieces;
-                    gp.purchaseMapForAffiliate(affiliateAddr, mapQty);
+                IDegenerusGamepiecesAffiliate gp = degenerusGamepieces;
+                if (address(gp) != address(0)) {
+                    uint256 mapCost = PRICE_COIN_UNIT / 4;
+                    if (mapCost != 0 && totalFlipAward >= mapCost * 2) {
+                        uint256 mapBudget = totalFlipAward / 2;
+                        uint256 potentialMaps = mapBudget / mapCost;
+                        uint32 mapQty = uint32(potentialMaps);
+                        uint256 mapSpend = mapCost * uint256(mapQty);
+                        totalFlipAward -= mapSpend;
+                        gp.purchaseMapForAffiliate(affiliateAddr, mapQty);
+                    }
                 }
             }
             players[cursor] = affiliateAddr;

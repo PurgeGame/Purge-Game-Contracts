@@ -15,6 +15,10 @@ describe("DegenerusBonds Stress Tests", function () {
     const MockStETH = await ethers.getContractFactory("MockStETH");
     steth = await MockStETH.deploy();
     await steth.waitForDeployment();
+
+    const MockVault = await ethers.getContractFactory("MockVault");
+    const vault = await MockVault.deploy(await steth.getAddress());
+    await vault.waitForDeployment();
     
     const MockVRF = await ethers.getContractFactory("MockVRFCoordinator");
     vrfCoord = await MockVRF.deploy();
@@ -27,11 +31,15 @@ describe("DegenerusBonds Stress Tests", function () {
     const vrfAddr = await vrfCoord.getAddress();
 
     // Wire game and VRF
-    await bonds.wire([await game.getAddress(), ethers.ZeroAddress, ethers.ZeroAddress, vrfAddr], 1, ethers.hexlify(ethers.randomBytes(32)));
+    await bonds.wire(
+      [await game.getAddress(), await vault.getAddress(), ethers.ZeroAddress, vrfAddr],
+      1,
+      ethers.hexlify(ethers.randomBytes(32))
+    );
     
     // Impersonate game for privileged calls
     gameSigner = await ethers.getImpersonatedSigner(await game.getAddress());
-    await admin.sendTransaction({ to: await game.getAddress(), value: ethers.parseEther("10") });
+    await admin.sendTransaction({ to: await game.getAddress(), value: ethers.parseEther("200") });
     
     // Default available is 0, so no resolution happens by default.
   });
@@ -50,7 +58,7 @@ describe("DegenerusBonds Stress Tests", function () {
       await game.setLevel(16);
       
       for(let i=0; i<50; i++) {
-          await bonds.depositCurrentFor(admin.address, { value: 1n }); 
+          await bonds.connect(gameSigner).depositFromGame(admin.address, 1n, { value: 1n });
       }
       
       const tx = await bonds.connect(gameSigner).bondMaintenance(12345, 0);
@@ -97,7 +105,7 @@ describe("DegenerusBonds Stress Tests", function () {
     // Now we should have burns registered in lanes.
     
     await bonds.connect(gameSigner).notifyGameOver();
-  await bonds.payBonds(0, 0, 0, { value: ethers.parseEther("100") });
+    await bonds.connect(gameSigner).payBonds(0, 0, 0, { value: ethers.parseEther("100") });
     
     await bonds.connect(gameSigner).gameOver();
     

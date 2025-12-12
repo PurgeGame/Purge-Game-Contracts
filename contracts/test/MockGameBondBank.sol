@@ -17,6 +17,10 @@ contract MockGameBondBank {
         return lvl;
     }
 
+    function ethMintStreakCount(address) external pure returns (uint24) {
+        return 0;
+    }
+
     function bondDeposit(bool) external payable {}
 
     function bondCreditToClaimable(address, uint256) external {}

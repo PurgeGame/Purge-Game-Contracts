@@ -137,8 +137,6 @@ contract DegenerusGame is DegenerusGameStorage {
      * @param jackpotModule_    Delegate module handling jackpot distribution
      * @param mintModule_       Delegate module handling mint packing and trait rebuild helpers
      * @param bondModule_       Delegate module handling bond upkeep, staking, and shutdown gameOvers
-     * @param vrfCoordinator_   Chainlink VRF coordinator
-     * @param vrfKeyHash_       VRF key hash
      * @param stEthToken_       stETH token address
      * @param jackpots_         DegenerusJackpots contract address (wires Decimator/BAF jackpots)
      * @param bonds_            Bonds contract address
@@ -155,8 +153,6 @@ contract DegenerusGame is DegenerusGameStorage {
         address jackpotModule_,
         address mintModule_,
         address bondModule_,
-        address vrfCoordinator_,
-        bytes32 vrfKeyHash_,
         address stEthToken_,
         address jackpots_,
         address bonds_,
@@ -172,9 +168,8 @@ contract DegenerusGame is DegenerusGameStorage {
         jackpotModule = jackpotModule_;
         mintModule = mintModule_;
         bondModule = bondModule_;
-        vrfCoordinator = IVRFCoordinator(vrfCoordinator_);
         affiliateProgram = affiliateProgram_;
-        vrfKeyHash = vrfKeyHash_;
+        if (vrfAdmin_ == address(0)) revert E();
         vrfAdmin = vrfAdmin_;
         steth = IStETH(stEthToken_);
         jackpots = jackpots_;
@@ -300,17 +295,28 @@ contract DegenerusGame is DegenerusGameStorage {
         return _threeDayRngGap(_currentDayIndex());
     }
 
-    /// @notice One-time wiring of VRF config from the VRF admin contract (on deployment).
-    function wireVrf(address coordinator_, uint256 subId) external {
+    /// @notice One-time wiring of VRF config from the VRF admin contract.
+    function wireVrf(address coordinator_, uint256 subId, bytes32 keyHash_) external {
         if (msg.sender != vrfAdmin) revert E();
+        if (coordinator_ == address(0) || subId == 0 || keyHash_ == bytes32(0)) revert E();
+
+        // Idempotent once wired: allow only no-op repeats with identical config.
+        if (vrfSubscriptionId != 0) {
+            if (subId != vrfSubscriptionId) revert E();
+            if (coordinator_ != address(vrfCoordinator)) revert E();
+            if (keyHash_ != vrfKeyHash) revert E();
+            return;
+        }
+
         address current = address(vrfCoordinator);
         vrfCoordinator = IVRFCoordinator(coordinator_);
         vrfSubscriptionId = subId;
+        vrfKeyHash = keyHash_;
         emit VrfCoordinatorUpdated(current, coordinator_);
     }
 
     function decWindow() external view returns (bool on, uint24 lvl) {
-        on = decWindowOpen;
+        on = decWindowOpen && !rngLockedFlag;
         lvl = level;
     }
 
@@ -329,8 +335,7 @@ contract DegenerusGame is DegenerusGameStorage {
             uint8 gameState_,
             bool lastPurchaseDay_,
             bool rngLocked_,
-            uint256 priceWei,
-            uint256 priceCoinUnit
+            uint256 priceWei
         )
     {
         lvl = level;
@@ -338,7 +343,6 @@ contract DegenerusGame is DegenerusGameStorage {
         lastPurchaseDay_ = (gameState_ == 2) && lastPurchaseDay;
         rngLocked_ = rngLockedFlag;
         priceWei = price;
-        priceCoinUnit = priceCoin;
 
         if (gameState_ == 3) {
             unchecked {
@@ -1203,7 +1207,7 @@ contract DegenerusGame is DegenerusGameStorage {
         if (rngWordByDay[day] == 0) {
             rngWordByDay[day] = currentWord;
             if (lvl != 0) {
-                coin.processCoinflipPayouts(lvl, false, currentWord, day, priceCoin);
+                coin.processCoinflipPayouts(lvl, false, currentWord, day);
             }
         }
         return currentWord;
@@ -1282,6 +1286,8 @@ contract DegenerusGame is DegenerusGameStorage {
         vrfRequestId = 0;
         rngRequestTime = 0;
         rngWordCurrent = 0;
+        // In case bonds were locked during a stuck RNG window, attempt to release the lock during recovery.
+        try IDegenerusBonds(bonds).setRngLock(false) {} catch {}
 
         emit VrfCoordinatorUpdated(current, newCoordinator);
     }
@@ -1291,6 +1297,8 @@ contract DegenerusGame is DegenerusGameStorage {
         rngLockedFlag = false;
         vrfRequestId = 0;
         rngRequestTime = 0;
+        // If bonds were locked for a map-jackpot RNG window, release the lock once this RNG window is over.
+        try IDegenerusBonds(bonds).setRngLock(false) {} catch {}
     }
 
     /// @notice Pay BURNIE to nudge the next RNG word by +1; cost scales +50% per queued nudge and resets after fulfillment.

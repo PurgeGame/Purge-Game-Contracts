@@ -175,6 +175,7 @@ contract DegenerusCoin {
     // Constants (units & limits)
     // ---------------------------------------------------------------------
     uint256 private constant MILLION = 1e6; // token has 6 decimals
+    uint256 private constant PRICE_COIN_UNIT = 1000 * MILLION; // 1000 BURNIE
     uint256 private constant MIN = 100 * MILLION; // min burn / min flip (100 BURNIE)
     uint16 private constant COINFLIP_EXTRA_MIN_PERCENT = 78; // base % on non-extreme flips
     uint16 private constant COINFLIP_EXTRA_RANGE = 38; // roll range (add to min) => [78..115]
@@ -652,8 +653,7 @@ contract DegenerusCoin {
         uint24 level,
         bool bonusFlip,
         uint256 rngWord,
-        uint48 epoch,
-        uint256 priceCoinUnit
+        uint48 epoch
     ) external onlyDegenerusGameContract returns (bool finished) {
         uint256 seedWord = rngWord;
         seedWord = uint256(keccak256(abi.encodePacked(rngWord, epoch)));
@@ -700,13 +700,13 @@ contract DegenerusCoin {
 
         unchecked {
             // Gas-optimized: wraps on overflow, which would effectively reset the bounty.
-            currentBounty += uint128(priceCoinUnit);
+            currentBounty += uint128(PRICE_COIN_UNIT);
         }
         if (!topFlipRewardPaid[level]) {
             PlayerScore memory entry = coinflipTopByLevel[level];
             if (entry.player != address(0)) {
                 // Credit lands as future flip stake; no direct mint.
-                addFlip(entry.player, priceCoinUnit, false, false);
+                addFlip(entry.player, PRICE_COIN_UNIT, false, false);
                 topFlipRewardPaid[level] = true;
             }
         }
