@@ -225,7 +225,9 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
         }
         if (kind == 1) {
             uint256 returnWei = IDegenerusJackpots(jackpotsAddr).runDecimatorJackpot(poolWei, lvl, rngWord);
-            return (poolWei - returnWei, 0);
+            // Decimator pool is reserved in `claimablePool` up front; per-player credits happen on claim.
+            uint256 spend = poolWei - returnWei;
+            return (spend, spend);
         }
         return (0, 0);
     }

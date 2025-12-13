@@ -366,7 +366,7 @@ contract DegenerusJackpots is IDegenerusJackpots {
                 }
             }
 
-            if (exWinCount < 3) {
+            if (exWinCount == 0) {
                 toReturn += exterminatorSlice;
             } else {
                 // Sort by BAF score so higher scores take the larger cuts (5/3/2/0%).
@@ -506,7 +506,7 @@ contract DegenerusJackpots is IDegenerusJackpots {
                     }
                 }
 
-                if (winnerCount < 3) {
+                if (winnerCount == 0) {
                     toReturn += affiliateSlice;
                 } else {
                     // Sort by BAF score so higher scores take the larger cuts (5/3/2/0%).
@@ -755,6 +755,12 @@ contract DegenerusJackpots is IDegenerusJackpots {
         returns (uint256 returnAmountWei)
     {
         // Decimator jackpots defer ETH distribution to per-player claims; this call snapshots winners.
+        DecClaimRound storage round = decClaimRound[lvl];
+        if (round.active) {
+            // Already snapshotted; treat as no-op and refund the incoming pool.
+            return poolWei;
+        }
+
         uint256 totalBurn;
 
         uint256 decSeed = rngWord;
@@ -777,7 +783,6 @@ contract DegenerusJackpots is IDegenerusJackpots {
             return poolWei;
         }
 
-        DecClaimRound storage round = decClaimRound[lvl];
         round.poolWei = poolWei;
         round.totalBurn = totalBurn;
         round.level = lvl;
@@ -875,7 +880,8 @@ contract DegenerusJackpots is IDegenerusJackpots {
         DecEntry storage e = decBurn[lvl][player];
         uint8 denom = e.bucket;
         uint8 sub = e.subBucket;
-        if (e.level != lvl || denom == 0 || e.burn == 0) return (0, false);
+        uint192 entryBurn = e.burn;
+        if (e.level != lvl || denom == 0 || entryBurn == 0) return (0, false);
 
         uint8 winningSub = uint8(decBucketOffset[lvl][denom]);
         if (sub != winningSub) return (0, false);
@@ -883,7 +889,7 @@ contract DegenerusJackpots is IDegenerusJackpots {
         if (decBucketBurnTotal[lvl][denom][winningSub] == 0) return (0, false);
 
         // Pro-rata share of the Decimator pool based on the burn inside the winning subbucket.
-        amountWei = (round.poolWei * uint256(e.burn)) / round.totalBurn;
+        amountWei = (round.poolWei * uint256(entryBurn)) / round.totalBurn;
         winner = true;
     }
 

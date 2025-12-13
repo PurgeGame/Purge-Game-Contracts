@@ -915,22 +915,15 @@ contract DegenerusGame is DegenerusGameStorage {
             address jackpotsAddr = jackpots;
             if (msg.sender != jackpotsAddr) revert E();
 
-            uint256 total;
             for (uint256 i; i < len; ) {
                 uint256 amt = amounts[i];
                 address account = accounts[i];
                 if (amt != 0 && account != address(0)) {
                     _addClaimableEth(account, amt);
-                    unchecked {
-                        total += amt;
-                    }
                 }
                 unchecked {
                     ++i;
                 }
-            }
-            if (total != 0) {
-                claimablePool += total;
             }
             return;
         }
@@ -941,7 +934,6 @@ contract DegenerusGame is DegenerusGameStorage {
         address jackpotsAddr = jackpots;
         if (jackpotsAddr == address(0) || msg.sender != jackpotsAddr) revert E();
         if (amount == 0 || account == address(0)) return;
-        claimablePool += amount;
         _addClaimableEth(account, amount);
     }
 
@@ -1053,6 +1045,11 @@ contract DegenerusGame is DegenerusGameStorage {
         address jackpotsAddr = jackpots;
         if (jackpotsAddr == address(0)) revert E();
         uint256 returnWei = IDegenerusJackpots(jackpotsAddr).runDecimatorJackpot(pool, lvl, rngWord);
+        uint256 netSpend = pool - returnWei;
+        if (netSpend != 0) {
+            // Reserve the full decimator pool in `claimablePool` immediately; player credits occur on claim.
+            claimablePool += netSpend;
+        }
 
         if (returnWei != 0) {
             rewardPool += returnWei;
