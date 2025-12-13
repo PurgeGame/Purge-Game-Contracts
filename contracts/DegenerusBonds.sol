@@ -222,7 +222,7 @@ contract BondToken {
  * @title DegenerusBonds
  * @notice Bond system wired for the Degenerus game:
  *         - Bonds created every 5 levels; sales open 10 levels before maturity.
- *         - Payout budget = last issuance raise * growthBps (default 1.5x), seeded by presale raise for the first round.
+ *         - Payout budget = series raise * growth multiplier (finalized on the last emission run).
  *         - Deposits award a score (multiplier stub) used for jackpots.
  *         - Five jackpot days mint a maturity-specific ERC20; total mint equals payout budget.
  *         - Burning the ERC20 enters a two-lane final jackpot at maturity; payout ~pro-rata to burned amount.
@@ -342,6 +342,7 @@ contract DegenerusBonds {
     uint256 public coinOwed; // running total of BURNIE owed for bond jackpots
     address private immutable admin;
     uint256 private lastIssuanceRaise;
+    uint24 public lastBondMaintenanceLevel; // last level where bondMaintenance() ran (used for burn routing at maturity boundaries)
     address private vrfCoordinator;
     bytes32 private vrfKeyHash;
     uint256 private vrfSubscriptionId;
@@ -793,7 +794,10 @@ contract DegenerusBonds {
     }
 
     function _activeMaturity() private view returns (uint24 maturityLevel) {
-        uint24 currLevel = _currentLevel();
+        return _activeMaturityAt(_currentLevel());
+    }
+
+    function _activeMaturityAt(uint24 currLevel) private pure returns (uint24 maturityLevel) {
         if (currLevel < 10) {
             return 10; // treat presale / unwired play as level 0; first maturity is level 10
         }
@@ -810,6 +814,7 @@ contract DegenerusBonds {
         uint32 workCap = workCapOverride == 0 ? BOND_MAINT_WORK_CAP : workCapOverride;
         uint32 workUsed;
         uint24 currLevel = _currentLevel();
+        lastBondMaintenanceLevel = currLevel;
         bool hitCap;
 
         // Ensure the active series exists and precreate the next maturity when we are 10 levels out.
@@ -835,10 +840,12 @@ contract DegenerusBonds {
             if (s.maturityLevel == 0 || s.resolved) continue;
             bool consumedWork;
 
+            uint8 maxRuns = _maxEmissionRuns(s.maturityLevel);
+            uint24 emissionStop = s.maturityLevel > 5 ? s.maturityLevel - 5 : 0; // stop 5 levels before maturity
             if (
                 currLevel >= s.saleStartLevel &&
-                currLevel < s.maturityLevel &&
-                s.jackpotsRun < _maxEmissionRuns(s.maturityLevel) &&
+                currLevel < emissionStop &&
+                s.jackpotsRun < maxRuns &&
                 s.lastJackpotLevel != currLevel
             ) {
                 _runJackpotsForDay(s, rollingEntropy, currLevel);
@@ -910,13 +917,26 @@ contract DegenerusBonds {
         if (rngLock) revert PurchasesDisabled();
 
         uint24 currLevel = _currentLevel();
-        uint24 targetMat = _baseMaturityForDigit(isFive);
-        (BondSeries storage target, uint24 resolvedTargetMat) = _nextActiveSeries(targetMat, currLevel);
+        uint24 burnLevel = _burnEffectiveLevel(currLevel);
+        uint24 targetMat = _baseMaturityForDigitAtLevel(isFive, burnLevel);
+        (BondSeries storage target, uint24 resolvedTargetMat) = _nextActiveSeries(targetMat, burnLevel);
         // Burn from the predeployed shared DGNS0/DGNS5 token.
         (isFive ? tokenDGNS5 : tokenDGNS0).burn(msg.sender, amount);
 
         (uint8 lane, bool boosted) = _registerBurn(target, resolvedTargetMat, amount, currLevel);
         emit BondBurned(msg.sender, resolvedTargetMat, lane, amount, boosted);
+    }
+
+    /// @dev bondMaintenance runs mid-level; before the first maintenance pass for the current level,
+    ///      treat burns as if they occurred on the prior level so burns can still enter the maturity
+    ///      that is about to resolve.
+    function _burnEffectiveLevel(uint24 currLevel) private view returns (uint24 level) {
+        level = currLevel;
+        if (currLevel != 0 && lastBondMaintenanceLevel < currLevel) {
+            unchecked {
+                level = currLevel - 1;
+            }
+        }
     }
 
     /// @notice Claim Decimator share for a resolved bond series.
@@ -967,19 +987,19 @@ contract DegenerusBonds {
 
     function _nextActiveSeries(
         uint24 maturityLevel,
-        uint24 currLevel
+        uint24 effectiveLevel
     ) private returns (BondSeries storage target, uint24 targetMaturity) {
         targetMaturity = maturityLevel;
         target = _getOrCreateSeries(targetMaturity);
         // Once a maturity has arrived or been resolved, redirect new burns to the next (+10) maturity.
-        while (currLevel >= targetMaturity || target.resolved) {
+        while (effectiveLevel >= targetMaturity || target.resolved) {
             targetMaturity += 10;
             target = _getOrCreateSeries(targetMaturity);
         }
     }
 
-    function _baseMaturityForDigit(bool isFive) private view returns (uint24 maturityLevel) {
-        maturityLevel = _activeMaturity();
+    function _baseMaturityForDigitAtLevel(bool isFive, uint24 currLevel) private pure returns (uint24 maturityLevel) {
+        maturityLevel = _activeMaturityAt(currLevel);
         if (isFive) {
             if (maturityLevel % 10 == 0) {
                 maturityLevel += 5;
@@ -1201,15 +1221,14 @@ contract DegenerusBonds {
         s.maturityLevel = maturityLevel;
         s.saleStartLevel = maturityLevel > 10 ? maturityLevel - 10 : 0;
 
-        // Seed budget from the last raise; the first series starts at 0 and grows with presale deposits.
-        uint256 budget = lastIssuanceRaise;
-        s.payoutBudget = budget;
+        // Budget starts at 0 and is derived from this series' own raise (tracked on deposits).
+        s.payoutBudget = 0;
 
         // Only two ERC20s are ever used: DGNS0 (maturities ending in 0) and DGNS5 (ending in 5).
         s.token = maturityLevel % 10 == 5 ? tokenDGNS5 : tokenDGNS0;
 
         maturities.push(maturityLevel);
-        emit BondSeriesCreated(maturityLevel, s.saleStartLevel, address(s.token), budget);
+        emit BondSeriesCreated(maturityLevel, s.saleStartLevel, address(s.token), 0);
     }
 
     function _setGame(address game_) private {
@@ -1292,34 +1311,39 @@ contract DegenerusBonds {
         uint8 maxRuns = _maxEmissionRuns(s.maturityLevel);
         bool isFinalRun = (s.jackpotsRun + 1 == maxRuns);
 
-        // For early runs, keep payout budget tracked to raised so remaining stays non-negative.
-        // On the final run, compute the true growth-adjusted budget once and sweep the remainder.
+        // Emissions:
+        // - First runs: mint a % of ETH raised so far (new money in).
+        // - Final run: set payoutBudget = raised * multiplier and mint the remaining amount.
         if (isFinalRun) {
             uint256 finalBudget = _targetBudgetForSeries(s);
-            if (finalBudget > s.payoutBudget) {
-                s.payoutBudget = finalBudget;
+            if (finalBudget == 0) return;
+            s.payoutBudget = finalBudget;
+            if (s.mintedBudget >= finalBudget) return;
+
+            uint256 toMint = finalBudget - s.mintedBudget;
+            if (toMint != 0 && s.totalScore != 0) {
+                _runMintJackpot(s, rngWord, toMint);
+                s.mintedBudget = finalBudget;
+                emit BondJackpot(s.maturityLevel, s.jackpotsRun, toMint, rngWord);
             }
-        } else if (s.payoutBudget < s.raised) {
-            s.payoutBudget = s.raised;
-        }
+        } else {
+            if (s.payoutBudget < s.raised) {
+                s.payoutBudget = s.raised; // keep pre-final budget at least 1.0x the raise
+            }
+            if (s.payoutBudget == 0 || s.mintedBudget >= s.payoutBudget) return;
 
-        if (s.payoutBudget == 0 || s.mintedBudget >= s.payoutBudget) return;
+            uint256 pct = _emissionPct(s.maturityLevel, s.jackpotsRun);
+            if (pct == 0) return;
 
-        uint256 pct = _emissionPct(s.maturityLevel, s.jackpotsRun);
-        if (pct == 0) return;
+            uint256 toMint = (s.raised * pct) / 100;
+            uint256 available = s.payoutBudget - s.mintedBudget;
+            if (toMint > available) toMint = available;
 
-        uint256 remainingBudget = s.payoutBudget - s.mintedBudget;
-
-        // Early runs mint against actual ETH raised; final run mints the remaining budget (growth-adjusted).
-        uint256 baseForRun = isFinalRun ? s.payoutBudget : s.raised;
-        uint256 targetTotal = isFinalRun ? remainingBudget : _min((baseForRun * pct) / 100, remainingBudget);
-
-        uint256 primaryMint = targetTotal;
-
-        if (primaryMint != 0 && s.totalScore != 0) {
-            _runMintJackpot(s, rngWord, primaryMint);
-            s.mintedBudget += primaryMint;
-            emit BondJackpot(s.maturityLevel, s.jackpotsRun, primaryMint, rngWord);
+            if (toMint != 0 && s.totalScore != 0) {
+                _runMintJackpot(s, rngWord, toMint);
+                s.mintedBudget += toMint;
+                emit BondJackpot(s.maturityLevel, s.jackpotsRun, toMint, rngWord);
+            }
         }
 
         s.jackpotsRun += 1;
