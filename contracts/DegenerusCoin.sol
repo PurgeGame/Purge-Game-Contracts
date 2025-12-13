@@ -94,7 +94,7 @@ contract DegenerusCoin {
 
     // Vault escrow: tracks coin reserved for the vault; minted only when vault pays out.
     // Virtual supply the vault is authorized to mint (not yet circulated). Seeded to 2m BURNIE.
-    uint256 private vaultMintAllowance = 2_000_000 * 1e6;
+    uint256 private _vaultMintAllowance = 2_000_000 * 1e6;
 
     // Track whether the top-flip bonus has been paid for a given level (once per level).
     mapping(uint24 => bool) internal topFlipRewardPaid;
@@ -110,7 +110,13 @@ contract DegenerusCoin {
 
     /// @notice Total supply including uncirculated vault allowance.
     function supplyIncUncirculated() external view returns (uint256) {
-        return totalSupply + vaultMintAllowance;
+        return totalSupply + _vaultMintAllowance;
+    }
+
+    /// @notice Virtual coin reserved for the vault (not yet circulating).
+    /// @dev Exposed for the vault share math and external dashboards.
+    function vaultMintAllowance() external view returns (uint256) {
+        return _vaultMintAllowance;
     }
     // Tracks total unclaimed presale allocation across all sources; minted on claim.
     uint256 public presaleClaimableRemaining;
@@ -230,6 +236,17 @@ contract DegenerusCoin {
         bonds = bonds_;
         admin = admin_;
         affiliateProgram = IDegenerusAffiliateCoin(affiliate_);
+        vault = vault_;
+    }
+
+    /// @notice Set the vault address once (or no-op if already set).
+    /// @dev Allows `DegenerusVault` to call this during construction for idempotent deployments.
+    function setVault(address vault_) external {
+        if (vault_ == address(0)) revert ZeroAddress();
+        address current = vault;
+        if (current == vault_) return;
+        if (current != address(0)) revert AlreadyWired();
+        if (msg.sender != admin) revert OnlyAdmin();
         vault = vault_;
     }
 
@@ -416,15 +433,15 @@ contract DegenerusCoin {
         if (amount == 0) return;
         address sender = msg.sender;
         if (sender != vault && sender != bonds && sender != address(degenerusGame)) revert OnlyVault();
-        vaultMintAllowance += amount;
+        _vaultMintAllowance += amount;
     }
 
     /// @notice Mint coin out of the vault allowance to a recipient (only the vault can call).
     function vaultMintTo(address to, uint256 amount) external onlyVault {
         if (amount == 0) return;
-        uint256 allowanceVault = vaultMintAllowance;
+        uint256 allowanceVault = _vaultMintAllowance;
         if (amount > allowanceVault) revert Insufficient();
-        vaultMintAllowance = allowanceVault - amount;
+        _vaultMintAllowance = allowanceVault - amount;
         _mint(to, amount);
     }
 

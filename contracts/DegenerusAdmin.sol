@@ -28,6 +28,11 @@ interface IDegenerusBondsAdmin {
     function emergencySetVrf(address coordinator_, uint256 vrfSubId, bytes32 vrfKeyHash_) external;
 }
 
+interface IDegenerusBondsPresaleAdmin {
+    function shutdownPresale() external;
+    function runPresaleJackpot() external returns (bool advanced);
+}
+
 interface IDegenerusBondsGameOverFlag {
     function gameOverEntropyAttempted() external view returns (bool);
     function gameOverStarted() external view returns (bool);
@@ -101,6 +106,8 @@ contract DegenerusAdmin {
     event PurchaseTogglesSet(bool externalEnabled, bool gameEnabled);
     event BondsGameWired(address indexed game);
     event BondsVrfWired(address indexed coordinator, uint256 indexed subId, bytes32 keyHash);
+    event PresaleShutdown();
+    event PresaleJackpotRun(bool advanced);
 
     // -----------------------
     // Storage
@@ -350,6 +357,20 @@ contract DegenerusAdmin {
     function setBondsPurchaseToggles(bool externalEnabled, bool gameEnabled) external onlyOwner {
         IDegenerusBondsAdmin(bonds).setPurchaseToggles(externalEnabled, gameEnabled);
         emit PurchaseTogglesSet(externalEnabled, gameEnabled);
+    }
+
+    function shutdownPresale() external onlyOwner {
+        address bondsAddr = bonds;
+        if (bondsAddr == address(0)) revert NotWired();
+        IDegenerusBondsPresaleAdmin(bondsAddr).shutdownPresale();
+        emit PresaleShutdown();
+    }
+
+    function runPresaleJackpot() external onlyOwner returns (bool advanced) {
+        address bondsAddr = bonds;
+        if (bondsAddr == address(0)) revert NotWired();
+        advanced = IDegenerusBondsPresaleAdmin(bondsAddr).runPresaleJackpot();
+        emit PresaleJackpotRun(advanced);
     }
 
     // -----------------------
