@@ -183,6 +183,7 @@ contract DegenerusCoin {
     uint24 private constant DECIMATOR_SPECIAL_LEVEL = 100; // special bucket rules every 100 levels
     uint48 private constant JACKPOT_RESET_TIME = 82620; // anchor timestamp for day indexing
     uint8 private constant COIN_CLAIM_DAYS = 30; // claim window for flips
+    uint24 private constant MAX_BAF_BRACKET = (type(uint24).max / 10) * 10;
 
     // ---------------------------------------------------------------------
     // Immutables / external wiring
@@ -594,6 +595,15 @@ contract DegenerusCoin {
         return coinflipBalance[day][player];
     }
 
+    /// @notice Return the player's coinflip stake for the most recently opened day window.
+    /// @dev This is the prior day relative to `_targetFlipDay()` (since stakes always target the next day).
+    function coinflipAmountLastDay(address player) external view returns (uint256) {
+        uint48 day = _targetFlipDay();
+        unchecked {
+            return coinflipBalance[day - 1][player];
+        }
+    }
+
     function _claimCoinflipsInternal(address player) internal returns (uint256 claimed) {
         uint48 latest = flipsClaimableDay;
         uint48 start = lastCoinflipClaim[player];
@@ -639,6 +649,12 @@ contract DegenerusCoin {
     function _targetFlipDay() internal view returns (uint48) {
         // Day 0 starts after JACKPOT_RESET_TIME, then increments every 24h; target is always the next day.
         return uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days) + 1;
+    }
+
+    function _bafBracketLevel(uint24 lvl) private pure returns (uint24) {
+        uint256 bracket = ((uint256(lvl) + 9) / 10) * 10;
+        if (bracket > type(uint24).max) return MAX_BAF_BRACKET;
+        return uint24(bracket);
     }
 
     /// @notice Progress coinflip payouts for the current level in bounded slices.
@@ -759,13 +775,10 @@ contract DegenerusCoin {
 
         coinflipBalance[targetDay][player] = newStake;
 
-        // When BAF is active, capture a persistent roster entry + index for scatter.
-        if (degenerusGame.isBafLevelActive(currLevel)) {
-            uint24 bafLvl = currLevel;
-            address module = jackpots;
-            if (module == address(0)) revert ZeroAddress();
-            IDegenerusJackpots(module).recordBafFlip(player, bafLvl, coinflipDeposit);
-        }
+        address module = jackpots;
+        uint24 bafLvl = _bafBracketLevel(currLevel);
+
+        IDegenerusJackpots(module).recordBafFlip(player, bafLvl, coinflipDeposit);
 
         // Allow leaderboard churn even while RNG is locked; only freeze global records to avoid post-RNG manipulation.
         _updateTopBettor(player, newStake, currLevel);

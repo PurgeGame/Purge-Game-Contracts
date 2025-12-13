@@ -7,7 +7,7 @@ import {IDegenerusJackpots} from "./interfaces/IDegenerusJackpots.sol";
 import {DegenerusGameExternalOp} from "./interfaces/IDegenerusGameExternal.sol";
 
 interface IDegenerusCoinJackpotView {
-    function coinflipAmount(address player) external view returns (uint256);
+    function coinflipAmountLastDay(address player) external view returns (uint256);
     function coinflipTop(uint24 lvl) external view returns (address player, uint96 score);
     function affiliateProgram() external view returns (address);
 }
@@ -838,8 +838,8 @@ contract DegenerusJackpots is IDegenerusJackpots {
     // Helpers
     // ---------------------------------------------------------------------
     // Eligibility gate reused across jackpot slices; accepts optional coinflip score hint to save a read.
-    function _eligible(address player, uint256 scoreHint, bool hasHint) internal view returns (bool) {
-        uint256 score = hasHint ? scoreHint : coin.coinflipAmount(player);
+    function _eligible(address player, uint256 /*scoreHint*/, bool /*hasHint*/) internal view returns (bool) {
+        uint256 score = coin.coinflipAmountLastDay(player);
         if (score < 5_000 * MILLION) return false;
         // Require at least a 6-level ETH mint streak to ensure winners are active players.
         return degenerusGame.ethMintStreakCount(player) >= 6;
