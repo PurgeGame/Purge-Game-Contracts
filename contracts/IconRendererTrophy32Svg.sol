@@ -25,7 +25,7 @@ interface IIconRendererTrophy32Svg {
     }
 
     function trophySvg(SvgParams calldata params) external view returns (string memory);
-    function setNft(address nft_) external;
+    function wire(address[] calldata addresses) external;
 }
 
 contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg {
@@ -35,6 +35,7 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg {
     IIcons32 private immutable icons;
     IColorRegistry private immutable registry;
     ITrophySvgAssets private immutable assets;
+    address public immutable admin;
     IERC721Lite private nft;
 
     error E();
@@ -78,17 +79,33 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg {
     int256 private constant TOP_AFFILIATE_SHIFT_DOWN_1E6 = 3_200_000;
     int256 private constant TOP_AFFILIATE_UPWARD_1E6 = (VIEWBOX_HEIGHT_1E6 * 4) / 100; // 4% of total height
 
-    constructor(address coin_, address icons_, address registry_, address assets_) {
+    constructor(address coin_, address icons_, address registry_, address assets_, address admin_) {
         coin = IDegenerusdRead(coin_);
         icons = IIcons32(icons_);
         registry = IColorRegistry(registry_);
         if (assets_ == address(0)) revert E();
         assets = ITrophySvgAssets(assets_);
+        if (admin_ == address(0)) revert E();
+        admin = admin_;
     }
 
-    function setNft(address nft_) external override {
-        if (msg.sender != address(coin)) revert E();
-        nft = IERC721Lite(nft_);
+    modifier onlyAdmin() {
+        if (msg.sender != admin) revert E();
+        _;
+    }
+
+    function wire(address[] calldata addresses) external override onlyAdmin {
+        _setNft(addresses.length > 0 ? addresses[0] : address(0));
+    }
+
+    function _setNft(address nft_) private {
+        if (nft_ == address(0)) return;
+        address current = address(nft);
+        if (current == address(0)) {
+            nft = IERC721Lite(nft_);
+        } else if (current != nft_) {
+            revert E();
+        }
     }
 
     function trophySvg(SvgParams calldata params) external view override returns (string memory) {
@@ -148,7 +165,7 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg {
                 : _svgHeader(borderColor, _resolve(tokenId, 3, "#d9d9d9"));
             string memory placeholderFlameColor = isBond ? "#ff3300" : _resolve(tokenId, 1, "#ff3300");
             string memory ringColor = isBond ? "#30d100" : _paletteColor(ringIdx, lvl);
-            bool showProgress = isBond && !bondMatured ? false : (isBond && !bondMatured);
+            bool showProgress = isBond && !bondMatured;
             string memory progressColor = placeholderFlameColor;
             string memory bandColor = isBond
                 ? "#111"
@@ -769,11 +786,11 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg {
         bytes memory buffer = new bytes(7);
         buffer[0] = "#";
         buffer[1] = _hexChar(uint8(rgb >> 20));
-        buffer[2] = _hexChar(uint8(rgb >> 16));
-        buffer[3] = _hexChar(uint8(rgb >> 12));
-        buffer[4] = _hexChar(uint8(rgb >> 8));
-        buffer[5] = _hexChar(uint8(rgb >> 4));
-        buffer[6] = _hexChar(uint8(rgb));
+        buffer[2] = _hexChar(uint8((rgb >> 16) & 0x0f));
+        buffer[3] = _hexChar(uint8((rgb >> 12) & 0x0f));
+        buffer[4] = _hexChar(uint8((rgb >> 8) & 0x0f));
+        buffer[5] = _hexChar(uint8((rgb >> 4) & 0x0f));
+        buffer[6] = _hexChar(uint8(rgb & 0x0f));
         return string(buffer);
     }
 

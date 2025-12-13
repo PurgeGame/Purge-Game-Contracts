@@ -25,29 +25,22 @@ contract IconRendererTrophy32 {
     uint256 private constant TROPHY_OWED_MASK = (uint256(1) << 128) - 1;
     uint16 private constant BAF_TRAIT_SENTINEL = 0xFFFA;
     uint16 private constant DECIMATOR_TRAIT_SENTINEL = 0xFFFB;
-    IDegenerusdRead private immutable coin;
     IIcons32 private immutable icons;
     IColorRegistry private immutable registry;
-    address public immutable bonds;
+    address public immutable admin;
     IIconRendererTrophy32Svg private immutable svgRenderer;
 
     IERC721Lite private nft;
 
     error E();
 
-    constructor(
-        address coin_,
-        address icons_,
-        address registry_,
-        address svgRenderer_,
-        address bonds_
-    ) {
-        coin = IDegenerusdRead(coin_);
+    constructor(address icons_, address registry_, address svgRenderer_, address admin_) {
         icons = IIcons32(icons_);
         registry = IColorRegistry(registry_);
-        if (svgRenderer_ == address(0) || bonds_ == address(0)) revert E();
+        if (svgRenderer_ == address(0)) revert E();
         svgRenderer = IIconRendererTrophy32Svg(svgRenderer_);
-        bonds = bonds_;
+        if (admin_ == address(0)) revert E();
+        admin = admin_;
     }
 
     function setMyColors(
@@ -94,13 +87,13 @@ contract IconRendererTrophy32 {
         return registry.setTopAffiliateColor(msg.sender, address(nft), tokenId, trophyHex);
     }
 
-    modifier onlyBonds() {
-        if (msg.sender != bonds) revert E();
+    modifier onlyAdmin() {
+        if (msg.sender != admin) revert E();
         _;
     }
 
-    /// @notice Wire NFT contract in a single call; callable only by bonds, set-once.
-    function wire(address[] calldata addresses) external onlyBonds {
+    /// @notice Wire NFT contract in a single call; callable only by the coin admin, set-once.
+    function wire(address[] calldata addresses) external onlyAdmin {
         _setNft(addresses.length > 0 ? addresses[0] : address(0));
     }
 
@@ -109,7 +102,6 @@ contract IconRendererTrophy32 {
         address current = address(nft);
         if (current == address(0)) {
             nft = IERC721Lite(nftAddr);
-            svgRenderer.setNft(nftAddr);
         } else if (current != nftAddr) {
             revert E();
         }

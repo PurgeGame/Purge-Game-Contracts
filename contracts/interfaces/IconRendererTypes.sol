@@ -47,5 +47,6 @@ interface IERC721Lite {
 }
 
 interface IDegenerusdRead {
+    function admin() external view returns (address);
     function affiliateProgram() external view returns (address);
 }

@@ -22,17 +22,17 @@ contract IconRendererRegular32 {
     IDegenerusdRead private immutable coin; // BURNIE ERC20 implementing affiliateProgram()
     IIcons32 private immutable icons; // External icon data source
     IColorRegistry private immutable registry; // Color override store
-    address public immutable bonds; // admin
+    address public immutable admin; // DegenerusAdmin contract (authorised caller)
 
     /// @dev Generic guard.
     error E();
 
-    constructor(address coin_, address icons_, address registry_, address bonds_) {
+    constructor(address coin_, address icons_, address registry_, address admin_) {
         coin = IDegenerusdRead(coin_);
         icons = IIcons32(icons_);
         registry = IColorRegistry(registry_);
-        if (bonds_ == address(0)) revert E();
-        bonds = bonds_;
+        if (admin_ == address(0)) revert E();
+        admin = admin_;
     }
 
     // ---------------- Metadata helpers ----------------
@@ -243,15 +243,15 @@ contract IconRendererRegular32 {
         _;
     }
 
-    modifier onlyBonds() {
-        if (msg.sender != bonds) revert E();
+    modifier onlyAdmin() {
+        if (msg.sender != admin) revert E();
         _;
     }
 
     /// @notice Wire both the game controller and ERC721 contract in a single call.
-    /// @dev Callable only by bonds; set-once semantics. Optional extra addresses are registered as allowed
+    /// @dev Callable only by the coin admin; set-once semantics. Optional extra addresses are registered as allowed
     ///      token contracts in the color registry (e.g., trophies, bonds).
-    function wire(address[] calldata addresses) external onlyBonds {
+    function wire(address[] calldata addresses) external onlyAdmin {
         _setGame(addresses.length > 0 ? addresses[0] : address(0));
         _setNft(addresses.length > 1 ? addresses[1] : address(0));
         if (addresses.length > 2 && addresses[2] != address(0)) {

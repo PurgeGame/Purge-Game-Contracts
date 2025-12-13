@@ -72,6 +72,7 @@ contract DegenerusAdmin {
     error NotOwner();
     error NotAuthorized();
     error ZeroAddress();
+    error LengthMismatch();
     error NotStalled();
     error AlreadyWired();
     error NotWired();
@@ -142,18 +143,6 @@ contract DegenerusAdmin {
     // Wiring
     // -----------------------
 
-    /// @notice One-time bonding of the bonds contract address after deploy.
-    function setBonds(address bonds_) external onlyOwner {
-        if (bonds != address(0)) revert AlreadyWired();
-        if (bonds_ == address(0)) revert ZeroAddress();
-        bonds = bonds_;
-    }
-
-    /// @notice Create the subscription (if needed) and wire bonds.
-    function wire(address coordinator_, bytes32 bondKeyHash) external onlyOwner {
-        _wire(coordinator_, bondKeyHash);
-    }
-
     function _wire(address coordinator_, bytes32 bondKeyHash) private {
         if (bonds == address(0)) revert NotWired();
         // Create subscription on first call.
@@ -188,32 +177,11 @@ contract DegenerusAdmin {
         );
     }
 
-    /// @notice Wire the game as a VRF consumer after bonds have been wired.
-    function wireGame(address game_) external onlyOwner {
-        if (subscriptionId == 0) revert NotWired();
-        if (game != address(0)) revert AlreadyWired();
-        if (game_ == address(0)) revert ZeroAddress();
-
-        game = game_;
-
-        try IVRFCoordinatorV2_5Owner(coordinator).addConsumer(subscriptionId, game_) {
-            emit ConsumerAdded(game_);
-        } catch {}
-
-        bytes32 keyHash = vrfKeyHash;
-        if (keyHash == bytes32(0)) revert NotWired();
-        IDegenerusGameVrf(game_).wireVrf(coordinator, subscriptionId, keyHash);
-        IDegenerusBondsAdmin(bonds).wire(
-            _packBondsWire(game_, address(0), address(0), address(0), address(0), address(0)),
-            0,
-            bytes32(0)
-        );
-    }
-
     /// @notice Consolidated wiring helper: creates VRF sub if needed, wires bonds, then downstream modules directly.
     /// @dev Order: bonds must be set; coordinator/keyHash are required when creating the sub. Downstream modules
     ///             are wired here (coin, affiliate, jackpots, quest module, trophies, NFT).
     function wireAll(
+        address bonds_,
         address coordinator_,
         bytes32 bondKeyHash_,
         address game_,
@@ -223,9 +191,48 @@ contract DegenerusAdmin {
         address questModule_,
         address trophies_,
         address nft_,
-        address vault_
+        address vault_,
+        address[] calldata modules,
+        address[][] calldata moduleWires
     ) external onlyOwner {
-        if (bonds == address(0)) revert NotWired();
+        address bondsAddr = bonds;
+        if (bondsAddr == address(0)) {
+            if (bonds_ == address(0)) revert ZeroAddress();
+            bonds = bonds_;
+            bondsAddr = bonds_;
+        } else if (bonds_ != address(0) && bonds_ != bondsAddr) {
+            revert AlreadyWired();
+        }
+
+        if (vault_ != address(0)) {
+            address currentVault = vault;
+            if (currentVault == address(0)) {
+                vault = vault_;
+                emit VaultSet(vault_);
+            } else if (currentVault != vault_) {
+                revert AlreadyWired();
+            }
+        }
+
+        if (coin_ != address(0)) {
+            address currentCoin = coin;
+            if (currentCoin == address(0)) {
+                coin = coin_;
+                emit CoinWired(coin_);
+            } else if (currentCoin != coin_) {
+                revert AlreadyWired();
+            }
+        }
+
+        if (affiliate_ != address(0)) {
+            address currentAffiliate = affiliate;
+            if (currentAffiliate == address(0)) {
+                affiliate = affiliate_;
+                emit AffiliateWired(affiliate_);
+            } else if (currentAffiliate != affiliate_) {
+                revert AlreadyWired();
+            }
+        }
 
         // Ensure VRF subscription exists and bonds are wired to it.
         if (subscriptionId == 0) {
@@ -260,7 +267,7 @@ contract DegenerusAdmin {
             IDegenerusGameVrf(game_).wireVrf(coord, subscriptionId, keyHash);
         }
 
-        IDegenerusBondsAdmin(bonds).wire(
+        IDegenerusBondsAdmin(bondsAddr).wire(
             _packBondsWire(game_, vault_, coin_, coord, questModule_, trophies_),
             subscriptionId,
             keyHash
@@ -301,6 +308,17 @@ contract DegenerusAdmin {
             jpWire[1] = game_;
             IWiring(jackpots_).wire(jpWire);
         }
+
+        uint256 moduleCount = modules.length;
+        if (moduleCount != moduleWires.length) revert LengthMismatch();
+        for (uint256 i; i < moduleCount; ) {
+            address module = modules[i];
+            if (module == address(0)) revert ZeroAddress();
+            IWiring(module).wire(moduleWires[i]);
+            unchecked {
+                ++i;
+            }
+        }
     }
 
     function _packBondsWire(
@@ -320,22 +338,6 @@ contract DegenerusAdmin {
         arr[5] = trophies_;
     }
 
-    /// @notice Wire the coin contract for LINK-based minting/claiming.
-    function wireCoin(address coin_) external onlyOwner {
-        if (coin != address(0) && coin_ != coin) revert AlreadyWired();
-        if (coin_ == address(0)) revert ZeroAddress();
-        coin = coin_;
-        emit CoinWired(coin_);
-    }
-
-    /// @notice Wire the affiliate contract used to estimate presale priceCoin before the game is live.
-    function wireAffiliate(address affiliate_) external onlyOwner {
-        if (affiliate != address(0) && affiliate_ != affiliate) revert AlreadyWired();
-        if (affiliate_ == address(0)) revert ZeroAddress();
-        affiliate = affiliate_;
-        emit AffiliateWired(affiliate_);
-    }
-
     /// @notice Configure the LINK/ETH price feed used to value LINK donations (zero disables the oracle).
     function setLinkEthPriceFeed(address feed) external onlyOwner {
         address current = linkEthPriceFeed;
@@ -344,65 +346,10 @@ contract DegenerusAdmin {
         emit LinkEthFeedUpdated(feed);
     }
 
-    /// @notice Pass-through to set the bonds vault (one-time).
-    function setBondsVault(address vault_) external onlyOwner {
-        IDegenerusBondsAdmin(bonds).wire(
-            _packBondsWire(address(0), vault_, address(0), address(0), address(0), address(0)),
-            0,
-            bytes32(0)
-        );
-        vault = vault_;
-        emit VaultSet(vault_);
-    }
-
-    /// @notice Pass-through to set the bonds coin address.
-    function setBondsCoin(address coin_) external onlyOwner {
-        IDegenerusBondsAdmin(bonds).wire(
-            _packBondsWire(address(0), address(0), coin_, address(0), address(0), address(0)),
-            0,
-            bytes32(0)
-        );
-        emit CoinSet(coin_);
-    }
-
     /// @notice Pass-through to set bond purchase toggles.
     function setBondsPurchaseToggles(bool externalEnabled, bool gameEnabled) external onlyOwner {
         IDegenerusBondsAdmin(bonds).setPurchaseToggles(externalEnabled, gameEnabled);
         emit PurchaseTogglesSet(externalEnabled, gameEnabled);
-    }
-
-    /// @notice Pass-through to set the bond game address.
-    function wireBondsGame(address game_) external onlyOwner {
-        IDegenerusBondsAdmin(bonds).wire(
-            _packBondsWire(game_, address(0), address(0), address(0), address(0), address(0)),
-            0,
-            bytes32(0)
-        );
-        emit BondsGameWired(game_);
-    }
-
-    /// @notice Pass-through to (re)wire bond VRF settings.
-    function wireBondsVrf(address coordinator_, bytes32 keyHash_) external onlyOwner {
-        uint256 subId = subscriptionId;
-        if (subId == 0) revert NotWired();
-        address coord = coordinator;
-        if (coordinator_ != address(0) && coordinator_ != coord) revert AlreadyWired();
-
-        bytes32 currentKeyHash = vrfKeyHash;
-        if (currentKeyHash == bytes32(0)) {
-            if (keyHash_ == bytes32(0)) revert ZeroAddress();
-            vrfKeyHash = keyHash_;
-            currentKeyHash = keyHash_;
-        } else {
-            if (keyHash_ != bytes32(0) && keyHash_ != currentKeyHash) revert AlreadyWired();
-        }
-
-        IDegenerusBondsAdmin(bonds).wire(
-            _packBondsWire(address(0), address(0), address(0), coord, address(0), address(0)),
-            subId,
-            currentKeyHash
-        );
-        emit BondsVrfWired(coord, subId, currentKeyHash);
     }
 
     // -----------------------
