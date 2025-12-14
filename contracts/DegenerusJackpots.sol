@@ -9,6 +9,7 @@ import {DegenerusGameExternalOp} from "./interfaces/IDegenerusGameExternal.sol";
 interface IDegenerusCoinJackpotView {
     function coinflipAmountLastDay(address player) external view returns (uint256);
     function coinflipTop(uint24 lvl) external view returns (address player, uint96 score);
+    function coinflipTopLastDay() external view returns (address player, uint96 score);
     function affiliateProgram() external view returns (address);
 }
 
@@ -216,10 +217,10 @@ contract DegenerusJackpots is IDegenerusJackpots {
     // ---------------------------------------------------------------------
     /**
      * @notice Resolve the BAF jackpot for a level.
-     * @dev Pool split (percent of `poolWei`): 20% top bettor (absorbing the former trophy slice),
-     *      10% random pick between 3rd/4th leaderboard slots, 10% exterminator draw (prior 20 levels),
+     * @dev Pool split (percent of `poolWei`): 10% top BAF bettor, 10% top flip from the last day window,
+     *      5% random pick between 3rd/4th BAF leaderboard slots, 10% exterminator draw (prior 20 levels),
      *      10% affiliate draw (top referrers from prior 20 levels), 10% retro tops (recent levels),
-     *      20%/20% scatter buckets from trait tickets (first scatter bucket pays out in bonds). Any unfilled shares are refunded to the caller via
+     *      20%/25% scatter buckets from trait tickets (first scatter bucket pays out in bonds). Any unfilled shares are refunded to the caller via
      *      `returnAmountWei`.
      */
     function runBafJackpot(
@@ -233,7 +234,7 @@ contract DegenerusJackpots is IDegenerusJackpots {
         returns (address[] memory winners, uint256[] memory amounts, uint256 bondMask, uint256 returnAmountWei)
     {
         uint256 P = poolWei;
-        // Max distinct winners: 1 (top) + 1 (pick) + 4 (exterminator draw) + 4 (affiliate draw) + 3 (retro) + 50 + 50 (scatter buckets) = 113.
+        // Max distinct winners: 1 (top BAF) + 1 (top flip) + 1 (pick) + 4 (exterminator draw) + 4 (affiliate draw) + 3 (retro) + 50 + 50 (scatter buckets) = 114.
         address[] memory tmpW = new address[](120);
         uint256[] memory tmpA = new uint256[](120);
         uint256 n;
@@ -244,9 +245,23 @@ contract DegenerusJackpots is IDegenerusJackpots {
         uint256 salt;
 
         {
-            // Slice A: top bettor now receives the combined share that previously funded the extra slice (20% total).
-            uint256 topPrize = (P * 2) / 10;
+            // Slice A: 10% to the top BAF bettor for the level.
+            uint256 topPrize = P / 10;
             (address w, ) = _bafTop(lvl, 0);
+            uint256 s0 = _bafScore(w, lvl);
+            if (_creditOrRefund(w, topPrize, tmpW, tmpA, n, s0, true)) {
+                unchecked {
+                    ++n;
+                }
+            } else {
+                toReturn += topPrize;
+            }
+        }
+
+        {
+            // Slice A2: 10% to the top coinflip bettor from the last day window.
+            uint256 topPrize = P / 10;
+            (address w, ) = coin.coinflipTopLastDay();
             uint256 s0 = _bafScore(w, lvl);
             if (_creditOrRefund(w, topPrize, tmpW, tmpA, n, s0, true)) {
                 unchecked {
@@ -262,10 +277,10 @@ contract DegenerusJackpots is IDegenerusJackpots {
                 ++salt;
             }
             entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
-            uint256 prize = P / 10;
+            uint256 prize = P / 20;
             uint8 pick = 2 + uint8(entropy & 1);
             (address w, ) = _bafTop(lvl, pick);
-            // Slice B: 10% to either the 3rd or 4th leaderboard slot (pseudo-random tie-break).
+            // Slice B: 5% to either the 3rd or 4th BAF leaderboard slot (pseudo-random tie-break).
             uint256 sPick = _bafScore(w, lvl);
             if (_creditOrRefund(w, prize, tmpW, tmpA, n, sPick, true)) {
                 unchecked {
@@ -619,11 +634,11 @@ contract DegenerusJackpots is IDegenerusJackpots {
         }
 
         // Scatter slice: 200 total draws (4 tickets * 50 rounds). Per round, take top-2 by BAF score.
-        // First bucket splits 20% evenly (max 50 winners) in bonds; second bucket splits 20% evenly (max 50 winners) in ETH.
+        // First bucket splits 20% evenly (max 50 winners) in bonds; second bucket splits 25% evenly (max 50 winners) in ETH.
         {
             // Slice E: scatter tickets from trait sampler so casual participants can land smaller cuts.
             uint256 scatterTop = (P * 20) / 100;
-            uint256 scatterSecond = (P * 20) / 100;
+            uint256 scatterSecond = (P * 25) / 100;
             address[50] memory firstWinners;
             address[50] memory secondWinners;
             uint256 firstCount;

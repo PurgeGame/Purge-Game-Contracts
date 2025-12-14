@@ -102,6 +102,9 @@ contract DegenerusCoin {
     // Live per-level leaderboard for biggest pending flip.
     mapping(uint24 => PlayerScore) internal coinflipTopByLevel;
 
+    // Live per-day leaderboard for biggest pending flip (keyed by coinflip day window).
+    mapping(uint48 => PlayerScore) internal coinflipTopByDay;
+
     /// @notice View-only helper to estimate claimable coin (flips only; staking removed) for the caller.
     function claimableCoin() external view returns (uint256) {
         address player = msg.sender;
@@ -755,6 +758,16 @@ contract DegenerusCoin {
         return (stored.player, stored.score);
     }
 
+    /// @notice Return the top coinflip bettor for the most recently opened day window.
+    /// @dev Mirrors `coinflipAmountLastDay()` but returns the top address + score for that day.
+    function coinflipTopLastDay() external view returns (address player, uint96 score) {
+        uint48 day = _targetFlipDay();
+        unchecked {
+            PlayerScore memory stored = coinflipTopByDay[day - 1];
+            return (stored.player, stored.score);
+        }
+    }
+
     /// @notice Increase a player's pending coinflip stake and possibly arm a bounty.
     /// @param player               Target player.
     /// @param coinflipDeposit      Amount to add to their current pending flip stake.
@@ -791,6 +804,7 @@ contract DegenerusCoin {
         uint256 eligibleStake = bountyEligible ? newStake : prevStake;
 
         coinflipBalance[targetDay][player] = newStake;
+        _updateTopDayBettor(player, newStake, targetDay);
 
         address module = jackpots;
         uint24 bafLvl = _bafBracketLevel(currLevel);
@@ -878,6 +892,14 @@ contract DegenerusCoin {
         PlayerScore memory levelLeader = coinflipTopByLevel[lvl];
         if (score > levelLeader.score || levelLeader.player == address(0)) {
             coinflipTopByLevel[lvl] = PlayerScore({player: player, score: score});
+        }
+    }
+
+    function _updateTopDayBettor(address player, uint256 stakeScore, uint48 day) private {
+        uint96 score = _score96(stakeScore);
+        PlayerScore memory dayLeader = coinflipTopByDay[day];
+        if (score > dayLeader.score || dayLeader.player == address(0)) {
+            coinflipTopByDay[day] = PlayerScore({player: player, score: score});
         }
     }
 }

@@ -39,6 +39,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
 
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
     uint16 private constant BOND_BPS_HALF = 5000;
+    uint16 private constant BAF_TOP_BOND_BPS = 2500;
 
     /**
      * @notice Settles a completed level by paying the exterminator, a trait-only jackpot, and reward jackpots.
@@ -267,7 +268,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
                 // Force full bond payout for tagged winners (with ETH fallback if bonds cannot be minted).
                 (ethPortion, tmpClaimable) = _splitEthWithBond(winnersArr[i], amount, 10_000, bondsEnabled);
             } else if (i < 2) {
-                (ethPortion, tmpClaimable) = _splitEthWithBond(winnersArr[i], amount, BOND_BPS_HALF, bondsEnabled);
+                (ethPortion, tmpClaimable) = _splitEthWithBond(winnersArr[i], amount, BAF_TOP_BOND_BPS, bondsEnabled);
             }
             claimableDelta += tmpClaimable;
             if (ethPortion != 0) {
