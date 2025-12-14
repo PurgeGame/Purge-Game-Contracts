@@ -31,108 +31,103 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
         uint24 lvl,
         bool coinMint,
         uint32 mintUnits
-    ) external returns (uint256 coinReward) {
+    ) external payable returns (uint256 coinReward) {
         uint256 prevData = mintPacked_[player];
-        uint32 day = _currentMintDay();
         uint256 data;
 
-        if (coinMint) {
-            // Coin mints no longer record per-day metadata.
+        uint32 day = _currentMintDay();
+        uint256 priceCoinLocal = priceCoin;
+        uint24 prevLevel = uint24((prevData >> ETH_LAST_LEVEL_SHIFT) & MINT_MASK_24);
+        uint24 total = uint24((prevData >> ETH_LEVEL_COUNT_SHIFT) & MINT_MASK_24);
+        uint24 streak = uint24((prevData >> ETH_LEVEL_STREAK_SHIFT) & MINT_MASK_24);
+        bool sameLevel = prevLevel == lvl;
+        bool newCentury = (prevLevel / 100) != (lvl / 100);
+        uint256 levelUnitsBefore = (prevData >> ETH_LEVEL_UNITS_SHIFT) & MINT_MASK_16;
+        if (!sameLevel && prevLevel + 1 != lvl) {
+            levelUnitsBefore = 0;
+        }
+        bool bonusPaid = sameLevel && (((prevData >> ETH_LEVEL_BONUS_SHIFT) & 1) == 1);
+        uint256 levelUnitsAfter = levelUnitsBefore + uint256(mintUnits);
+        if (levelUnitsAfter > MINT_MASK_16) {
+            levelUnitsAfter = MINT_MASK_16;
+        }
+        bool awardBonus = (!bonusPaid) && levelUnitsAfter >= 400;
+        if (awardBonus) {
+            coinReward += (priceCoinLocal * 5) / 2;
+            bonusPaid = true;
+        }
+
+        if (!sameLevel && levelUnitsAfter < 4) {
+            data = _setPacked(prevData, ETH_LEVEL_UNITS_SHIFT, MINT_MASK_16, levelUnitsAfter);
+            data = _setPacked(data, ETH_LEVEL_BONUS_SHIFT, 1, bonusPaid ? 1 : 0);
+            if (data != prevData) {
+                mintPacked_[player] = data;
+            }
             return coinReward;
-        } else {
-            uint256 priceCoinLocal = priceCoin;
-            uint24 prevLevel = uint24((prevData >> ETH_LAST_LEVEL_SHIFT) & MINT_MASK_24);
-            uint24 total = uint24((prevData >> ETH_LEVEL_COUNT_SHIFT) & MINT_MASK_24);
-            uint24 streak = uint24((prevData >> ETH_LEVEL_STREAK_SHIFT) & MINT_MASK_24);
-            bool sameLevel = prevLevel == lvl;
-            bool newCentury = (prevLevel / 100) != (lvl / 100);
-            uint256 levelUnitsBefore = (prevData >> ETH_LEVEL_UNITS_SHIFT) & MINT_MASK_16;
-            if (!sameLevel && prevLevel + 1 != lvl) {
-                levelUnitsBefore = 0;
-            }
-            bool bonusPaid = sameLevel && (((prevData >> ETH_LEVEL_BONUS_SHIFT) & 1) == 1);
-            uint256 levelUnitsAfter = levelUnitsBefore + uint256(mintUnits);
-            if (levelUnitsAfter > MINT_MASK_16) {
-                levelUnitsAfter = MINT_MASK_16;
-            }
-            bool awardBonus = (!bonusPaid) && levelUnitsAfter >= 400;
-            if (awardBonus) {
-                coinReward += (priceCoinLocal * 5) / 2;
-                bonusPaid = true;
-            }
+        }
 
-            if (!sameLevel && levelUnitsAfter < 4) {
-                data = _setPacked(prevData, ETH_LEVEL_UNITS_SHIFT, MINT_MASK_16, levelUnitsAfter);
-                data = _setPacked(data, ETH_LEVEL_BONUS_SHIFT, 1, bonusPaid ? 1 : 0);
-                if (data != prevData) {
-                    mintPacked_[player] = data;
-                }
-                return coinReward;
-            }
+        data = _setMintDay(prevData, day, ETH_DAY_SHIFT, MINT_MASK_32);
 
-            data = _setMintDay(prevData, day, ETH_DAY_SHIFT, MINT_MASK_32);
-
-            if (sameLevel) {
-                data = _setPacked(data, ETH_LEVEL_UNITS_SHIFT, MINT_MASK_16, levelUnitsAfter);
-                data = _setPacked(data, ETH_LEVEL_BONUS_SHIFT, 1, bonusPaid ? 1 : 0);
-                if (data != prevData) {
-                    mintPacked_[player] = data;
-                }
-                return coinReward;
-            }
-
-            if (newCentury) {
-                total = 1;
-            } else if (total < type(uint24).max) {
-                unchecked {
-                    total = uint24(total + 1);
-                }
-            }
-
-            if (prevLevel != 0 && prevLevel + 1 == lvl) {
-                if (streak < type(uint24).max) {
-                    unchecked {
-                        streak = uint24(streak + 1);
-                    }
-                }
-            } else {
-                streak = 1;
-            }
-
-            data = _setPacked(data, ETH_LAST_LEVEL_SHIFT, MINT_MASK_24, lvl);
-            data = _setPacked(data, ETH_LEVEL_COUNT_SHIFT, MINT_MASK_24, total);
-            data = _setPacked(data, ETH_LEVEL_STREAK_SHIFT, MINT_MASK_24, streak);
+        if (sameLevel) {
             data = _setPacked(data, ETH_LEVEL_UNITS_SHIFT, MINT_MASK_16, levelUnitsAfter);
             data = _setPacked(data, ETH_LEVEL_BONUS_SHIFT, 1, bonusPaid ? 1 : 0);
-
-            uint256 rewardUnit = priceCoinLocal / 10;
-            uint256 streakReward;
-            if (streak >= 2) {
-                uint256 capped = streak >= 61 ? 60 : uint256(streak - 1);
-                streakReward = capped * rewardUnit;
+            if (data != prevData) {
+                mintPacked_[player] = data;
             }
+            return coinReward;
+        }
 
-            uint256 totalReward;
-            if (total >= 2) {
-                uint256 cappedTotal = total >= 61 ? 60 : uint256(total - 1);
-                totalReward = (cappedTotal * rewardUnit * 30) / 100;
+        if (newCentury) {
+            total = 1;
+        } else if (total < type(uint24).max) {
+            unchecked {
+                total = uint24(total + 1);
             }
+        }
 
-            if (streakReward != 0 || totalReward != 0) {
+        if (prevLevel != 0 && prevLevel + 1 == lvl) {
+            if (streak < type(uint24).max) {
                 unchecked {
-                    coinReward += streakReward + totalReward;
+                    streak = uint24(streak + 1);
                 }
             }
+        } else {
+            streak = 1;
+        }
 
-            if (streak == lvl && lvl >= 20 && (lvl % 10 == 0)) {
-                uint256 milestoneBonus = (uint256(lvl) / 2) * priceCoinLocal;
-                coinReward += milestoneBonus;
-            }
+        data = _setPacked(data, ETH_LAST_LEVEL_SHIFT, MINT_MASK_24, lvl);
+        data = _setPacked(data, ETH_LEVEL_COUNT_SHIFT, MINT_MASK_24, total);
+        data = _setPacked(data, ETH_LEVEL_STREAK_SHIFT, MINT_MASK_24, streak);
+        data = _setPacked(data, ETH_LEVEL_UNITS_SHIFT, MINT_MASK_16, levelUnitsAfter);
+        data = _setPacked(data, ETH_LEVEL_BONUS_SHIFT, 1, bonusPaid ? 1 : 0);
 
-            if (total >= 20 && (total % 10 == 0)) {
-                uint256 totalMilestone = (uint256(total) / 2) * priceCoinLocal;
-                coinReward += (totalMilestone * 30) / 100;
+        uint256 rewardUnit = priceCoinLocal / 10;
+        uint256 streakReward;
+        if (streak >= 2) {
+            uint256 capped = streak >= 61 ? 60 : uint256(streak - 1);
+            streakReward = capped * rewardUnit;
+        }
+
+        uint256 totalReward;
+        if (total >= 2) {
+            uint256 cappedTotal = total >= 61 ? 60 : uint256(total - 1);
+            totalReward = (cappedTotal * rewardUnit * 30) / 100;
+        }
+
+        if (streakReward != 0 || totalReward != 0) {
+            unchecked {
+                coinReward += streakReward + totalReward;
             }
+        }
+
+        if (streak == lvl && lvl >= 20 && (lvl % 10 == 0)) {
+            uint256 milestoneBonus = (uint256(lvl) / 2) * priceCoinLocal;
+            coinReward += milestoneBonus;
+        }
+
+        if (total >= 20 && (total % 10 == 0)) {
+            uint256 totalMilestone = (uint256(total) / 2) * priceCoinLocal;
+            coinReward += (totalMilestone * 30) / 100;
         }
 
         if (data != prevData) {

@@ -61,7 +61,7 @@ interface IDegenerusGameMintModule {
         uint24 lvl,
         bool coinMint,
         uint32 mintUnits
-    ) external returns (uint256 coinReward);
+    ) external payable returns (uint256 coinReward);
 
     function calculateAirdropMultiplier(uint32 purchaseCount, uint24 lvl) external pure returns (uint32);
 

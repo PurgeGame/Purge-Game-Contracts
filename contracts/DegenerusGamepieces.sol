@@ -638,7 +638,6 @@ contract DegenerusGamepieces {
         else if (stepMod == 18) amount = (amount * 9) / 10;
         if (discount != 0) amount -= discount;
         coin.burnCoin(payer, amount);
-        game.recordMint(payer, lvl, true, 0, 0, MintPaymentKind.DirectEth);
         uint32 questQuantity = quantity / 4; // coin mints track full-price equivalents for quests
         if (questQuantity != 0) {
             coin.notifyQuestMint(payer, questQuantity, false);

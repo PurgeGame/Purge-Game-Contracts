@@ -330,13 +330,7 @@ contract DegenerusGame is DegenerusGameStorage {
     function purchaseInfo()
         external
         view
-        returns (
-            uint24 lvl,
-            uint8 gameState_,
-            bool lastPurchaseDay_,
-            bool rngLocked_,
-            uint256 priceWei
-        )
+        returns (uint24 lvl, uint8 gameState_, bool lastPurchaseDay_, bool rngLocked_, uint256 priceWei)
     {
         lvl = level;
         gameState_ = gameState;
@@ -375,20 +369,6 @@ contract DegenerusGame is DegenerusGameStorage {
         MintPaymentKind payKind
     ) external payable returns (uint256 coinReward) {
         if (msg.sender != address(nft)) revert E();
-
-        if (coinMint) {
-            if (msg.value != 0) revert E();
-            if (payKind != MintPaymentKind.DirectEth) revert E(); // coin mints are keyed by DirectEth sentinel
-
-            uint256 priceWei = price;
-            if (priceWei == 0) revert E();
-
-            // Charge BURNIE for the equivalent ETH cost at current priceWei.
-            uint256 burnCost = (priceWei * mintUnits) / 1 ether;
-            coin.burnCoin(player, burnCost);
-            return _recordMintDataModule(player, lvl, true, 0);
-        }
-
         uint256 amount = costWei;
         uint256 prizeContribution = _processMintPayment(player, amount, payKind);
         if (prizeContribution != 0) {
@@ -1285,7 +1265,6 @@ contract DegenerusGame is DegenerusGameStorage {
         rngWordCurrent = 0;
         // In case bonds were locked during a stuck RNG window, attempt to release the lock during recovery.
         try IDegenerusBonds(bonds).setRngLock(false) {} catch {}
-
         emit VrfCoordinatorUpdated(current, newCoordinator);
     }
 
