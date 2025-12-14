@@ -348,7 +348,7 @@ contract DegenerusGamepieces {
 
         if (payInCoin) {
             if (msg.value != 0) revert E();
-            _coinReceive(payer, uint32(quantity), quantity * PRICE_COIN_UNIT, targetLevel, 0);
+            _coinReceive(payer, quantity * PRICE_COIN_UNIT, targetLevel, 0);
         } else {
             bonusCoinReward = (quantity / 10) * PRICE_COIN_UNIT;
             bonus = _processEthPurchase(
@@ -434,7 +434,7 @@ contract DegenerusGamepieces {
 
         if (payInCoin) {
             if (msg.value != 0) revert E();
-            _coinReceive(payer, uint32(quantity), coinCost, lvl, 0);
+            _coinReceive(payer, coinCost, lvl, 0);
             // Affiliate coin-triggered mints should not earn rebates/bonuses.
             bonus = payKind == MintPaymentKind.Claimable ? 0 : mapRebate;
         } else {
@@ -515,11 +515,11 @@ contract DegenerusGamepieces {
 
         uint256 streakBonus;
         if (payKind == MintPaymentKind.DirectEth) {
-            streakBonus = game.recordMint{value: costWei}(payer, lvl, false, costWei, mintUnits, payKind);
+            streakBonus = game.recordMint{value: costWei}(payer, lvl, costWei, mintUnits, payKind);
         } else if (payKind == MintPaymentKind.Combined) {
-            streakBonus = game.recordMint{value: msg.value}(payer, lvl, false, costWei, mintUnits, payKind);
+            streakBonus = game.recordMint{value: msg.value}(payer, lvl, costWei, mintUnits, payKind);
         } else {
-            streakBonus = game.recordMint(payer, lvl, false, costWei, mintUnits, payKind);
+            streakBonus = game.recordMint(payer, lvl, costWei, mintUnits, payKind);
         }
 
         if (mintedQuantity != 0) {
@@ -603,17 +603,13 @@ contract DegenerusGamepieces {
         newCount = prev + quantity;
     }
 
-    function _coinReceive(address payer, uint32 quantity, uint256 amount, uint24 lvl, uint256 discount) private {
-        // Coin payments burn BURNIE (with level-based modifiers) and notify quest tracking without moving ETH.
+    function _coinReceive(address payer, uint256 amount, uint24 lvl, uint256 discount) private {
+        // Coin payments burn BURNIE (with level-based modifiers) without moving ETH.
         uint8 stepMod = uint8(lvl % 20);
         if (stepMod == 13) amount = (amount * 3) / 2;
         else if (stepMod == 18) amount = (amount * 9) / 10;
         if (discount != 0) amount -= discount;
         coin.burnCoin(payer, amount);
-        uint32 questQuantity = quantity / 4; // coin mints track full-price equivalents for quests
-        if (questQuantity != 0) {
-            coin.notifyQuestMint(payer, questQuantity, false);
-        }
     }
 
     function _recordPurchase(address buyer, uint32 quantity) private {

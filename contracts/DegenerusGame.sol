@@ -347,7 +347,6 @@ contract DegenerusGame is DegenerusGameStorage {
     function recordMint(
         address player,
         uint24 lvl,
-        bool coinMint,
         uint256 costWei,
         uint32 mintUnits,
         MintPaymentKind payKind
@@ -359,7 +358,7 @@ contract DegenerusGame is DegenerusGameStorage {
             nextPrizePool += prizeContribution;
         }
 
-        coinReward = _recordMintDataModule(player, lvl, false, mintUnits);
+        coinReward = _recordMintDataModule(player, lvl, mintUnits);
     }
 
     function _processMintPayment(
@@ -792,11 +791,10 @@ contract DegenerusGame is DegenerusGameStorage {
     function _recordMintDataModule(
         address player,
         uint24 lvl,
-        bool coinMint,
         uint32 mintUnits
     ) private returns (uint256 coinReward) {
         (bool ok, bytes memory data) = mintModule.delegatecall(
-            abi.encodeWithSelector(IDegenerusGameMintModule.recordMintData.selector, player, lvl, coinMint, mintUnits)
+            abi.encodeWithSelector(IDegenerusGameMintModule.recordMintData.selector, player, lvl, mintUnits)
         );
         if (!ok || data.length == 0) return 0;
         return abi.decode(data, (uint256));

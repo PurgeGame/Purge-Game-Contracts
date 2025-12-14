@@ -44,7 +44,6 @@ interface IDegenerusGame is IDegenerusGameExternal {
     function recordMint(
         address player,
         uint24 lvl,
-        bool coinMint,
         uint256 costWei,
         uint32 mintUnits,
         MintPaymentKind payKind

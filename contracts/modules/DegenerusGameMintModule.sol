@@ -29,7 +29,6 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
     function recordMintData(
         address player,
         uint24 lvl,
-        bool coinMint,
         uint32 mintUnits
     ) external payable returns (uint256 coinReward) {
         uint256 prevData = mintPacked_[player];
