@@ -4,7 +4,6 @@ pragma solidity ^0.8.26;
 import {IDegenerusGamepieces} from "./DegenerusGamepieces.sol";
 import {IDegenerusCoinModule} from "./interfaces/DegenerusGameModuleInterfaces.sol";
 import {IDegenerusCoin} from "./interfaces/IDegenerusCoin.sol";
-import {IDegenerusAffiliate} from "./interfaces/IDegenerusAffiliate.sol";
 import {IDegenerusRendererLike} from "./interfaces/IDegenerusRendererLike.sol";
 import {IDegenerusJackpots} from "./interfaces/IDegenerusJackpots.sol";
 import {IDegenerusTrophies} from "./interfaces/IDegenerusTrophies.sol";
@@ -88,7 +87,6 @@ contract DegenerusGame is DegenerusGameStorage {
     IDegenerusRendererLike private immutable renderer; // Trusted renderer; used for tokenURI composition
     IDegenerusCoin private immutable coin; // Trusted coin/game-side coordinator (BURNIE ERC20)
     IDegenerusGamepieces private immutable nft; // ERC721 interface for mint/burn/metadata surface
-    address private immutable affiliateProgram; // Cached affiliate program for payout routing
     IStETH private immutable steth; // stETH token held by the game
     address private immutable jackpots; // DegenerusJackpots contract
     address private immutable endgameModule; // Delegate module for endgame settlement
@@ -168,7 +166,6 @@ contract DegenerusGame is DegenerusGameStorage {
         jackpotModule = jackpotModule_;
         mintModule = mintModule_;
         bondModule = bondModule_;
-        affiliateProgram = affiliateProgram_;
         if (vrfAdmin_ == address(0)) revert E();
         vrfAdmin = vrfAdmin_;
         steth = IStETH(stEthToken_);
@@ -242,19 +239,6 @@ contract DegenerusGame is DegenerusGameStorage {
 
     function nextPrizePoolView() external view returns (uint256) {
         return nextPrizePool;
-    }
-
-    /// @notice Create a synthetic MAP-only player for the caller’s affiliate code.
-    function createSyntheticMapPlayer(bytes32 code) external returns (address synthetic) {
-        synthetic = IDegenerusAffiliate(affiliateProgram).createSyntheticMapPlayer(msg.sender, code);
-        bondCashoutHalf[synthetic] = true; // default synthetic players to half-cashout mode
-    }
-
-    /// @notice Resolve the payout recipient for a player, routing synthetic MAP-only players to their affiliate owner.
-    function affiliatePayoutAddress(address player) public view returns (address recipient, address affiliateOwner) {
-        address affiliateAddr = affiliateProgram;
-        (affiliateOwner, ) = IDegenerusAffiliate(affiliateAddr).syntheticMapInfo(player);
-        recipient = affiliateOwner == address(0) ? player : affiliateOwner;
     }
 
     // --- State machine: advance one tick ------------------------------------------------
@@ -942,8 +926,6 @@ contract DegenerusGame is DegenerusGameStorage {
 
     /// @notice Toggle auto-liquidation of bond winnings into claimable balance (tax applies on withdrawal).
     function setBondCashoutHalf(bool enabled) external {
-        (address owner, ) = IDegenerusAffiliate(affiliateProgram).syntheticMapInfo(msg.sender);
-        if (owner != address(0)) revert E(); // synthetic players always half-cashout (no toggles)
         bondCashoutHalf[msg.sender] = enabled;
     }
 
@@ -996,10 +978,6 @@ contract DegenerusGame is DegenerusGameStorage {
     /// @param weiAmount   Amount in wei to add.
     function _addClaimableEth(address beneficiary, uint256 weiAmount) internal {
         address recipient = beneficiary;
-        // Synthetic MAP players have the low 48 bits zeroed; only they need the affiliate lookup.
-        if ((uint160(beneficiary) & ((uint160(1) << 48) - 1)) == 0) {
-            (recipient, ) = affiliatePayoutAddress(beneficiary);
-        }
         unchecked {
             claimableWinnings[recipient] += weiAmount;
         }

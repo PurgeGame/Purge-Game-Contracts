@@ -485,7 +485,7 @@ contract DegenerusBonds {
     }
 
     /// @notice Presale-only bond purchase; splits ETH 30% vault / 50% rewardPool / 20% yieldPool and records score for manual jackpots.
-    /// @dev Gated by the affiliate presale flag; callable before full wiring when presale bonuses pay out in synthetic coin.
+    /// @dev Gated by the affiliate presale flag; callable before full wiring when presale bonuses accrue as off-chain credits.
     function presaleDeposit(address beneficiary) external payable returns (uint256 scoreAwarded) {
         if (gameOverStarted) revert SaleClosed();
         uint256 amount = msg.value;

@@ -604,7 +604,7 @@ contract DegenerusCoin {
         return module.getPlayerQuestView(player);
     }
 
-    /// @notice Burn BURNIE from `target` during gameplay/affiliate flows (purchases, fees, synthetic caps).
+    /// @notice Burn BURNIE from `target` during gameplay/affiliate flows (purchases, fees, affiliate utilities).
     /// @dev Access: DegenerusGame, NFT, or affiliate. OZ ERC20 `_burn` reverts on zero address or insufficient balance.
     function burnCoin(address target, uint256 amount) external onlyTrustedContracts {
         _burn(target, amount);
@@ -809,7 +809,9 @@ contract DegenerusCoin {
         address module = jackpots;
         uint24 bafLvl = _bafBracketLevel(currLevel);
 
-        IDegenerusJackpots(module).recordBafFlip(player, bafLvl, coinflipDeposit);
+        if (module != address(0) && coinflipDeposit != 0) {
+            IDegenerusJackpots(module).recordBafFlip(player, bafLvl, coinflipDeposit);
+        }
 
         // Allow leaderboard churn even while RNG is locked; only freeze global records to avoid post-RNG manipulation.
         _updateTopBettor(player, newStake, currLevel);

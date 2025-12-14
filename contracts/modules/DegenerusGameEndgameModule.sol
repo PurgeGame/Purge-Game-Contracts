@@ -6,10 +6,6 @@ import {IDegenerusTrophies} from "../interfaces/IDegenerusTrophies.sol";
 import {IDegenerusAffiliate} from "../interfaces/IDegenerusAffiliate.sol";
 import {DegenerusGameStorage} from "../storage/DegenerusGameStorage.sol";
 
-interface IDegenerusGameAffiliatePayout {
-    function affiliatePayoutAddress(address player) external view returns (address recipient, address affiliateOwner);
-}
-
 interface IDegenerusGameTraitJackpot {
     function payExterminationJackpot(
         uint24 lvl,
@@ -35,7 +31,6 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
     // Custom Errors / Events
     // -----------------------
     event PlayerCredited(address indexed player, address indexed recipient, uint256 amount);
-    event BondReroutedToAffiliate(address indexed synthetic, address indexed affiliateOwner, uint256 amount);
 
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
     uint16 private constant BOND_BPS_HALF = 5000;
@@ -163,7 +158,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
             return (ethPortion, claimableDelta);
         }
 
-        (address resolved, bool rerouted, bool halfCashout) = _resolveBondRecipient(winner);
+        (address resolved, , bool halfCashout) = _resolveBondRecipient(winner);
         if (halfCashout) {
             uint256 payout = bondBudget / 2;
             claimableDelta = _addClaimableEth(resolved, payout);
@@ -173,9 +168,6 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
 
         try IDegenerusBondsJackpot(bonds).depositFromGame{value: bondBudget}(resolved, bondBudget) {
             ethPortion -= bondBudget;
-            if (rerouted) {
-                emit BondReroutedToAffiliate(winner, resolved, bondBudget);
-            }
         } catch {
             // leave bondBudget in ethPortion to pay out as ETH on failure
         }
@@ -184,7 +176,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
 
     /// @notice Adds ETH winnings to a player, emitting the credit event.
     function _addClaimableEth(address beneficiary, uint256 weiAmount) private returns (uint256) {
-        address recipient = _payoutRecipient(beneficiary);
+        address recipient = beneficiary;
         unchecked {
             claimableWinnings[recipient] += weiAmount;
         }
@@ -195,14 +187,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
     function _resolveBondRecipient(address winner) private view returns (address resolved, bool rerouted, bool halfCashout) {
         resolved = winner;
         halfCashout = bondCashoutHalf[winner];
-        (address owner, ) = IDegenerusAffiliate(affiliateProgramAddr).syntheticMapInfo(winner);
-        if (owner != address(0)) {
-            resolved = owner;
-            rerouted = true;
-            halfCashout = true; // synthetic winners always half-cashout
-            return (resolved, rerouted, halfCashout);
-        }
-        halfCashout = bondCashoutHalf[resolved];
+        rerouted = false;
     }
 
     /**
@@ -231,18 +216,6 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
             return (spend, spend);
         }
         return (0, 0);
-    }
-
-    function _payoutRecipient(address player) private view returns (address recipient) {
-        // Synthetic MAP addresses minted by the game zero out the low 48 bits.
-        bool maybeSynthetic = (uint160(player) & ((uint160(1) << 48) - 1)) == 0;
-        if (!maybeSynthetic) {
-            return player;
-        }
-        (recipient, ) = IDegenerusGameAffiliatePayout(address(this)).affiliatePayoutAddress(player);
-        if (recipient == address(0)) {
-            return player;
-        }
     }
 
     function _runBafJackpot(
@@ -279,8 +252,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
             }
         }
         if (winnersArr.length != 0) {
-            address trophyRecipient = _payoutRecipient(winnersArr[0]);
-            try IDegenerusTrophies(trophyAddr).mintBaf(trophyRecipient, lvl) {} catch {}
+            try IDegenerusTrophies(trophyAddr).mintBaf(winnersArr[0], lvl) {} catch {}
         }
         netSpend = poolWei - refund;
         return (netSpend, claimableDelta);

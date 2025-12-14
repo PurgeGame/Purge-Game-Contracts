@@ -23,7 +23,6 @@ contract DegenerusAffiliate {
     // Events
     // ---------------------------------------------------------------------
     event Affiliate(uint256 amount, bytes32 indexed code, address sender);
-    event SyntheticMapPlayerCreated(address indexed synthetic, address indexed affiliate, bytes32 code);
 
     // ---------------------------------------------------------------------
     // Errors
@@ -37,7 +36,6 @@ contract DegenerusAffiliate {
     error ZeroAddress();
     error PresaleClosed();
     error OnlyGame();
-    error SyntheticCap();
 
     // ---------------------------------------------------------------------
     // Types
@@ -52,20 +50,12 @@ contract DegenerusAffiliate {
         uint8 rakeback;
     }
 
-    struct SyntheticCapInfo {
-        uint32 minted; // number of synthetic players created
-        uint32 cap; // total synthetic players allowed
-    }
-
     // ---------------------------------------------------------------------
     // Constants
     // ---------------------------------------------------------------------
     uint256 private constant MILLION = 1e6; // token has 6 decimals
     uint256 private constant PRICE_COIN_UNIT = 1_000_000_000;
     bytes32 private constant REF_CODE_LOCKED = bytes32(uint256(1));
-    uint256 private constant SYNTH_BASE_COST = 1500 * MILLION; // base 10 slots after level > 3
-    uint256 private constant SYNTH_TOPUP_COST = 2500 * MILLION; // per +10 slots
-    uint32 private constant SYNTH_BATCH = 10;
 
     // ---------------------------------------------------------------------
     // Immutable / wiring
@@ -84,12 +74,9 @@ contract DegenerusAffiliate {
     mapping(uint24 => mapping(address => uint256)) public affiliateCoinEarned;
     mapping(address => bytes32) private playerReferralCode;
     mapping(address => uint24) public referralJoinLevel; // level recorded when a referral code is set
-    mapping(address => address) public syntheticMapOwner; // synthetic player -> affiliate owner
     mapping(address => uint256) public presaleCoinEarned;
     mapping(uint24 => PlayerScore) private affiliateTopByLevel;
-    mapping(address => SyntheticCapInfo) private syntheticCap;
     uint256 public presaleClaimableTotal;
-    uint64 private syntheticNonce;
     bool private preCoinActive = true;
     bool private presaleShutdown; // permanently stops presale-era flows once coin is wired or manually closed
     bool private referralLocksActive;
@@ -181,61 +168,6 @@ contract DegenerusAffiliate {
             _recordReferralJoinLevel(msg.sender, degenerusGame.level());
         }
         emit Affiliate(0, code_, msg.sender); // 0 = player referred
-    }
-
-    /// @notice Create a synthetic MAP-only player; callable only by the affiliate that owns the code.
-    /// @dev Synthetic addresses are auto-generated with the low 48 bits zeroed to make them identifiable.
-    function createSyntheticMapPlayer(bytes32 code_) external returns (address synthetic) {
-        synthetic = _createSyntheticMapPlayer(msg.sender, code_);
-    }
-
-    /// @notice Game-routed synthetic creation that preserves the affiliate owner context.
-    /// @dev Access: game only; allows `DegenerusGame.createSyntheticMapPlayer` to pass through the original caller.
-    function createSyntheticMapPlayer(address affiliateOwner, bytes32 code_) external returns (address synthetic) {
-        if (msg.sender != address(degenerusGame)) revert OnlyGame();
-        synthetic = _createSyntheticMapPlayer(affiliateOwner, code_);
-    }
-
-    function _createSyntheticMapPlayer(address affiliateOwner, bytes32 code_) private returns (address synthetic) {
-        AffiliateCodeInfo storage info = affiliateCode[code_];
-        if (info.owner != affiliateOwner) revert OnlyAuthorized();
-
-        address gameAddr = address(degenerusGame);
-        if (gameAddr == address(0)) revert OnlyGame();
-
-        uint160 mask = uint160(~((uint160(1) << 48) - 1));
-        uint64 nonce = syntheticNonce;
-        do {
-            unchecked {
-                ++nonce;
-            }
-            synthetic = address(
-                uint160(uint256(keccak256(abi.encode(affiliateOwner, code_, nonce, block.chainid)))) & mask
-            );
-        } while (synthetic == address(0) || syntheticMapOwner[synthetic] != address(0));
-        syntheticNonce = nonce;
-
-        if (playerReferralCode[synthetic] != bytes32(0)) revert Insufficient();
-        SyntheticCapInfo storage capInfo = syntheticCap[affiliateOwner];
-        uint32 cap = capInfo.cap;
-        if (cap == 0) {
-            // Grant the base 10 slots for free only through level 3; later requires a paid unlock.
-            uint24 currentLevel = degenerusGame.level();
-            if (currentLevel <= 3) {
-                cap = SYNTH_BATCH;
-                capInfo.cap = cap;
-            } else {
-                revert SyntheticCap();
-            }
-        }
-        if (capInfo.minted >= cap) revert SyntheticCap();
-        syntheticMapOwner[synthetic] = affiliateOwner;
-        playerReferralCode[synthetic] = code_;
-        _recordReferralJoinLevel(synthetic, degenerusGame.level());
-        unchecked {
-            ++capInfo.minted;
-        }
-        emit SyntheticMapPlayerCreated(synthetic, affiliateOwner, code_);
     }
 
     /// @notice Return the recorded referrer for `player` (zero address if none).
@@ -416,11 +348,7 @@ contract DegenerusAffiliate {
             }
 
             if (playerRakeback != 0) {
-                address rakeRecipient = syntheticMapOwner[sender];
-                if (rakeRecipient == address(0)) {
-                    rakeRecipient = sender;
-                }
-                presaleCoinEarned[rakeRecipient] += playerRakeback;
+                presaleCoinEarned[sender] += playerRakeback;
                 presaleClaimableTotal += playerRakeback;
             }
         }
@@ -471,50 +399,6 @@ contract DegenerusAffiliate {
     /// @notice Presale pricing via ETH is disabled; return zero to signal no rate.
     function presalePriceCoinEstimate() external pure returns (uint256 priceCoinUnit) {
         return 0;
-    }
-
-    /// @notice Return synthetic map info (affiliate owner and locked code) for a synthetic player.
-    function syntheticMapInfo(address synthetic) external view returns (address owner, bytes32 code) {
-        owner = syntheticMapOwner[synthetic];
-        code = playerReferralCode[synthetic];
-    }
-
-    /// @notice View current synthetic cap and minted count for an affiliate owner.
-    function syntheticCapView(address affiliateOwner) external view returns (uint32 minted, uint32 cap) {
-        SyntheticCapInfo memory info = syntheticCap[affiliateOwner];
-        return (info.minted, info.cap);
-    }
-
-    /// @notice Increase synthetic MAP player cap by 10-slot increments by burning BURNIE.
-    /// @dev Base cap of 10 is free only through level 3; later requires paying the base cost.
-    function increaseSyntheticCap(uint8 batches) external {
-        address affiliateOwner = msg.sender;
-        SyntheticCapInfo storage info = syntheticCap[affiliateOwner];
-        uint32 newCap = info.cap;
-        uint256 cost;
-        if (newCap != 0 && batches == 0) revert Zero();
-
-        if (newCap == 0) {
-            address gameAddr = address(degenerusGame);
-            if (gameAddr == address(0)) revert OnlyGame();
-            if (degenerusGame.level() > 3) {
-                cost = SYNTH_BASE_COST;
-            }
-            newCap = SYNTH_BATCH;
-        }
-
-        if (batches != 0) {
-            uint32 addSlots = uint32(batches) * SYNTH_BATCH;
-            newCap += addSlots;
-            cost += uint256(batches) * SYNTH_TOPUP_COST;
-        }
-
-        info.cap = newCap;
-
-        if (cost != 0) {
-            if (address(coin) == address(0)) revert ZeroAddress();
-            coin.burnCoin(affiliateOwner, cost);
-        }
     }
 
     // ---------------------------------------------------------------------

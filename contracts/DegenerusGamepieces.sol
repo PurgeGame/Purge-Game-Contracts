@@ -53,7 +53,6 @@ interface IDegenerusGamepieces {
     function clearPlaceholderPadding(uint256 startTokenId, uint256 endTokenId) external;
     function purchase(PurchaseParams calldata params) external payable;
     function purchaseMapForAffiliate(address buyer, uint256 quantity) external;
-    function purchaseMapForSynthetic(address synthetic, uint256 quantity, bool payInCoin) external payable;
 }
 
 interface IBurnieToken {
@@ -286,35 +285,8 @@ contract DegenerusGamepieces {
     // Purchase entrypoints (proxy to game logic)
     // ---------------------------------------------------------------------
 
-    function _syntheticMapInfo(address player) private view returns (address owner, bytes32 code) {
-        address affiliateAddr = affiliateProgram;
-        if (affiliateAddr == address(0)) {
-            return (address(0), bytes32(0));
-        }
-        return IDegenerusAffiliate(affiliateAddr).syntheticMapInfo(player);
-    }
-
-    function _payoutAddress(address player) private view returns (address) {
-        (address owner, ) = _syntheticMapInfo(player);
-        return owner == address(0) ? player : owner;
-    }
-
     function purchase(PurchaseParams calldata params) external payable {
         _routePurchase(msg.sender, msg.sender, params);
-    }
-
-    /// @notice Affiliate-only entry to purchase MAPs for a registered synthetic player (ETH or coin).
-    function purchaseMapForSynthetic(address synthetic, uint256 quantity, bool payInCoin) external payable {
-        (address synOwner, bytes32 code) = _syntheticMapInfo(synthetic);
-        if (synOwner != msg.sender) revert E();
-        PurchaseParams memory params = PurchaseParams({
-            quantity: quantity,
-            kind: PurchaseKind.Map,
-            payKind: MintPaymentKind.DirectEth,
-            payInCoin: payInCoin,
-            affiliateCode: code
-        });
-        _routePurchase(synthetic, msg.sender, params);
     }
 
     /// @notice MAP purchase for affiliate rewards (affiliate-only, zero bonus/payout).
@@ -498,7 +470,7 @@ contract DegenerusGamepieces {
             rebateMint += claimableBonus;
         }
         if (rebateMint != 0) {
-            coin.creditFlip(_payoutAddress(buyer), rebateMint);
+            coin.creditFlip(buyer, rebateMint);
         }
 
         game.enqueueMap(buyer, uint32(quantity));

@@ -4,11 +4,6 @@ pragma solidity ^0.8.26;
 import {IDegenerusCoinModule} from "../interfaces/DegenerusGameModuleInterfaces.sol";
 import {DegenerusGameStorage} from "../storage/DegenerusGameStorage.sol";
 import {DegenerusTraitUtils} from "../DegenerusTraitUtils.sol";
-import {IDegenerusAffiliate} from "../interfaces/IDegenerusAffiliate.sol";
-
-interface IDegenerusGameAffiliatePayout {
-    function affiliatePayoutAddress(address player) external view returns (address recipient, address affiliateOwner);
-}
 
 interface IStETHView {
     function balanceOf(address account) external view returns (uint256);
@@ -29,7 +24,6 @@ interface IDegenerusBondsJackpot {
  */
 contract DegenerusGameJackpotModule is DegenerusGameStorage {
     event PlayerCredited(address indexed player, address indexed recipient, uint256 amount);
-    event BondReroutedToAffiliate(address indexed synthetic, address indexed affiliateOwner, uint256 amount);
 
     uint48 private constant JACKPOT_RESET_TIME = 82620;
     uint8 private constant JACKPOT_LEVEL_CAP = 10;
@@ -315,7 +309,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
     }
 
     function _addClaimableEth(address beneficiary, uint256 weiAmount) private {
-        address recipient = _payoutRecipient(beneficiary);
+        address recipient = beneficiary;
         claimableWinnings[recipient] += weiAmount;
         emit PlayerCredited(beneficiary, recipient, weiAmount);
     }
@@ -730,7 +724,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
                 }
                 continue;
             }
-            (address resolved, bool rerouted, bool halfCashout) = _resolveBondRecipient(recipient);
+            (address resolved, , bool halfCashout) = _resolveBondRecipient(recipient);
             bool spent;
             if (halfCashout) {
                 uint256 payout = perWinner / 2;
@@ -745,9 +739,6 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
             } else {
                 try bondsContract.depositFromGame{value: perWinner}(resolved, perWinner) {
                     spent = true;
-                    if (rerouted) {
-                        emit BondReroutedToAffiliate(recipient, resolved, perWinner);
-                    }
                 } catch {
                     spent = false;
                 }
@@ -798,9 +789,8 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
         uint256 amount
     ) private returns (bool) {
         if (beneficiary == address(0) || amount == 0) return false;
-        address recipient = _payoutRecipient(beneficiary);
         if (payInCoin) {
-            coinContract.creditFlip(recipient, amount);
+            coinContract.creditFlip(beneficiary, amount);
         } else {
             // Liability is tracked by the caller to avoid per-winner SSTORE cost.
             _addClaimableEth(beneficiary, amount);
@@ -808,21 +798,10 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
         return true;
     }
 
-    function _payoutRecipient(address player) private view returns (address recipient) {
-        (recipient, ) = IDegenerusGameAffiliatePayout(address(this)).affiliatePayoutAddress(player);
-    }
-
     function _resolveBondRecipient(address winner) private view returns (address resolved, bool rerouted, bool halfCashout) {
         resolved = winner;
         halfCashout = bondCashoutHalf[winner];
-        (address owner, ) = IDegenerusAffiliate(affiliateProgramAddr).syntheticMapInfo(winner);
-        if (owner != address(0)) {
-            resolved = owner;
-            rerouted = true;
-            halfCashout = true; // synthetic winners always half-cashout
-            return (resolved, rerouted, halfCashout);
-        }
-        halfCashout = bondCashoutHalf[resolved];
+        rerouted = false;
     }
 
     function _packWinningTraits(uint8[4] memory traits) private pure returns (uint32 packed) {
