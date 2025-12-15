@@ -315,6 +315,9 @@ contract IconRendererRegular32 {
         uint256 data,
         uint32[4] calldata remaining
     ) external view returns (string memory) {
+        if (tokenId == 0) {
+            return _genesisTokenURI();
+        }
         if ((data >> 128) != 0) revert("renderer:trophy-data");
 
         uint24 lvl = uint24((data >> 32) & 0xFFFFFF);
@@ -351,6 +354,51 @@ contract IconRendererRegular32 {
         );
 
         return _pack(tokenId, false, img2, lvl, desc2, "", attrs);
+    }
+
+    function _genesisTokenURI() private view returns (string memory) {
+        string memory imgData = string.concat(
+            "data:image/svg+xml;base64,",
+            Base64.encode(bytes(_genesisTrophySvg()))
+        );
+
+        string memory j = string.concat('{"name":"Degenerus Genesis Trophy","description":"Genesis token minted to the vault.","image":"', imgData);
+        j = string.concat(j, '"}');
+
+        return string.concat("data:application/json;base64,", Base64.encode(bytes(j)));
+    }
+
+    function _genesisTrophySvg() private view returns (string memory) {
+        // Matches the legacy placeholder extermination trophy art (see `eth_trophy.svg`).
+        string memory flamePath = icons.diamond();
+        return
+            string(
+                abi.encodePacked(
+                    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'>",
+                    "<defs><clipPath id='flame-clip'><circle cx='0' cy='0' r='27'/></clipPath>",
+                    "<symbol id='flame-icon' viewBox='-60 -60 120 120'><g clip-path='url(#flame-clip)'>",
+                    "<path fill='#ff3300' transform='matrix(0.13 0 0 0.13 -56 -41)' d='",
+                    flamePath,
+                    "'/></g></symbol></defs>",
+                    "<rect width='512' height='512' rx='64' fill='#30d100'/>",
+                    "<rect x='16' y='16' width='480' height='480' rx='48' fill='#cccccc'/>",
+                    "<circle cx='256' cy='256' r='180' fill='#30d100'/>",
+                    "<circle cx='256' cy='256' r='140' fill='#111111'/>",
+                    "<circle cx='256' cy='256' r='115' fill='#ffffff'/>",
+                    "<g transform='matrix(0.35 0 0 0.35 166 155)'><g transform='translate(98.831637 0) scale(0.40094)'>",
+                    "<polygon fill='#343434' points='392.07,0 383.5,29.11 383.5,873.74 392.07,882.29 784.13,650.54'/>",
+                    "<polygon fill='#8C8C8C' points='392.07,0 -0,650.54 392.07,882.29 392.07,472.33'/>",
+                    "<polygon fill='#3C3C3B' points='392.07,956.52 387.24,962.41 387.24,1263.28 392.07,1277.38 784.37,724.89'/>",
+                    "<polygon fill='#8C8C8C' points='392.07,1277.38 392.07,956.52 -0,724.89'/>",
+                    "<polygon fill='#141414' points='392.07,882.29 784.13,650.54 392.07,472.33'/>",
+                    "<polygon fill='#393939' points='0,650.54 392.07,882.29 392.07,472.33'/>",
+                    "</g></g>",
+                    "<use href='#flame-icon' x='346' y='416' width='70' height='70' transform='matrix(2,0,0,2,-542.44965,-601.16117)'/>",
+                    "<use href='#flame-icon' x='346' y='416' width='70' height='70' transform='matrix(2,0,0,2,-506.4916,-573.78355)'/>",
+                    "<use href='#flame-icon' x='346' y='416' width='70' height='70' transform='matrix(2,0,0,2,-469.5895,-598.67165)'/>",
+                    "</svg>"
+                )
+            );
     }
 
     /// @dev Compose the full SVG for a regular token (non‑trophy).

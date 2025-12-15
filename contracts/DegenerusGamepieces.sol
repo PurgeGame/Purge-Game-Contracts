@@ -260,12 +260,17 @@ contract DegenerusGamepieces {
     }
 
     /// @notice Renders metadata via the regular renderer; reverts for nonexistent/burned tokens.
-    /// @dev Uses the regular renderer for all tokens.
+    /// @dev Token #0 is a special vault-minted genesis token and renders as a trophy placeholder.
     function tokenURI(uint256 tokenId) external view returns (string memory) {
         // Revert for nonexistent or burned tokens (keeps ERC721-consistent surface for indexers).
         _packedOwnershipOf(tokenId);
 
-        if (tokenId != SPECIAL_TOKEN_ID && tokenId < _currentBaseTokenId()) revert InvalidToken();
+        if (tokenId == SPECIAL_TOKEN_ID) {
+            uint32[4] memory emptyRemaining;
+            return regularRenderer.tokenURI(tokenId, 0, emptyRemaining);
+        }
+
+        if (tokenId < _currentBaseTokenId()) revert InvalidToken();
 
         uint32 traitsPacked = DegenerusTraitUtils.packedTraitsForToken(tokenId);
         uint8 t0 = uint8(traitsPacked);

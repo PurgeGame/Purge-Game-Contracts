@@ -184,4 +184,61 @@ describe("Renderers sanity", function () {
     expect(meta.name).to.include("#1");
     expect(svgStr).to.include("<svg");
   });
+
+  it("renders genesis token #0 as the placeholder trophy", async function () {
+    const [owner] = await ethers.getSigners();
+    const admin = ethers.Wallet.createRandom().address;
+
+    const MockCoin = await ethers.getContractFactory("MockCoinRead");
+    const coin = await MockCoin.deploy(ethers.ZeroAddress, admin);
+    await coin.waitForDeployment();
+
+    const MockIcons = await ethers.getContractFactory("MockIcons32");
+    const icons = await MockIcons.deploy();
+    await icons.waitForDeployment();
+
+    const MockNft = await ethers.getContractFactory("MockERC721Lite");
+    const nft = await MockNft.deploy();
+    await nft.waitForDeployment();
+
+    const Registry = await ethers.getContractFactory("IconColorRegistry");
+    const registry = await Registry.deploy(await nft.getAddress());
+    await registry.waitForDeployment();
+
+    const RegularRenderer = await ethers.getContractFactory("IconRendererRegular32");
+    const renderer = await RegularRenderer.deploy(
+      await coin.getAddress(),
+      await icons.getAddress(),
+      await registry.getAddress(),
+      admin
+    );
+    await renderer.waitForDeployment();
+
+    const uri = await renderer.tokenURI(0, 0, [0, 0, 0, 0]);
+    const jsonStr = decodeBase64DataUrl(uri, "data:application/json;base64,");
+    const meta = JSON.parse(jsonStr);
+    const svgStr = decodeBase64DataUrl(meta.image, "data:image/svg+xml;base64,");
+
+    expect(meta.name).to.include("Genesis");
+    expect(svgStr).to.include("viewBox='0 0 512 512'");
+    expect(svgStr).to.include("href='#flame-icon'");
+    expect(svgStr).to.include("<polygon");
+
+    const ExposedNft = await ethers.getContractFactory("ExposedDegenerusGamepieces");
+    const gamepieces = await ExposedNft.deploy(
+      await renderer.getAddress(),
+      await coin.getAddress(),
+      ethers.ZeroAddress,
+      await owner.getAddress()
+    );
+    await gamepieces.waitForDeployment();
+
+    const uriFromNft = await gamepieces.tokenURI(0);
+    const jsonStr2 = decodeBase64DataUrl(uriFromNft, "data:application/json;base64,");
+    const meta2 = JSON.parse(jsonStr2);
+    const svgStr2 = decodeBase64DataUrl(meta2.image, "data:image/svg+xml;base64,");
+
+    expect(meta2.name).to.include("Genesis");
+    expect(svgStr2).to.include("viewBox='0 0 512 512'");
+  });
 });
