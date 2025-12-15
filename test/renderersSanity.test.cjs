@@ -219,10 +219,13 @@ describe("Renderers sanity", function () {
     const meta = JSON.parse(jsonStr);
     const svgStr = decodeBase64DataUrl(meta.image, "data:image/svg+xml;base64,");
 
-    expect(meta.name).to.include("Genesis");
+    expect(meta.name).to.equal("Degenerus Genesis Token");
+    expect(meta.description).to.equal(
+      "A cosmetic token locked to the creator's vault."
+    );
     expect(svgStr).to.include("viewBox='0 0 512 512'");
     expect(svgStr).to.include("href='#flame-icon'");
-    expect(svgStr).to.include("<polygon");
+    expect(svgStr).to.not.include("<polygon");
 
     const ExposedNft = await ethers.getContractFactory("ExposedDegenerusGamepieces");
     const gamepieces = await ExposedNft.deploy(
@@ -238,7 +241,10 @@ describe("Renderers sanity", function () {
     const meta2 = JSON.parse(jsonStr2);
     const svgStr2 = decodeBase64DataUrl(meta2.image, "data:image/svg+xml;base64,");
 
-    expect(meta2.name).to.include("Genesis");
+    expect(meta2.name).to.equal("Degenerus Genesis Token");
+    expect(meta2.description).to.equal(
+      "A cosmetic token locked to the creator's vault."
+    );
     expect(svgStr2).to.include("viewBox='0 0 512 512'");
   });
 });

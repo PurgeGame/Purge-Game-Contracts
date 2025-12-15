@@ -362,14 +362,16 @@ contract IconRendererRegular32 {
             Base64.encode(bytes(_genesisTrophySvg()))
         );
 
-        string memory j = string.concat('{"name":"Degenerus Genesis Trophy","description":"Genesis token minted to the vault.","image":"', imgData);
+        string memory j = string.concat(
+            '{"name":"Degenerus Genesis Token","description":"A cosmetic token locked to the creator\'s vault.","image":"',
+            imgData
+        );
         j = string.concat(j, '"}');
 
         return string.concat("data:application/json;base64,", Base64.encode(bytes(j)));
     }
 
     function _genesisTrophySvg() private view returns (string memory) {
-        // Matches the legacy placeholder extermination trophy art (see `eth_trophy.svg`).
         string memory flamePath = icons.diamond();
         return
             string(
@@ -385,17 +387,7 @@ contract IconRendererRegular32 {
                     "<circle cx='256' cy='256' r='180' fill='#30d100'/>",
                     "<circle cx='256' cy='256' r='140' fill='#111111'/>",
                     "<circle cx='256' cy='256' r='115' fill='#ffffff'/>",
-                    "<g transform='matrix(0.35 0 0 0.35 166 155)'><g transform='translate(98.831637 0) scale(0.40094)'>",
-                    "<polygon fill='#343434' points='392.07,0 383.5,29.11 383.5,873.74 392.07,882.29 784.13,650.54'/>",
-                    "<polygon fill='#8C8C8C' points='392.07,0 -0,650.54 392.07,882.29 392.07,472.33'/>",
-                    "<polygon fill='#3C3C3B' points='392.07,956.52 387.24,962.41 387.24,1263.28 392.07,1277.38 784.37,724.89'/>",
-                    "<polygon fill='#8C8C8C' points='392.07,1277.38 392.07,956.52 -0,724.89'/>",
-                    "<polygon fill='#141414' points='392.07,882.29 784.13,650.54 392.07,472.33'/>",
-                    "<polygon fill='#393939' points='0,650.54 392.07,882.29 392.07,472.33'/>",
-                    "</g></g>",
-                    "<use href='#flame-icon' x='346' y='416' width='70' height='70' transform='matrix(2,0,0,2,-542.44965,-601.16117)'/>",
-                    "<use href='#flame-icon' x='346' y='416' width='70' height='70' transform='matrix(2,0,0,2,-506.4916,-573.78355)'/>",
-                    "<use href='#flame-icon' x='346' y='416' width='70' height='70' transform='matrix(2,0,0,2,-469.5895,-598.67165)'/>",
+                    "<use href='#flame-icon' x='156' y='156' width='200' height='200'/>",
                     "</svg>"
                 )
             );

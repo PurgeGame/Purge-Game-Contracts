@@ -121,7 +121,8 @@ contract DegenerusCoin {
     function vaultMintAllowance() external view returns (uint256) {
         return _vaultMintAllowance;
     }
-    // Tracks total unclaimed presale allocation across all sources; minted on claim.
+    // Tracks total unclaimed presale allocation (bond-purchase affiliate rewards); minted on claim.
+    // Note: separate from the vault's `_vaultMintAllowance` seed.
     uint256 public presaleClaimableRemaining;
 
     // Bounty state; bounty is credited as future coinflip stake for the owed player.

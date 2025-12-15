@@ -1,19 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+import {IDegenerusCoinModule} from "../interfaces/DegenerusGameModuleInterfaces.sol";
+import {IDegenerusGameJackpotModule} from "../interfaces/IDegenerusGameModules.sol";
 import {IDegenerusJackpots} from "../interfaces/IDegenerusJackpots.sol";
 import {IDegenerusTrophies} from "../interfaces/IDegenerusTrophies.sol";
 import {IDegenerusAffiliate} from "../interfaces/IDegenerusAffiliate.sol";
 import {DegenerusGameStorage} from "../storage/DegenerusGameStorage.sol";
-
-interface IDegenerusGameTraitJackpot {
-    function payExterminationJackpot(
-        uint24 lvl,
-        uint8 traitId,
-        uint256 rngWord,
-        uint256 ethPool
-    ) external returns (uint256 paidEth);
-}
 
 interface IDegenerusBondsJackpot {
     function depositCurrentFor(address beneficiary) external payable returns (uint256 scoreAwarded);
@@ -43,7 +36,13 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
      * @param rngWord Randomness used for jackpot and ticket selection.
      * @param jackpotsAddr Address of the jackpots contract to invoke.
      */
-    function finalizeEndgame(uint24 lvl, uint256 rngWord, address jackpotsAddr) external {
+    function finalizeEndgame(
+        uint24 lvl,
+        uint256 rngWord,
+        address jackpotsAddr,
+        address jackpotModuleAddr,
+        IDegenerusCoinModule coinContract
+    ) external {
         uint256 claimableDelta;
         uint24 prevLevel = lvl == 0 ? 0 : lvl - 1;
         uint16 traitRaw = lastExterminatedTrait;
@@ -61,12 +60,19 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
 
             uint256 jackpotPool = poolValue > exterminatorShare ? poolValue - exterminatorShare : 0;
             if (jackpotPool != 0) {
-                IDegenerusGameTraitJackpot(address(this)).payExterminationJackpot(
-                    prevLevel,
-                    traitId,
-                    rngWord,
-                    jackpotPool
+                (bool ok, ) = jackpotModuleAddr.delegatecall(
+                    abi.encodeWithSelector(
+                        IDegenerusGameJackpotModule.payExterminationJackpot.selector,
+                        prevLevel,
+                        traitId,
+                        rngWord,
+                        jackpotPool,
+                        coinContract
+                    )
                 );
+                if (!ok) {
+                    // ignore failures (consistent with other jackpot delegatecalls)
+                }
             }
 
             currentPrizePool = 0;

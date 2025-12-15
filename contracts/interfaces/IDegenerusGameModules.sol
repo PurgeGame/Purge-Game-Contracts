@@ -7,7 +7,9 @@ interface IDegenerusGameEndgameModule {
     function finalizeEndgame(
         uint24 lvl,
         uint256 rngWord,
-        address jackpots
+        address jackpots,
+        address jackpotModule,
+        IDegenerusCoinModule coinContract
     ) external;
 }
 
@@ -18,6 +20,13 @@ interface IDegenerusGameJackpotModule {
         uint256 randWord,
         IDegenerusCoinModule coinContract
     ) external;
+
+    function payCarryoverExterminationJackpot(
+        uint24 lvl,
+        uint8 traitId,
+        uint256 randWord,
+        IDegenerusCoinModule coinContract
+    ) external returns (uint256 paidEth);
 
     function payExterminationJackpot(
         uint24 lvl,

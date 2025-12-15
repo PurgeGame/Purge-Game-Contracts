@@ -475,7 +475,7 @@ contract DegenerusGame is DegenerusGameStorage {
             if (_gameState == 1) {
                 _runEndgameModule(lvl, rngWord); // handles payouts, wipes, endgame dist, and jackpots
                 if (lastExterminatedTrait != TRAIT_ID_TIMEOUT) {
-                    payDailyJackpot(false, level, rngWord);
+                    payCarryoverExterminationJackpot(lvl, uint8(lastExterminatedTrait), rngWord);
                 }
                 _stakeForTargetRatioModule(lvl);
                 bool decOpen = ((lvl >= 25) && ((lvl % 10) == 5) && ((lvl % 100) != 95));
@@ -780,7 +780,14 @@ contract DegenerusGame is DegenerusGameStorage {
     function _runEndgameModule(uint24 lvl, uint256 rngWord) internal {
         // Endgame settlement logic lives in DegenerusGameEndgameModule (delegatecall keeps state on this contract).
         (bool ok, ) = endgameModule.delegatecall(
-            abi.encodeWithSelector(IDegenerusGameEndgameModule.finalizeEndgame.selector, lvl, rngWord, jackpots)
+            abi.encodeWithSelector(
+                IDegenerusGameEndgameModule.finalizeEndgame.selector,
+                lvl,
+                rngWord,
+                jackpots,
+                jackpotModule,
+                IDegenerusCoinModule(address(coin))
+            )
         );
         if (!ok) return;
         gameState = 2; // Endgame is fully settled; move directly into the purchase/airdrop state.
@@ -1058,25 +1065,17 @@ contract DegenerusGame is DegenerusGameStorage {
         if (!ok) return;
     }
 
-    function payExterminationJackpot(
-        uint24 lvl,
-        uint8 traitId,
-        uint256 randWord,
-        uint256 ethPool
-    ) external returns (uint256 paidEth) {
-        if (msg.sender != address(this)) revert E();
-        (bool ok, bytes memory data) = jackpotModule.delegatecall(
+    function payCarryoverExterminationJackpot(uint24 lvl, uint8 traitId, uint256 randWord) internal {
+        (bool ok, ) = jackpotModule.delegatecall(
             abi.encodeWithSelector(
-                IDegenerusGameJackpotModule.payExterminationJackpot.selector,
+                IDegenerusGameJackpotModule.payCarryoverExterminationJackpot.selector,
                 lvl,
                 traitId,
                 randWord,
-                ethPool,
                 IDegenerusCoinModule(address(coin))
             )
         );
-        if (!ok || data.length == 0) return 0;
-        return abi.decode(data, (uint256));
+        if (!ok) return;
     }
 
     function _handleJackpotLevelCap() internal returns (bool) {

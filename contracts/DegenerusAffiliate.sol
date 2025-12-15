@@ -210,6 +210,10 @@ contract DegenerusAffiliate {
         if (caller != coinAddr && caller != bonds && caller != gamepiecesAddr) revert OnlyAuthorized();
 
         bool coinActive = coinAddr != address(0);
+        // During presale (coin not wired), only bond purchases should accrue presale-claimable coin.
+        // This keeps presale coin distribution anchored to bond purchases (not other gameplay calls).
+        if (!coinActive && caller != bonds) return 0;
+
         bytes32 storedCode = playerReferralCode[sender];
         if (storedCode == REF_CODE_LOCKED) return 0;
 

@@ -487,13 +487,9 @@ contract DegenerusAdmin {
         uint256 credit = (baseCredit * mult) / 1e18;
         if (credit == 0) return;
 
-        // If affiliate/presale is live, record with affiliate (no coin mint). Otherwise mint directly via coin.
-        address aff = affiliate;
         bool minted;
-        if (aff != address(0) && IDegenerusAffiliateLink(aff).presaleActive()) {
-            IDegenerusAffiliateLink(aff).addPresaleLinkCredit(from, credit);
-            minted = false;
-        } else if (coin != address(0)) {
+        // LINK funding rewards are not part of presale claimable; if the coin isn't wired yet, cache them here.
+        if (coin != address(0)) {
             IDegenerusCoinPresaleLink(coin).creditLinkReward(from, credit);
             minted = true;
         } else {
@@ -510,15 +506,8 @@ contract DegenerusAdmin {
         uint256 credit = pendingLinkCredit[player];
         if (credit == 0) return;
         pendingLinkCredit[player] = 0;
-        address aff = affiliate;
-        bool minted;
-        if (aff != address(0) && IDegenerusAffiliateLink(aff).presaleActive()) {
-            IDegenerusAffiliateLink(aff).addPresaleLinkCredit(player, credit);
-            minted = false;
-        } else {
-            IDegenerusCoinPresaleLink(coin).creditLinkReward(player, credit);
-            minted = true;
-        }
+        IDegenerusCoinPresaleLink(coin).creditLinkReward(player, credit);
+        bool minted = true;
         emit LinkCreditRecorded(player, credit, minted);
     }
 

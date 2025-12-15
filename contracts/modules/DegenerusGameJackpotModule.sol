@@ -229,6 +229,46 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
         );
     }
 
+    /// @notice Pays a post-extermination carryover jackpot using the exterminated trait and the next level's tickets.
+    /// @dev Funded from `rewardPool` (1% scaled) and distributed using daily jackpot share/bucket sizing.
+    function payCarryoverExterminationJackpot(
+        uint24 lvl,
+        uint8 traitId,
+        uint256 randWord,
+        IDegenerusCoinModule coinContract
+    ) external returns (uint256 paidEth) {
+        uint48 questDay = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
+        uint256 ethPool = (rewardPool * 100 * _rewardJackpotScaleBps(lvl)) / 100_000_000;
+
+        if (ethPool != 0) {
+            uint32 packedTrait = uint32(traitId);
+            packedTrait |= uint32(traitId) << 8;
+            packedTrait |= uint32(traitId) << 16;
+            packedTrait |= uint32(traitId) << 24;
+
+            paidEth = _executeJackpot(
+                JackpotParams({
+                    lvl: lvl,
+                    ethPool: ethPool,
+                    coinPool: 0,
+                    entropy: randWord ^ (uint256(lvl) << 192),
+                    winningTraitsPacked: packedTrait,
+                    traitShareBpsPacked: DAILY_JACKPOT_SHARES_PACKED,
+                    coinContract: coinContract
+                }),
+                false,
+                false,
+                BOND_BPS_DAILY
+            );
+
+            if (paidEth != 0) {
+                rewardPool -= paidEth;
+            }
+        }
+
+        _rollQuestForJackpot(coinContract, randWord, false, questDay);
+    }
+
     /// @notice Pays the MAP jackpot slice (trophies removed).
     function payMapJackpot(
         uint24 lvl,
