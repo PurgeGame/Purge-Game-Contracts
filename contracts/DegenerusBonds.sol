@@ -30,6 +30,7 @@ interface IStETHLike {
     function balanceOf(address account) external view returns (uint256);
     function transferFrom(address from, address to, uint256 amount) external returns (bool);
     function transfer(address to, uint256 amount) external returns (bool);
+    function approve(address spender, uint256 amount) external returns (bool);
 }
 
 interface IERC721BalanceOf {
@@ -181,7 +182,8 @@ contract BondToken {
 
     function burn(address from, uint256 amount) external {
         _requireActive();
-        if (from != msg.sender) {
+        // The bond controller (minter) can burn without allowance; all other callers need approval.
+        if (msg.sender != minter && from != msg.sender) {
             uint256 allowed = allowance[from][msg.sender];
             if (allowed < amount) revert Unauthorized();
             if (allowed != type(uint256).max) {
@@ -244,7 +246,6 @@ contract DegenerusBonds {
     // Errors
     // ---------------------------------------------------------------------
     error Unauthorized();
-    error InvalidMaturity();
     error SaleClosed();
     error InsufficientScore();
     error AlreadyResolved();
@@ -283,7 +284,7 @@ contract DegenerusBonds {
     event PresaleBondDeposit(address indexed buyer, uint256 amount, uint256 scoreAwarded);
     event PresaleProceedsCached(uint256 rewardEth, uint256 yieldEth);
     event PresaleProceedsFlushed(uint256 rewardEth, uint256 yieldEth);
-    event PresaleJackpot(uint8 indexed round, uint256 mintedTotal, uint256 mintedDgns0, uint256 mintedDgns5, uint256 rngWord);
+    event PresaleJackpot(uint8 indexed round, uint256 mintedTotal, uint256 rngWord);
     event PresaleJackpotVrfRequested(uint256 indexed requestId);
     event RewardStakeTargetUpdated(uint16 bps);
 
@@ -398,8 +399,7 @@ contract DegenerusBonds {
     address private affiliate;
     IDegenerusQuestView private questModule;
     address private trophies;
-    BondToken private tokenDGNS0;
-    BondToken private tokenDGNS5;
+    BondToken private tokenDGNRS;
     address private immutable steth;
     uint256 public presalePendingRewardEth;
     uint256 public presalePendingYieldEth;
@@ -414,9 +414,8 @@ contract DegenerusBonds {
         admin = admin_;
         steth = steth_;
 
-        // Predeploy the two shared bond tokens (DGNS0 for maturities ending in 0, DGNS5 for ending in 5).
-        tokenDGNS0 = new BondToken("Degenerus Bond DGNS0", "DGNS0", address(this));
-        tokenDGNS5 = new BondToken("Degenerus Bond DGNS5", "DGNS5", address(this));
+        // Predeploy the shared bond token used across all active maturities.
+        tokenDGNRS = new BondToken("Degenerus Bond DGNRS", "DGNRS", address(this));
     }
 
     modifier onlyGame() {
@@ -530,7 +529,7 @@ contract DegenerusBonds {
         emit PresaleBondDeposit(ben, amount, scoreAwarded);
     }
 
-    /// @notice Run one presale jackpot round (0-4); mints DGNS0/DGNS5 50/50 to weighted winners.
+    /// @notice Run one presale jackpot round (0-4); mints DGNRS to weighted winners.
     /// @dev Manual trigger; callable only by the admin contract. Final round applies a growth multiplier
     ///      anchored to a fixed previous raise of 50 ETH.
     function runPresaleJackpot() external returns (bool advanced) {
@@ -558,9 +557,9 @@ contract DegenerusBonds {
 
             uint256 toMint = finalBudget - p.mintedBudget;
             if (toMint != 0 && p.totalScore != 0) {
-                (uint256 minted0, uint256 minted5) = _runPresaleMintJackpot(rngWord, toMint);
+                _runPresaleMintJackpot(rngWord, toMint);
                 p.mintedBudget = finalBudget;
-                emit PresaleJackpot(run, toMint, minted0, minted5, rngWord);
+                emit PresaleJackpot(run, toMint, rngWord);
             }
         } else {
             if (p.payoutBudget == 0 || p.mintedBudget >= p.payoutBudget) return false;
@@ -573,9 +572,9 @@ contract DegenerusBonds {
             if (toMint > available) toMint = available;
 
             if (toMint != 0 && p.totalScore != 0) {
-                (uint256 minted0, uint256 minted5) = _runPresaleMintJackpot(rngWord, toMint);
+                _runPresaleMintJackpot(rngWord, toMint);
                 p.mintedBudget += toMint;
-                emit PresaleJackpot(run, toMint, minted0, minted5, rngWord);
+                emit PresaleJackpot(run, toMint, rngWord);
             }
         }
 
@@ -633,16 +632,24 @@ contract DegenerusBonds {
         scoreAwarded = _processDeposit(ben, amount, true);
     }
 
-    /// @notice Funding shim used by the game to accrue jackpot coin for bonds; ETH/stETH still go to the vault.
+    /// @notice Funding shim used by the game to accrue jackpot coin for bonds.
+    /// @dev During normal operation ETH/stETH are forwarded to the vault; during shutdown they stay here for `gameOver()`.
     function payBonds(uint256 coinAmount, uint256 stEthAmount, uint256 rngWord) external payable onlyGame {
+        uint256 pulledStEth;
         if (stEthAmount != 0) {
+            uint256 beforeBal = _stEthBalance();
             try IStETHLike(steth).transferFrom(msg.sender, address(this), stEthAmount) {} catch {}
+            uint256 afterBal = _stEthBalance();
+            if (afterBal > beforeBal) {
+                pulledStEth = afterBal - beforeBal;
+            }
         }
         if (coinAmount != 0) {
             coinOwed += coinAmount;
         }
         _runCoinJackpot(rngWord);
-        IVaultLike(vault).deposit{value: msg.value}(0, stEthAmount);
+        if (gameOverStarted) return;
+        IVaultLike(vault).deposit{value: msg.value}(0, pulledStEth);
     }
 
     // ---------------------------------------------------------------------
@@ -706,13 +713,15 @@ contract DegenerusBonds {
     }
 
     function purchasesEnabled() external view returns (bool) {
-        return !gameOverStarted && gamePurchasesEnabled;
+        if (gameOverStarted || !gamePurchasesEnabled) return false;
+        if (address(game) == address(0)) return false;
+        return _bondPurchasesOpen(_currentLevel());
     }
 
     /// @notice Emergency shutdown path: consume all ETH/stETH and resolve maturities in order, partially paying the last one.
     /// @dev If no entropy is ready, this requests VRF (if configured) and exits; call again once fulfilled.
     function gameOver() external payable {
-        if (msg.sender != address(game)) revert Unauthorized();
+        if (msg.sender != address(game) && !gameOverStarted) revert Unauthorized();
         if (!gameOverStarted) {
             gameOverStarted = true;
             gameOverTimestamp = uint48(block.timestamp);
@@ -831,7 +840,9 @@ contract DegenerusBonds {
             if (!externalPurchasesEnabled || rngLock) revert PurchasesDisabled();
         }
 
-        uint24 maturityLevel = _activeMaturity();
+        uint24 currLevel = _currentLevel();
+        if (!_bondPurchasesOpen(currLevel)) revert PurchasesDisabled();
+        uint24 maturityLevel = _activeMaturityAt(currLevel);
         BondSeries storage s = _getOrCreateSeries(maturityLevel);
 
         // Split ETH: from game (30% vault, 50% bondPool, 20% rewardPool), external (50% vault, 30% bondPool, 20% rewardPool)
@@ -844,7 +855,7 @@ contract DegenerusBonds {
         _sendEthOrRevert(vaultAddr, vaultShare);
 
         if (bondShare != 0) {
-            IDegenerusGameBondBank(address(game)).bondDeposit{value: bondShare}(false);
+            IDegenerusGameBondBank(address(game)).bondDeposit{value: bondShare}(true);
         }
 
         _sendEthOrRevert(address(game), rewardShare);
@@ -893,8 +904,17 @@ contract DegenerusBonds {
         if (currLevel < 10) {
             return 10; // treat presale / unwired play as level 0; first maturity is level 10
         }
-        // choose the next multiple of 5 ahead of the current level
-        maturityLevel = ((currLevel / 5) + 1) * 5;
+        // Single-token bond cycle is 10 levels wide: maturities are levels ending in 0.
+        maturityLevel = ((currLevel / 10) + 1) * 10;
+    }
+
+    function _bondPurchasesOpen(uint24 currLevel) private pure returns (bool open) {
+        // Real game levels are 1-indexed; treat level 0 as a closed window.
+        if (currLevel == 0) return false;
+        // Bootstrap window: levels 1-5 sell into maturity 10 (stop at 6).
+        if (currLevel < 10) return currLevel < 6;
+        // Thereafter: open for 5 levels per 10 (e.g., 10-14, 20-24, ...).
+        return (currLevel % 10) < 5;
     }
 
     /// @notice Run bond maintenance for the current level (create series, run jackpots, resolve funded maturities).
@@ -909,15 +929,8 @@ contract DegenerusBonds {
         lastBondMaintenanceLevel = currLevel;
         bool hitCap;
 
-        // Ensure the active series exists and precreate the next maturity when we are 10 levels out.
-        uint24 nextMat = _activeMaturityAt(currLevel);
-        _getOrCreateSeries(nextMat);
-        unchecked {
-            uint24 ahead = currLevel + 10;
-            if (ahead >= 5 && ahead % 5 == 0) {
-                _getOrCreateSeries(ahead);
-            }
-        }
+        // Ensure the active series exists.
+        _getOrCreateSeries(_activeMaturityAt(currLevel));
         uint256 rollingEntropy = rngWord;
         bool backlogPending;
         // Run jackpots and resolve matured series.
@@ -937,6 +950,7 @@ contract DegenerusBonds {
 
             uint8 maxRuns = _maxEmissionRuns(s.maturityLevel);
             uint24 emissionStop = s.maturityLevel > 5 ? s.maturityLevel - 5 : 0; // stop 5 levels before maturity
+            if (s.maturityLevel == 10) emissionStop = 6; // bootstrap window: levels 1-5
             if (
                 currLevel >= s.saleStartLevel &&
                 currLevel < emissionStop &&
@@ -1005,18 +1019,17 @@ contract DegenerusBonds {
         return used >= cap;
     }
 
-    /// @notice Burn DGNS for a digit lane (false = DGNS0, true = DGNS5) to enter the active jackpot.
-    function burnDGNS(bool isFive, uint256 amount) external {
+    /// @notice Burn DGNRS to enter the active jackpot.
+    function burnDGNRS(uint256 amount) external {
         if (amount == 0) revert InsufficientScore();
         if (gameOverStarted) revert SaleClosed();
         if (rngLock) revert PurchasesDisabled();
 
         uint24 currLevel = _currentLevel();
         uint24 burnLevel = _burnEffectiveLevel(currLevel);
-        uint24 targetMat = _baseMaturityForDigitAtLevel(isFive, burnLevel);
+        uint24 targetMat = _activeMaturityAt(burnLevel);
         (BondSeries storage target, uint24 resolvedTargetMat) = _nextActiveSeries(targetMat, burnLevel);
-        // Burn from the predeployed shared DGNS0/DGNS5 token.
-        (isFive ? tokenDGNS5 : tokenDGNS0).burn(msg.sender, amount);
+        tokenDGNRS.burn(msg.sender, amount);
 
         (uint8 lane, bool boosted) = _registerBurn(target, resolvedTargetMat, amount, currLevel);
         emit BondBurned(msg.sender, resolvedTargetMat, lane, amount, boosted);
@@ -1095,23 +1108,6 @@ contract DegenerusBonds {
         }
     }
 
-    function _baseMaturityForDigitAtLevel(bool isFive, uint24 currLevel) private pure returns (uint24 maturityLevel) {
-        maturityLevel = _activeMaturityAt(currLevel);
-        if (isFive) {
-            if (maturityLevel % 10 == 0) {
-                unchecked {
-                    maturityLevel += 5;
-                }
-            }
-        } else {
-            if (maturityLevel % 10 == 5) {
-                unchecked {
-                    maturityLevel += 5;
-                }
-            }
-        }
-    }
-
     function _registerBurn(
         BondSeries storage s,
         uint24 maturityLevel,
@@ -1126,7 +1122,7 @@ contract DegenerusBonds {
         s.lanes[lane].burnedAmount[msg.sender] += amount;
         s.lanes[lane].cumulative.push(s.lanes[lane].total);
 
-        // While DGNS is still being minted for this series, count burns toward mint jackpot score as well.
+        // While DGNRS is still being minted for this series, count burns toward mint jackpot score as well.
         if (currLevel != 0 && currLevel < s.maturityLevel && s.jackpotsRun < 5 && s.mintedBudget < s.payoutBudget) {
             uint256 boostedScore = _scoreWithMultiplier(msg.sender, amount);
             _recordJackpotScore(s, msg.sender, boostedScore);
@@ -1142,8 +1138,8 @@ contract DegenerusBonds {
         return address(series[maturityLevel].token);
     }
 
-    function dgnsTokens() external view returns (address dgns0, address dgns5) {
-        return (address(tokenDGNS0), address(tokenDGNS5));
+    function dgnrsToken() external view returns (address) {
+        return address(tokenDGNRS);
     }
 
     function payoutBudget(uint24 maturityLevel) external view returns (uint256) {
@@ -1384,13 +1380,17 @@ contract DegenerusBonds {
     function _createSeries(uint24 maturityLevel) private {
         BondSeries storage s = series[maturityLevel];
         s.maturityLevel = maturityLevel;
-        s.saleStartLevel = maturityLevel > 10 ? maturityLevel - 10 : 0;
+        if (maturityLevel == 10) {
+            s.saleStartLevel = 1;
+        } else {
+            s.saleStartLevel = maturityLevel > 10 ? maturityLevel - 10 : 0;
+        }
 
         // Budget starts at 0 and is derived from this series' own raise (tracked on deposits).
         s.payoutBudget = 0;
 
-        // Only two ERC20s are ever used: DGNS0 (maturities ending in 0) and DGNS5 (ending in 5).
-        s.token = maturityLevel % 10 == 5 ? tokenDGNS5 : tokenDGNS0;
+        // Single shared ERC20 across all active series.
+        s.token = tokenDGNRS;
 
         maturities.push(maturityLevel);
         emit BondSeriesCreated(maturityLevel, s.saleStartLevel, address(s.token), 0);
@@ -1425,6 +1425,7 @@ contract DegenerusBonds {
         address current = vault;
         if (current != address(0)) revert AlreadySet();
         vault = vault_;
+        if (!IStETHLike(steth).approve(vault_, type(uint256).max)) revert BankCallFailed();
     }
 
     function _setCoin(address coin_) private {
@@ -1549,15 +1550,7 @@ contract DegenerusBonds {
     }
 
     function _emissionPct(uint24 maturityLevel, uint8 run) private pure returns (uint256) {
-        // Special-case the first series (maturity 10) to emit only four days; day 1 combines level0/level1 share.
-        if (maturityLevel == 10) {
-            if (run == 0) return 20;
-            if (run == 1) return 10;
-            if (run == 2) return 10;
-            if (run == 3) return 60;
-            return 0;
-        }
-
+        maturityLevel; // reserved for future schedule tweaks
         if (run == 0) return 10;
         if (run == 1) return 10;
         if (run == 2) return 10;
@@ -1572,7 +1565,8 @@ contract DegenerusBonds {
     }
 
     function _maxEmissionRuns(uint24 maturityLevel) private pure returns (uint8) {
-        return maturityLevel == 10 ? 4 : 5;
+        maturityLevel; // reserved for future schedule tweaks
+        return 5;
     }
 
     // Piecewise sliding multiplier: 3x at 0.5x prior raise, 2x at 1x, 1x at 2x; clamped outside.
@@ -1655,31 +1649,17 @@ contract DegenerusBonds {
         );
     }
 
-    function _runPresaleMintJackpot(uint256 rngWord, uint256 toMint) private returns (uint256 minted0, uint256 minted5) {
-        minted0 = toMint >> 1;
-        minted5 = toMint - minted0;
-
+    function _runPresaleMintJackpot(uint256 rngWord, uint256 toMint) private {
         PresaleSeries storage p = presale;
         uint256 totalScore = p.totalScore;
-        if (minted0 != 0) {
+        if (toMint != 0) {
             _runMintJackpotToken(
-                tokenDGNS0,
+                tokenDGNRS,
                 p.jackpotParticipants,
                 p.jackpotCumulative,
                 totalScore,
                 uint256(keccak256(abi.encode(rngWord, uint256(0)))),
-                minted0,
-                PRESALE_JACKPOT_SPOTS
-            );
-        }
-        if (minted5 != 0) {
-            _runMintJackpotToken(
-                tokenDGNS5,
-                p.jackpotParticipants,
-                p.jackpotCumulative,
-                totalScore,
-                uint256(keccak256(abi.encode(rngWord, uint256(5)))),
-                minted5,
+                toMint,
                 PRESALE_JACKPOT_SPOTS
             );
         }
@@ -1855,7 +1835,8 @@ contract DegenerusBonds {
 
         if (burned == 0) {
             s.resolved = true;
-            lastIssuanceRaise = s.raised;
+            uint256 raised = s.raised;
+            if (raised != 0) lastIssuanceRaise = raised;
             emit BondSeriesResolved(s.maturityLevel, 0, 0, 0);
             return true;
         }
@@ -1887,7 +1868,8 @@ contract DegenerusBonds {
         }
 
         s.resolved = true;
-        lastIssuanceRaise = s.raised;
+        uint256 raisedFinal = s.raised;
+        if (raisedFinal != 0) lastIssuanceRaise = raisedFinal;
         emit BondSeriesResolved(s.maturityLevel, lane, paid, 0);
         return true;
     }

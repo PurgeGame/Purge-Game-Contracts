@@ -26,17 +26,15 @@ describe("DegenerusBonds gas", function () {
     const gameSigner = await ethers.getImpersonatedSigner(await game.getAddress());
     await admin.sendTransaction({ to: await game.getAddress(), value: ethers.parseEther("1") });
 
-    // Seed series creation at level 10 (maturity 20).
-    await game.setLevel(10);
+    // Seed the first series (maturity 10) and populate it with many entrants.
+    await game.setLevel(0);
     await bonds.connect(gameSigner).bondMaintenance(123, 0);
+    await game.setLevel(1);
 
     const depositCount = 500;
     for (let i = 0; i < depositCount; i++) {
       await bonds.connect(gameSigner).depositFromGame(admin.address, 1, { value: 1 });
     }
-
-    // Advance level so jackpots run once for the populated day.
-    await game.setLevel(11);
 
     const gas = await bonds.connect(gameSigner).bondMaintenance.estimateGas(456, 0);
     expect(gas).to.be.lt(14_000_000n);

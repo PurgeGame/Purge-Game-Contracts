@@ -25,7 +25,7 @@ function presaleTargetBudget(raised) {
 }
 
 describe("DegenerusBonds presale jackpot", function () {
-  it("mints DGNS0/DGNS5 50/50 across 5 manual rounds", async function () {
+  it("mints DGNRS across 5 manual rounds", async function () {
     const [admin, alice, bob] = await ethers.getSigners();
 
     const MockVrf = await ethers.getContractFactory("MockVRFCoordinator");
@@ -66,28 +66,22 @@ describe("DegenerusBonds presale jackpot", function () {
     await bonds.connect(alice).presaleDeposit(alice.address, { value: amountA });
     await bonds.connect(bob).presaleDeposit(bob.address, { value: amountB });
 
-    const [dgns0Addr, dgns5Addr] = await bonds.dgnsTokens();
-    const dgns0 = await ethers.getContractAt("BondToken", dgns0Addr);
-    const dgns5 = await ethers.getContractAt("BondToken", dgns5Addr);
+    const dgnrsAddr = await bonds.dgnrsToken();
+    const dgnrs = await ethers.getContractAt("BondToken", dgnrsAddr);
 
-    expect(await dgns0.totalSupply()).to.equal(0n);
-    expect(await dgns5.totalSupply()).to.equal(0n);
+    expect(await dgnrs.totalSupply()).to.equal(0n);
 
     const perRun = (raised * 10n) / 100n;
     const finalBudget = presaleTargetBudget(raised);
 
     let expectedMintedBudget = 0n;
-    let expectedSupply0 = 0n;
-    let expectedSupply5 = 0n;
+    let expectedSupply = 0n;
 
     for (let run = 0; run < 5; run++) {
       const isFinal = run === 4;
       const toMint = isFinal ? finalBudget - expectedMintedBudget : perRun;
-      const minted0 = toMint >> 1n;
-      const minted5 = toMint - minted0;
-
-      expectedSupply0 += minted0;
-      expectedSupply5 += minted5;
+      const minted = toMint;
+      expectedSupply += minted;
       expectedMintedBudget = isFinal ? finalBudget : expectedMintedBudget + toMint;
 
       const requestId = await vrf.nextRequestId();
@@ -102,17 +96,16 @@ describe("DegenerusBonds presale jackpot", function () {
 
       await expect(bonds.runPresaleJackpot())
         .to.emit(bonds, "PresaleJackpot")
-        .withArgs(run, toMint, minted0, minted5, BigInt(100 + run));
+        .withArgs(run, toMint, BigInt(100 + run));
 
       const [, , mintedBudget, jackpotsRun] = await bonds.presaleStatus();
       expect(jackpotsRun).to.equal(BigInt(run + 1));
       expect(mintedBudget).to.equal(expectedMintedBudget);
-      expect(await dgns0.totalSupply()).to.equal(expectedSupply0);
-      expect(await dgns5.totalSupply()).to.equal(expectedSupply5);
+      expect(await dgnrs.totalSupply()).to.equal(expectedSupply);
     }
 
-    // Final invariant: mintedBudget == total DGNS minted.
+    // Final invariant: mintedBudget == total DGNRS minted.
     const [, , mintedBudget] = await bonds.presaleStatus();
-    expect(await dgns0.totalSupply() + (await dgns5.totalSupply())).to.equal(mintedBudget);
+    expect(await dgnrs.totalSupply()).to.equal(mintedBudget);
   });
 });

@@ -4,6 +4,9 @@ pragma solidity ^0.8.26;
 contract MockGameBondBank {
     uint24 public lvl;
     uint256 public available;
+    bool public lastTrackPool;
+    uint256 public trackedBondPool;
+    uint256 public untrackedBondPool;
 
     function setLevel(uint24 l) external {
         lvl = l;
@@ -21,7 +24,14 @@ contract MockGameBondBank {
         return 0;
     }
 
-    function bondDeposit(bool) external payable {}
+    function bondDeposit(bool trackPool) external payable {
+        lastTrackPool = trackPool;
+        if (trackPool) {
+            trackedBondPool += msg.value;
+        } else {
+            untrackedBondPool += msg.value;
+        }
+    }
 
     function bondCreditToClaimable(address, uint256) external {}
 

@@ -564,9 +564,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
                     ctx.ethDistributed += share;
                 }
             }
-            uint16 bucketBondBps = traitIdx == 0
-                ? JACKPOT_BOND_BPS_GRAND
-                : (bondBps == 0 ? 0 : JACKPOT_BOND_BPS_OTHER);
+            uint16 bucketBondBps = bondBps;
             {
                 (uint256 newEntropyState, uint256 ethDelta, , uint256 bondSpent, uint256 bucketLiability) =
                     _resolveTraitWinners(

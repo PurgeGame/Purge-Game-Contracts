@@ -47,20 +47,27 @@ describe("DegenerusBonds Stress Tests", function () {
   it("Multiple Jackpots: Handles 2 simultaneous jackpots", async function () {
       await game.setAvailable(ethers.parseEther("1000000"));
 
-      await game.setLevel(10);
+      // Seed maturity 10 issuance and create a burn so resolution does non-trivial work later.
+      await game.setLevel(1);
+      await bonds.depositCurrentFor(admin.address, { value: ethers.parseEther("1") });
       await bonds.connect(gameSigner).bondMaintenance(1, 0);
-      await bonds.depositCurrentFor(admin.address, { value: ethers.parseEther("1") });
 
-      await game.setLevel(15);
-      await bonds.connect(gameSigner).bondMaintenance(2, 0);
-      await bonds.depositCurrentFor(admin.address, { value: ethers.parseEther("1") });
-      
-      await game.setLevel(16);
-      
-      for(let i=0; i<50; i++) {
-          await bonds.connect(gameSigner).depositFromGame(admin.address, 1n, { value: 1n });
+      const dgnrsAddr = await bonds.dgnrsToken();
+      const Dgnrs = await ethers.getContractAt("BondToken", dgnrsAddr);
+      const bal10 = await Dgnrs.balanceOf(admin.address);
+      if (bal10 > 0n) {
+        await bonds.burnDGNRS(bal10);
       }
-      
+
+      // Seed maturity 20 issuance with many entrants.
+      await game.setLevel(10);
+      await bonds.depositCurrentFor(admin.address, { value: ethers.parseEther("1") });
+      for (let i = 0; i < 50; i++) {
+        await bonds.connect(gameSigner).depositFromGame(admin.address, 1n, { value: 1n });
+      }
+
+      // Level 11: resolves maturity 10 and runs issuance for maturity 20.
+      await game.setLevel(11);
       const tx = await bonds.connect(gameSigner).bondMaintenance(12345, 0);
       const receipt = await tx.wait();
       
@@ -75,31 +82,22 @@ describe("DegenerusBonds Stress Tests", function () {
     // We need to trigger at least one creation to get addresses?
     // Or just rely on burns.
     
+    const dgnrsAddr = await bonds.dgnrsToken();
+    const Dgnrs = await ethers.getContractAt("BondToken", dgnrsAddr);
+
     for (let i = 1; i <= 20; i++) {
-        let lvl = i * 5;
-        await game.setLevel(lvl);
-        
-        // Pass entropy to run jackpots
-        await bonds.connect(gameSigner).bondMaintenance(12345 + i, 0);
-        
-        await bonds.depositCurrentFor(admin.address, { value: ethers.parseEther("0.1") });
-        
-        // Try to burn tokens if we have any.
-        // Series created at `i*5`. Maturity `i*5 + 10` (15, 20, ...).
-        
-        let createdMat = lvl + 10;
-        let tokenAddr = await bonds.seriesToken(createdMat);
-        
-        if (tokenAddr !== ethers.ZeroAddress) {
-            const Token = await ethers.getContractAt("BondToken", tokenAddr);
-            const bal = await Token.balanceOf(admin.address);
-            if (bal > 0n) {
-                // Determine if it's DGNS0 or DGNS5 by maturity digit.
-                
-                const isFive = createdMat % 10 === 5;
-                await bonds.burnDGNS(isFive, bal);
-            }
-        }
+      const lvl = i * 10;
+      await game.setLevel(lvl);
+
+      // Deposit first so the jackpot mint has participants, then run one issuance tick.
+      await bonds.depositCurrentFor(admin.address, { value: ethers.parseEther("0.1") });
+      await bonds.connect(gameSigner).bondMaintenance(12345 + i, 0);
+
+      // Burn any minted DGNRS into the active maturity (always ending in 0).
+      const bal = await Dgnrs.balanceOf(admin.address);
+      if (bal > 0n) {
+        await bonds.burnDGNRS(bal);
+      }
     }
     
     // Now we should have burns registered in lanes.
