@@ -30,9 +30,9 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
     event PlayerCredited(address indexed player, address indexed recipient, uint256 amount);
 
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
-    uint16 private constant BOND_BPS_HALF = 5000;
+    uint16 private constant BOND_BPS_EX = 2500; // 25% of exterminator share routed to bonds
     uint16 private constant BAF_TOP_BOND_BPS = 2000; // 20% bond buy for top/flip/3-4 BAF winners
-    uint16 private constant BAF_SCATTER_BOND_BPS = 10_000; // full bond payout for selected scatter winners
+    uint16 private constant BAF_SCATTER_BOND_BPS = 10_000; // full bond payout when scatter tail is routed to bonds
     uint8 private constant BAF_BOND_MASK_OFFSET = 128;
     uint16 private constant EXTERMINATION_PURCHASE_BPS = 2000; // 20% of non-exterminator pool
     uint8 private constant EXTERMINATION_PURCHASE_WINNERS = 20;
@@ -72,6 +72,14 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
             if (jackpotPool != 0) {
                 uint256 purchasePool = (jackpotPool * EXTERMINATION_PURCHASE_BPS) / 10_000;
                 uint256 exterminationPool = jackpotPool - purchasePool;
+                uint256 mapPrice = uint256(price) / 4;
+                if (mapPrice != 0 && purchasePool != 0) {
+                    // Round purchase pool down to a MAP-price multiple; remainder goes to the trait jackpot.
+                    uint256 rounded = (purchasePool / mapPrice) * mapPrice;
+                    uint256 refund = purchasePool - rounded;
+                    purchasePool = rounded;
+                    exterminationPool += refund;
+                }
                 (bool ok, bytes memory data) = jackpotModuleAddr.delegatecall(
                     abi.encodeWithSelector(
                         IDegenerusGameJackpotModule.payExterminationJackpot.selector,
@@ -157,7 +165,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
         (uint256 ethPortion, uint256 splitClaimable) = _splitEthWithBond(
             ex,
             exterminatorShare,
-            BOND_BPS_HALF,
+            BOND_BPS_EX,
             bondsEnabled
         );
         claimableDelta = splitClaimable + _addClaimableEth(ex, ethPortion);
@@ -203,7 +211,9 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
         return weiAmount;
     }
 
-    function _resolveBondRecipient(address winner) private view returns (address resolved, bool rerouted, bool halfCashout) {
+    function _resolveBondRecipient(
+        address winner
+    ) private view returns (address resolved, bool rerouted, bool halfCashout) {
         resolved = winner;
         halfCashout = bondCashoutHalf[winner];
         rerouted = false;
@@ -231,57 +241,123 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
         if (burnCount > len) burnCount = len;
         uint256 burnStart = len - burnCount;
 
-        uint256 minUnitPrice = mapPrice;
-        uint256 maxWinners = poolWei / minUnitPrice;
+        uint256 totalUnits = poolWei / mapPrice;
+        uint256 maxWinners = totalUnits;
         if (maxWinners > EXTERMINATION_PURCHASE_WINNERS) maxWinners = EXTERMINATION_PURCHASE_WINNERS;
         if (maxWinners > len) maxWinners = len;
         if (maxWinners == 0) return;
 
-        uint256 remainingPool = poolWei;
         IDegenerusGamepiecesRewards nftRewards = IDegenerusGamepiecesRewards(nftAddr);
 
+        address[] memory winners = new address[](maxWinners);
+        uint256[] memory burnIdx = new uint256[](maxWinners);
+        uint256[] memory mapIdx = new uint256[](maxWinners);
+        uint256 burnWinners;
+        uint256 mapWinners;
+        uint256 totalBurnUnits;
+        uint256 totalMapUnits;
+        uint256 unitsLeft = totalUnits;
+        uint256 entropy = uint256(keccak256(abi.encode(rngWord, prevLevel, traitId, totalUnits)));
+
         for (uint256 i; i < maxWinners; ) {
-            if (remainingPool < minUnitPrice) break;
+            entropy = _entropyStep(entropy);
             uint256 remainingWinners = maxWinners - i;
-            uint256 budget = remainingPool / remainingWinners;
-            uint256 entropy = uint256(keccak256(abi.encode(rngWord, prevLevel, traitId, i, "ex_reward")));
             uint256 idx = entropy % len;
             address winner = holders[idx];
             if (winner == address(0)) {
+                winner = holders[0];
+            }
+
+            uint256 baseUnits = unitsLeft / remainingWinners;
+            uint256 extraUnits = unitsLeft % remainingWinners;
+            uint256 unitBudget = baseUnits;
+            if (extraUnits != 0 && (entropy % remainingWinners) < extraUnits) {
                 unchecked {
-                    ++i;
+                    ++unitBudget;
                 }
-                continue;
             }
+            unitsLeft -= unitBudget;
 
-            bool isBurnTicket = idx >= burnStart;
-            uint256 unitPrice = isBurnTicket ? tokenPrice : mapPrice;
-            uint256 qty = budget / unitPrice;
-            if (qty == 0) {
-                if (remainingPool < unitPrice) break;
-                qty = 1;
-            }
-            if (qty > type(uint32).max) {
-                qty = type(uint32).max;
-            }
-            uint256 cost = qty * unitPrice;
-            if (cost > remainingPool) {
-                qty = remainingPool / unitPrice;
-                if (qty == 0) break;
-                cost = qty * unitPrice;
-            }
-            remainingPool -= cost;
-
-            if (isBurnTicket) {
-                nftRewards.queueRewardMints(winner, uint32(qty));
+            winners[i] = winner;
+            if (idx >= burnStart) {
+                burnIdx[burnWinners++] = i;
+                totalBurnUnits += unitBudget;
             } else {
-                _queueRewardMaps(winner, uint32(qty));
+                mapIdx[mapWinners++] = i;
+                totalMapUnits += unitBudget;
             }
 
             unchecked {
                 ++i;
             }
         }
+
+        uint256 leftoverUnits = totalBurnUnits % 4;
+        uint256 totalTokenQty = totalBurnUnits / 4;
+        totalMapUnits += leftoverUnits;
+
+        if (burnWinners != 0 && totalTokenQty != 0) {
+            uint256 baseTokens = totalTokenQty / burnWinners;
+            uint256 extraTokens = totalTokenQty % burnWinners;
+            entropy = _entropyStep(entropy);
+            uint256 offset = entropy % burnWinners;
+            for (uint256 i; i < burnWinners; ) {
+                uint256 idx = burnIdx[(i + offset) % burnWinners];
+                uint256 qty = baseTokens + (i < extraTokens ? 1 : 0);
+                if (qty > type(uint32).max) {
+                    qty = type(uint32).max;
+                }
+                if (qty != 0) {
+                    nftRewards.queueRewardMints(winners[idx], uint32(qty));
+                }
+                unchecked {
+                    ++i;
+                }
+            }
+        }
+
+        if (totalMapUnits != 0) {
+            if (mapWinners == 0) {
+                uint256 baseMaps = totalMapUnits / maxWinners;
+                uint256 extraMaps = totalMapUnits % maxWinners;
+                entropy = _entropyStep(entropy);
+                uint256 offset = entropy % maxWinners;
+                for (uint256 i; i < maxWinners; ) {
+                    uint256 idx = (i + offset) % maxWinners;
+                    uint256 qty = baseMaps + (i < extraMaps ? 1 : 0);
+                    if (qty != 0) {
+                        _queueRewardMaps(winners[idx], uint32(qty));
+                    }
+                    unchecked {
+                        ++i;
+                    }
+                }
+            } else {
+                uint256 baseMaps = totalMapUnits / mapWinners;
+                uint256 extraMaps = totalMapUnits % mapWinners;
+                entropy = _entropyStep(entropy);
+                uint256 offset = entropy % mapWinners;
+                for (uint256 i; i < mapWinners; ) {
+                    uint256 idx = mapIdx[(i + offset) % mapWinners];
+                    uint256 qty = baseMaps + (i < extraMaps ? 1 : 0);
+                    if (qty != 0) {
+                        _queueRewardMaps(winners[idx], uint32(qty));
+                    }
+                    unchecked {
+                        ++i;
+                    }
+                }
+            }
+        }
+    }
+
+    function _entropyStep(uint256 state) private pure returns (uint256) {
+        unchecked {
+            state ^= state << 7;
+            state ^= state >> 9;
+            state ^= state << 8;
+        }
+        return state;
     }
 
     function _queueRewardMaps(address buyer, uint32 quantity) private {
@@ -336,18 +412,64 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
             uint256 bondMask,
             uint256 refund
         ) = IDegenerusJackpots(jackpotsAddr).runBafJackpot(poolWei, lvl, rngWord);
-        // bondMask: low bits mark top/flip/3-4 winners; high bits mark scatter winners.
+        // bondMask: low bits mark top/flip/3-4 winners; high bits mark the tail scatter winners for map/bond handling.
         uint256 topMask = bondMask & ((uint256(1) << BAF_BOND_MASK_OFFSET) - 1);
         uint256 scatterMask = bondMask >> BAF_BOND_MASK_OFFSET;
         bool bondsEnabled = IDegenerusBondsJackpot(bonds).purchasesEnabled();
+        uint256 mapPrice = uint256(price) / 4;
+        uint256 scatterTotal;
+        for (uint256 i; i < winnersArr.length; ) {
+            if ((scatterMask & (uint256(1) << i)) != 0) {
+                scatterTotal += amountsArr[i];
+            }
+            unchecked {
+                ++i;
+            }
+        }
+        uint256 mapTarget = scatterTotal / 2;
+        uint256 mapSpent;
         for (uint256 i; i < winnersArr.length; ) {
             uint256 amount = amountsArr[i];
             uint256 ethPortion = amount;
             uint256 tmpClaimable;
-            bool scatterBond = (scatterMask & (uint256(1) << i)) != 0;
+            bool scatterSpecial = (scatterMask & (uint256(1) << i)) != 0;
             bool topBond = (topMask & (uint256(1) << i)) != 0;
-            if (scatterBond) {
-                (ethPortion, tmpClaimable) = _splitEthWithBond(winnersArr[i], amount, BAF_SCATTER_BOND_BPS, bondsEnabled);
+            if (scatterSpecial) {
+                if (mapPrice != 0 && mapSpent < mapTarget) {
+                    uint256 qty = amount / mapPrice;
+                    if (qty != 0) {
+                        if (qty > type(uint32).max) qty = type(uint32).max;
+                        uint256 mapCost = qty * mapPrice;
+                        _queueRewardMaps(winnersArr[i], uint32(qty));
+                        nextPrizePool += mapCost;
+                        uint256 remainder = amount - mapCost;
+                        if (remainder != 0) {
+                            (ethPortion, tmpClaimable) = _splitEthWithBond(
+                                winnersArr[i],
+                                remainder,
+                                BAF_SCATTER_BOND_BPS,
+                                bondsEnabled
+                            );
+                        } else {
+                            ethPortion = 0;
+                        }
+                        mapSpent += mapCost;
+                    } else {
+                        (ethPortion, tmpClaimable) = _splitEthWithBond(
+                            winnersArr[i],
+                            amount,
+                            BAF_SCATTER_BOND_BPS,
+                            bondsEnabled
+                        );
+                    }
+                } else {
+                    (ethPortion, tmpClaimable) = _splitEthWithBond(
+                        winnersArr[i],
+                        amount,
+                        BAF_SCATTER_BOND_BPS,
+                        bondsEnabled
+                    );
+                }
             } else if (topBond) {
                 (ethPortion, tmpClaimable) = _splitEthWithBond(winnersArr[i], amount, BAF_TOP_BOND_BPS, bondsEnabled);
             }

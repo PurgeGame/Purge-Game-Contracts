@@ -86,7 +86,7 @@ contract DegenerusJackpots is IDegenerusJackpots {
     // ---------------------------------------------------------------------
     uint256 private constant MILLION = 1e6;
     uint256 private constant BAF_SCATTER_MASK_OFFSET = 128;
-    uint8 private constant BAF_SCATTER_BOND_WINNERS = 33;
+    uint8 private constant BAF_SCATTER_BOND_WINNERS = 40;
 
     // ---------------------------------------------------------------------
     // BAF / Decimator state (lives here; DegenerusCoin storage is unaffected)
@@ -222,7 +222,8 @@ contract DegenerusJackpots is IDegenerusJackpots {
      * @dev Pool split (percent of `poolWei`): 10% top BAF bettor, 10% top flip from the last day window,
      *      5% random pick between 3rd/4th BAF leaderboard slots, 10% exterminator draw (prior 20 levels),
      *      10% affiliate draw (top referrers from prior 20 levels), 10% retro tops (recent levels),
-     *      20%/25% scatter buckets from trait tickets. `bondMask` encodes which winners should be paid as bonds by the game.
+     *      20%/25% scatter buckets from trait tickets. `bondMask` encodes top-bond winners and the tail scatter winners
+     *      that get special handling (map/bond split) in the game.
      *      Any unfilled shares are refunded to the caller via `returnAmountWei`.
      */
     function runBafJackpot(
@@ -639,7 +640,7 @@ contract DegenerusJackpots is IDegenerusJackpots {
         }
 
         // Scatter slice: 200 total draws (4 tickets * 50 rounds). Per round, take top-2 by BAF score.
-        // Game pays bonds for the last BAF_SCATTER_BOND_WINNERS scatter winners based on `bondMask`.
+        // Game applies special map/bond handling for the last BAF_SCATTER_BOND_WINNERS scatter winners via `bondMask`.
         {
             // Slice E: scatter tickets from trait sampler so casual participants can land smaller cuts.
             uint256 scatterTop = (P * 20) / 100;
@@ -749,10 +750,10 @@ contract DegenerusJackpots is IDegenerusJackpots {
 
             uint256 scatterCount = n - scatterStart;
             if (scatterCount != 0) {
-                uint256 targetBondCount = scatterCount < BAF_SCATTER_BOND_WINNERS
+                uint256 targetSpecialCount = scatterCount < BAF_SCATTER_BOND_WINNERS
                     ? scatterCount
                     : BAF_SCATTER_BOND_WINNERS;
-                for (uint256 i; i < targetBondCount; ) {
+                for (uint256 i; i < targetSpecialCount; ) {
                     uint256 idx = (scatterStart + scatterCount - 1) - i;
                     mask |= (uint256(1) << (BAF_SCATTER_MASK_OFFSET + idx));
                     unchecked {

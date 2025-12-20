@@ -70,6 +70,22 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
         IVaultEscrowCoin(coinAddr).vaultEscrow(coinSlice);
         bondContract.payBonds{value: ethSpend}(coinSlice, stSpend, rngWord);
         rewardPool += rewardTopUp;
+
+        // If bondPool exceeds required cover (including upcoming maturities), sweep the excess to the vault.
+        if (bondPool > required) {
+            uint256 excess = bondPool - required;
+            address v = vault;
+            if (v != address(0)) {
+                uint256 ethAvail = address(this).balance;
+                uint256 sendAmt = excess < ethAvail ? excess : ethAvail;
+                if (sendAmt != 0) {
+                    (bool ok, ) = payable(v).call{value: sendAmt}("");
+                    if (ok) {
+                        bondPool -= sendAmt;
+                    }
+                }
+            }
+        }
     }
 
     /// @notice View helper to compute untracked funds (stETH + ETH minus obligations).

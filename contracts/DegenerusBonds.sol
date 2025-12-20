@@ -693,7 +693,7 @@ contract DegenerusBonds {
         for (uint24 i = activeMaturityIndex; i < len; ) {
             BondSeries storage iter = series[maturities[i]];
             // Consider unresolved series that can still accept burns (before maturity) or are in grace window.
-            if (iter.maturityLevel != 0 && !iter.resolved && currLevel < iter.maturityLevel) {
+            if (address(iter.token) != address(0) && !iter.resolved && currLevel < iter.maturityLevel) {
                 maturityLevel = iter.maturityLevel;
                 return (iter, maturityLevel);
             }
@@ -745,7 +745,7 @@ contract DegenerusBonds {
             unchecked {
                 ++i;
             }
-            if (s.maturityLevel == 0 || s.resolved) continue;
+            if (address(s.token) == address(0) || s.resolved) continue;
 
             uint256 burned = s.lanes[0].total + s.lanes[1].total;
             if (burned == 0) {
@@ -778,7 +778,7 @@ contract DegenerusBonds {
             unchecked {
                 ++j;
             }
-            if (rem.maturityLevel == 0 || rem.resolved) continue;
+            if (address(rem.token) == address(0) || rem.resolved) continue;
             rem.resolved = true;
         }
 
@@ -942,9 +942,12 @@ contract DegenerusBonds {
         return _activeMaturityAt(_currentLevel());
     }
 
-    function _activeMaturityAt(uint24 currLevel) private pure returns (uint24 maturityLevel) {
+    function _activeMaturityAt(uint24 currLevel) private view returns (uint24 maturityLevel) {
+        if (_presaleActive()) {
+            return 0; // presale burns route into the level-0 maturity
+        }
         if (currLevel < 10) {
-            return 10; // treat presale / unwired play as level 0; first maturity is level 10
+            return 10; // pregame levels route into the first maturity (level 10)
         }
         // Single-token bond cycle is 10 levels wide: maturities are levels ending in 0.
         maturityLevel = ((currLevel / 10) + 1) * 10;
@@ -987,7 +990,7 @@ contract DegenerusBonds {
             unchecked {
                 ++i;
             }
-            if (s.maturityLevel == 0 || s.resolved) continue;
+            if (address(s.token) == address(0) || s.resolved) continue;
             bool consumedWork;
 
             uint8 maxRuns = _maxEmissionRuns(s.maturityLevel);
@@ -1069,7 +1072,7 @@ contract DegenerusBonds {
             unchecked {
                 ++i;
             }
-            if (s.maturityLevel == 0 || s.resolved) continue;
+            if (address(s.token) == address(0) || s.resolved) continue;
 
             bool consumedWork;
             uint8 maxRuns = _maxEmissionRuns(s.maturityLevel);
@@ -1107,7 +1110,7 @@ contract DegenerusBonds {
         }
 
         uint24 activeMat = _activeMaturityAt(currLevel);
-        if (series[activeMat].maturityLevel == 0) {
+        if (address(series[activeMat].token) == address(0)) {
             bool consumedWork;
             uint24 saleStartLevel = activeMat == 10 ? 1 : (activeMat > 10 ? activeMat - 10 : 0);
             uint8 maxRuns = _maxEmissionRuns(activeMat);
@@ -1219,6 +1222,15 @@ contract DegenerusBonds {
     ) private returns (BondSeries storage target, uint24 targetMaturity) {
         targetMaturity = maturityLevel;
         target = _getOrCreateSeries(targetMaturity);
+        if (targetMaturity == 0) {
+            if (_presaleActive() && !target.resolved) {
+                return (target, targetMaturity);
+            }
+            unchecked {
+                targetMaturity = 10;
+            }
+            target = _getOrCreateSeries(targetMaturity);
+        }
         // Once a maturity has arrived or been resolved, redirect new burns to the next (+10) maturity.
         while (effectiveLevel >= targetMaturity || target.resolved) {
             unchecked {
@@ -1282,16 +1294,61 @@ contract DegenerusBonds {
         return (p.raised, p.payoutBudget, p.mintedBudget, p.jackpotsRun, p.totalScore, p.jackpotParticipants.length);
     }
 
-    /// @notice Required cover across all maturities up to the next active maturity.
+    /// @notice Required cover for matured obligations plus outstanding/burned DGNRS exposure.
     function requiredCoverNext() external view returns (uint256 required) {
-        uint24 targetMat = _activeMaturity();
-        BondSeries storage target = series[targetMat];
-        (required, ) = _requiredCoverTotals(target, _currentLevel(), 0);
+        uint24 currLevel = _currentLevel();
+        uint256 maturedOwed = _maturedOwedCover(currLevel);
+        uint256 dgnrsSupply = tokenDGNRS.totalSupply();
+        uint256 upcomingBurned = _upcomingBurnedCover(currLevel);
+        required = maturedOwed + dgnrsSupply + upcomingBurned;
     }
 
     // ---------------------------------------------------------------------
     // Internals
     // ---------------------------------------------------------------------
+
+    function _maturedOwedCover(uint24 currLevel) private view returns (uint256 owed) {
+        owed = resolvedUnclaimedTotal;
+        uint24 len = uint24(maturities.length);
+        for (uint24 i = activeMaturityIndex; i < len; ) {
+            BondSeries storage s = series[maturities[i]];
+            if (address(s.token) == address(0)) {
+                unchecked {
+                    ++i;
+                }
+                continue;
+            }
+            if (s.maturityLevel > currLevel) break;
+            if (s.resolved) {
+                owed += s.unclaimedBudget;
+            } else {
+                owed += s.lanes[0].total + s.lanes[1].total;
+            }
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    function _upcomingBurnedCover(uint24 currLevel) private view returns (uint256 burned) {
+        uint24 burnLevel = _burnEffectiveLevel(currLevel);
+        uint24 targetMat = _activeMaturityAt(burnLevel);
+        if (targetMat == 0) {
+            BondSeries storage presale = series[targetMat];
+            if (_presaleActive() && !presale.resolved) {
+                return presale.lanes[0].total + presale.lanes[1].total;
+            }
+            targetMat = 10;
+        }
+        while (burnLevel >= targetMat || series[targetMat].resolved) {
+            unchecked {
+                targetMat += 10;
+            }
+        }
+        BondSeries storage target = series[targetMat];
+        if (address(target.token) == address(0)) return 0;
+        burned = target.lanes[0].total + target.lanes[1].total;
+    }
 
     function _wire(WireConfig memory cfg) private {
         _setGame(cfg.game);
@@ -1304,6 +1361,16 @@ contract DegenerusBonds {
 
     function _currentLevel() private view returns (uint24) {
         return game.level();
+    }
+
+    function _presaleActive() private view returns (bool active) {
+        address aff = affiliate;
+        if (aff == address(0)) return false;
+        try IAffiliatePresaleStatus(aff).presaleActive() returns (bool ok) {
+            return ok;
+        } catch {
+            return false;
+        }
     }
 
     function _scoreMultiplierBps(address player) private view returns (uint256) {
@@ -1410,16 +1477,16 @@ contract DegenerusBonds {
     }
 
     function _requiredCover(BondSeries storage s, uint24 currLevel) private view returns (uint256 required) {
-        if (s.maturityLevel == 0) return 0;
+        if (address(s.token) == address(0)) return 0;
         if (s.resolved) return s.unclaimedBudget;
 
         uint256 burned = s.lanes[0].total + s.lanes[1].total;
         if (currLevel >= s.maturityLevel) {
             required = burned; // maturity reached/past: cover actual burns only
         } else {
-        // Upcoming maturity: cover all potential burns (full budget for that cycle).
-        required = s.payoutBudget;
-    }
+            // Upcoming maturity: cover all potential burns (full budget for that cycle).
+            required = s.payoutBudget;
+        }
     }
 
     function _requiredCoverTotals(
@@ -1596,7 +1663,7 @@ contract DegenerusBonds {
 
     function _getOrCreateSeries(uint24 maturityLevel) private returns (BondSeries storage s) {
         s = series[maturityLevel];
-        if (s.maturityLevel == 0) {
+        if (address(s.token) == address(0)) {
             _createSeries(maturityLevel);
             s = series[maturityLevel];
         }
