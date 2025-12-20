@@ -319,6 +319,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
         uint256 mainWei;
 
         (uint256 savePctTimes2, uint256 level100RollTotal) = _mapRewardPoolPercent(lvl, rngWord);
+        savePctTimes2 = _adjustRewardPoolForFlipTotals(savePctTimes2);
         uint256 _rewardPool = (totalWei * savePctTimes2) / 200;
         rewardPool = _rewardPool;
 
@@ -416,6 +417,27 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
             baseTimes2 = 166;
         }
         return (baseTimes2, 0);
+    }
+
+    function _adjustRewardPoolForFlipTotals(uint256 baseTimes2) private view returns (uint256 adjusted) {
+        adjusted = baseTimes2;
+        uint256 prevTotal = lastPurchaseDayFlipTotalPrev;
+        if (prevTotal == 0) return adjusted;
+        uint256 currentTotal = lastPurchaseDayFlipTotal;
+
+        if (currentTotal >= prevTotal && currentTotal - prevTotal >= prevTotal) {
+            if (adjusted > 3) {
+                adjusted -= 4;
+            } else {
+                adjusted = 0;
+            }
+        } else if (currentTotal < prevTotal && prevTotal - currentTotal > currentTotal) {
+            adjusted += 4;
+        }
+
+        if (adjusted > 196) {
+            adjusted = 196;
+        }
     }
 
     function _roll3d11(uint256 rngWord) private pure returns (uint256 total) {

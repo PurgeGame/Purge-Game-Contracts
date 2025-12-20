@@ -51,6 +51,8 @@ interface IDegenerusGame is IDegenerusGameExternal {
         MintPaymentKind payKind
     ) external payable returns (uint256 coinReward);
 
+    function recordCoinflipDeposit(uint256 amount) external;
+
     function rngLocked() external view returns (bool);
 
     function burnTokens(uint256[] calldata tokenIds) external;

@@ -372,6 +372,15 @@ contract DegenerusGame is DegenerusGameStorage {
         coinReward = _recordMintDataModule(player, lvl, mintUnits);
     }
 
+    /// @notice Track coinflip deposits during the last purchase day for prize pool tuning.
+    function recordCoinflipDeposit(uint256 amount) external {
+        if (msg.sender != address(coin)) revert E();
+        if (amount == 0) return;
+        if (gameState == 2 && lastPurchaseDay) {
+            lastPurchaseDayFlipTotal += amount;
+        }
+    }
+
     function _processMintPayment(
         address player,
         uint256 amount,
@@ -510,6 +519,7 @@ contract DegenerusGame is DegenerusGameStorage {
                     payDailyJackpot(false, lvl, rngWord);
                     if (nextPrizePool >= lastPrizePool) {
                         lastPurchaseDay = true;
+                        lastPurchaseDayFlipTotal = 0;
                     }
                     _unlockRng(day);
                     break;
@@ -717,6 +727,8 @@ contract DegenerusGame is DegenerusGameStorage {
         address callerExterminator = msg.sender;
         uint24 levelSnapshot = level;
         gameState = 1;
+        lastPurchaseDayFlipTotalPrev = lastPurchaseDayFlipTotal;
+        lastPurchaseDayFlipTotal = 0;
         bool traitExterminated = exterminated < 256;
         if (traitExterminated) {
             uint8 exTrait = uint8(exterminated);

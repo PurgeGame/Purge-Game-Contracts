@@ -282,6 +282,7 @@ contract DegenerusCoin {
         // Principal + quest bonus become the pending flip stake.
         uint256 creditedFlip = amount + questReward;
         addFlip(caller, creditedFlip, true, true);
+        degenerusGame.recordCoinflipDeposit(amount);
 
         emit CoinflipDeposit(caller, amount);
     }

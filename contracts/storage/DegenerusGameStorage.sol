@@ -106,4 +106,10 @@ abstract contract DegenerusGameStorage {
     // ---------------------------------------------------------------------
     address internal trophies; // standalone trophy contract (purely cosmetic)
     address internal affiliateProgramAddr; // cached affiliate program (for trophies)
+
+    // ---------------------------------------------------------------------
+    // Coinflip deposit tracking (last purchase day)
+    // ---------------------------------------------------------------------
+    uint256 internal lastPurchaseDayFlipTotal; // coinflip deposits while lastPurchaseDay is true (current level)
+    uint256 internal lastPurchaseDayFlipTotalPrev; // previous level's lastPurchaseDay coinflip deposits
 }
