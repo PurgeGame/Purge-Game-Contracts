@@ -40,6 +40,10 @@ describe("DegenerusBonds Stress Tests", function () {
     // Impersonate game for privileged calls
     gameSigner = await ethers.getImpersonatedSigner(await game.getAddress());
     await admin.sendTransaction({ to: await game.getAddress(), value: ethers.parseEther("200") });
+
+    // Seed stETH so direct purchases can swap vault shares into the vault.
+    await steth.mint(await game.getAddress(), ethers.parseEther("1000"));
+    await steth.connect(gameSigner).approve(await bonds.getAddress(), ethers.MaxUint256);
     
     // Default available is 0, so no resolution happens by default.
   });

@@ -14,6 +14,8 @@ interface IDegenerusGame is IDegenerusGameExternal {
         uint8[4] calldata traitIds
     ) external view returns (uint16 lastExterminated, uint24 currentLevel, uint32[4] memory remaining);
 
+    function startTraitRemaining(uint8 traitId) external view returns (uint32);
+
     function level() external view returns (uint24);
 
     function gameState() external view returns (uint8);

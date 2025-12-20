@@ -321,6 +321,11 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         }
         _questSyncState(state, currentDay);
 
+        IDegenerusGame game_ = questGame;
+        if (address(game_) == address(0) || !_bondPurchasesOpen(game_.level())) {
+            return (0, false, quests[0].questType, state.streak, false);
+        }
+
         (DailyQuest memory quest, uint8 slotIndex) = _currentDayQuestOfType(quests, currentDay, QUEST_TYPE_BOND);
         if (slotIndex == type(uint8).max) {
             return (0, false, QUEST_TYPE_BOND, state.streak, false);
@@ -328,8 +333,8 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
 
         _questSyncProgress(state, slotIndex, currentDay, quest.version);
         uint8 tier = _questTier(state.baseStreak);
-        uint256 priceUnit = questGame.coinPriceUnit();
-        uint256 priceWei = questGame.mintPrice();
+        uint256 priceUnit = game_.coinPriceUnit();
+        uint256 priceWei = game_.mintPrice();
         if (priceUnit == 0 || priceWei == 0) {
             return (0, false, quest.questType, state.streak, false);
         }
@@ -595,6 +600,12 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         if (lvl != 0 && (lvl % DECIMATOR_SPECIAL_LEVEL) == 0) return true;
         if (lvl < 15) return false;
         return (lvl % 10) == 5 && (lvl % 100) != 95;
+    }
+
+    function _bondPurchasesOpen(uint24 currLevel) private pure returns (bool open) {
+        if (currLevel == 0) return false;
+        if (currLevel < 10) return currLevel < 6;
+        return (currLevel % 10) < 5;
     }
 
     /// @dev BAF weighting is active when the current level is in a BAF-open window (divisible by 10 in burn state).

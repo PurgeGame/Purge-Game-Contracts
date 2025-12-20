@@ -85,6 +85,8 @@ contract DegenerusJackpots is IDegenerusJackpots {
     // Constants
     // ---------------------------------------------------------------------
     uint256 private constant MILLION = 1e6;
+    uint256 private constant BAF_SCATTER_MASK_OFFSET = 128;
+    uint8 private constant BAF_SCATTER_BOND_WINNERS = 33;
 
     // ---------------------------------------------------------------------
     // BAF / Decimator state (lives here; DegenerusCoin storage is unaffected)
@@ -220,8 +222,8 @@ contract DegenerusJackpots is IDegenerusJackpots {
      * @dev Pool split (percent of `poolWei`): 10% top BAF bettor, 10% top flip from the last day window,
      *      5% random pick between 3rd/4th BAF leaderboard slots, 10% exterminator draw (prior 20 levels),
      *      10% affiliate draw (top referrers from prior 20 levels), 10% retro tops (recent levels),
-     *      20%/25% scatter buckets from trait tickets (first scatter bucket pays out in bonds). Any unfilled shares are refunded to the caller via
-     *      `returnAmountWei`.
+     *      20%/25% scatter buckets from trait tickets. `bondMask` encodes which winners should be paid as bonds by the game.
+     *      Any unfilled shares are refunded to the caller via `returnAmountWei`.
      */
     function runBafJackpot(
         uint256 poolWei,
@@ -250,6 +252,7 @@ contract DegenerusJackpots is IDegenerusJackpots {
             (address w, ) = _bafTop(lvl, 0);
             uint256 s0 = _bafScore(w, lvl);
             if (_creditOrRefund(w, topPrize, tmpW, tmpA, n, s0, true)) {
+                mask |= (uint256(1) << n);
                 unchecked {
                     ++n;
                 }
@@ -264,6 +267,7 @@ contract DegenerusJackpots is IDegenerusJackpots {
             (address w, ) = coin.coinflipTopLastDay();
             uint256 s0 = _bafScore(w, lvl);
             if (_creditOrRefund(w, topPrize, tmpW, tmpA, n, s0, true)) {
+                mask |= (uint256(1) << n);
                 unchecked {
                     ++n;
                 }
@@ -283,6 +287,7 @@ contract DegenerusJackpots is IDegenerusJackpots {
             // Slice B: 5% to either the 3rd or 4th BAF leaderboard slot (pseudo-random tie-break).
             uint256 sPick = _bafScore(w, lvl);
             if (_creditOrRefund(w, prize, tmpW, tmpA, n, sPick, true)) {
+                mask |= (uint256(1) << n);
                 unchecked {
                     ++n;
                 }
@@ -634,7 +639,7 @@ contract DegenerusJackpots is IDegenerusJackpots {
         }
 
         // Scatter slice: 200 total draws (4 tickets * 50 rounds). Per round, take top-2 by BAF score.
-        // First bucket splits 20% evenly (max 50 winners) in bonds; second bucket splits 25% evenly (max 50 winners) in ETH.
+        // Game pays bonds for the last BAF_SCATTER_BOND_WINNERS scatter winners based on `bondMask`.
         {
             // Slice E: scatter tickets from trait sampler so casual participants can land smaller cuts.
             uint256 scatterTop = (P * 20) / 100;
@@ -643,6 +648,7 @@ contract DegenerusJackpots is IDegenerusJackpots {
             address[50] memory secondWinners;
             uint256 firstCount;
             uint256 secondCount;
+            uint256 scatterStart = n;
 
             // 50 rounds of 4-ticket sampling (total 200 tickets).
             for (uint8 round; round < 50; ) {
@@ -708,7 +714,6 @@ contract DegenerusJackpots is IDegenerusJackpots {
                 for (uint256 i; i < firstCount; ) {
                     uint256 scoreHint = _bafScore(firstWinners[i], lvl);
                     if (per != 0 && _creditOrRefund(firstWinners[i], per, tmpW, tmpA, n, scoreHint, true)) {
-                        mask |= (uint256(1) << n); // mark scatter bonds bucket for bond payout
                         unchecked {
                             ++n;
                         }
@@ -736,6 +741,20 @@ contract DegenerusJackpots is IDegenerusJackpots {
                     } else {
                         toReturn += per2;
                     }
+                    unchecked {
+                        ++i;
+                    }
+                }
+            }
+
+            uint256 scatterCount = n - scatterStart;
+            if (scatterCount != 0) {
+                uint256 targetBondCount = scatterCount < BAF_SCATTER_BOND_WINNERS
+                    ? scatterCount
+                    : BAF_SCATTER_BOND_WINNERS;
+                for (uint256 i; i < targetBondCount; ) {
+                    uint256 idx = (scatterStart + scatterCount - 1) - i;
+                    mask |= (uint256(1) << (BAF_SCATTER_MASK_OFFSET + idx));
                     unchecked {
                         ++i;
                     }

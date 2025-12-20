@@ -9,7 +9,8 @@ interface IDegenerusGameEndgameModule {
         uint256 rngWord,
         address jackpots,
         address jackpotModule,
-        IDegenerusCoinModule coinContract
+        IDegenerusCoinModule coinContract,
+        address nftAddr
     ) external;
 }
 
@@ -53,11 +54,10 @@ interface IDegenerusGameJackpotModule {
 }
 
 interface IDegenerusGameBondModule {
-    function bondMaintenanceForMap(
+    function bondUpkeep(
         address bondsAddr,
         address stethAddr,
         address coinAddr,
-        uint24 lvl,
         uint256 rngWord
     ) external;
     function stakeForTargetRatio(address bondsAddr, address stethAddr, uint24 lvl) external;

@@ -39,6 +39,7 @@ struct PurchaseParams {
 interface IDegenerusGamepieces {
     function tokenTraitsPacked(uint256 tokenId) external view returns (uint32);
     function purchaseCount() external view returns (uint32);
+    function queueRewardMints(address player, uint32 quantity) external;
     function processPendingMints(
         uint32 playersToProcess,
         uint32 multiplier,
@@ -626,6 +627,15 @@ contract DegenerusGamepieces {
 
         unchecked {
             _tokensOwed[buyer] = owed + quantity;
+        }
+    }
+
+    /// @notice Queue reward mints without applying purchase bonuses.
+    function queueRewardMints(address buyer, uint32 quantity) external onlyGame {
+        if (quantity == 0) return;
+        _recordPurchase(buyer, quantity);
+        unchecked {
+            _purchaseCount += quantity;
         }
     }
 

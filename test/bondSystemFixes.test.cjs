@@ -159,8 +159,16 @@ describe("Bond system fixes", function () {
     const pool = ethers.parseEther("1");
     await harness.payMapJackpot(lvl, 0, pool, await coin.getAddress());
 
-    // With lvl=10 and rngWord=0, the deterministic bond spend yields this exact vault inflow.
-    const expectedVaultEth = 57867199999999993n;
-    expect(await ethers.provider.getBalance(await vault.getAddress())).to.equal(expectedVaultEth);
+    // With lvl=10 and rngWord=0, the deterministic bond spend yields this exact bondPool inflow.
+    const share0 = (pool * 1333n) / 10000n;
+    const share1 = (pool * 1333n) / 10000n;
+    const share2 = (pool * 1334n) / 10000n;
+    const share3 = pool - share0 - share1 - share2;
+    const perWinner0 = share0 / 25n; // bucketCount=25, winners=12 for MAP large bucket
+    const bondBudgetSolo = (share3 * 2500n) / 10000n; // 25% bond spend for solo MAP bucket
+    const bondSpent = perWinner0 * 12n + bondBudgetSolo;
+    const expectedBondPool = bondSpent / 2n; // 50% bondPool / 50% yield split for game purchases
+    expect(await harness.bondAvailable()).to.equal(expectedBondPool);
+    expect(await ethers.provider.getBalance(await vault.getAddress())).to.equal(0n);
   });
 });

@@ -52,8 +52,11 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
     uint16 private constant JACKPOT_BOND_BPS_GRAND = 5000; // 50% skim for the top bucket
     uint16 private constant JACKPOT_BOND_BPS_OTHER = 1000; // 10% skim for other buckets
     uint256 private constant JACKPOT_BOND_MIN_BASE = 0.02 ether;
-    uint16 private constant BOND_BPS_MAP = 5000; // 50% of MAP jackpots routed into bonds
-    uint16 private constant BOND_BPS_DAILY = 2000; // 20% of daily/early-burn jackpots routed into bonds
+    uint16 private constant BOND_BPS_DAILY = 0; // bond buys from reward/early-burn daily jackpots disabled for now
+    uint16 private constant MAIN_LARGE_BUCKET_SIZE = 25;
+    uint16 private constant MAIN_LARGE_BUCKET_BOND_WINNERS = 12;
+    uint16 private constant MAP_SOLO_BOND_BPS = 2500; // 25% bond buy for solo MAP winner
+    uint16 private constant DAILY_SOLO_BOND_BPS = 5000; // 50% bond buy for solo daily winner
     uint32 private constant WRITES_BUDGET_MIN = 8; // Clamps low caps so we always clear base overhead and make progress
 
     struct JackpotEthCtx {
@@ -85,7 +88,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
             bool lastDaily = (jackpotCounter + 1) >= JACKPOT_LEVEL_CAP;
             uint256 budget = (dailyJackpotBase * _dailyJackpotBps(jackpotCounter)) / 10_000;
 
-            _executeJackpot(
+            uint256 paidEth = _runMainJackpotEthFlow(
                 JackpotParams({
                     lvl: lvl,
                     ethPool: budget,
@@ -95,10 +98,13 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
                     traitShareBpsPacked: DAILY_JACKPOT_SHARES_PACKED,
                     coinContract: coinContract
                 }),
-                true,
-                false,
-                BOND_BPS_DAILY
+                DAILY_SOLO_BOND_BPS,
+                MAIN_LARGE_BUCKET_SIZE,
+                MAIN_LARGE_BUCKET_BOND_WINNERS
             );
+            if (paidEth != 0) {
+                currentPrizePool -= paidEth;
+            }
 
             uint24 nextLevel = lvl + 1;
             uint256 futureEthPool;
@@ -278,21 +284,21 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
     ) external {
         uint8[4] memory winningTraits = _getRandomTraits(rngWord);
         uint32 winningTraitsPacked = _packWinningTraits(winningTraits);
-        currentPrizePool += (effectiveWei -
-            _executeJackpot(
-                JackpotParams({
-                    lvl: lvl,
-                    ethPool: effectiveWei,
-                    coinPool: 0,
-                    entropy: rngWord,
-                    winningTraitsPacked: winningTraitsPacked,
-                    traitShareBpsPacked: MAP_JACKPOT_SHARES_PACKED,
-                    coinContract: coinContract
-                }),
-                false,
-                false,
-                BOND_BPS_MAP
-            ));
+        uint256 paidEth = _runMainJackpotEthFlow(
+            JackpotParams({
+                lvl: lvl,
+                ethPool: effectiveWei,
+                coinPool: 0,
+                entropy: rngWord,
+                winningTraitsPacked: winningTraitsPacked,
+                traitShareBpsPacked: MAP_JACKPOT_SHARES_PACKED,
+                coinContract: coinContract
+            }),
+            MAP_SOLO_BOND_BPS,
+            MAIN_LARGE_BUCKET_SIZE,
+            MAIN_LARGE_BUCKET_BOND_WINNERS
+        );
+        currentPrizePool += (effectiveWei - paidEth);
 
         uint48 questDay = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
         _rollQuestForJackpot(coinContract, rngWord, true, questDay);
@@ -528,6 +534,74 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
             );
     }
 
+    function _runMainJackpotEthFlow(
+        JackpotParams memory jp,
+        uint16 soloBondBps,
+        uint16 largeBucketSize,
+        uint16 largeBucketBondWinners
+    ) private returns (uint256 totalPaidEth) {
+        uint8[4] memory traitIds = _unpackWinningTraits(jp.winningTraitsPacked);
+        uint16[4] memory shareBps = _shareBpsByBucket(jp.traitShareBpsPacked, uint8(jp.entropy & 3));
+        uint8 band = uint8((jp.lvl % 100) / 20) + 1;
+        uint16[4] memory bucketCounts = _traitBucketCounts(band, jp.entropy);
+        uint16 largeBucketCount;
+        if (largeBucketSize != 0) {
+            largeBucketCount = uint16(uint256(largeBucketSize) * band);
+        }
+        address bondsAddr = bonds;
+
+        JackpotEthCtx memory ctx;
+        ctx.entropyState = jp.entropy;
+
+        for (uint8 traitIdx; traitIdx < 4; ) {
+            uint256 share = _bucketShare(jp.ethPool, shareBps[traitIdx], traitIdx, ctx.ethDistributed);
+            if (traitIdx < 3) {
+                unchecked {
+                    ctx.ethDistributed += share;
+                }
+            }
+
+            uint16 bucketCount = bucketCounts[traitIdx];
+            uint16 bucketBondBps;
+            uint16 bondWinnerCount;
+
+            if (bucketCount == 1) {
+                bucketBondBps = soloBondBps;
+            } else if (bucketCount == largeBucketCount && largeBucketSize != 0 && largeBucketBondWinners != 0) {
+                bondWinnerCount = (bucketCount * largeBucketBondWinners) / largeBucketSize;
+            }
+
+            (uint256 newEntropyState, uint256 ethDelta, , uint256 bondSpent, uint256 bucketLiability) =
+                _resolveTraitWinners(
+                    jp.coinContract,
+                    false,
+                    jp.lvl,
+                    traitIds[traitIdx],
+                    traitIdx,
+                    share,
+                    ctx.entropyState,
+                    bucketCount,
+                    bondsAddr,
+                    bucketBondBps,
+                    bondWinnerCount
+                );
+            ctx.entropyState = newEntropyState;
+            ctx.totalPaidEth += ethDelta + bondSpent;
+            ctx.liabilityDelta += bucketLiability;
+            unchecked {
+                ++traitIdx;
+            }
+        }
+
+        if (ctx.liabilityDelta != 0) {
+            unchecked {
+                claimablePool += ctx.liabilityDelta;
+            }
+        }
+
+        return ctx.totalPaidEth;
+    }
+
     function _runJackpotCoinFlow(JackpotParams memory jp, uint8[4] memory traitIds, uint16[4] memory shareBps) private {
         // Do not scale coin jackpots by level; use base bucket counts.
         uint16[4] memory bucketCounts = _traitBucketCounts(1, jp.entropy);
@@ -577,8 +651,9 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
                         ctx.entropyState,
                         bucketCounts[traitIdx],
                         bondsAddr,
-                        bucketBondBps
-                    );
+                        bucketBondBps,
+                        0
+                );
                 ctx.entropyState = newEntropyState;
                 ctx.totalPaidEth += ethDelta + bondSpent;
                 ctx.liabilityDelta += bucketLiability;
@@ -626,6 +701,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
                 entropy,
                 bucketCount,
                 address(0),
+                0,
                 0
             );
             unchecked {
@@ -660,7 +736,8 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
         uint256 entropy,
         uint16 winnerCount,
         address bondsAddr,
-        uint16 bondBps
+        uint16 bondBps,
+        uint16 bondWinnerCount
     )
         private
         returns (uint256 entropyState, uint256 ethDelta, uint256 coinDelta, uint256 bondSpent, uint256 liabilityDelta)
@@ -685,7 +762,30 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
         uint256 perWinner = traitShare / totalCount;
         if (perWinner == 0) return (entropyState, 0, 0, bondSpent, liabilityDelta);
 
-        if (!payCoin && bondBps != 0 && IDegenerusBondsJackpot(bondsAddr).purchasesEnabled()) {
+        bool bondsEnabled;
+        if (!payCoin && (bondBps != 0 || bondWinnerCount != 0)) {
+            bondsEnabled = IDegenerusBondsJackpot(bondsAddr).purchasesEnabled();
+        }
+
+        if (!payCoin && bondBps != 0 && bondsEnabled && totalCount == 1) {
+            address winner = winners[0];
+            if (winner == address(0)) return (entropyState, 0, 0, 0, 0);
+            (uint256 soloEthPaid, uint256 soloBondSpent, uint256 soloLiability) =
+                _splitSoloBondPayout(winner, perWinner, bondBps, bondsAddr);
+            return (entropyState, soloEthPaid, 0, soloBondSpent, soloLiability);
+        }
+
+        if (!payCoin && bondWinnerCount != 0 && bondsEnabled) {
+            uint256 burnLiability;
+            (bondSpent, burnLiability) = _jackpotBondSpendCount(
+                bondsAddr,
+                winners,
+                perWinner,
+                entropyState,
+                bondWinnerCount
+            );
+            liabilityDelta += burnLiability;
+        } else if (!payCoin && bondBps != 0 && bondsEnabled) {
             uint256 burnLiability;
             (bondSpent, burnLiability) = _jackpotBondSpend(
                 bondsAddr,
@@ -731,6 +831,49 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
         return (entropyState, ethDelta, 0, bondSpent, liabilityDelta);
     }
 
+    function _splitSoloBondPayout(
+        address winner,
+        uint256 amount,
+        uint16 bondBps,
+        address bondsAddr
+    ) private returns (uint256 ethPaid, uint256 bondSpent, uint256 liabilityDelta) {
+        uint256 bondBudget = (amount * bondBps) / 10_000;
+        uint256 cashPortion = amount;
+        uint256 rewardAdd;
+
+        if (bondBudget != 0) {
+            (address resolved, , bool halfCashout) = _resolveBondRecipient(winner);
+            if (halfCashout) {
+                uint256 payout = bondBudget / 2;
+                uint256 remainder = bondBudget - payout;
+                uint256 rewardSlice = remainder / 2;
+                if (payout != 0) {
+                    _addClaimableEth(resolved, payout);
+                    liabilityDelta += payout;
+                }
+                rewardAdd += rewardSlice;
+                cashPortion = amount - bondBudget;
+                bondSpent = bondBudget;
+            } else {
+                try IDegenerusBondsJackpot(bondsAddr).depositFromGame{value: bondBudget}(resolved, bondBudget) {
+                    cashPortion = amount - bondBudget;
+                    bondSpent = bondBudget;
+                } catch {}
+            }
+        }
+
+        if (rewardAdd != 0) {
+            rewardPool += rewardAdd;
+        }
+
+        if (cashPortion != 0) {
+            _addClaimableEth(winner, cashPortion);
+            liabilityDelta += cashPortion;
+        }
+
+        ethPaid = liabilityDelta;
+    }
+
     function _jackpotBondSpend(
         address bondsAddr,
         address[] memory winners,
@@ -741,18 +884,40 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
     ) private returns (uint256 bondSpent, uint256 liabilityDelta) {
         uint256 winnersLen = winners.length;
 
-        IDegenerusBondsJackpot bondsContract = IDegenerusBondsJackpot(bondsAddr);
-
         // Immediately spend the bond skim on live bond purchases for the drawn winners.
         uint256 bondBudget = (traitShare * bondBps) / 10_000;
         if (bondBudget < perWinner) return (0, 0);
 
-        uint16 offset = uint16(entropyState % winnersLen);
-        uint256 rewardAdd;
         uint256 targetBondWinners = bondBudget / perWinner;
         if (targetBondWinners > winnersLen) {
             targetBondWinners = winnersLen;
         }
+
+        return _jackpotBondSpendCount(
+            bondsAddr,
+            winners,
+            perWinner,
+            entropyState,
+            uint16(targetBondWinners)
+        );
+    }
+
+    function _jackpotBondSpendCount(
+        address bondsAddr,
+        address[] memory winners,
+        uint256 perWinner,
+        uint256 entropyState,
+        uint16 targetBondWinners
+    ) private returns (uint256 bondSpent, uint256 liabilityDelta) {
+        uint256 winnersLen = winners.length;
+        if (targetBondWinners == 0 || winnersLen == 0) return (0, 0);
+        if (targetBondWinners > winnersLen) {
+            targetBondWinners = uint16(winnersLen);
+        }
+
+        IDegenerusBondsJackpot bondsContract = IDegenerusBondsJackpot(bondsAddr);
+        uint16 offset = uint16(entropyState % winnersLen);
+        uint256 rewardAdd;
 
         for (uint256 i; i < targetBondWinners; ) {
             address recipient = winners[(uint256(offset) + i) % winnersLen];

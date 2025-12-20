@@ -12,7 +12,9 @@ interface IDegenerusGameBondBank is IDegenerusGameLevel {
     function bondDeposit(bool trackPool) external payable;
     function bondCreditToClaimable(address player, uint256 amount) external;
     function bondCreditToClaimableBatch(address[] calldata players, uint256[] calldata amounts) external;
+    function bondSpendToMaps(address player, uint256 amount, uint32 quantity) external;
     function bondAvailable() external view returns (uint256);
+    function mintPrice() external view returns (uint256);
 }
 
 /// @notice Minimal VRF coordinator surface for V2+ random word requests.
@@ -235,10 +237,10 @@ contract BondToken {
 /**
  * @title DegenerusBonds
  * @notice Bond system wired for the Degenerus game:
- *         - Bonds created every 5 levels; sales open 10 levels before maturity.
+ *         - Bonds mature every 10 levels (ending in 0); sales open for 5 levels per cycle.
  *         - Payout budget = series raise * growth multiplier (finalized on the last emission run).
  *         - Deposits award a score (multiplier stub) used for jackpots.
- *         - Five jackpot days mint a maturity-specific ERC20; total mint equals payout budget.
+ *         - Five jackpot days mint the shared ERC20 (DGNRS); total mint equals payout budget.
  *         - Burning the ERC20 enters a two-lane final jackpot at maturity; payout ~pro-rata to burned amount.
  */
 contract DegenerusBonds {
@@ -301,7 +303,7 @@ contract DegenerusBonds {
     uint8 private constant TOP_PCT_4 = 5;
     uint256 private constant MIN_DEPOSIT = 0.01 ether;
     uint8 private constant PRESALE_MAX_RUNS = 5;
-    uint8 private constant PRESALE_JACKPOT_SPOTS = 50;
+    uint8 private constant PRESALE_JACKPOT_SPOTS = 100; // single presale draw per round; doubled winner count
     uint256 private constant PRESALE_PREV_RAISE = 50 ether;
     uint32 private constant VRF_CALLBACK_GAS_LIMIT = 200_000;
     uint16 private constant VRF_REQUEST_CONFIRMATIONS = 10;
@@ -712,6 +714,7 @@ contract DegenerusBonds {
         }
     }
 
+    /// @notice Used by jackpot bond buys; when false, jackpots should pay ETH instead of bonds.
     function purchasesEnabled() external view returns (bool) {
         if (gameOverStarted || !gamePurchasesEnabled) return false;
         if (address(game) == address(0)) return false;
@@ -845,20 +848,59 @@ contract DegenerusBonds {
         uint24 maturityLevel = _activeMaturityAt(currLevel);
         BondSeries storage s = _getOrCreateSeries(maturityLevel);
 
-        // Split ETH: from game (30% vault, 50% bondPool, 20% rewardPool), external (50% vault, 30% bondPool, 20% rewardPool)
-        uint256 vaultShare = (amount * (fromGame ? 30 : 50)) / 100;
-        uint256 bondShare = (amount * (fromGame ? 50 : 30)) / 100;
-        uint256 rewardShare = amount - vaultShare - bondShare; // remaining 20%
+        // Split ETH: game purchases (50% bondPool, 50% yield); direct purchases (40% vault paid in stETH with ETH retained by game, fallback to ETH if needed, 30% yield, 20% bondPool, 10% reward).
+        uint256 vaultShare;
+        uint256 bondShare;
+        uint256 yieldShare;
+        uint256 rewardShare;
+        uint256 vaultEthShare;
+        if (fromGame) {
+            bondShare = amount / 2;
+            yieldShare = amount - bondShare;
+        } else {
+            vaultShare = (amount * 40) / 100;
+            bondShare = (amount * 20) / 100;
+            rewardShare = (amount * 10) / 100;
+            yieldShare = amount - vaultShare - bondShare - rewardShare;
+        }
 
         address vaultAddr = vault;
         if (vaultAddr == address(0)) revert BankCallFailed();
-        _sendEthOrRevert(vaultAddr, vaultShare);
-
-        if (bondShare != 0) {
-            IDegenerusGameBondBank(address(game)).bondDeposit{value: bondShare}(true);
+        address gameAddr = address(game);
+        vaultEthShare = vaultShare;
+        if (!fromGame && vaultShare != 0) {
+            uint256 stethCover = vaultShare;
+            uint256 stethBal;
+            try IStETHLike(steth).balanceOf(gameAddr) returns (uint256 b) {
+                stethBal = b;
+            } catch {}
+            if (stethBal < stethCover) stethCover = stethBal;
+            if (stethCover != 0) {
+                bool ok;
+                try IStETHLike(steth).transferFrom(gameAddr, vaultAddr, stethCover) returns (bool success) {
+                    ok = success;
+                } catch {
+                    ok = false;
+                }
+                if (ok) {
+                    vaultEthShare = vaultShare - stethCover;
+                    yieldShare += stethCover; // keep ETH in the game; vault gets stETH instead
+                }
+            }
         }
 
-        _sendEthOrRevert(address(game), rewardShare);
+        if (vaultEthShare != 0) {
+            _sendEthOrRevert(vaultAddr, vaultEthShare);
+        }
+        if (bondShare != 0) {
+            IDegenerusGameBondBank(gameAddr).bondDeposit{value: bondShare}(true);
+        }
+        if (yieldShare != 0) {
+            IDegenerusGameBondBank(gameAddr).bondDeposit{value: yieldShare}(false);
+        }
+        if (rewardShare != 0) {
+            _sendEthOrRevert(gameAddr, rewardShare);
+        }
 
         scoreAwarded = _scoreWithMultiplier(beneficiary, amount);
         _payAffiliateReward(beneficiary, amount, AFFILIATE_BOND_BPS);
@@ -921,8 +963,8 @@ contract DegenerusBonds {
     /// @param rngWord Entropy used for jackpots and lane selection.
     /// @param workCapOverride Optional work budget override; 0 uses the built-in default.
     ///        Budget units are coarse “work ticks” (series iterations/archive steps), not gas.
-    /// @return worked True if any maintenance action was performed this call.
-    function bondMaintenance(uint256 rngWord, uint32 workCapOverride) external onlyGame returns (bool worked) {
+    /// @return done True when the maintenance pass completed without hitting the work cap.
+    function bondMaintenance(uint256 rngWord, uint32 workCapOverride) external onlyGame returns (bool done) {
         uint32 workCap = workCapOverride == 0 ? BOND_MAINT_WORK_CAP : workCapOverride;
         uint32 workUsed;
         uint24 currLevel = _currentLevel();
@@ -964,13 +1006,9 @@ contract DegenerusBonds {
 
             if (currLevel >= s.maturityLevel && !s.resolved) {
                 if (_isFunded(s) && !backlogPending) {
-                    bool wasResolved = s.resolved;
                     bool resolved = _resolveSeries(s, rollingEntropy);
                     if (resolved) {
                         rollingEntropy = uint256(keccak256(abi.encode(rollingEntropy, s.maturityLevel, "resolve")));
-                        if (!wasResolved && s.resolved) {
-                            worked = true; // only count work when we resolve a new maturity
-                        }
                     } else {
                         backlogPending = true;
                     }
@@ -1012,7 +1050,89 @@ contract DegenerusBonds {
         }
 
         // Note: rngLock is controlled by the game to prevent post-RNG manipulation windows.
-        return worked;
+        done = !hitCap;
+        return done;
+    }
+
+    /// @notice Preview whether maintenance would consume ~20% of the work cap if run now.
+    function bondMaintenanceWillHitCap(uint32 workCapOverride) external view returns (bool hitCap) {
+        uint32 workCap = workCapOverride == 0 ? BOND_MAINT_WORK_CAP : workCapOverride;
+        if (workCap == 0) return false;
+        uint32 threshold = (workCap + 4) / 5; // ceil(20% of cap)
+
+        uint32 workUsed;
+        uint24 currLevel = _currentLevel();
+        uint24 len = uint24(maturities.length);
+
+        for (uint24 i = activeMaturityIndex; i < len; ) {
+            BondSeries storage s = series[maturities[i]];
+            unchecked {
+                ++i;
+            }
+            if (s.maturityLevel == 0 || s.resolved) continue;
+
+            bool consumedWork;
+            uint8 maxRuns = _maxEmissionRuns(s.maturityLevel);
+            uint24 emissionStop = s.maturityLevel > 5 ? s.maturityLevel - 5 : 0;
+            if (s.maturityLevel == 10) emissionStop = 6;
+            if (
+                currLevel >= s.saleStartLevel &&
+                currLevel < emissionStop &&
+                s.jackpotsRun < maxRuns &&
+                s.lastJackpotLevel != currLevel
+            ) {
+                consumedWork = true;
+            }
+            if (currLevel >= s.maturityLevel && !s.resolved) {
+                consumedWork = true;
+            }
+
+            if (consumedWork) {
+                unchecked {
+                    ++workUsed;
+                }
+                if (workUsed >= threshold) return true;
+            }
+        }
+
+        uint24 archiveIdx = activeMaturityIndex;
+        while (archiveIdx < len) {
+            BondSeries storage s = series[maturities[archiveIdx]];
+            if (!s.resolved) break;
+            unchecked {
+                ++archiveIdx;
+                ++workUsed;
+            }
+            if (workUsed >= threshold) return true;
+        }
+
+        uint24 activeMat = _activeMaturityAt(currLevel);
+        if (series[activeMat].maturityLevel == 0) {
+            bool consumedWork;
+            uint24 saleStartLevel = activeMat == 10 ? 1 : (activeMat > 10 ? activeMat - 10 : 0);
+            uint8 maxRuns = _maxEmissionRuns(activeMat);
+            uint24 emissionStop = activeMat > 5 ? activeMat - 5 : 0;
+            if (activeMat == 10) emissionStop = 6;
+            if (
+                currLevel >= saleStartLevel &&
+                currLevel < emissionStop &&
+                maxRuns != 0 &&
+                currLevel != 0
+            ) {
+                consumedWork = true;
+            }
+            if (currLevel >= activeMat) {
+                consumedWork = true;
+            }
+            if (consumedWork) {
+                unchecked {
+                    ++workUsed;
+                }
+                if (workUsed >= threshold) return true;
+            }
+        }
+
+        return false;
     }
 
     function _bondMaintWorkExceeded(uint32 used, uint32 cap) private pure returns (bool exceeded) {
@@ -1297,9 +1417,9 @@ contract DegenerusBonds {
         if (currLevel >= s.maturityLevel) {
             required = burned; // maturity reached/past: cover actual burns only
         } else {
-            // Upcoming maturity: cover all potential burns (full budget for that digit cycle).
-            required = s.payoutBudget;
-        }
+        // Upcoming maturity: cover all potential burns (full budget for that cycle).
+        required = s.payoutBudget;
+    }
     }
 
     function _requiredCoverTotals(
@@ -1658,7 +1778,7 @@ contract DegenerusBonds {
                 p.jackpotParticipants,
                 p.jackpotCumulative,
                 totalScore,
-                uint256(keccak256(abi.encode(rngWord, uint256(0)))),
+                rngWord,
                 toMint,
                 PRESALE_JACKPOT_SPOTS
             );
@@ -1760,14 +1880,19 @@ contract DegenerusBonds {
         address[] memory payoutWinners;
         uint256[] memory payoutAmounts;
         uint256 payoutCount;
+        uint256 mapPrice;
+        uint8 mapParity;
         if (liveGame) {
             payoutWinners = new address[](14);
             payoutAmounts = new uint256[](14);
+            mapPrice = IDegenerusGameBondBank(address(game)).mintPrice() / 4;
+            mapParity = uint8(rngWord & 1);
         }
 
         uint256 localEntropy = rngWord;
         for (uint256 k = 0; k < 14; ) {
-            uint256 prize = buckets[k];
+            uint256 bucketIdx = k;
+            uint256 prize = buckets[bucketIdx];
             unchecked {
                 ++k;
             }
@@ -1777,6 +1902,18 @@ contract DegenerusBonds {
             if (winner == address(0)) continue;
 
             if (liveGame) {
+                bool isSmallBucket = bucketIdx >= 4;
+                // Convert half of the 1% buckets into MAP rewards during live play.
+                bool mapBucket = isSmallBucket && (((bucketIdx - 4) & 1) == mapParity);
+                if (mapBucket && mapPrice != 0) {
+                    uint256 qty = prize / mapPrice;
+                    if (qty != 0) {
+                        if (qty > type(uint32).max) qty = type(uint32).max;
+                        IDegenerusGameBondBank(address(game)).bondSpendToMaps(winner, prize, uint32(qty));
+                        paid += prize;
+                        continue;
+                    }
+                }
                 payoutWinners[payoutCount] = winner;
                 payoutAmounts[payoutCount] = prize;
                 unchecked {

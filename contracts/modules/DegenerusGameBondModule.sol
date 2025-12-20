@@ -27,12 +27,11 @@ interface IStETHLite {
 contract DegenerusGameBondModule is DegenerusGameStorage {
     uint256 private constant MIN_STAKE = 0.01 ether;
 
-    /// @notice Handle bond funding/resolve work during map jackpot prep.
-    function bondMaintenanceForMap(
+    /// @notice Handle bond funding/resolve work during pregame maintenance.
+    function bondUpkeep(
         address bondsAddr,
         address stethAddr,
         address coinAddr,
-        uint24 lvl,
         uint256 rngWord
     ) external {
         IBonds bondContract = IBonds(bondsAddr);
@@ -41,16 +40,11 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
         uint256 ethBal = address(this).balance;
 
         uint256 obligations = currentPrizePool + nextPrizePool + rewardPool + claimablePool + bondPool;
-        if (lvl % 100 == 0) {
-            unchecked {
-                obligations += bafHundredPool; // include reserved reward slices so they cannot be skimmed as “yield” on level 100. Decimator already ran
-            }
-        }
         uint256 combined = ethBal + stBal;
         uint256 yieldTotal = combined > obligations ? combined - obligations : 0;
 
-        // Mintable coin: each of vault and bonds receives 5% of the nextPrizePool value (priced in coin units).
-        uint256 coinSlice = (nextPrizePool * priceCoin) / price; // coin equivalent of nextPrizePool
+        // Mintable coin: each of vault and bonds receives 5% of the last prize pool (priced in coin units).
+        uint256 coinSlice = (lastPrizePool * priceCoin) / price; // coin equivalent of lastPrizePool
         coinSlice = coinSlice / 20; // 5%
 
         uint256 bondSkim = yieldTotal / 4; // 25% to bonds
@@ -84,11 +78,10 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
         uint256 stBal = IStETHLite(stethAddr).balanceOf(address(this));
         uint256 ethBal = address(this).balance;
         uint256 obligations = currentPrizePool + nextPrizePool + rewardPool + claimablePool + bondPool;
-        uint256 decPool = decimatorHundredPool;
         uint256 bafPool = bafHundredPool;
-        if (decPool != 0 || bafPool != 0) {
+        if (bafPool != 0) {
             unchecked {
-                obligations += decPool + bafPool; // only non-zero during level-100 specials
+                obligations += bafPool; // only non-zero during level-100 specials
             }
         }
         uint256 combined = ethBal + stBal;

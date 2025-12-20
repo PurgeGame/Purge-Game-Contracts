@@ -4,7 +4,6 @@ pragma solidity ^0.8.26;
 import {IDegenerusGamepieces} from "./DegenerusGamepieces.sol";
 import {IDegenerusCoinModule} from "./interfaces/DegenerusGameModuleInterfaces.sol";
 import {IDegenerusCoin} from "./interfaces/IDegenerusCoin.sol";
-import {IDegenerusRendererLike} from "./interfaces/IDegenerusRendererLike.sol";
 import {IDegenerusJackpots} from "./interfaces/IDegenerusJackpots.sol";
 import {IDegenerusTrophies} from "./interfaces/IDegenerusTrophies.sol";
 import {
@@ -29,7 +28,8 @@ interface IDegenerusBonds {
     function depositCurrentFor(address beneficiary) external payable returns (uint256 scoreAwarded);
     function depositFromGame(address beneficiary, uint256 amount) external payable returns (uint256 scoreAwarded);
     function payBonds(uint256 coinAmount, uint256 stEthAmount, uint256 rngWord) external payable;
-    function bondMaintenance(uint256 rngWord, uint32 workCapOverride) external returns (bool worked);
+    function bondMaintenance(uint256 rngWord, uint32 workCapOverride) external returns (bool done);
+    function bondMaintenanceWillHitCap(uint32 workCapOverride) external view returns (bool hitCap);
     function setRngLock(bool locked) external;
     function notifyGameOver() external;
     function purchasesEnabled() external view returns (bool);
@@ -84,7 +84,6 @@ contract DegenerusGame is DegenerusGameStorage {
     // -----------------------
     // Immutable Addresses
     // -----------------------
-    IDegenerusRendererLike private immutable renderer; // Trusted renderer; used for tokenURI composition
     IDegenerusCoin private immutable coin; // Trusted coin/game-side coordinator (BURNIE ERC20)
     IDegenerusGamepieces private immutable nft; // ERC721 interface for mint/burn/metadata surface
     IStETH private immutable steth; // stETH token held by the game
@@ -129,7 +128,6 @@ contract DegenerusGame is DegenerusGameStorage {
 
     /**
      * @param degenerusCoinContract Trusted BURNIE ERC20 / game coordinator address
-     * @param renderer_         Trusted on-chain renderer
      * @param nftContract       ERC721 game contract
      * @param endgameModule_    Delegate module handling endgame settlement
      * @param jackpotModule_    Delegate module handling jackpot distribution
@@ -145,7 +143,6 @@ contract DegenerusGame is DegenerusGameStorage {
      */
     constructor(
         address degenerusCoinContract,
-        address renderer_,
         address nftContract,
         address endgameModule_,
         address jackpotModule_,
@@ -160,7 +157,6 @@ contract DegenerusGame is DegenerusGameStorage {
         address vrfAdmin_
     ) {
         coin = IDegenerusCoin(degenerusCoinContract);
-        renderer = IDegenerusRendererLike(renderer_);
         nft = IDegenerusGamepieces(nftContract);
         endgameModule = endgameModule_;
         jackpotModule = jackpotModule_;
@@ -222,6 +218,22 @@ contract DegenerusGame is DegenerusGameStorage {
         if (total != 0) {
             bondPool -= total;
             claimablePool += total;
+        }
+    }
+
+    /// @notice Convert a bond payout into MAP mints, debiting the bond pool.
+    function bondSpendToMaps(address player, uint256 amount, uint32 quantity) external onlyBonds {
+        if (bondGameOver) revert E();
+        if (amount == 0 || quantity == 0 || player == address(0)) return;
+        bondPool -= amount;
+        nextPrizePool += amount;
+
+        uint32 owed = playerMapMintsOwed[player];
+        if (owed == 0) {
+            pendingMapMints.push(player);
+        }
+        unchecked {
+            playerMapMintsOwed[player] = owed + quantity;
         }
     }
 
@@ -471,6 +483,11 @@ contract DegenerusGame is DegenerusGameStorage {
             (bool batchWorked, bool batchesFinished) = _runProcessMapBatch(cap); // single batch per call; break if any work was done
             if (batchWorked || !batchesFinished) break;
 
+            if (bondMaintenancePending) {
+                _runBondMaintenance(bonds, rngWord, cap, day);
+                break;
+            }
+
             // --- State 1 - Pregame ---
             if (_gameState == 1) {
                 _runEndgameModule(lvl, rngWord); // handles payouts, wipes, endgame dist, and jackpots
@@ -484,7 +501,7 @@ contract DegenerusGame is DegenerusGameStorage {
                     decWindowOpen = true;
                 }
                 if (lvl % 100 == 99) decWindowOpen = true;
-                _unlockRng(day);
+                _bondSetup(rngWord, cap, day);
                 break;
             }
 
@@ -504,11 +521,6 @@ contract DegenerusGame is DegenerusGameStorage {
                             break; // keep working this jackpot slice before moving on
                         }
                     }
-
-                    _bondSetup(lvl, rngWord);
-
-                    bool bondWorked = IDegenerusBonds(bonds).bondMaintenance(rngWord, cap);
-                    if (bondWorked) break; // bond batch consumed this tick; rerun advanceGame to continue
 
                     uint256 mapEffectiveWei = _calcPrizePoolForJackpot(lvl, rngWord);
                     payMapJackpot(lvl, rngWord, mapEffectiveWei);
@@ -779,31 +791,35 @@ contract DegenerusGame is DegenerusGameStorage {
     /// @notice Delegatecall into the endgame module to resolve slow settlement paths.
     function _runEndgameModule(uint24 lvl, uint256 rngWord) internal {
         // Endgame settlement logic lives in DegenerusGameEndgameModule (delegatecall keeps state on this contract).
-        (bool ok, ) = endgameModule.delegatecall(
+        (bool ok, bytes memory data) = endgameModule.delegatecall(
             abi.encodeWithSelector(
                 IDegenerusGameEndgameModule.finalizeEndgame.selector,
                 lvl,
                 rngWord,
                 jackpots,
                 jackpotModule,
-                IDegenerusCoinModule(address(coin))
+                IDegenerusCoinModule(address(coin)),
+                address(nft)
             )
         );
-        if (!ok) return;
-        gameState = 2; // Endgame is fully settled; move directly into the purchase/airdrop state.
+        if (!ok) _revertDelegate(data);
+    }
+
+    function _revertDelegate(bytes memory reason) private pure {
+        if (reason.length == 0) revert E();
+        assembly ("memory-safe") {
+            revert(add(32, reason), mload(reason))
+        }
     }
 
     // --- Delegate helpers (mint module) --------------------------------------------------------------
 
-    function _recordMintDataModule(
-        address player,
-        uint24 lvl,
-        uint32 mintUnits
-    ) private returns (uint256 coinReward) {
+    function _recordMintDataModule(address player, uint24 lvl, uint32 mintUnits) private returns (uint256 coinReward) {
         (bool ok, bytes memory data) = mintModule.delegatecall(
             abi.encodeWithSelector(IDegenerusGameMintModule.recordMintData.selector, player, lvl, mintUnits)
         );
-        if (!ok || data.length == 0) return 0;
+        if (!ok) _revertDelegate(data);
+        if (data.length == 0) revert E();
         return abi.decode(data, (uint256));
     }
 
@@ -811,7 +827,8 @@ contract DegenerusGame is DegenerusGameStorage {
         (bool ok, bytes memory data) = mintModule.delegatecall(
             abi.encodeWithSelector(IDegenerusGameMintModule.calculateAirdropMultiplier.selector, purchaseCount, lvl)
         );
-        if (!ok || data.length == 0) return 1;
+        if (!ok) _revertDelegate(data);
+        if (data.length == 0) revert E();
         return abi.decode(data, (uint32));
     }
 
@@ -819,12 +836,13 @@ contract DegenerusGame is DegenerusGameStorage {
         (bool ok, bytes memory data) = mintModule.delegatecall(
             abi.encodeWithSelector(IDegenerusGameMintModule.purchaseTargetCountFromRaw.selector, rawCount)
         );
-        if (!ok || data.length == 0) return rawCount;
+        if (!ok) _revertDelegate(data);
+        if (data.length == 0) revert E();
         return abi.decode(data, (uint32));
     }
 
     function _rebuildTraitCountsModule(uint32 tokenBudget, uint32 target, uint256 baseTokenId) private {
-        (bool ok, ) = mintModule.delegatecall(
+        (bool ok, bytes memory data) = mintModule.delegatecall(
             abi.encodeWithSelector(
                 IDegenerusGameMintModule.rebuildTraitCounts.selector,
                 tokenBudget,
@@ -832,28 +850,47 @@ contract DegenerusGame is DegenerusGameStorage {
                 baseTokenId
             )
         );
-        if (!ok) return;
+        if (!ok) _revertDelegate(data);
     }
 
-    function _bondSetup(uint24 lvl, uint256 rngWord) private {
-        (bool ok, ) = bondModule.delegatecall(
+    function _bondSetup(uint256 rngWord, uint32 cap, uint48 day) private {
+        (bool ok, bytes memory data) = bondModule.delegatecall(
             abi.encodeWithSelector(
-                IDegenerusGameBondModule.bondMaintenanceForMap.selector,
+                IDegenerusGameBondModule.bondUpkeep.selector,
                 bonds,
                 address(steth),
                 address(coin),
-                lvl,
                 rngWord
             )
         );
-        if (!ok) return;
+        if (!ok) _revertDelegate(data);
+        address bondsAddr = bonds;
+        if (IDegenerusBonds(bondsAddr).bondMaintenanceWillHitCap(cap)) {
+            bondMaintenancePending = true;
+            return;
+        }
+        _runBondMaintenance(bondsAddr, rngWord, cap, day);
+    }
+
+    function _runBondMaintenance(address bondsAddr, uint256 rngWord, uint32 cap, uint48 day) private {
+        bool done = IDegenerusBonds(bondsAddr).bondMaintenance(rngWord, cap);
+        if (done) {
+            gameState = 2; // enter purchase/airdrop state once bond maintenance is fully settled
+
+            if (bondMaintenancePending) {
+                bondMaintenancePending = false;
+            }
+            _unlockRng(day);
+        } else if (!bondMaintenancePending) {
+            bondMaintenancePending = true;
+        }
     }
 
     function _stakeForTargetRatioModule(uint24 lvl) private {
-        (bool ok, ) = bondModule.delegatecall(
+        (bool ok, bytes memory data) = bondModule.delegatecall(
             abi.encodeWithSelector(IDegenerusGameBondModule.stakeForTargetRatio.selector, bonds, address(steth), lvl)
         );
-        if (!ok) return;
+        if (!ok) _revertDelegate(data);
     }
 
     /// @notice Unified external hook for trusted modules to adjust DegenerusGame accounting.
@@ -1025,7 +1062,7 @@ contract DegenerusGame is DegenerusGameStorage {
     // --- Map jackpot payout (end of purchase phase) -------------------------------------------------
 
     function payMapJackpot(uint24 lvl, uint256 rngWord, uint256 effectiveWei) internal {
-        (bool ok, ) = jackpotModule.delegatecall(
+        (bool ok, bytes memory data) = jackpotModule.delegatecall(
             abi.encodeWithSelector(
                 IDegenerusGameJackpotModule.payMapJackpot.selector,
                 lvl,
@@ -1034,7 +1071,7 @@ contract DegenerusGame is DegenerusGameStorage {
                 IDegenerusCoinModule(address(coin))
             )
         );
-        if (!ok) return;
+        if (!ok) _revertDelegate(data);
     }
 
     function _calcPrizePoolForJackpot(uint24 lvl, uint256 rngWord) internal returns (uint256 effectiveWei) {
@@ -1046,14 +1083,15 @@ contract DegenerusGame is DegenerusGameStorage {
                 address(steth)
             )
         );
-        if (!ok || data.length == 0) return 0;
+        if (!ok) _revertDelegate(data);
+        if (data.length == 0) revert E();
         return abi.decode(data, (uint256));
     }
 
     // --- Daily & early‑burn jackpots ---------------------------------------------------------------
 
     function payDailyJackpot(bool isDaily, uint24 lvl, uint256 randWord) internal {
-        (bool ok, ) = jackpotModule.delegatecall(
+        (bool ok, bytes memory data) = jackpotModule.delegatecall(
             abi.encodeWithSelector(
                 IDegenerusGameJackpotModule.payDailyJackpot.selector,
                 isDaily,
@@ -1062,11 +1100,11 @@ contract DegenerusGame is DegenerusGameStorage {
                 IDegenerusCoinModule(address(coin))
             )
         );
-        if (!ok) return;
+        if (!ok) _revertDelegate(data);
     }
 
     function payCarryoverExterminationJackpot(uint24 lvl, uint8 traitId, uint256 randWord) internal {
-        (bool ok, ) = jackpotModule.delegatecall(
+        (bool ok, bytes memory data) = jackpotModule.delegatecall(
             abi.encodeWithSelector(
                 IDegenerusGameJackpotModule.payCarryoverExterminationJackpot.selector,
                 lvl,
@@ -1075,7 +1113,7 @@ contract DegenerusGame is DegenerusGameStorage {
                 IDegenerusCoinModule(address(coin))
             )
         );
-        if (!ok) return;
+        if (!ok) _revertDelegate(data);
     }
 
     function _handleJackpotLevelCap() internal returns (bool) {
@@ -1087,10 +1125,10 @@ contract DegenerusGame is DegenerusGameStorage {
     }
 
     function gameOverDrainToBonds() private {
-        (bool ok, ) = bondModule.delegatecall(
+        (bool ok, bytes memory data) = bondModule.delegatecall(
             abi.encodeWithSelector(IDegenerusGameBondModule.drainToBonds.selector, bonds, address(steth))
         );
-        if (!ok) return;
+        if (!ok) _revertDelegate(data);
         gameState = 0;
     }
 
@@ -1177,7 +1215,8 @@ contract DegenerusGame is DegenerusGameStorage {
         (bool ok, bytes memory data) = jackpotModule.delegatecall(
             abi.encodeWithSelector(IDegenerusGameJackpotModule.processMapBatch.selector, writesBudget)
         );
-        if (!ok || data.length == 0) return false;
+        if (!ok) _revertDelegate(data);
+        if (data.length == 0) revert E();
         return abi.decode(data, (bool));
     }
 
@@ -1192,7 +1231,7 @@ contract DegenerusGame is DegenerusGameStorage {
     }
 
     function _requestRng(uint8 gameState_, bool isMapJackpotDay, uint24 lvl, uint48 /*day*/) private {
-        bool shouldLockBonds = (gameState_ == 2 && isMapJackpotDay);
+        bool shouldLockBonds = (gameState_ == 1) || (gameState_ == 3 && (jackpotCounter + 1) >= JACKPOT_LEVEL_CAP);
         if (shouldLockBonds) {
             IDegenerusBonds(bonds).setRngLock(true);
         }
@@ -1248,7 +1287,7 @@ contract DegenerusGame is DegenerusGameStorage {
         rngLockedFlag = false;
         vrfRequestId = 0;
         rngRequestTime = 0;
-        // If bonds were locked for a map-jackpot RNG window, release the lock once this RNG window is over.
+        // If bonds were locked for an RNG window, release the lock once this RNG window is over.
         try IDegenerusBonds(bonds).setRngLock(false) {} catch {}
     }
 
@@ -1379,17 +1418,16 @@ contract DegenerusGame is DegenerusGameStorage {
     }
 
     function _seedTraitCounts() private {
-        uint32[256] memory snapshot;
         uint32[256] storage remaining = traitRemaining;
+        uint32[256] storage startRemaining = traitStartRemaining;
 
         for (uint16 t; t < 256; ) {
-            snapshot[t] = remaining[t];
+            uint32 value = remaining[t];
+            startRemaining[t] = value;
             unchecked {
                 ++t;
             }
         }
-
-        renderer.setStartingTraitRemaining(snapshot);
     }
 
     function _consumeTrait(uint8 traitId, uint32 endLevel) private returns (bool reachedZero) {
@@ -1425,6 +1463,10 @@ contract DegenerusGame is DegenerusGameStorage {
         address[] storage arr = levelExterminators;
         if (arr.length < lvl) return address(0);
         return arr[uint256(lvl) - 1];
+    }
+
+    function startTraitRemaining(uint8 traitId) external view returns (uint32) {
+        return traitStartRemaining[traitId];
     }
 
     function getTraitRemainingQuad(

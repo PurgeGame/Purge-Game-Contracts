@@ -87,12 +87,14 @@ abstract contract DegenerusGameStorage {
     mapping(uint24 => address[][256]) internal traitBurnTicket; // level -> trait id -> ticket owner list
     uint32[80] internal dailyBurnCount; // per-day trait hit counters used for jackpot selection
     uint32[256] internal traitRemaining; // remaining supply per trait id
+    uint32[256] internal traitStartRemaining; // supply per trait id at burn start (map/burn ticket split)
     mapping(address => uint256) internal mintPacked_; // bit-packed mint history (see DegenerusGame ETH_* constants for layout)
 
     // ---------------------------------------------------------------------
     // Bond maintenance / cashout preferences
     // ---------------------------------------------------------------------
     mapping(address => bool) internal bondCashoutHalf; // opt-in flag to take 50% cash instead of receiving bonds
+    bool internal bondMaintenancePending; // true while bond maintenance needs dedicated advanceGame calls
 
     // ---------------------------------------------------------------------
     // RNG history

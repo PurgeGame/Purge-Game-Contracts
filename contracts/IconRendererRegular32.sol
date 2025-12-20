@@ -6,6 +6,10 @@ import "@openzeppelin/contracts/utils/Strings.sol";
 import "./interfaces/IDegenerusAffiliate.sol";
 import "./interfaces/IconRendererTypes.sol";
 
+interface IDegenerusGameStartRemaining {
+    function startTraitRemaining(uint8 traitId) external view returns (uint32);
+}
+
 /**
  * @title IconRendererRegular32
  * @notice Stateless(ish) SVG renderer with per-token and per-address color overrides.
@@ -218,11 +222,8 @@ contract IconRendererRegular32 {
     int16[4] private CX = [int16(-25), int16(25), int16(-25), int16(25)];
     int16[4] private CY = [int16(25), int16(25), int16(-25), int16(-25)];
 
-    // Trait‑remaining snapshot (set by game at epoch start).
-    uint32[256] private startTR;
-
     // Linked contracts (set once).
-    address private game; // DegenerusGame contract (authorised caller)
+    IDegenerusGameStartRemaining private game; // DegenerusGame contract
     IERC721Lite private nft; // DegenerusGamepieces ERC721 contract
     // --- Square geometry (for trophy sizing vs inner side) -----------------
     uint32 private constant SQUARE_SIDE_100 = 100; // <rect width/height>
@@ -236,12 +237,6 @@ contract IconRendererRegular32 {
     // ---------------------------------------------------------------------
     // Game wiring & trait baselines
     // ---------------------------------------------------------------------
-
-    /// @dev Restrict to the DegenerusGame contract once linked.
-    modifier onlyGame() {
-        if (msg.sender != game) revert E();
-        _;
-    }
 
     modifier onlyAdmin() {
         if (msg.sender != admin) revert E();
@@ -264,9 +259,9 @@ contract IconRendererRegular32 {
 
     function _setGame(address gameAddr) private {
         if (gameAddr == address(0)) return;
-        if (game == address(0)) {
-            game = gameAddr;
-        } else if (game != gameAddr) {
+        if (address(game) == address(0)) {
+            game = IDegenerusGameStartRemaining(gameAddr);
+        } else if (address(game) != gameAddr) {
             revert E();
         }
     }
@@ -278,17 +273,6 @@ contract IconRendererRegular32 {
             nft = IERC721Lite(nftAddr);
         } else if (current != nftAddr) {
             revert E();
-        }
-    }
-
-    /// @notice Capture the starting trait‑remaining snapshot for the new epoch.
-    /// @dev Writes 256 slots; intended to be called once per level by the game.
-    function setStartingTraitRemaining(uint32[256] calldata values) external onlyGame {
-        for (uint256 i; i < 256; ) {
-            startTR[i] = values[i];
-            unchecked {
-                ++i;
-            }
         }
     }
 
@@ -722,7 +706,8 @@ contract IconRendererRegular32 {
 
     /// @dev Read the starting “remaining” supply for the trait bucket.
     function _startFor(uint256 dataQ, uint8 colIdx, uint8 symIdx) private view returns (uint32) {
-        return startTR[_traitId(uint8(dataQ), colIdx, symIdx)];
+        if (address(game) == address(0)) return 0;
+        return game.startTraitRemaining(_traitId(uint8(dataQ), colIdx, symIdx));
     }
 
     /// @dev Map current remaining vs initial remaining into a 1e6‑scaled ring size factor.

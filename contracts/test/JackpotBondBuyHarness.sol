@@ -43,7 +43,7 @@ contract JackpotBondBuyHarness is DegenerusGameJackpotModule {
         return 0;
     }
 
-    // Accept rewardShare sent by DegenerusBonds.depositFromGame().
+    // Accept rewardShare sent by DegenerusBonds for direct purchases.
     receive() external payable {
         rewardPool += msg.value;
     }
