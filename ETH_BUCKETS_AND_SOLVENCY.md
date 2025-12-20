@@ -15,7 +15,7 @@ The `DegenerusGame` contract tracks its ETH liabilities in distinct "buckets" (v
 *   **`currentPrizePool`**: The active pot for the current level's Exterminator and Extermination Jackpot.
 *   **`nextPrizePool`**: Accumulating pot for the *next* level (funded by current level mints).
 *   **`rewardPool`**: A general-purpose "slush fund" for Daily Jackpots, BAFs, and other side-prizes.
-    *   *Solvency:* These are funded directly by minting revenue (`msg.value`) or yield injections. They cannot grow without matching ETH inflow.
+    *   *Solvency:* These are funded directly by minting revenue (`msg.value`) or yield injections. They cannot grow without matching ETH inflow. The per-level “save” percent that feeds `rewardPool` is recomputed during MAP-jackpot finalization and includes a small +/- 2% adjustment based on last-purchase-day coinflip deposits (capped at 98%).
 
 ### D. Reserved/Special Pools
 *   **`decimatorHundredPool`** & **`bafHundredPool`**: Temporary holding buckets for level-100 special jackpots, carved out of `rewardPool` when needed.

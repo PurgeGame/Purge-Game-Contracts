@@ -669,23 +669,19 @@ contract DegenerusGame is DegenerusGameStorage {
                 }
             }
 
+            if (_consumeTrait(trait0, endLevelFlag) && winningTrait == TRAIT_ID_TIMEOUT) {
+                winningTrait = trait0;
+            }
+            if (_consumeTrait(trait1, endLevelFlag) && winningTrait == TRAIT_ID_TIMEOUT) {
+                winningTrait = trait1;
+            }
+            if (_consumeTrait(trait2, endLevelFlag) && winningTrait == TRAIT_ID_TIMEOUT) {
+                winningTrait = trait2;
+            }
+            if (_consumeTrait(trait3, endLevelFlag) && winningTrait == TRAIT_ID_TIMEOUT) {
+                winningTrait = trait3;
+            }
             unchecked {
-                if (_consumeTrait(trait0, endLevelFlag)) {
-                    winningTrait = trait0;
-                    break;
-                }
-                if (_consumeTrait(trait1, endLevelFlag)) {
-                    winningTrait = trait1;
-                    break;
-                }
-                if (_consumeTrait(trait2, endLevelFlag)) {
-                    winningTrait = trait2;
-                    break;
-                }
-                if (_consumeTrait(trait3, endLevelFlag)) {
-                    winningTrait = trait3;
-                    break;
-                }
                 dailyBurnCount[trait0 & 0x07] += 1;
                 dailyBurnCount[((trait1 - 64) >> 3) + 8] += 1;
                 dailyBurnCount[trait2 - 128 + 16] += 1;
@@ -904,9 +900,7 @@ contract DegenerusGame is DegenerusGameStorage {
     /// @param op      Operation selector.
     /// @param account Player to credit (when applicable).
     /// @param amount  Wei amount associated with the operation.
-    /// @param lvl     Level context for the operation (unused by the game, used by callers).
-    function applyExternalOp(DegenerusGameExternalOp op, address account, uint256 amount, uint24 lvl) external {
-        lvl;
+    function applyExternalOp(DegenerusGameExternalOp op, address account, uint256 amount) external {
         if (op == DegenerusGameExternalOp.DecJackpotClaim) {
             _applyDecJackpotClaim(account, amount);
             return;
@@ -918,10 +912,8 @@ contract DegenerusGame is DegenerusGameStorage {
     function applyExternalOpBatch(
         DegenerusGameExternalOp op,
         address[] calldata accounts,
-        uint256[] calldata amounts,
-        uint24 lvl
+        uint256[] calldata amounts
     ) external {
-        lvl;
         if (op == DegenerusGameExternalOp.DecJackpotClaim) {
             uint256 len = accounts.length;
             if (len != amounts.length) revert E();
@@ -1435,6 +1427,10 @@ contract DegenerusGame is DegenerusGameStorage {
     function _consumeTrait(uint8 traitId, uint32 endLevel) private returns (bool reachedZero) {
         // Trait counts are expected to be seeded for the current level; hitting zero here should only occur via burn flow.
         uint32 stored = traitRemaining[traitId];
+
+        if (stored <= endLevel) {
+            return stored == endLevel;
+        }
 
         unchecked {
             stored -= 1;

@@ -26,6 +26,7 @@ For a code-grounded contract map, trust assumptions, and “source of truth” p
 
 - A new level doesn’t open the burn phase until enough ETH has been raised relative to the previous level. This pushes the minimum “pot size” upward over time if players keep participating.
 - Part of the system’s ETH is intentionally saved for jackpots and special events. As more ETH flows in and time passes (and if staking yield exists), those jackpot budgets tend to get larger.
+- Once a level hits its start target, coinflip deposits during the last purchase day are totaled; if that total is >= 2x the previous level, 2% more of the pot goes to prize pools, and if it is < 1/2, 2% more is saved to the global reward pool (still capped at 98%).
 
 ### Latecomers → Earlier Players (The Simple Version)
 

@@ -274,6 +274,7 @@ In code, a level is “live” when the game is in burn phase:
 
 During the purchase/airdrop phase (`gameState == 2`), the contract checks whether the level is “funded enough” to proceed:
 - In `DegenerusGame.advanceGame(...)` (state 2), each day it sets `lastPurchaseDay = true` once `nextPrizePool >= lastPrizePool` (`contracts/DegenerusGame.sol`).
+- While `lastPurchaseDay` is true, `DegenerusCoin.depositCoinflip(...)` calls `DegenerusGame.recordCoinflipDeposit(amount)`; that total is used to nudge the reward-pool save percent by +/- 2% during `calcPrizePoolForJackpot(...)` (capped at 98%).
 - Until that condition is met, the game can continue running purchase-phase jackpots (`payDailyJackpot(false, ...)`) but it will not finalize the MAP jackpot and open the burn phase.
 
 What increases `nextPrizePool`:
@@ -295,6 +296,7 @@ Cycle boundary note:
 `rewardPool` grows from three main mechanisms:
 - **Direct ETH inflows:** any plain ETH sent to the game increases `rewardPool` via `receive() external payable { rewardPool += msg.value; }` (`contracts/DegenerusGame.sol`).
 - **Per-level “save” at MAP jackpot finalization:** `calcPrizePoolForJackpot(...)` recomputes `rewardPool` as a level- and RNG-dependent percent of `rewardPool + currentPrizePool` (`contracts/modules/DegenerusGameJackpotModule.sol`, `_mapRewardPoolPercent`).
+- **Last-purchase-day coinflip adjustment:** `calcPrizePoolForJackpot(...)` applies `_adjustRewardPoolForFlipTotals(...)` to shift that save percent by +/- 2% when last-purchase-day coinflip deposits doubled vs the previous level (reduce save) or fell below half (increase save), capped at 98%.
 - **Yield skims/top-ups:** during map-jackpot prep, `DegenerusGameBondModule.bondMaintenanceForMap(...)` computes untracked surplus (`yieldTotal`) and adds a slice to `rewardPool` (`rewardTopUp = yieldTotal / 20`) (`contracts/modules/DegenerusGameBondModule.sol`).
 
 Why it matters:

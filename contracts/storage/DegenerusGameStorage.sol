@@ -91,9 +91,8 @@ abstract contract DegenerusGameStorage {
     mapping(address => uint256) internal mintPacked_; // bit-packed mint history (see DegenerusGame ETH_* constants for layout)
 
     // ---------------------------------------------------------------------
-    // Bond maintenance / cashout preferences
+    // Bond maintenance
     // ---------------------------------------------------------------------
-    mapping(address => bool) internal bondCashoutHalf; // deprecated (reserved for storage layout)
     bool internal bondMaintenancePending; // true while bond maintenance needs dedicated advanceGame calls
 
     // ---------------------------------------------------------------------

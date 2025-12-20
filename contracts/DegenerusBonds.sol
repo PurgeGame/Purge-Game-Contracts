@@ -306,6 +306,9 @@ contract DegenerusBonds {
     uint256 private constant PRESALE_PREV_RAISE = 50 ether;
     uint32 private constant VRF_CALLBACK_GAS_LIMIT = 200_000;
     uint16 private constant VRF_REQUEST_CONFIRMATIONS = 10;
+    uint8 private constant AUTO_BURN_UNSET = 0;
+    uint8 private constant AUTO_BURN_ENABLED = 1;
+    uint8 private constant AUTO_BURN_DISABLED = 2;
 
     // ---------------------------------------------------------------------
     // Data structures
@@ -400,7 +403,7 @@ contract DegenerusBonds {
     IDegenerusQuestView private questModule;
     address private trophies;
     BondToken private tokenDGNRS;
-    mapping(address => bool) private autoBurnDgnrs;
+    mapping(address => uint8) private autoBurnDgnrsPref;
     address private immutable steth;
     uint256 private presalePendingRewardEth;
     uint256 private presalePendingYieldEth;
@@ -478,8 +481,9 @@ contract DegenerusBonds {
     }
 
     /// @notice Player toggle to auto-burn any DGNRS minted from bond jackpots.
+    /// @dev Defaults to disabled during presale; defaults to enabled once presale ends.
     function setAutoBurnDgnrs(bool enabled) external {
-        autoBurnDgnrs[msg.sender] = enabled;
+        autoBurnDgnrsPref[msg.sender] = enabled ? AUTO_BURN_ENABLED : AUTO_BURN_DISABLED;
     }
 
     /// @notice Presale-only bond purchase; splits ETH 30% vault / 50% rewardPool / 20% yieldPool and records score for manual jackpots.
@@ -926,7 +930,9 @@ contract DegenerusBonds {
         }
 
         scoreAwarded = _scoreWithMultiplier(beneficiary, amount);
-        _payAffiliateReward(beneficiary, amount, AFFILIATE_BOND_BPS);
+        if (!fromGame) {
+            _payAffiliateReward(beneficiary, amount, AFFILIATE_BOND_BPS);
+        }
 
         // Append new weight slice for jackpot selection (append-only cumulative for O(log N) sampling).
         _recordJackpotScore(s, beneficiary, scoreAwarded);
@@ -1773,6 +1779,13 @@ contract DegenerusBonds {
         }
     }
 
+    function _autoBurnEnabled(address player, bool presaleActive) private view returns (bool enabled) {
+        uint8 pref = autoBurnDgnrsPref[player];
+        if (pref == AUTO_BURN_ENABLED) return true;
+        if (pref == AUTO_BURN_DISABLED) return false;
+        return !presaleActive;
+    }
+
     function _runMintJackpotToken(
         BondToken token,
         address[] storage participants,
@@ -1785,16 +1798,14 @@ contract DegenerusBonds {
     ) private {
         uint256[6] memory payouts = _jackpotPayouts(toMint, spots);
         uint256 entropy = rngWord;
-        bool canAutoBurn = currLevel != 0;
-        if (!canAutoBurn) {
-            canAutoBurn = _presaleActive();
-        }
+        bool presaleActive = _presaleActive();
+        bool canAutoBurn = currLevel != 0 || presaleActive;
 
         for (uint256 i; i < 4; ) {
             uint256 amount = payouts[i];
             if (amount != 0) {
                 address winner = _weightedPickFrom(participants, cumulative, totalScore, entropy);
-                if (canAutoBurn && autoBurnDgnrs[winner]) {
+                if (canAutoBurn && _autoBurnEnabled(winner, presaleActive)) {
                     _burnDgnrsFor(winner, amount, currLevel, false);
                 } else {
                     token.mint(winner, amount);
@@ -1814,7 +1825,7 @@ contract DegenerusBonds {
             uint256 amount = (i == totalSpots - 1) ? payouts[5] : payouts[4];
             if (amount != 0) {
                 address winner = _weightedPickFrom(participants, cumulative, totalScore, entropy);
-                if (canAutoBurn && autoBurnDgnrs[winner]) {
+                if (canAutoBurn && _autoBurnEnabled(winner, presaleActive)) {
                     _burnDgnrsFor(winner, amount, currLevel, false);
                 } else {
                     token.mint(winner, amount);
