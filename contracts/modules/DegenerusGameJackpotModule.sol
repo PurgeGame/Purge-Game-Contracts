@@ -88,7 +88,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
             bool lastDaily = (jackpotCounter + 1) >= JACKPOT_LEVEL_CAP;
             uint256 budget = (dailyJackpotBase * _dailyJackpotBps(jackpotCounter)) / 10_000;
 
-            uint256 paidEth = _runMainJackpotEthFlow(
+            uint256 paidDailyEth = _runMainJackpotEthFlow(
                 JackpotParams({
                     lvl: lvl,
                     ethPool: budget,
@@ -102,8 +102,8 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
                 MAIN_LARGE_BUCKET_SIZE,
                 MAIN_LARGE_BUCKET_BOND_WINNERS
             );
-            if (paidEth != 0) {
-                currentPrizePool -= paidEth;
+            if (paidDailyEth != 0) {
+                currentPrizePool -= paidDailyEth;
             }
 
             uint24 nextLevel = lvl + 1;
@@ -839,31 +839,12 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
     ) private returns (uint256 ethPaid, uint256 bondSpent, uint256 liabilityDelta) {
         uint256 bondBudget = (amount * bondBps) / 10_000;
         uint256 cashPortion = amount;
-        uint256 rewardAdd;
 
         if (bondBudget != 0) {
-            (address resolved, , bool halfCashout) = _resolveBondRecipient(winner);
-            if (halfCashout) {
-                uint256 payout = bondBudget / 2;
-                uint256 remainder = bondBudget - payout;
-                uint256 rewardSlice = remainder / 2;
-                if (payout != 0) {
-                    _addClaimableEth(resolved, payout);
-                    liabilityDelta += payout;
-                }
-                rewardAdd += rewardSlice;
+            try IDegenerusBondsJackpot(bondsAddr).depositFromGame{value: bondBudget}(winner, bondBudget) {
                 cashPortion = amount - bondBudget;
                 bondSpent = bondBudget;
-            } else {
-                try IDegenerusBondsJackpot(bondsAddr).depositFromGame{value: bondBudget}(resolved, bondBudget) {
-                    cashPortion = amount - bondBudget;
-                    bondSpent = bondBudget;
-                } catch {}
-            }
-        }
-
-        if (rewardAdd != 0) {
-            rewardPool += rewardAdd;
+            } catch {}
         }
 
         if (cashPortion != 0) {
@@ -917,7 +898,6 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
 
         IDegenerusBondsJackpot bondsContract = IDegenerusBondsJackpot(bondsAddr);
         uint16 offset = uint16(entropyState % winnersLen);
-        uint256 rewardAdd;
 
         for (uint256 i; i < targetBondWinners; ) {
             address recipient = winners[(uint256(offset) + i) % winnersLen];
@@ -927,24 +907,11 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
                 }
                 continue;
             }
-            (address resolved, , bool halfCashout) = _resolveBondRecipient(recipient);
             bool spent;
-            if (halfCashout) {
-                uint256 payout = perWinner / 2;
-                uint256 remainder = perWinner - payout;
-                uint256 rewardSlice = remainder / 2;
-                if (payout != 0) {
-                    _addClaimableEth(resolved, payout);
-                    liabilityDelta += payout;
-                }
-                rewardAdd += rewardSlice;
+            try bondsContract.depositFromGame{value: perWinner}(recipient, perWinner) {
                 spent = true;
-            } else {
-                try bondsContract.depositFromGame{value: perWinner}(resolved, perWinner) {
-                    spent = true;
-                } catch {
-                    spent = false;
-                }
+            } catch {
+                spent = false;
             }
 
             if (spent) {
@@ -954,10 +921,6 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
             unchecked {
                 ++i;
             }
-        }
-
-        if (rewardAdd != 0) {
-            rewardPool += rewardAdd;
         }
 
         return (bondSpent, liabilityDelta);
@@ -999,12 +962,6 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
             _addClaimableEth(beneficiary, amount);
         }
         return true;
-    }
-
-    function _resolveBondRecipient(address winner) private view returns (address resolved, bool rerouted, bool halfCashout) {
-        resolved = winner;
-        halfCashout = bondCashoutHalf[winner];
-        rerouted = false;
     }
 
     function _packWinningTraits(uint8[4] memory traits) private pure returns (uint32 packed) {

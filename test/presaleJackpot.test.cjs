@@ -98,14 +98,10 @@ describe("DegenerusBonds presale jackpot", function () {
         .to.emit(bonds, "PresaleJackpot")
         .withArgs(run, toMint, BigInt(100 + run));
 
-      const [, , mintedBudget, jackpotsRun] = await bonds.presaleStatus();
-      expect(jackpotsRun).to.equal(BigInt(run + 1));
-      expect(mintedBudget).to.equal(expectedMintedBudget);
       expect(await dgnrs.totalSupply()).to.equal(expectedSupply);
     }
 
     // Final invariant: mintedBudget == total DGNRS minted.
-    const [, , mintedBudget] = await bonds.presaleStatus();
-    expect(await dgnrs.totalSupply()).to.equal(mintedBudget);
+    expect(await dgnrs.totalSupply()).to.equal(expectedMintedBudget);
   });
 });

@@ -185,15 +185,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
             return (ethPortion, claimableDelta);
         }
 
-        (address resolved, , bool halfCashout) = _resolveBondRecipient(winner);
-        if (halfCashout) {
-            uint256 payout = bondBudget / 2;
-            claimableDelta = _addClaimableEth(resolved, payout);
-            ethPortion -= bondBudget;
-            return (ethPortion, claimableDelta);
-        }
-
-        try IDegenerusBondsJackpot(bonds).depositFromGame{value: bondBudget}(resolved, bondBudget) {
+        try IDegenerusBondsJackpot(bonds).depositFromGame{value: bondBudget}(winner, bondBudget) {
             ethPortion -= bondBudget;
         } catch {
             // leave bondBudget in ethPortion to pay out as ETH on failure
@@ -209,14 +201,6 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
         }
         emit PlayerCredited(beneficiary, recipient, weiAmount);
         return weiAmount;
-    }
-
-    function _resolveBondRecipient(
-        address winner
-    ) private view returns (address resolved, bool rerouted, bool halfCashout) {
-        resolved = winner;
-        halfCashout = bondCashoutHalf[winner];
-        rerouted = false;
     }
 
     function _runExterminationPurchaseRewards(

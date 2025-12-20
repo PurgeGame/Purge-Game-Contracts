@@ -93,7 +93,7 @@ abstract contract DegenerusGameStorage {
     // ---------------------------------------------------------------------
     // Bond maintenance / cashout preferences
     // ---------------------------------------------------------------------
-    mapping(address => bool) internal bondCashoutHalf; // opt-in flag to take 50% cash instead of receiving bonds
+    mapping(address => bool) internal bondCashoutHalf; // deprecated (reserved for storage layout)
     bool internal bondMaintenancePending; // true while bond maintenance needs dedicated advanceGame calls
 
     // ---------------------------------------------------------------------

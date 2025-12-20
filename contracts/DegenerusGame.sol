@@ -29,7 +29,6 @@ interface IDegenerusBonds {
     function depositFromGame(address beneficiary, uint256 amount) external payable returns (uint256 scoreAwarded);
     function payBonds(uint256 coinAmount, uint256 stEthAmount, uint256 rngWord) external payable;
     function bondMaintenance(uint256 rngWord, uint32 workCapOverride) external returns (bool done);
-    function bondMaintenanceWillHitCap(uint32 workCapOverride) external view returns (bool hitCap);
     function setRngLock(bool locked) external;
     function notifyGameOver() external;
     function purchasesEnabled() external view returns (bool);
@@ -501,7 +500,7 @@ contract DegenerusGame is DegenerusGameStorage {
                     decWindowOpen = true;
                 }
                 if (lvl % 100 == 99) decWindowOpen = true;
-                _bondSetup(rngWord, cap, day);
+                _bondSetup(rngWord);
                 break;
             }
 
@@ -853,7 +852,7 @@ contract DegenerusGame is DegenerusGameStorage {
         if (!ok) _revertDelegate(data);
     }
 
-    function _bondSetup(uint256 rngWord, uint32 cap, uint48 day) private {
+    function _bondSetup(uint256 rngWord) private {
         (bool ok, bytes memory data) = bondModule.delegatecall(
             abi.encodeWithSelector(
                 IDegenerusGameBondModule.bondUpkeep.selector,
@@ -864,12 +863,8 @@ contract DegenerusGame is DegenerusGameStorage {
             )
         );
         if (!ok) _revertDelegate(data);
-        address bondsAddr = bonds;
-        if (IDegenerusBonds(bondsAddr).bondMaintenanceWillHitCap(cap)) {
-            bondMaintenancePending = true;
-            return;
-        }
-        _runBondMaintenance(bondsAddr, rngWord, cap, day);
+        // Queue maintenance so the next advanceGame call runs it in isolation.
+        bondMaintenancePending = true;
     }
 
     function _runBondMaintenance(address bondsAddr, uint256 rngWord, uint32 cap, uint48 day) private {
@@ -964,11 +959,6 @@ contract DegenerusGame is DegenerusGameStorage {
         uint256 stored = claimableWinnings[msg.sender];
         if (stored <= 1) return 0;
         return stored - 1;
-    }
-
-    /// @notice Toggle auto-liquidation of bond winnings into claimable balance (tax applies on withdrawal).
-    function setBondCashoutHalf(bool enabled) external {
-        bondCashoutHalf[msg.sender] = enabled;
     }
 
     /// @notice Spend claimable ETH to purchase either NFTs or MAPs using the full available balance.

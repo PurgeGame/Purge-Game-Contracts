@@ -46,8 +46,6 @@ describe("DegenerusBonds presale caching", function () {
 
     expect(await ethers.provider.getBalance(await vault.getAddress())).to.equal(vaultBalBefore + vaultShare);
     expect(await ethers.provider.getBalance(await bonds.getAddress())).to.equal(rewardShare + yieldShare);
-    expect(await bonds.presalePendingRewardEth()).to.equal(rewardShare);
-    expect(await bonds.presalePendingYieldEth()).to.equal(yieldShare);
 
     // Wire the game; presale proceeds should remain cached until shutdownPresale().
     const MockGame = await ethers.getContractFactory("MockGameBondBank");
@@ -55,8 +53,6 @@ describe("DegenerusBonds presale caching", function () {
     await game.waitForDeployment();
 
     await bonds.wire([await game.getAddress()], 0, ethers.ZeroHash);
-    expect(await bonds.presalePendingRewardEth()).to.equal(rewardShare);
-    expect(await bonds.presalePendingYieldEth()).to.equal(yieldShare);
     expect(await ethers.provider.getBalance(await bonds.getAddress())).to.equal(rewardShare + yieldShare);
 
     await expect(bonds.shutdownPresale())
@@ -64,8 +60,6 @@ describe("DegenerusBonds presale caching", function () {
       .withArgs(rewardShare, yieldShare);
 
     expect(await ethers.provider.getBalance(await game.getAddress())).to.equal(gameBalBefore + rewardShare + yieldShare);
-    expect(await bonds.presalePendingRewardEth()).to.equal(0n);
-    expect(await bonds.presalePendingYieldEth()).to.equal(0n);
     expect(await ethers.provider.getBalance(await bonds.getAddress())).to.equal(0n);
   });
 });

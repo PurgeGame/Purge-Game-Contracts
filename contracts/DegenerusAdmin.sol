@@ -23,7 +23,6 @@ interface IDegenerusGameVrf is IDegenerusGameCore {
 }
 
 interface IDegenerusBondsAdmin {
-    function setPurchaseToggles(bool externalEnabled, bool gameEnabled) external;
     function wire(address[] calldata addresses, uint256 vrfSubId, bytes32 vrfKeyHash_) external;
     function emergencySetVrf(address coordinator_, uint256 vrfSubId, bytes32 vrfKeyHash_) external;
 }
@@ -103,7 +102,6 @@ contract DegenerusAdmin {
     event AffiliateWired(address indexed affiliate);
     event VaultSet(address indexed vault);
     event CoinSet(address indexed coin);
-    event PurchaseTogglesSet(bool externalEnabled, bool gameEnabled);
     event BondsGameWired(address indexed game);
     event BondsVrfWired(address indexed coordinator, uint256 indexed subId, bytes32 keyHash);
     event PresaleShutdown();
@@ -354,11 +352,6 @@ contract DegenerusAdmin {
     }
 
     /// @notice Pass-through to set bond purchase toggles.
-    function setBondsPurchaseToggles(bool externalEnabled, bool gameEnabled) external onlyOwner {
-        IDegenerusBondsAdmin(bonds).setPurchaseToggles(externalEnabled, gameEnabled);
-        emit PurchaseTogglesSet(externalEnabled, gameEnabled);
-    }
-
     function shutdownPresale() external onlyOwner {
         address bondsAddr = bonds;
         if (bondsAddr == address(0)) revert NotWired();
