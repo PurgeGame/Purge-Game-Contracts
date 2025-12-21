@@ -669,17 +669,22 @@ contract DegenerusGame is DegenerusGameStorage {
                 }
             }
 
-            if (_consumeTrait(trait0, endLevelFlag) && winningTrait == TRAIT_ID_TIMEOUT) {
-                winningTrait = trait0;
+            bool tokenWon;
+            if (_consumeTrait(trait0, endLevelFlag)) {
+                if (winningTrait == TRAIT_ID_TIMEOUT) winningTrait = trait0;
+                tokenWon = true;
             }
-            if (_consumeTrait(trait1, endLevelFlag) && winningTrait == TRAIT_ID_TIMEOUT) {
-                winningTrait = trait1;
+            if (_consumeTrait(trait1, endLevelFlag)) {
+                if (winningTrait == TRAIT_ID_TIMEOUT) winningTrait = trait1;
+                tokenWon = true;
             }
-            if (_consumeTrait(trait2, endLevelFlag) && winningTrait == TRAIT_ID_TIMEOUT) {
-                winningTrait = trait2;
+            if (_consumeTrait(trait2, endLevelFlag)) {
+                if (winningTrait == TRAIT_ID_TIMEOUT) winningTrait = trait2;
+                tokenWon = true;
             }
-            if (_consumeTrait(trait3, endLevelFlag) && winningTrait == TRAIT_ID_TIMEOUT) {
-                winningTrait = trait3;
+            if (_consumeTrait(trait3, endLevelFlag)) {
+                if (winningTrait == TRAIT_ID_TIMEOUT) winningTrait = trait3;
+                tokenWon = true;
             }
             unchecked {
                 dailyBurnCount[trait0 & 0x07] += 1;
@@ -692,6 +697,10 @@ contract DegenerusGame is DegenerusGameStorage {
             tickets[trait1].push(caller);
             tickets[trait2].push(caller);
             tickets[trait3].push(caller);
+
+            if (tokenWon) {
+                break;
+            }
         }
 
         if (isDoubleCountStep) count <<= 1;
@@ -1427,10 +1436,6 @@ contract DegenerusGame is DegenerusGameStorage {
     function _consumeTrait(uint8 traitId, uint32 endLevel) private returns (bool reachedZero) {
         // Trait counts are expected to be seeded for the current level; hitting zero here should only occur via burn flow.
         uint32 stored = traitRemaining[traitId];
-
-        if (stored <= endLevel) {
-            return stored == endLevel;
-        }
 
         unchecked {
             stored -= 1;
