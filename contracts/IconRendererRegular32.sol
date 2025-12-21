@@ -23,7 +23,7 @@ contract IconRendererRegular32 {
 
     // ---------------- Storage ----------------
 
-    IDegenerusdRead private immutable coin; // BURNIE ERC20 implementing affiliateProgram()
+    address private immutable affiliateProgram; // Optional affiliate contract for referrer colors
     IIcons32 private immutable icons; // External icon data source
     IColorRegistry private immutable registry; // Color override store
     address public immutable admin; // DegenerusAdmin contract (authorised caller)
@@ -31,8 +31,8 @@ contract IconRendererRegular32 {
     /// @dev Generic guard.
     error E();
 
-    constructor(address coin_, address icons_, address registry_, address admin_) {
-        coin = IDegenerusdRead(coin_);
+    constructor(address icons_, address registry_, address affiliate_, address admin_) {
+        affiliateProgram = affiliate_;
         icons = IIcons32(icons_);
         registry = IColorRegistry(registry_);
         if (admin_ == address(0)) revert E();
@@ -183,7 +183,7 @@ contract IconRendererRegular32 {
     }
 
     function _affiliateProgram() private view returns (IDegenerusAffiliate) {
-        address affiliate = coin.affiliateProgram();
+        address affiliate = affiliateProgram;
         return affiliate == address(0) ? IDegenerusAffiliate(address(0)) : IDegenerusAffiliate(affiliate);
     }
 
@@ -244,7 +244,7 @@ contract IconRendererRegular32 {
     }
 
     /// @notice Wire both the game controller and ERC721 contract in a single call.
-    /// @dev Callable only by the coin admin; set-once semantics. Optional extra addresses are registered as allowed
+    /// @dev Callable only by the admin contract; set-once semantics. Optional extra addresses are registered as allowed
     ///      token contracts in the color registry (e.g., trophies, bonds).
     function wire(address[] calldata addresses) external onlyAdmin {
         _setGame(addresses.length > 0 ? addresses[0] : address(0));

@@ -10,7 +10,6 @@ interface IDegenerusCoinJackpotView {
     function coinflipAmountLastDay(address player) external view returns (uint256);
     function coinflipTop(uint24 lvl) external view returns (address player, uint96 score);
     function coinflipTopLastDay() external view returns (address player, uint96 score);
-    function affiliateProgram() external view returns (address);
 }
 
 /**
@@ -79,6 +78,7 @@ contract DegenerusJackpots is IDegenerusJackpots {
     // ---------------------------------------------------------------------
     IDegenerusCoinJackpotView public coin;
     IDegenerusGame public degenerusGame;
+    address private affiliate;
     address public immutable bondsAdmin;
 
     // ---------------------------------------------------------------------
@@ -133,13 +133,14 @@ contract DegenerusJackpots is IDegenerusJackpots {
         bondsAdmin = bondsAdmin_;
     }
 
-    /// @notice One-time wiring using address array ([coin, game]); callable only by bonds.
+    /// @notice One-time wiring using address array ([coin, game, affiliate]); callable only by bonds.
     function wire(address[] calldata addresses) external override {
         address admin = bondsAdmin;
         if (msg.sender != bonds && msg.sender != admin) revert OnlyBonds();
 
         _setCoin(addresses.length > 0 ? addresses[0] : address(0));
         _setGame(addresses.length > 1 ? addresses[1] : address(0));
+        _setAffiliate(addresses.length > 2 ? addresses[2] : address(0));
     }
 
     function _setCoin(address coinAddr) private {
@@ -158,6 +159,16 @@ contract DegenerusJackpots is IDegenerusJackpots {
         if (current == address(0)) {
             degenerusGame = IDegenerusGame(gameAddr);
         } else if (gameAddr != current) {
+            revert AlreadyWired();
+        }
+    }
+
+    function _setAffiliate(address affiliateAddr) private {
+        if (affiliateAddr == address(0)) return;
+        address current = affiliate;
+        if (current == address(0)) {
+            affiliate = affiliateAddr;
+        } else if (affiliateAddr != current) {
             revert AlreadyWired();
         }
     }
@@ -452,11 +463,11 @@ contract DegenerusJackpots is IDegenerusJackpots {
             }
             entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
 
-            address affiliateAddr = coin.affiliateProgram();
+            address affiliateAddr = affiliate;
             if (affiliateAddr == address(0)) {
                 toReturn += affiliateSlice;
             } else {
-                IDegenerusAffiliate affiliate = IDegenerusAffiliate(affiliateAddr);
+                IDegenerusAffiliate affiliateContract = IDegenerusAffiliate(affiliateAddr);
                 address[20] memory candidates;
                 uint256[20] memory candidateScores;
                 uint8 candidateCount;
@@ -464,7 +475,7 @@ contract DegenerusJackpots is IDegenerusJackpots {
                 // Collect the top affiliate from each of the prior 20 levels (deduped).
                 for (uint8 offset = 1; offset <= 20; ) {
                     if (lvl <= offset) break;
-                    (address player, ) = affiliate.affiliateTop(uint24(lvl - offset));
+                    (address player, ) = affiliateContract.affiliateTop(uint24(lvl - offset));
                     if (player != address(0)) {
                         bool seen;
                         for (uint8 i; i < candidateCount; ) {

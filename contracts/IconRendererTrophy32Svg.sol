@@ -31,7 +31,7 @@ interface IIconRendererTrophy32Svg {
 contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg {
     using Strings for uint256;
 
-    IDegenerusdRead private immutable coin;
+    address private immutable affiliateProgram;
     IIcons32 private immutable icons;
     IColorRegistry private immutable registry;
     ITrophySvgAssets private immutable assets;
@@ -79,8 +79,8 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg {
     int256 private constant TOP_AFFILIATE_SHIFT_DOWN_1E6 = 3_200_000;
     int256 private constant TOP_AFFILIATE_UPWARD_1E6 = (VIEWBOX_HEIGHT_1E6 * 4) / 100; // 4% of total height
 
-    constructor(address coin_, address icons_, address registry_, address assets_, address admin_) {
-        coin = IDegenerusdRead(coin_);
+    constructor(address icons_, address registry_, address assets_, address affiliate_, address admin_) {
+        affiliateProgram = affiliate_;
         icons = IIcons32(icons_);
         registry = IColorRegistry(registry_);
         if (assets_ == address(0)) revert E();
@@ -385,7 +385,7 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg {
     }
 
     function _affiliateProgram() private view returns (IDegenerusAffiliate) {
-        address affiliate = coin.affiliateProgram();
+        address affiliate = affiliateProgram;
         return affiliate == address(0) ? IDegenerusAffiliate(address(0)) : IDegenerusAffiliate(affiliate);
     }
 

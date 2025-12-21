@@ -3,16 +3,16 @@ pragma solidity ^0.8.26;
 
 import "../interfaces/IDegenerusQuestModule.sol";
 import "../interfaces/IDegenerusGame.sol";
-import "../interfaces/IDegenerusCoin.sol";
-
 /// @title DegenerusQuestModule
 /// @notice Tracks two rotating daily quests and validates player progress against Degenerus game actions.
 /// @dev All entry points are coin-gated; randomness is supplied by the coin contract.
 contract DegenerusQuestModule is IDegenerusQuestModule {
     error OnlyCoin();
+    error OnlyAdmin();
     error AlreadyWired();
     error InvalidQuestDay();
     error InvalidEntropy();
+    error ZeroAddress();
 
     uint256 private constant MILLION = 1e6;
     uint8 private constant QUEST_SLOT_COUNT = 2;
@@ -46,6 +46,7 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
     uint256 private constant QUEST_BOND_MAX_WEI = 0.5 ether;
 
     address public immutable coin;
+    address public immutable admin;
     IDegenerusGame private questGame;
 
     /// @notice Definition of a quest that is active for the current day.
@@ -82,12 +83,14 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
 
     uint32 private questVersionCounter = 1;
     /// @param coin_ Coin contract that is authorized to drive quest logic.
-    constructor(address coin_) {
+    constructor(address coin_, address admin_) {
+        if (coin_ == address(0) || admin_ == address(0)) revert ZeroAddress();
         coin = coin_;
+        admin = admin_;
     }
 
     /// @notice Wire the Degenerus game contract using an address array ([game]); set-once per slot.
-    function wire(address[] calldata addresses) external onlyCoinOrAdmin {
+    function wire(address[] calldata addresses) external onlyAdmin {
         _setGame(addresses.length > 0 ? addresses[0] : address(0));
     }
 
@@ -106,14 +109,9 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         _;
     }
 
-    modifier onlyCoinOrAdmin() {
-        if (!_isCoinOrAdmin(msg.sender)) revert OnlyCoin();
+    modifier onlyAdmin() {
+        if (msg.sender != admin) revert OnlyAdmin();
         _;
-    }
-
-    function _isCoinOrAdmin(address sender) private view returns (bool) {
-        if (sender == coin) return true;
-        return sender == IDegenerusCoin(coin).admin();
     }
 
     /// @notice Roll the daily quest set using VRF entropy.

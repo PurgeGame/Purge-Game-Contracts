@@ -5,15 +5,11 @@ import {IDegenerusCoinModule} from "./DegenerusGameModuleInterfaces.sol";
 import {QuestInfo, PlayerQuestView} from "./IDegenerusQuestModule.sol";
 
 interface IDegenerusCoin is IDegenerusCoinModule {
-    function admin() external view returns (address);
-    function jackpots() external view returns (address);
-    function affiliateProgram() external view returns (address);
-
     function creditFlipBatch(address[3] calldata players, uint256[3] calldata amounts) external;
 
     function burnCoin(address target, uint256 amount) external;
 
-    function claimPresaleAffiliateBonus() external;
+    function claimPresale() external;
 
     function processCoinflipPayouts(
         uint24 level,
@@ -22,11 +18,7 @@ interface IDegenerusCoin is IDegenerusCoinModule {
         uint48 epoch
     ) external returns (bool);
 
-    function addToBounty(uint256 amount) external;
-
     function normalizeActiveBurnQuests() external;
-
-    function vault() external view returns (address);
 
     function coinflipTop(uint24 level) external view returns (address player, uint96 score);
 

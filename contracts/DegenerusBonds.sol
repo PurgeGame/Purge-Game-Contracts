@@ -57,10 +57,6 @@ interface ICoinFlipCreditor {
     function creditFlip(address player, uint256 amount) external;
 }
 
-interface ICoinAffiliateLike is ICoinLike {
-    function affiliateProgram() external view returns (address);
-}
-
 interface IDegenerusGamePricing {
     function mintPrice() external view returns (uint256);
     function purchaseInfo()
@@ -334,6 +330,7 @@ contract DegenerusBonds {
         bytes32 vrfKeyHash;
         address questModule;
         address trophies;
+        address affiliate;
     }
 
     struct BondSeries {
@@ -431,7 +428,7 @@ contract DegenerusBonds {
     // External write API
     // ---------------------------------------------------------------------
 
-    /// @notice Wire bonds like other modules: [game, vault, coin, vrfCoordinator, questModule, trophies] + subId/keyHash (partial allowed).
+    /// @notice Wire bonds like other modules: [game, vault, coin, vrfCoordinator, questModule, trophies, affiliate] + subId/keyHash (partial allowed).
     function wire(address[] calldata addresses, uint256 vrfSubId, bytes32 vrfKeyHash_) external {
         if (msg.sender != admin) revert Unauthorized();
         _wire(
@@ -442,6 +439,7 @@ contract DegenerusBonds {
                 vrfCoordinator: addresses.length > 3 ? addresses[3] : address(0),
                 questModule: addresses.length > 4 ? addresses[4] : address(0),
                 trophies: addresses.length > 5 ? addresses[5] : address(0),
+                affiliate: addresses.length > 6 ? addresses[6] : address(0),
                 vrfSubId: vrfSubId,
                 vrfKeyHash: vrfKeyHash_
             })
@@ -613,12 +611,7 @@ contract DegenerusBonds {
         }
 
         // Attempt to close presale on the affiliate contract.
-        address coinAddr = coin;
-        if (coinAddr == address(0)) revert NotReady();
-        address affiliateAddr = ICoinAffiliateLike(coinAddr).affiliateProgram();
-        if (affiliate == address(0)) {
-            affiliate = affiliateAddr;
-        }
+        address affiliateAddr = affiliate;
         if (affiliateAddr != address(0)) {
             try IAffiliatePresaleShutdown(affiliateAddr).shutdownPresale() {} catch {}
         }
@@ -1288,6 +1281,7 @@ contract DegenerusBonds {
         _setGame(cfg.game);
         _setVault(cfg.vault);
         _setCoin(cfg.coin);
+        _setAffiliate(cfg.affiliate);
         _setQuestModule(cfg.questModule);
         _setTrophies(cfg.trophies);
         _setVrf(cfg.vrfCoordinator, cfg.vrfSubId, cfg.vrfKeyHash);
@@ -1556,7 +1550,13 @@ contract DegenerusBonds {
         address current = coin;
         if (current != address(0)) revert AlreadySet();
         coin = coin_;
-        affiliate = ICoinAffiliateLike(coin_).affiliateProgram();
+    }
+
+    function _setAffiliate(address affiliate_) private {
+        if (affiliate_ == address(0)) return;
+        address current = affiliate;
+        if (current != address(0)) revert AlreadySet();
+        affiliate = affiliate_;
     }
 
     function _setQuestModule(address questModule_) private {

@@ -64,7 +64,7 @@ interface IBurnieToken {
 
 /// @title DegenerusGamepieces
 /// @notice ERC721 surface for Degenerus player tokens.
-/// @dev Uses a packed ownership layout inspired by ERC721A; relies on external wiring from the coin contract
+/// @dev Uses a packed ownership layout inspired by ERC721A; relies on external wiring from the admin contract
 ///      to set the trusted game address.
 contract DegenerusGamepieces {
     // ---------------------------------------------------------------------
@@ -78,7 +78,7 @@ contract DegenerusGamepieces {
     error E();
 
     error OnlyCoin();
-    error OnlyCoinAdmin();
+    error OnlyAdmin();
     error InvalidToken();
     error NotTimeYet();
     error RngNotReady();
@@ -172,6 +172,7 @@ contract DegenerusGamepieces {
     IDegenerusGame private game;
     ITokenRenderer private immutable regularRenderer;
     IDegenerusCoin private immutable coin;
+    address private immutable admin;
     IBurnieToken private immutable burnie;
     address private immutable vault;
     address private immutable affiliateProgram;
@@ -216,9 +217,11 @@ contract DegenerusGamepieces {
         return _currentIndex;
     }
 
-    constructor(address regularRenderer_, address coin_, address affiliateProgram_, address vault_) {
+    constructor(address regularRenderer_, address coin_, address affiliateProgram_, address vault_, address admin_) {
         regularRenderer = ITokenRenderer(regularRenderer_);
         coin = IDegenerusCoin(coin_);
+        if (admin_ == address(0)) revert Zero();
+        admin = admin_;
         burnie = IBurnieToken(coin_);
         affiliateProgram = affiliateProgram_;
         vault = vault_;
@@ -998,24 +1001,13 @@ contract DegenerusGamepieces {
         _;
     }
 
-    modifier onlyCoinOrAdmin() {
-        if (!_isCoinOrAdmin()) revert OnlyCoin();
+    modifier onlyAdmin() {
+        if (msg.sender != admin) revert OnlyAdmin();
         _;
-    }
-
-    modifier onlyCoinAdmin() {
-        if (msg.sender != coin.admin()) revert OnlyCoinAdmin();
-        _;
-    }
-
-    function _isCoinOrAdmin() private view returns (bool) {
-        address sender = msg.sender;
-        if (sender == address(coin)) return true;
-        return sender == coin.admin();
     }
 
     /// @notice Wire the game module using an address array ([game]); set-once per slot.
-    function wire(address[] calldata addresses) external onlyCoinOrAdmin {
+    function wire(address[] calldata addresses) external onlyAdmin {
         _setGame(addresses.length > 0 ? addresses[0] : address(0));
     }
 

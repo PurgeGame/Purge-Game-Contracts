@@ -45,8 +45,3 @@ interface IColorRegistry {
 interface IERC721Lite {
     function ownerOf(uint256 tokenId) external view returns (address);
 }
-
-interface IDegenerusdRead {
-    function admin() external view returns (address);
-    function affiliateProgram() external view returns (address);
-}
