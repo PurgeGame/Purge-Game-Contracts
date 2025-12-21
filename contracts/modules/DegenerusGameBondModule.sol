@@ -7,6 +7,7 @@ interface IBonds {
     function payBonds(uint256 coinAmount, uint256 stEthAmount, uint256 rngWord) external payable;
     function notifyGameOver() external;
     function requiredCoverNext() external view returns (uint256 required);
+    function requiredCoverNext(uint256 stopAt) external view returns (uint256 required);
     function rewardStakeTargetBps() external view returns (uint16);
 }
 
@@ -50,7 +51,8 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
         uint256 bondSkim = yieldTotal / 4; // 25% to bonds
         uint256 rewardTopUp = yieldTotal / 20; // 5% to reward pool
 
-        uint256 required = bondContract.requiredCoverNext();
+        uint256 requiredStopAt = bondPool + bondSkim;
+        uint256 required = bondContract.requiredCoverNext(requiredStopAt);
         uint256 shortfall = required > bondPool ? required - bondPool : 0;
         uint256 toBondPool = bondSkim < shortfall ? bondSkim : shortfall;
         if (toBondPool != 0) {
@@ -110,8 +112,8 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
         if (cycle == 99 || cycle == 0) return;
 
         uint16 targetBps = IBonds(bondsAddr).rewardStakeTargetBps();
+        if (targetBps == 0) return;
         if (targetBps > 10_000) return;
-        if (targetBps == 0) targetBps = 10_000; // default to fully staking non-reserved ETH
 
         uint256 stBal = IStETHLite(stethAddr).balanceOf(address(this));
         uint256 ethBal = address(this).balance;
@@ -124,13 +126,10 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
 
         // Work with the stakeable ETH plus existing stETH to hit the target ratio.
         uint256 totalStakeable = stBal + ethStakeable;
-        if (totalStakeable == 0) return;
-
         uint256 targetSt = (totalStakeable * uint256(targetBps)) / 10_000;
         if (targetSt <= stBal) return;
 
         uint256 needed = targetSt - stBal;
-        if (needed == 0) return;
 
         uint256 stakeAmt = needed < ethStakeable ? needed : ethStakeable;
         if (stakeAmt < MIN_STAKE) return;

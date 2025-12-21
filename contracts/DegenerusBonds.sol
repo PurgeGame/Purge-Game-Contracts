@@ -465,6 +465,7 @@ contract DegenerusBonds {
         if (steth_ == address(0)) revert Unauthorized();
         admin = admin_;
         steth = steth_;
+        rewardStakeTargetBps = 10_000;
 
         // Predeploy the shared bond token used across all active maturities.
         tokenDGNRS = new BondToken("Degenerus Bond DGNRS", "DGNRS", address(this));
@@ -1283,18 +1284,35 @@ contract DegenerusBonds {
 
     /// @notice Required cover for matured obligations plus outstanding/burned DGNRS exposure.
     function requiredCoverNext() external view returns (uint256 required) {
-        uint24 currLevel = _currentLevel();
-        uint256 maturedOwed = _maturedOwedCover(currLevel);
-        uint256 dgnrsSupply = tokenDGNRS.supplyIncUncirculated();
-        uint256 upcomingBurned = _upcomingBurnedCover(currLevel);
-        required = maturedOwed + dgnrsSupply + upcomingBurned;
+        return _requiredCoverNext(0);
+    }
+
+    /// @notice Required cover with early stop if the total exceeds stopAt (0 disables early stop).
+    function requiredCoverNext(uint256 stopAt) external view returns (uint256 required) {
+        return _requiredCoverNext(stopAt);
     }
 
     // ---------------------------------------------------------------------
     // Internals
     // ---------------------------------------------------------------------
 
-    function _maturedOwedCover(uint24 currLevel) private view returns (uint256 owed) {
+    function _requiredCoverNext(uint256 stopAt) private view returns (uint256 required) {
+        uint24 currLevel = _currentLevel();
+        uint256 dgnrsSupply = tokenDGNRS.supplyIncUncirculated();
+        uint256 upcomingBurned = _upcomingBurnedCover(currLevel);
+        if (stopAt == 0) {
+            uint256 maturedOwed = _maturedOwedCover(currLevel, 0);
+            return maturedOwed + dgnrsSupply + upcomingBurned;
+        }
+        uint256 overhead = dgnrsSupply + upcomingBurned;
+        if (overhead > stopAt) return _capStopAt(stopAt);
+        uint256 stopAtAdj = stopAt - overhead;
+        uint256 maturedOwed = _maturedOwedCover(currLevel, stopAtAdj);
+        if (maturedOwed > stopAtAdj) return _capStopAt(stopAt);
+        return maturedOwed + overhead;
+    }
+
+    function _maturedOwedCover(uint24 currLevel, uint256 stopAt) private view returns (uint256 owed) {
         owed = resolvedUnclaimedTotal;
         uint24 len = uint24(maturities.length);
         for (uint24 i = activeMaturityIndex; i < len; ) {
@@ -1310,6 +1328,9 @@ contract DegenerusBonds {
                 owed += s.unclaimedBudget;
             } else {
                 owed += s.lanes[0].total + s.lanes[1].total;
+            }
+            if (stopAt != 0 && owed > stopAt) {
+                return _capStopAt(stopAt);
             }
             unchecked {
                 ++i;
@@ -1335,6 +1356,10 @@ contract DegenerusBonds {
         BondSeries storage target = series[targetMat];
         if (address(target.token) == address(0)) return 0;
         burned = target.lanes[0].total + target.lanes[1].total;
+    }
+
+    function _capStopAt(uint256 stopAt) private pure returns (uint256 capped) {
+        return stopAt == type(uint256).max ? stopAt : stopAt + 1;
     }
 
     function _wire(WireConfig memory cfg) private {

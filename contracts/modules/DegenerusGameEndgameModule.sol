@@ -55,12 +55,11 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
     ) external {
         uint256 claimableDelta;
         uint24 prevLevel = lvl == 0 ? 0 : lvl - 1;
+        bool hasPrevLevel = prevLevel != 0;
         uint16 traitRaw = lastExterminatedTrait;
         if (traitRaw != TRAIT_ID_TIMEOUT) {
             uint8 traitId = uint8(traitRaw);
             address ex = levelExterminators[uint256(prevLevel) - 1]; // guaranteed populated when traitRaw is set
-
-            _maybeMintAffiliateTop(prevLevel);
 
             uint256 poolValue = currentPrizePool;
             uint16 exShareBps = _exterminatorShareBps(prevLevel, rngWord);
@@ -99,7 +98,12 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
             currentPrizePool = 0;
             airdropIndex = 0;
         }
-        claimableDelta += _runRewardJackpots(prevLevel, rngWord, jackpotsAddr);
+        if (hasPrevLevel) {
+            _maybeMintAffiliateTop(prevLevel);
+        }
+        if (hasPrevLevel) {
+            claimableDelta += _runRewardJackpots(prevLevel, rngWord, jackpotsAddr);
+        }
         if (claimableDelta != 0) {
             claimablePool += claimableDelta;
         }
@@ -161,7 +165,8 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
     }
 
     function _payExterminatorShare(address ex, uint256 exterminatorShare) private returns (uint256 claimableDelta) {
-        bool bondsEnabled = true; // attempt bond buys; failures fall back to ETH payouts
+        if (exterminatorShare == 0) return 0;
+        bool bondsEnabled = IDegenerusBondsJackpot(bonds).purchasesEnabled();
         (uint256 ethPortion, uint256 splitClaimable) = _splitEthWithBond(
             ex,
             exterminatorShare,
