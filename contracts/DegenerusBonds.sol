@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+import {IDegenerusCoin} from "./interfaces/IDegenerusCoin.sol";
+
 /// @notice Minimal view into the core game to read the current level.
 interface IDegenerusGameLevel {
     function level() external view returns (uint24);
@@ -104,6 +106,9 @@ contract BondToken {
     error Unauthorized();
     error InsufficientBalance();
     error Disabled();
+    error ZeroAddress();
+    error AlreadySet();
+    error InsufficientAllowance();
 
     // ---------------------------------------------------------------------
     // Events
@@ -126,6 +131,8 @@ contract BondToken {
     mapping(address => uint256) public balanceOf;
     mapping(address => mapping(address => uint256)) public allowance;
     bool private disabled;
+    address private vault;
+    uint256 private _vaultMintAllowance = 50 ether; // seed vault escrow with 50 ETH worth
 
     constructor(string memory name_, string memory symbol_, address minter_) {
         name = name_;
@@ -193,6 +200,50 @@ contract BondToken {
             }
         }
         _burn(from, amount);
+    }
+
+    // ------------------------------------------------------------------
+    // Vault escrow / mint allowance
+    // ------------------------------------------------------------------
+
+    function setVault(address vault_) external {
+        _requireActive();
+        if (msg.sender != minter) revert Unauthorized();
+        if (vault_ == address(0)) revert ZeroAddress();
+        address current = vault;
+        if (current == vault_) return;
+        if (current != address(0)) revert AlreadySet();
+        vault = vault_;
+    }
+
+    function vaultMintAllowance() external view returns (uint256) {
+        return _vaultMintAllowance;
+    }
+
+    function supplyIncUncirculated() external view returns (uint256) {
+        return totalSupply + _vaultMintAllowance;
+    }
+
+    function vaultEscrow(uint256 amount) external {
+        _requireActive();
+        if (amount == 0) return;
+        address sender = msg.sender;
+        if (sender != minter && sender != vault) revert Unauthorized();
+        _vaultMintAllowance += amount;
+    }
+
+    function vaultMintTo(address to, uint256 amount) external {
+        _requireActive();
+        if (msg.sender != vault) revert Unauthorized();
+        if (amount == 0) return;
+        uint256 allowanceVault = _vaultMintAllowance;
+        if (amount > allowanceVault) revert InsufficientAllowance();
+        unchecked {
+            _vaultMintAllowance = allowanceVault - amount;
+            totalSupply += amount;
+            balanceOf[to] += amount;
+        }
+        emit Transfer(address(0), to, amount);
     }
 
     // ------------------------------------------------------------------
@@ -571,6 +622,10 @@ contract DegenerusBonds {
             if (toMint != 0 && p.totalScore != 0) {
                 _runPresaleMintJackpot(rngWord, toMint, currLevel);
                 p.mintedBudget = finalBudget;
+                uint256 vaultMint = finalBudget / 10;
+                if (vaultMint != 0) {
+                    tokenDGNRS.vaultEscrow(vaultMint);
+                }
                 emit PresaleJackpot(run, toMint, rngWord);
             }
         } else {
@@ -710,7 +765,6 @@ contract DegenerusBonds {
         emit BondCoinJackpot(winner, amount, targetMat, lane);
         return true;
     }
-
 
     function _selectActiveSeries(uint24 currLevel) private view returns (BondSeries storage s, uint24 maturityLevel) {
         uint24 len = uint24(maturities.length);
@@ -925,6 +979,12 @@ contract DegenerusBonds {
         scoreAwarded = _scoreWithMultiplier(beneficiary, amount);
         if (!fromGame) {
             _payAffiliateReward(beneficiary, amount, AFFILIATE_BOND_BPS);
+        }
+        if (!fromGame) {
+            address coinAddr = coin;
+            if (coinAddr != address(0)) {
+                IDegenerusCoin(coinAddr).notifyQuestBond(beneficiary, amount);
+            }
         }
 
         // Append new weight slice for jackpot selection (append-only cumulative for O(log N) sampling).
@@ -1225,7 +1285,7 @@ contract DegenerusBonds {
     function requiredCoverNext() external view returns (uint256 required) {
         uint24 currLevel = _currentLevel();
         uint256 maturedOwed = _maturedOwedCover(currLevel);
-        uint256 dgnrsSupply = tokenDGNRS.totalSupply();
+        uint256 dgnrsSupply = tokenDGNRS.supplyIncUncirculated();
         uint256 upcomingBurned = _upcomingBurnedCover(currLevel);
         required = maturedOwed + dgnrsSupply + upcomingBurned;
     }
@@ -1542,6 +1602,7 @@ contract DegenerusBonds {
         address current = vault;
         if (current != address(0)) revert AlreadySet();
         vault = vault_;
+        tokenDGNRS.setVault(vault_);
         if (!IStETHLike(steth).approve(vault_, type(uint256).max)) revert BankCallFailed();
     }
 
@@ -1644,6 +1705,10 @@ contract DegenerusBonds {
             if (toMint != 0 && s.totalScore != 0) {
                 s.mintedBudget = finalBudget;
                 _runMintJackpot(s, rngWord, toMint, currLevel);
+                uint256 vaultMint = finalBudget / 10;
+                if (vaultMint != 0) {
+                    tokenDGNRS.vaultEscrow(vaultMint);
+                }
                 emit BondJackpot(s.maturityLevel, s.jackpotsRun, toMint, rngWord);
             }
         } else {

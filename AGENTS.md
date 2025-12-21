@@ -57,8 +57,9 @@ If docs disagree with code, defer to code and flag the mismatch.
 1. Solvency and bucket accounting
 2. Permissioning + write-once wiring
 3. State machine + time/RNG gating
-4. Economic flows and payout correctness
-5. Edge cases at boundaries (levels, days, caps, rounding)
+4. advancegame(0) must ALWAYS be under 16.7m gas (and preferably under 15m just for comfort) never use an argument with advancegame
+5. Economic flows and payout correctness
+6. Edge cases at boundaries (levels, days, caps, rounding)
 
 ## Core Invariants to Prove
 - Buckets only grow from valid inflows or internal transfers.

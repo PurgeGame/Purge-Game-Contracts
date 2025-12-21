@@ -852,7 +852,7 @@ contract DegenerusJackpots is IDegenerusJackpots {
         decClaimed[lvl][player] = true;
     }
 
-    function consumeDecClaim(address player, uint24 lvl) external override onlyGame returns (uint256 amountWei) {
+    function consumeDecClaim(address player, uint24 lvl) external onlyGame returns (uint256 amountWei) {
         return _consumeDecClaim(player, lvl);
     }
 
@@ -875,7 +875,7 @@ contract DegenerusJackpots is IDegenerusJackpots {
         degenerusGame.applyExternalOpBatch(DegenerusGameExternalOp.DecJackpotClaim, players, amounts);
     }
 
-    function decClaimable(address player, uint24 lvl) external view override returns (uint256 amountWei, bool winner) {
+    function decClaimable(address player, uint24 lvl) external view returns (uint256 amountWei, bool winner) {
         DecClaimRound storage round = decClaimRound[lvl];
         return _decClaimable(round, player, lvl);
     }

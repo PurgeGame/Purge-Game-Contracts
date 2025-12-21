@@ -21,7 +21,11 @@ interface IVaultCoin {
     function setVault(address vault_) external;
 }
 
-/// @notice Minimal ERC20 used for vault share classes (coin-only and eth-only).
+interface IDegenerusBondsDgnrs {
+    function dgnrsToken() external view returns (address);
+}
+
+/// @notice Minimal ERC20 used for vault share classes (coin-only, DGNRS-only, and eth-only).
 contract DegenerusVaultShare {
     error Unauthorized();
     error ZeroAddress();
@@ -118,8 +122,9 @@ contract DegenerusVaultShare {
 }
 
 /// @title DegenerusVault
-/// @notice Vault that holds ETH, stETH, and BURNIE. Two share classes:
+/// @notice Vault that holds ETH, stETH, BURNIE, and DGNRS. Three share classes:
 ///         - coinShare: claims BURNIE only
+///         - dgnrsShare: claims DGNRS only
 ///         - ethShare: claims ETH/stETH only
 ///         Each class has independent supply and retains the "burn all, mint a new billion" behavior.
 contract DegenerusVault {
@@ -137,7 +142,9 @@ contract DegenerusVault {
     event Transfer(address indexed from, address indexed to, uint256 amount);
     event Approval(address indexed owner, address indexed spender, uint256 amount);
     event Deposit(address indexed from, uint256 ethAmount, uint256 stEthAmount, uint256 coinAmount);
+    event DepositDgnrs(address indexed from, uint256 dgnrsAmount);
     event Claim(address indexed from, uint256 sharesBurned, uint256 ethOut, uint256 stEthOut, uint256 coinOut);
+    event ClaimDgnrs(address indexed from, uint256 sharesBurned, uint256 dgnrsOut);
 
     // ---------------------------------------------------------------------
     // ERC20 metadata/state
@@ -150,12 +157,14 @@ contract DegenerusVault {
 
     // Share classes
     DegenerusVaultShare private immutable coinShare; // BURNIE-only claims
+    DegenerusVaultShare private immutable dgnrsShare; // DGNRS-only claims
     DegenerusVaultShare private immutable ethShare; // ETH/stETH-only claims
 
     // ---------------------------------------------------------------------
     // Wiring
     // ---------------------------------------------------------------------
     address private immutable coin; // BURNIE coin (or compatible)
+    address private immutable dgnrs; // DGNRS token (bond coin)
     IStETH private immutable steth; // stETH token
     address private immutable bonds; // trusted bond contract for deposits
 
@@ -173,9 +182,19 @@ contract DegenerusVault {
         coin = coin_;
         steth = IStETH(stEth_);
         bonds = bonds_;
+        address dgnrsToken = IDegenerusBondsDgnrs(bonds_).dgnrsToken();
+        if (dgnrsToken == address(0)) revert ZeroAddress();
+        dgnrs = dgnrsToken;
         coinShare = new DegenerusVaultShare(
             "Degenerus Vault Burnie",
             "DGVB",
+            address(this),
+            INITIAL_SUPPLY,
+            msg.sender
+        );
+        dgnrsShare = new DegenerusVaultShare(
+            "Degenerus Vault DGNRS",
+            "DGVN",
             address(this),
             INITIAL_SUPPLY,
             msg.sender
@@ -195,6 +214,14 @@ contract DegenerusVault {
         }
         _pullToken(address(steth), msg.sender, stEthAmount);
         emit Deposit(msg.sender, msg.value, stEthAmount, coinAmount);
+    }
+
+    /// @notice Escrow DGNRS mint allowance for the vault.
+    /// @dev Access: bonds only. dgnrsAmount bumps the DGNRS vault mint allowance; no token transfer occurs.
+    function depositDgnrs(uint256 dgnrsAmount) external onlyBonds {
+        if (dgnrsAmount == 0) return;
+        IVaultCoin(dgnrs).vaultEscrow(dgnrsAmount);
+        emit DepositDgnrs(msg.sender, dgnrsAmount);
     }
 
     receive() external payable {
@@ -248,6 +275,26 @@ contract DegenerusVault {
         if (coinOut != 0) IVaultCoin(coin).vaultMintTo(msg.sender, coinOut);
     }
 
+    /// @notice Burn DGNRS-share tokens to redeem the proportional slice of DGNRS.
+    function burnDgnrs(uint256 amount) external returns (uint256 dgnrsOut) {
+        DegenerusVaultShare share = dgnrsShare;
+        uint256 bal = share.balanceOf(msg.sender);
+        if (amount == 0 || amount > bal) revert Insufficient();
+
+        uint256 supplyBefore = share.totalSupply();
+        uint256 dgnrsBal = IVaultCoin(dgnrs).vaultMintAllowance();
+        dgnrsOut = (dgnrsBal * amount) / supplyBefore;
+        if (dgnrsOut > dgnrsBal) revert Insufficient();
+
+        share.vaultBurn(msg.sender, amount);
+        if (supplyBefore == amount) {
+            share.vaultMint(msg.sender, REFILL_SUPPLY);
+        }
+
+        emit ClaimDgnrs(msg.sender, amount, dgnrsOut);
+        if (dgnrsOut != 0) IVaultCoin(dgnrs).vaultMintTo(msg.sender, dgnrsOut);
+    }
+
     /// @notice Burn eth-share tokens to redeem the proportional slice of ETH and stETH.
     function burnEth(uint256 amount) external returns (uint256 ethOut, uint256 stEthOut) {
         DegenerusVaultShare share = ethShare;
@@ -287,6 +334,15 @@ contract DegenerusVault {
         burnAmount = (coinOut * supply + reserve - 1) / reserve;
     }
 
+    /// @notice View the DGNRS-share burn required to withdraw a target amount of DGNRS.
+    function previewBurnForDgnrsOut(uint256 dgnrsOut) external view returns (uint256 burnAmount) {
+        uint256 reserve = IVaultCoin(dgnrs).vaultMintAllowance();
+        if (dgnrsOut == 0 || dgnrsOut > reserve) revert Insufficient();
+        uint256 supply = dgnrsShare.totalSupply();
+        // ceil(dgnrsOut * supply / reserve)
+        burnAmount = (dgnrsOut * supply + reserve - 1) / reserve;
+    }
+
     /// @notice View the eth-share burn required to withdraw a target ETH-equivalent value.
     /// @dev Value is measured as ethOut + stEthOut.
     function previewBurnForEthOut(
@@ -316,6 +372,14 @@ contract DegenerusVault {
         if (amount == 0 || amount > supply) revert Insufficient();
         uint256 coinBal = IVaultCoin(coin).vaultMintAllowance();
         coinOut = (coinBal * amount) / supply;
+    }
+
+    /// @notice View helper to preview a DGNRS claim without burning.
+    function previewDgnrs(uint256 amount) external view returns (uint256 dgnrsOut) {
+        uint256 supply = dgnrsShare.totalSupply();
+        if (amount == 0 || amount > supply) revert Insufficient();
+        uint256 dgnrsBal = IVaultCoin(dgnrs).vaultMintAllowance();
+        dgnrsOut = (dgnrsBal * amount) / supply;
     }
 
     /// @notice View helper to preview an ETH/stETH claim without burning.

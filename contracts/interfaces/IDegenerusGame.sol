@@ -24,8 +24,6 @@ interface IDegenerusGame is IDegenerusGameExternal {
 
     function coinPriceUnit() external view returns (uint256);
 
-    function prizePoolTargetView() external view returns (uint256);
-
     function decWindow() external view returns (bool on, uint24 lvl);
 
     function isBafLevelActive(uint24 lvl) external view returns (bool);
@@ -38,8 +36,6 @@ interface IDegenerusGame is IDegenerusGameExternal {
     function ethMintLevelCount(address player) external view returns (uint24);
 
     function ethMintStreakCount(address player) external view returns (uint24);
-
-    function ethMintLastLevel(address player) external view returns (uint24);
 
     function enqueueMap(address buyer, uint32 quantity) external;
 
