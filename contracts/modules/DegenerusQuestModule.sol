@@ -15,6 +15,7 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
     error ZeroAddress();
 
     uint256 private constant MILLION = 1e6;
+    uint256 private constant PRICE_COIN_UNIT = 1_000_000_000; // 1000 BURNIE (6 decimals)
     uint8 private constant QUEST_SLOT_COUNT = 2;
     // Quest types (generated pseudo-randomly per slot)
     uint8 private constant QUEST_TYPE_MINT_ANY = 0;
@@ -26,10 +27,9 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
     uint8 private constant QUEST_TYPE_BOND = 6;
     uint8 private constant QUEST_TYPE_COUNT = 7;
 
-    // Quest flags for difficulty and forced behavior
+    // Quest flags for difficulty behavior
     uint8 private constant QUEST_FLAG_HIGH_DIFFICULTY = 1 << 0;
     uint8 private constant QUEST_FLAG_VERY_HIGH_DIFFICULTY = 1 << 1;
-    uint8 private constant QUEST_FLAG_FORCE_BURN = 1 << 2;
 
     // Tiering and streak accounting
     uint8 private constant QUEST_TIER_MAX_INDEX = 10;
@@ -42,8 +42,6 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
     uint16 private constant QUEST_MIN_FLIP_STAKE_TOKEN = 1_000;
     uint16 private constant QUEST_MIN_MINT = 1;
     uint24 private constant DECIMATOR_SPECIAL_LEVEL = 100;
-    uint256 private constant QUEST_BOND_MIN_WEI = 25e15; // 0.025 ETH
-    uint256 private constant QUEST_BOND_MAX_WEI = 0.5 ether;
 
     address public immutable coin;
     address public immutable admin;
@@ -170,14 +168,8 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
             : _bonusQuestType(bonusEntropy, primaryType, burnAllowed, decAllowed, bafOpen);
 
         _seedQuestType(quests[0], day, primaryEntropy, primaryType);
-        quests[0].flags &= ~QUEST_FLAG_FORCE_BURN;
 
         _seedQuestType(quests[1], day, bonusEntropy, bonusType);
-        if (forceBurn) {
-            quests[1].flags |= QUEST_FLAG_FORCE_BURN;
-        } else {
-            quests[1].flags &= ~QUEST_FLAG_FORCE_BURN;
-        }
 
         bool hardMode = (quests[0].flags & QUEST_FLAG_HIGH_DIFFICULTY) != 0;
         return (true, quests[0].questType, hardMode);
@@ -199,7 +191,7 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         _questSyncState(state, currentDay);
         uint8 tier = _questTier(state.baseStreak);
 
-        uint256 priceUnit = questGame.coinPriceUnit();
+        uint256 priceUnit = PRICE_COIN_UNIT;
         bool matched;
         bool aggregatedCompleted;
         bool aggregatedHardMode;
@@ -274,7 +266,7 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
             return (0, false, quest.questType, state.streak, false);
         }
 
-        uint256 priceUnit = questGame.coinPriceUnit();
+        uint256 priceUnit = PRICE_COIN_UNIT;
         return _questCompleteWithPair(state, quests, slotIndex, quest, priceUnit, 0);
     }
 
@@ -291,7 +283,7 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         }
         _questSyncState(state, currentDay);
         uint8 tier = _questTier(state.baseStreak);
-        uint256 priceUnit = questGame.coinPriceUnit();
+        uint256 priceUnit = PRICE_COIN_UNIT;
 
         (DailyQuest memory quest, uint8 slotIndex) = _currentDayQuestOfType(quests, currentDay, QUEST_TYPE_DECIMATOR);
         if (slotIndex == type(uint8).max) {
@@ -331,7 +323,7 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
 
         _questSyncProgress(state, slotIndex, currentDay, quest.version);
         uint8 tier = _questTier(state.baseStreak);
-        uint256 priceUnit = game_.coinPriceUnit();
+        uint256 priceUnit = PRICE_COIN_UNIT;
         uint256 priceWei = game_.mintPrice();
         if (priceUnit == 0 || priceWei == 0) {
             return (0, false, quest.questType, state.streak, false);
@@ -358,7 +350,7 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         }
         _questSyncState(state, currentDay);
         uint8 tier = _questTier(state.baseStreak);
-        uint256 priceUnit = questGame.coinPriceUnit();
+        uint256 priceUnit = PRICE_COIN_UNIT;
 
         (DailyQuest memory quest, uint8 slotIndex) = _currentDayQuestOfType(quests, currentDay, QUEST_TYPE_AFFILIATE);
         if (slotIndex == type(uint8).max) {
@@ -386,7 +378,7 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         }
         _questSyncState(state, currentDay);
         uint8 tier = _questTier(state.baseStreak);
-        uint256 priceUnit = questGame.coinPriceUnit();
+        uint256 priceUnit = PRICE_COIN_UNIT;
 
         bool matched;
         uint8 fallbackType = quests[0].questType;
@@ -438,7 +430,6 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
                 uint8 otherSlot = slot == 0 ? uint8(1) : uint8(0);
                 bool otherMintEth = local[otherSlot].questType == QUEST_TYPE_MINT_ETH;
                 local[slot].questType = otherMintEth ? QUEST_TYPE_AFFILIATE : QUEST_TYPE_MINT_ETH;
-                local[slot].flags &= ~QUEST_FLAG_FORCE_BURN;
             }
             unchecked {
                 ++slot;
@@ -553,7 +544,6 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         DailyQuest storage other = quests[otherSlot];
         bool otherMintEth = other.questType == QUEST_TYPE_MINT_ETH;
         quest.questType = otherMintEth ? QUEST_TYPE_AFFILIATE : QUEST_TYPE_MINT_ETH;
-        quest.flags &= ~QUEST_FLAG_FORCE_BURN;
         quest.version = _nextQuestVersion();
     }
 

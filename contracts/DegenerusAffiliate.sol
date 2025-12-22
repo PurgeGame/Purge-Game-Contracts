@@ -54,6 +54,8 @@ contract DegenerusAffiliate {
     // Constants
     // ---------------------------------------------------------------------
     uint256 private constant MILLION = 1e6; // token has 6 decimals
+    uint256 private constant AFFILIATE_BONUS_MAX = 25;
+    uint256 private constant AFFILIATE_BONUS_SCALE = AFFILIATE_BONUS_MAX * 5; // 20% of top earns max
     uint256 private constant PRICE_COIN_UNIT = 1_000_000_000;
     bytes32 private constant REF_CODE_LOCKED = bytes32(uint256(1));
 
@@ -400,6 +402,27 @@ contract DegenerusAffiliate {
         return (stored.player, stored.score);
     }
 
+    /// @notice Return the top score and the player's score (whole tokens) for a level.
+    function affiliateBonusInfo(uint24 lvl, address player) external view returns (uint96 topScore, uint256 playerScore) {
+        topScore = affiliateTopByLevel[lvl].score;
+        if (topScore == 0 || player == address(0)) return (topScore, 0);
+        uint256 earned = affiliateCoinEarned[lvl][player];
+        if (earned == 0) return (topScore, 0);
+        playerScore = earned / MILLION;
+    }
+
+    /// @notice Return the best affiliate bonus points from currLevel-1 or currLevel-2.
+    function affiliateBonusPointsBest(uint24 currLevel, address player) external view returns (uint256 points) {
+        if (player == address(0) || currLevel == 0) return 0;
+        unchecked {
+            uint24 prevLevel = currLevel - 1;
+            uint256 best = _affiliateBonusPointsAt(prevLevel, player);
+            if (best == AFFILIATE_BONUS_MAX || currLevel == 1) return best;
+            uint256 alt = _affiliateBonusPointsAt(prevLevel - 1, player);
+            return alt > best ? alt : best;
+        }
+    }
+
     /// @notice Presale pricing via ETH is disabled; return zero to signal no rate.
     function presalePriceCoinEstimate() external pure returns (uint256 priceCoinUnit) {
         return 0;
@@ -455,6 +478,19 @@ contract DegenerusAffiliate {
             wholeTokens = type(uint96).max;
         }
         return uint96(wholeTokens);
+    }
+
+    function _affiliateBonusPointsAt(uint24 lvl, address player) private view returns (uint256 points) {
+        uint96 topScore = affiliateTopByLevel[lvl].score;
+        if (topScore == 0) return 0;
+        uint256 earned = affiliateCoinEarned[lvl][player];
+        if (earned == 0) return 0;
+        uint256 playerScore = earned / MILLION;
+        if (playerScore == 0) return 0;
+        unchecked {
+            uint256 scaled = (playerScore * AFFILIATE_BONUS_SCALE) / uint256(topScore);
+            return scaled > AFFILIATE_BONUS_MAX ? AFFILIATE_BONUS_MAX : scaled;
+        }
     }
 
     function _updateTopAffiliate(address player, uint256 total, uint24 lvl) private {

@@ -8,12 +8,16 @@ pragma solidity ^0.8.26;
  *
  * Slot map:
  * - Slot 0: level timers + airdrop cursors + FSM (level / gameState)
- * - Slot 1: rebuild cursor + jackpot counters + decimator latch
- * - Slot 2: RNG / trait flags
- * - Slot 3: price (wei) + priceCoin (unit)
- * Everything else starts at slot 4+ (full-width balances, arrays, mappings).
+ * - Slot 1: rebuild cursor + jackpot counters + state flags (airdrop/RNG/bond)
+ * - Slot 2: price (wei)
+ * Everything else starts at slot 3+ (full-width balances, arrays, mappings).
  */
 abstract contract DegenerusGameStorage {
+    // ---------------------------------------------------------------------
+    // Constants
+    // ---------------------------------------------------------------------
+    uint256 internal constant PRICE_COIN_UNIT = 1_000_000_000; // 1000 BURNIE (6 decimals)
+
     // ---------------------------------------------------------------------
     // Core packed state (slots 0-2)
     // ---------------------------------------------------------------------
@@ -28,7 +32,7 @@ abstract contract DegenerusGameStorage {
     uint16 internal lastExterminatedTrait = 420; // last trait cleared this level; 420 == TRAIT_ID_TIMEOUT sentinel
     uint8 public gameState = 1; // FSM: 0=idle,1=pregame,2=airdrop/mint,3=burn window
 
-    // Slot 1: actor pointers and sub-state cursors.
+    // Slot 1: cursors and state flags (airdrop/jackpot/RNG/bond).
     uint32 internal traitRebuildCursor; // progress cursor when reseeding trait counts
     uint32 internal airdropMultiplier; // airdrop bonus multiplier (scaled integer)
     uint8 internal jackpotCounter; // jackpots processed within the current level
@@ -36,22 +40,20 @@ abstract contract DegenerusGameStorage {
     bool internal mapJackpotPaid; // true once the map jackpot has been executed for the current purchase phase
     bool internal lastPurchaseDay; // true once the map prize target is met; next tick skips daily/jackpot prep
     bool internal decWindowOpen = true; // latch to hold decimator window open until RNG is requested
-
-    // Slot 2: RNG/trait flags.
     bool internal earlyBurnBoostArmed; // true if the next jackpot should apply the boost
     bool internal rngLockedFlag; // true while waiting for VRF fulfillment
     bool internal rngFulfilled = true; // tracks VRF lifecycle; default true pre-first request
     bool internal traitCountsSeedQueued; // true if initial trait counts were staged and await overwrite flag
     bool internal decimatorHundredReady; // true when level % 100 decimator special is primed
     bool internal exterminationInvertFlag; // toggles inversion of exterminator bonus on certain levels
+    bool internal bondMaintenancePending; // true while bond maintenance needs dedicated advanceGame calls
 
     // ---------------------------------------------------------------------
     // Pricing, pooled balances, and treasury pointers
     // ---------------------------------------------------------------------
 
-    // Slot 3: price (wei) + priceCoin (unit) packed into one word. Both capped well below uint128.
+    // Slot 2: price (wei) packed into one word. Capped well below uint128.
     uint128 internal price = 0.025 ether;
-    uint128 internal priceCoin = 1_000_000_000;
 
     // Pooled balances (ETH/BURNIE and jackpots)
     uint256 internal lastPrizePool = 125 ether; // prize pool snapshot from the previous level
@@ -89,11 +91,6 @@ abstract contract DegenerusGameStorage {
     uint32[256] internal traitRemaining; // remaining supply per trait id
     uint32[256] internal traitStartRemaining; // supply per trait id at burn start (map/burn ticket split)
     mapping(address => uint256) internal mintPacked_; // bit-packed mint history (see DegenerusGame ETH_* constants for layout)
-
-    // ---------------------------------------------------------------------
-    // Bond maintenance
-    // ---------------------------------------------------------------------
-    bool internal bondMaintenancePending; // true while bond maintenance needs dedicated advanceGame calls
 
     // ---------------------------------------------------------------------
     // RNG history

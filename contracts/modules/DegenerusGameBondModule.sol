@@ -6,7 +6,6 @@ import {DegenerusGameStorage} from "../storage/DegenerusGameStorage.sol";
 interface IBonds {
     function payBonds(uint256 coinAmount, uint256 stEthAmount, uint256 rngWord) external payable;
     function notifyGameOver() external;
-    function requiredCoverNext() external view returns (uint256 required);
     function requiredCoverNext(uint256 stopAt) external view returns (uint256 required);
     function rewardStakeTargetBps() external view returns (uint16);
 }
@@ -47,7 +46,7 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
         uint256 yieldTotal = combined > obligations ? combined - obligations : 0;
 
         // Mintable coin: each of vault and bonds receives 5% of the last prize pool (priced in coin units).
-        uint256 coinSlice = (lastPrizePool * priceCoin) / price; // coin equivalent of lastPrizePool
+        uint256 coinSlice = (lastPrizePool * PRICE_COIN_UNIT) / price; // coin equivalent of lastPrizePool
         coinSlice = coinSlice / 20; // 5%
 
         uint256 bondSkim = yieldTotal / 4; // 25% to bonds

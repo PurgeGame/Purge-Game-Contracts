@@ -120,8 +120,8 @@ Bonds are the game’s **time-locked payout** layer. You only get paid when a fu
 
 ### Key Concepts
 
-- **Maturities:** every 5 levels
-- **Sale window:** opens in advance of maturity
+- **Maturities:** every 10 levels (levels ending in 0)
+- **Sale window:** first 5 levels of each 10-level cycle (bootstraps at levels 1-5 for maturity 10)
 - **Where the money goes:** bond deposits are split on-chain between the vault reserve, bond backing, and jackpot funding (reward pool)
 - **Some wins roll into bonds:** certain payout paths can convert a slice of winnings into a bond position, which only pays at maturity
 - **Anti-runaway payouts:** the maturity’s payout budget is derived from what was raised, with a multiplier that drops as raises grow too fast

@@ -33,6 +33,8 @@ interface IDegenerusGame is IDegenerusGameExternal {
         view
         returns (uint24 lvl, uint8 gameState_, bool lastPurchaseDay_, bool rngLocked_, uint256 priceWei);
 
+    function ethMintStats(address player) external view returns (uint24 lvl, uint24 levelCount, uint24 streak);
+
     function ethMintLevelCount(address player) external view returns (uint24);
 
     function ethMintStreakCount(address player) external view returns (uint24);

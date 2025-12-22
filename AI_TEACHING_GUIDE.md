@@ -85,7 +85,7 @@ The main ongoing BURNIE sink is spending BURNIE to buy gamepieces/MAPs (plus mar
 Coinflip is designed to be close to break-even in BURNIE over time (high variance; no guarantees). The big reason people play it is that flips feed periodic rewards like the BAF jackpot, which fires every 10 levels and rewards active coinflippers.
 
 **How do bonds work? When do they pay out?**  
-Bonds are the game’s time-locked payout layer: you take a position that only settles at a future “maturity level” (every 5 levels). If the game keeps advancing, that maturity resolves and pays out under on-chain rules. It’s intentionally high variance: positions are split into two lanes, one lane wins and the other is eliminated, and winners split the payout (part as a claimable share, part as draw prizes). Some payout paths can also roll a slice of a win into bonds, so you may see “future maturity” rewards instead of immediate claimable ETH.
+Bonds are the game's time-locked payout layer: you take a position that only settles at a future maturity level (every 10 levels, with a 5-level sale window each cycle). If the game keeps advancing, that maturity resolves and pays out under on-chain rules. It's intentionally high variance: positions are split into two lanes, one lane wins and the other is eliminated, and winners split the payout (part as a claimable share, part as draw prizes). Some payout paths can also roll a slice of a win into bonds, so you may see "future maturity" rewards instead of immediate claimable ETH.
 
 **Are bonds backed, and what happens if the game ends?**  
 Bond payouts only come from ETH that is already inside the system (bond backing + drained funds on shutdown). During normal play, maturities only resolve when there’s enough backing to cover them; there are no unbacked “IOUs.” If the game stalls for a year, it triggers an on-chain shutdown that drains remaining ETH/stETH into bonds and settles maturities oldest-first (later maturities are the ones at risk of partial funding). After shutdown, you have 1 year to claim; leftover funds are swept to the vault, not to an admin wallet.
@@ -108,7 +108,7 @@ If a user asks for receipts, point them to `ETH_BUCKETS_AND_SOLVENCY.md` and, if
 - Create/manage a Chainlink VRF subscription and add consumers (game + bonds).
 - Perform one-time wiring across modules (`wireAll`).
 - Emergency migrate VRF coordinator/subscription after a **3-day RNG stall** (`emergencyRecover` → game `updateVrfCoordinatorAndSub`).
-- Toggle some bond settings (`setBondsPurchaseToggles`) and optionally set a LINK/ETH feed (`setLinkEthPriceFeed`).
+- Manage bond presale controls (`shutdownPresale`, `runPresaleJackpot`) and optionally set a LINK/ETH feed (`setLinkEthPriceFeed`).
 
 Important: many addresses across the system are **write-once** (“AlreadyWired” patterns). The admin is powerful for initial wiring and VRF maintenance, but it is not an “upgrade admin” that can change gameplay logic after deployment.
 
@@ -297,7 +297,7 @@ Cycle boundary note:
 - **Direct ETH inflows:** any plain ETH sent to the game increases `rewardPool` via `receive() external payable { rewardPool += msg.value; }` (`contracts/DegenerusGame.sol`).
 - **Per-level “save” at MAP jackpot finalization:** `calcPrizePoolForJackpot(...)` recomputes `rewardPool` as a level- and RNG-dependent percent of `rewardPool + currentPrizePool` (`contracts/modules/DegenerusGameJackpotModule.sol`, `_mapRewardPoolPercent`).
 - **Last-purchase-day coinflip adjustment:** `calcPrizePoolForJackpot(...)` applies `_adjustRewardPoolForFlipTotals(...)` to shift that save percent by +/- 2% when last-purchase-day coinflip deposits doubled vs the previous level (reduce save) or fell below half (increase save), capped at 98%.
-- **Yield skims/top-ups:** during map-jackpot prep, `DegenerusGameBondModule.bondMaintenanceForMap(...)` computes untracked surplus (`yieldTotal`) and adds a slice to `rewardPool` (`rewardTopUp = yieldTotal / 20`) (`contracts/modules/DegenerusGameBondModule.sol`).
+- **Yield skims/top-ups:** during pregame upkeep, `DegenerusGameBondModule.bondUpkeep(...)` computes untracked surplus (`yieldTotal`) and adds a slice to `rewardPool` (`rewardTopUp = yieldTotal / 20`) (`contracts/modules/DegenerusGameBondModule.sol`).
 
 Why it matters:
 - `rewardPool` directly funds many jackpots (purchase-phase jackpots, carryover jackpots, BAF/Decimator slices, etc.).
@@ -466,7 +466,7 @@ Use these patterns when responding:
 - **Are trophies transferable?** No. `DegenerusTrophies` implements the ERC721 surface but reverts transfers/approvals (`contracts/DegenerusTrophies.sol`).
 - **Can anyone change the rules after deployment?** Core gameplay contracts are not upgradeable, and most wiring is “write-once”. The things that *can* change mid-game are operational/dependency controls, not “rewrite the game” controls:
   - **VRF recovery (broken dependency):** the game only accepts a VRF coordinator/subscription rotation after a **3-day RNG stall** (`DegenerusGame.rngStalledForThreeDays()` / `updateVrfCoordinatorAndSub`, `contracts/DegenerusGame.sol`). This is an emergency recovery path so the game can continue if Chainlink config breaks; it does not change jackpot math or payout rules.
-  - **Bonds operations (liquidity/routing):** bonds has a few admin-gated switches (pause bond purchases from external/game sources, and adjust the target ETH↔stETH balance for reward liquidity). These affect *when/how* bond participation and staking/rebalancing happens, not the core gameplay loop under normal operation (`contracts/DegenerusBonds.sol`).
+  - **Bonds operations (liquidity/presale):** bonds has a couple admin-gated controls: `setRewardStakeTargetBps` (stETH ratio target) and presale management (`shutdownPresale`, `runPresaleJackpot`). Bond deposits are also paused during the game's RNG lock windows (`setRngLock`). These affect *when/how* bond participation and staking/rebalancing happens, not the core gameplay loop under normal operation (`contracts/DegenerusBonds.sol`).
   - **No “house-rule knob”:** there is no admin function that can arbitrarily change core pricing, jackpot selection, trait mechanics, or drain player pots.
 
 ---
@@ -476,5 +476,5 @@ Use these patterns when responding:
 - **`MustMintToday` (game advance blocked):** `advanceGame(cap=0)` requires the caller to have completed an ETH mint for the current day slot (see the `MustMintToday` check in `DegenerusGame.advanceGame`, `contracts/DegenerusGame.sol`).
 - **`NotTimeYet` (too early / wrong phase):** Often means the daily gate hasn’t rolled to a new day index, or an action is being attempted in the wrong `gameState` (see `DegenerusGame.rngAndTimeGate` and phase guards like `burnTokens`, `contracts/DegenerusGame.sol`).
 - **`RngNotReady` / `RngLocked` (RNG in-flight):** VRF request has been fired and the game is waiting for fulfillment (`rngLockedFlag == true`). Check `DegenerusGame.rngLocked()` and, if it persists, `DegenerusGame.rngStalledForThreeDays()` (`contracts/DegenerusGame.sol`).
-- **Bond purchases disabled:** `DegenerusBonds` can block deposits either via admin toggles or via the game’s temporary RNG lock during jackpot-critical windows (see `DegenerusBonds.setPurchaseToggles` and `DegenerusBonds.setRngLock`, `contracts/DegenerusBonds.sol`).
+- **Bond purchases disabled:** deposits are blocked outside the 5-level sale window, during the game's RNG lock, or after game over/presale shutdown (see `_bondPurchasesOpen` and `setRngLock`, `contracts/DegenerusBonds.sol`).
 - **`NotDecimatorWindow` (BURNIE burn blocked):** Decimator burns only work during an active Decimator window (`DegenerusCoin.decimatorBurn` checks `DegenerusGame.decWindow()`, `contracts/DegenerusCoin.sol` / `contracts/DegenerusGame.sol`).

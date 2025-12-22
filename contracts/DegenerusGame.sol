@@ -258,8 +258,8 @@ contract DegenerusGame is DegenerusGameStorage {
         return price;
     }
 
-    function coinPriceUnit() external view returns (uint256) {
-        return priceCoin;
+    function coinPriceUnit() external pure returns (uint256) {
+        return PRICE_COIN_UNIT;
     }
 
     function rngWordForDay(uint48 day) external view returns (uint256) {
@@ -350,6 +350,13 @@ contract DegenerusGame is DegenerusGameStorage {
 
     function ethMintStreakCount(address player) external view returns (uint24) {
         return uint24((mintPacked_[player] >> ETH_LEVEL_STREAK_SHIFT) & MINT_MASK_24);
+    }
+
+    function ethMintStats(address player) external view returns (uint24 lvl, uint24 levelCount, uint24 streak) {
+        uint256 packed = mintPacked_[player];
+        lvl = level;
+        levelCount = uint24((packed >> ETH_LEVEL_COUNT_SHIFT) & MINT_MASK_24);
+        streak = uint24((packed >> ETH_LEVEL_STREAK_SHIFT) & MINT_MASK_24);
     }
 
     /// @notice Record a mint, funded by ETH (`msg.value`) or claimable winnings.
@@ -591,7 +598,7 @@ contract DegenerusGame is DegenerusGameStorage {
 
         emit Advance(_gameState);
 
-        if (_gameState != 0 && cap == 0) coinContract.creditFlip(caller, priceCoin >> 1);
+        if (_gameState != 0 && cap == 0) coinContract.creditFlip(caller, PRICE_COIN_UNIT >> 1);
     }
 
     // --- Purchases: schedule NFT mints (traits precomputed) ----------------------------------------
@@ -629,7 +636,7 @@ contract DegenerusGame is DegenerusGameStorage {
         bool isDoubleCountStep = mod10 == 2;
         bool levelNinety = (lvl == 90);
         uint32 endLevelFlag = isSeventhStep ? 1 : 0;
-        uint256 priceCoinLocal = priceCoin;
+        uint256 priceCoinLocal = PRICE_COIN_UNIT;
         uint16 prevExterminated = lastExterminatedTrait;
 
         uint256 bonusTenths;

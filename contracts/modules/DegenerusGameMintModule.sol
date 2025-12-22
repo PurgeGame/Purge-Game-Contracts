@@ -35,15 +35,18 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
         uint256 data;
 
         uint32 day = _currentMintDay();
-        uint256 priceCoinLocal = priceCoin;
+        uint256 priceCoinLocal = PRICE_COIN_UNIT;
         uint24 prevLevel = uint24((prevData >> ETH_LAST_LEVEL_SHIFT) & MINT_MASK_24);
         uint24 total = uint24((prevData >> ETH_LEVEL_COUNT_SHIFT) & MINT_MASK_24);
         uint24 streak = uint24((prevData >> ETH_LEVEL_STREAK_SHIFT) & MINT_MASK_24);
         bool sameLevel = prevLevel == lvl;
         bool newCentury = (prevLevel / 100) != (lvl / 100);
         uint256 levelUnitsBefore = (prevData >> ETH_LEVEL_UNITS_SHIFT) & MINT_MASK_16;
-        if (!sameLevel && prevLevel + 1 != lvl) {
-            levelUnitsBefore = 0;
+        if (!sameLevel) {
+            // Reset once we switch levels after a counted mint (>=4 units), or when skipping levels.
+            if (prevLevel + 1 != lvl || levelUnitsBefore >= 4) {
+                levelUnitsBefore = 0;
+            }
         }
         bool bonusPaid = sameLevel && (((prevData >> ETH_LEVEL_BONUS_SHIFT) & 1) == 1);
         uint256 levelUnitsAfter = levelUnitsBefore + uint256(mintUnits);
@@ -160,7 +163,7 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
     }
 
     /// @notice Rebuild `traitRemaining` by scanning scheduled token traits in capped slices.
-    /// @param tokenBudget Max tokens to process this call (0 => default 4,096 or level-1 fallback).
+    /// @param tokenBudget Max tokens to process this call (ignored on first slice; 0 => default 2,500).
     /// @param target Total tokens expected for this level (pre-scaled).
     /// @param baseTokenId Current base token id for this level (passed from core to avoid extra slots).
     /// @return finished True when all tokens for the level have been incorporated.
