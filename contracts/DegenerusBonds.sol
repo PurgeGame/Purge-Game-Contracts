@@ -691,18 +691,16 @@ contract DegenerusBonds {
 
     /// @notice Unified deposit: external callers route ETH into the current maturity.
     function depositCurrentFor(address beneficiary) external payable returns (uint256 scoreAwarded) {
-        if (msg.sender == address(game)) revert Unauthorized(); // game should use depositFromGame with direct split
+        if (msg.sender == address(game)) revert Unauthorized(); // game should use depositFromGame; split handled in-game
         address ben = beneficiary == address(0) ? msg.sender : beneficiary;
         uint256 amount = msg.value;
         scoreAwarded = _processDeposit(ben, amount, false);
     }
 
-    /// @notice Game-only deposit that credits the current maturity and splits ETH without round-tripping.
-    function depositFromGame(address beneficiary, uint256 amount) external payable returns (uint256 scoreAwarded) {
+    /// @notice Game-only deposit that credits the current maturity; ETH split is handled in-game.
+    function depositFromGame(address beneficiary, uint256 amount) external returns (uint256 scoreAwarded) {
         if (msg.sender != address(game)) revert Unauthorized();
-        if (amount != msg.value) revert SaleClosed();
-        address ben = beneficiary == address(0) ? msg.sender : beneficiary;
-        scoreAwarded = _processDeposit(ben, amount, true);
+        scoreAwarded = _processDeposit(beneficiary, amount, true);
     }
 
     /// @notice Funding shim used by the game to accrue jackpot coin for bonds.
@@ -923,58 +921,51 @@ contract DegenerusBonds {
         uint24 maturityLevel = _activeMaturityAt(currLevel);
         BondSeries storage s = _getOrCreateSeries(maturityLevel);
 
-        // Split ETH: game purchases (50% bondPool, 50% yield); direct purchases (40% vault paid in stETH with ETH retained by game, fallback to ETH if needed, 30% yield, 20% bondPool, 10% reward).
-        uint256 vaultShare;
-        uint256 bondShare;
-        uint256 yieldShare;
-        uint256 rewardShare;
-        uint256 vaultEthShare;
-        if (fromGame) {
-            bondShare = amount / 2;
-            yieldShare = amount - bondShare;
-        } else {
-            vaultShare = (amount * 40) / 100;
-            bondShare = (amount * 20) / 100;
-            rewardShare = (amount * 10) / 100;
-            yieldShare = amount - vaultShare - bondShare - rewardShare;
-        }
+        if (!fromGame) {
+            // Split ETH: direct purchases (40% vault paid in stETH with ETH retained by game, fallback to ETH if needed,
+            // 30% yield, 20% bondPool, 10% reward).
+            uint256 vaultShare = (amount * 40) / 100;
+            uint256 bondShare = (amount * 20) / 100;
+            uint256 rewardShare = (amount * 10) / 100;
+            uint256 yieldShare = amount - vaultShare - bondShare - rewardShare;
 
-        address vaultAddr = vault;
-        if (vaultAddr == address(0)) revert BankCallFailed();
-        address gameAddr = address(game);
-        vaultEthShare = vaultShare;
-        if (!fromGame && vaultShare != 0) {
-            uint256 stethCover = vaultShare;
-            uint256 stethBal;
-            try IStETHLike(steth).balanceOf(gameAddr) returns (uint256 b) {
-                stethBal = b;
-            } catch {}
-            if (stethBal < stethCover) stethCover = stethBal;
-            if (stethCover != 0) {
-                bool ok;
-                try IStETHLike(steth).transferFrom(gameAddr, vaultAddr, stethCover) returns (bool success) {
-                    ok = success;
-                } catch {
-                    ok = false;
-                }
-                if (ok) {
-                    vaultEthShare = vaultShare - stethCover;
-                    yieldShare += stethCover; // keep ETH in the game; vault gets stETH instead
+            address vaultAddr = vault;
+            if (vaultAddr == address(0)) revert BankCallFailed();
+            address gameAddr = address(game);
+            uint256 vaultEthShare = vaultShare;
+            if (vaultShare != 0) {
+                uint256 stethCover = vaultShare;
+                uint256 stethBal;
+                try IStETHLike(steth).balanceOf(gameAddr) returns (uint256 b) {
+                    stethBal = b;
+                } catch {}
+                if (stethBal < stethCover) stethCover = stethBal;
+                if (stethCover != 0) {
+                    bool ok;
+                    try IStETHLike(steth).transferFrom(gameAddr, vaultAddr, stethCover) returns (bool success) {
+                        ok = success;
+                    } catch {
+                        ok = false;
+                    }
+                    if (ok) {
+                        vaultEthShare = vaultShare - stethCover;
+                        yieldShare += stethCover; // keep ETH in the game; vault gets stETH instead
+                    }
                 }
             }
-        }
 
-        if (vaultEthShare != 0) {
-            _sendEthOrRevert(vaultAddr, vaultEthShare);
-        }
-        if (bondShare != 0) {
-            IDegenerusGameBondBank(gameAddr).bondDeposit{value: bondShare}(true);
-        }
-        if (yieldShare != 0) {
-            IDegenerusGameBondBank(gameAddr).bondDeposit{value: yieldShare}(false);
-        }
-        if (rewardShare != 0) {
-            _sendEthOrRevert(gameAddr, rewardShare);
+            if (vaultEthShare != 0) {
+                _sendEthOrRevert(vaultAddr, vaultEthShare);
+            }
+            if (bondShare != 0) {
+                IDegenerusGameBondBank(gameAddr).bondDeposit{value: bondShare}(true);
+            }
+            if (yieldShare != 0) {
+                IDegenerusGameBondBank(gameAddr).bondDeposit{value: yieldShare}(false);
+            }
+            if (rewardShare != 0) {
+                _sendEthOrRevert(gameAddr, rewardShare);
+            }
         }
 
         scoreAwarded = _scoreWithMultiplier(beneficiary, amount);

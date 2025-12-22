@@ -10,7 +10,7 @@ import {DegenerusGameStorage} from "../storage/DegenerusGameStorage.sol";
 
 interface IDegenerusBondsJackpot {
     function depositCurrentFor(address beneficiary) external payable returns (uint256 scoreAwarded);
-    function depositFromGame(address beneficiary, uint256 amount) external payable returns (uint256 scoreAwarded);
+    function depositFromGame(address beneficiary, uint256 amount) external returns (uint256 scoreAwarded);
     function purchasesEnabled() external view returns (bool);
 }
 
@@ -54,7 +54,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
         address nftAddr
     ) external {
         uint256 claimableDelta;
-        uint24 prevLevel = lvl == 0 ? 0 : lvl - 1;
+        uint24 prevLevel = lvl - 1;
         bool hasPrevLevel = prevLevel != 0;
         uint16 traitRaw = lastExterminatedTrait;
         if (traitRaw != TRAIT_ID_TIMEOUT) {
@@ -100,8 +100,6 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
         }
         if (hasPrevLevel) {
             _maybeMintAffiliateTop(prevLevel);
-        }
-        if (hasPrevLevel) {
             claimableDelta += _runRewardJackpots(prevLevel, rngWord, jackpotsAddr);
         }
         if (claimableDelta != 0) {
@@ -190,12 +188,21 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
             return (ethPortion, claimableDelta);
         }
 
-        try IDegenerusBondsJackpot(bonds).depositFromGame{value: bondBudget}(winner, bondBudget) {
+        if (_depositBondFromGame(bonds, winner, bondBudget)) {
             ethPortion -= bondBudget;
-        } catch {
-            // leave bondBudget in ethPortion to pay out as ETH on failure
         }
         return (ethPortion, claimableDelta);
+    }
+
+    function _depositBondFromGame(address bondsAddr, address beneficiary, uint256 amount) private returns (bool spent) {
+        if (amount == 0) return false;
+        try IDegenerusBondsJackpot(bondsAddr).depositFromGame(beneficiary, amount) {
+            uint256 bondShare = amount / 2;
+            if (bondShare != 0) {
+                bondPool += bondShare;
+            }
+            spent = true;
+        } catch {}
     }
 
     /// @notice Adds ETH winnings to a player, emitting the credit event.

@@ -12,7 +12,7 @@ interface IStETHView {
 interface IDegenerusBondsJackpot {
     function purchasesEnabled() external view returns (bool);
     function depositCurrentFor(address beneficiary) external payable returns (uint256 scoreAwarded);
-    function depositFromGame(address beneficiary, uint256 amount) external payable returns (uint256 scoreAwarded);
+    function depositFromGame(address beneficiary, uint256 amount) external returns (uint256 scoreAwarded);
 }
 
 /**
@@ -863,10 +863,10 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
         uint256 cashPortion = amount;
 
         if (bondBudget != 0) {
-            try IDegenerusBondsJackpot(bondsAddr).depositFromGame{value: bondBudget}(winner, bondBudget) {
+            if (_depositBondFromGame(bondsAddr, winner, bondBudget)) {
                 cashPortion = amount - bondBudget;
                 bondSpent = bondBudget;
-            } catch {}
+            }
         }
 
         if (cashPortion != 0) {
@@ -918,7 +918,6 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
             targetBondWinners = uint16(winnersLen);
         }
 
-        IDegenerusBondsJackpot bondsContract = IDegenerusBondsJackpot(bondsAddr);
         uint16 offset = uint16(entropyState % winnersLen);
 
         for (uint256 i; i < targetBondWinners; ) {
@@ -929,14 +928,8 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
                 }
                 continue;
             }
-            bool spent;
-            try bondsContract.depositFromGame{value: perWinner}(recipient, perWinner) {
-                spent = true;
-            } catch {
-                spent = false;
-            }
 
-            if (spent) {
+            if (_depositBondFromGame(bondsAddr, recipient, perWinner)) {
                 winners[(uint256(offset) + i) % winnersLen] = address(0);
                 bondSpent += perWinner;
             }
@@ -955,6 +948,21 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
             state ^= state << 8;
         }
         return state;
+    }
+
+    function _depositBondFromGame(
+        address bondsAddr,
+        address beneficiary,
+        uint256 amount
+    ) private returns (bool spent) {
+        if (amount == 0) return false;
+        try IDegenerusBondsJackpot(bondsAddr).depositFromGame(beneficiary, amount) {
+            uint256 bondShare = amount / 2;
+            if (bondShare != 0) {
+                bondPool += bondShare;
+            }
+            spent = true;
+        } catch {}
     }
 
     function _rollQuestForJackpot(

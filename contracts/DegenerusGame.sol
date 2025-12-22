@@ -26,7 +26,7 @@ interface IStETH {
 
 interface IDegenerusBonds {
     function depositCurrentFor(address beneficiary) external payable returns (uint256 scoreAwarded);
-    function depositFromGame(address beneficiary, uint256 amount) external payable returns (uint256 scoreAwarded);
+    function depositFromGame(address beneficiary, uint256 amount) external returns (uint256 scoreAwarded);
     function payBonds(uint256 coinAmount, uint256 stEthAmount, uint256 rngWord) external payable;
     function bondMaintenance(uint256 rngWord, uint32 workCapOverride) external returns (bool done);
     function setRngLock(bool locked) external;

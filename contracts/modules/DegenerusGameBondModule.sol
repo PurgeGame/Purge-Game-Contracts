@@ -39,8 +39,10 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
 
         uint256 stBal = IStETHLite(stethAddr).balanceOf(address(this));
         uint256 ethBal = address(this).balance;
+        uint256 bondPoolLocal = bondPool;
+        uint256 rewardPoolLocal = rewardPool;
 
-        uint256 obligations = currentPrizePool + nextPrizePool + rewardPool + claimablePool + bondPool;
+        uint256 obligations = currentPrizePool + nextPrizePool + rewardPoolLocal + claimablePool + bondPoolLocal;
         uint256 combined = ethBal + stBal;
         uint256 yieldTotal = combined > obligations ? combined - obligations : 0;
 
@@ -51,15 +53,23 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
         uint256 bondSkim = yieldTotal / 4; // 25% to bonds
         uint256 rewardTopUp = yieldTotal / 20; // 5% to reward pool
 
-        uint256 requiredStopAt = bondPool + bondSkim;
-        uint256 required = bondContract.requiredCoverNext(requiredStopAt);
-        uint256 shortfall = required > bondPool ? required - bondPool : 0;
+        uint256 required;
+        if (bondSkim == 0 && bondPoolLocal == 0) {
+            required = 0;
+        } else {
+            uint256 requiredStopAt = bondPoolLocal + bondSkim;
+            required = bondContract.requiredCoverNext(requiredStopAt);
+        }
+        uint256 shortfall = required > bondPoolLocal ? required - bondPoolLocal : 0;
         uint256 toBondPool = bondSkim < shortfall ? bondSkim : shortfall;
         if (toBondPool != 0) {
-            bondPool += toBondPool;
+            bondPoolLocal += toBondPool;
         }
 
-        uint256 leftover = bondSkim - toBondPool;
+        uint256 leftover;
+        unchecked {
+            leftover = bondSkim - toBondPool;
+        }
         uint256 stSpend;
         uint256 ethSpend;
         if (leftover != 0) {
@@ -69,24 +79,36 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
                 ethSpend = gap <= ethBal ? gap : ethBal;
             }
         }
-        IVaultEscrowCoin(coinAddr).vaultEscrow(coinSlice);
+        if (coinSlice != 0) {
+            IVaultEscrowCoin(coinAddr).vaultEscrow(coinSlice);
+        }
         bondContract.payBonds{value: ethSpend}(coinSlice, stSpend, rngWord);
-        rewardPool += rewardTopUp;
+        if (rewardTopUp != 0) {
+            rewardPoolLocal += rewardTopUp;
+        }
 
         // If bondPool exceeds required cover (including upcoming maturities), sweep the excess to the vault.
-        if (bondPool > required) {
-            uint256 excess = bondPool - required;
+        if (bondPoolLocal > required) {
+            uint256 excess = bondPoolLocal - required;
             address v = vault;
             if (v != address(0)) {
-                uint256 ethAvail = address(this).balance;
+                ethBal = address(this).balance;
+                uint256 ethAvail = ethBal;
                 uint256 sendAmt = excess < ethAvail ? excess : ethAvail;
                 if (sendAmt != 0) {
                     (bool ok, ) = payable(v).call{value: sendAmt}("");
                     if (ok) {
-                        bondPool -= sendAmt;
+                        bondPoolLocal -= sendAmt;
                     }
                 }
             }
+        }
+
+        if (bondPoolLocal != bondPool) {
+            bondPool = bondPoolLocal;
+        }
+        if (rewardPoolLocal != rewardPool) {
+            rewardPool = rewardPoolLocal;
         }
     }
 
