@@ -291,7 +291,6 @@ contract DegenerusCoin {
     function claimPresale() external {
         uint256 amount = affiliateProgram.consumePresaleCoin(msg.sender);
         if (amount == 0) return;
-        if (amount > presaleClaimableRemaining) revert Insufficient();
         presaleClaimableRemaining -= amount;
         _mint(msg.sender, amount);
     }

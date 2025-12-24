@@ -4,14 +4,10 @@ pragma solidity ^0.8.26;
 import {IDegenerusGame} from "./interfaces/IDegenerusGame.sol";
 
 interface IDegenerusCoinAffiliate {
-    function balanceOf(address account) external view returns (uint256);
-    function presaleDistribute(address buyer, uint256 amountBase) external;
     function creditFlip(address player, uint256 amount) external;
     function creditFlipBatch(address[3] calldata players, uint256[3] calldata amounts) external;
     function affiliateQuestReward(address player, uint256 amount) external returns (uint256);
     function affiliatePrimePresale() external;
-    function burnCoin(address target, uint256 amount) external;
-    function affiliatePurchaseMaps(address player, uint32 mapQuantity) external returns (uint256);
 }
 
 interface IDegenerusGamepiecesAffiliate {
@@ -34,8 +30,6 @@ contract DegenerusAffiliate {
     error Insufficient();
     error InvalidRakeback();
     error ZeroAddress();
-    error PresaleClosed();
-    error OnlyGame();
 
     // ---------------------------------------------------------------------
     // Types
@@ -79,8 +73,7 @@ contract DegenerusAffiliate {
     mapping(address => uint256) public presaleCoinEarned;
     mapping(uint24 => PlayerScore) private affiliateTopByLevel;
     uint256 public presaleClaimableTotal;
-    bool private preCoinActive = true;
-    bool private presaleShutdown; // permanently stops presale-era flows once coin is wired or manually closed
+    bool private presaleShutdown; // permanently stops presale-era flows once manually closed
     bool private referralLocksActive;
 
     // ---------------------------------------------------------------------
@@ -113,8 +106,6 @@ contract DegenerusAffiliate {
         address current = address(coin);
         if (current == address(0)) {
             coin = IDegenerusCoinAffiliate(coinAddr);
-            presaleShutdown = true; // stop presale once coin is wired
-            preCoinActive = false;
             coin.affiliatePrimePresale();
         } else if (coinAddr != current) {
             revert AlreadyConfigured();
@@ -177,20 +168,15 @@ contract DegenerusAffiliate {
         return _referrerAddress(player);
     }
 
-    /// @notice True while presale is open and coin wiring has not finalized.
+    /// @notice True while presale is open (can remain open after coin wiring).
     function presaleActive() external view returns (bool) {
-        return preCoinActive && !presaleShutdown;
+        return !presaleShutdown;
     }
 
     /// @notice Allow the bonds contract to permanently close presale sales.
     function shutdownPresale() external {
         if (msg.sender != bonds) revert OnlyBonds();
         presaleShutdown = true;
-    }
-
-    /// @notice Presale direct purchases for ETH have been removed; always reverts.
-    function presale() external payable returns (uint256) {
-        revert PresaleClosed();
     }
 
     // ---------------------------------------------------------------------
@@ -211,10 +197,15 @@ contract DegenerusAffiliate {
         address gamepiecesAddr = address(degenerusGamepieces);
         if (caller != coinAddr && caller != bonds && caller != gamepiecesAddr) revert OnlyAuthorized();
 
-        bool coinActive = coinAddr != address(0);
-        // During presale (coin not wired), only bond purchases should accrue presale-claimable coin.
-        // This keeps presale coin distribution anchored to bond purchases (not other gameplay calls).
-        if (!coinActive && caller != bonds) return 0;
+        bool presaleOpen = !presaleShutdown;
+        if (presaleOpen) {
+            // During presale, only bond purchases should accrue presale-claimable coin.
+            // This keeps presale coin distribution anchored to bond purchases (not other gameplay calls).
+            if (caller != bonds) return 0;
+        } else {
+            // After presale closes, coin must be wired to distribute rewards.
+            if (coinAddr == address(0)) return 0;
+        }
 
         bytes32 storedCode = playerReferralCode[sender];
         if (storedCode == REF_CODE_LOCKED) return 0;
@@ -263,7 +254,7 @@ contract DegenerusAffiliate {
         _updateTopAffiliate(affiliateAddr, newTotal, lvl);
         playerRakeback = rakebackShare;
 
-        if (coinActive) {
+        if (!presaleOpen) {
             address[3] memory players;
             uint256[3] memory amounts;
             uint256 cursor;
@@ -274,7 +265,7 @@ contract DegenerusAffiliate {
                 IDegenerusGamepiecesAffiliate gp = degenerusGamepieces;
                 if (address(gp) != address(0)) {
                     uint256 mapCost = PRICE_COIN_UNIT / 4;
-                    if (mapCost != 0 && totalFlipAward >= mapCost * 2) {
+                    if (totalFlipAward >= mapCost * 2) {
                         uint256 mapBudget = totalFlipAward / 2;
                         uint256 potentialMaps = mapBudget / mapCost;
                         uint32 mapQty = uint32(potentialMaps);
@@ -294,10 +285,9 @@ contract DegenerusAffiliate {
             address upline = _referrerAddress(affiliateAddr);
             if (upline != address(0) && upline != sender) {
                 uint256 baseBonus = scaledAmount / 5;
-                uint256 bonus = baseBonus;
-                uint256 questRewardUpline = coin.affiliateQuestReward(upline, bonus);
-                uint256 totalUpline = bonus + questRewardUpline;
-                earned[upline] = earned[upline] + bonus;
+                uint256 questRewardUpline = coin.affiliateQuestReward(upline, baseBonus);
+                uint256 totalUpline = baseBonus + questRewardUpline;
+                earned[upline] = earned[upline] + baseBonus;
 
                 players[cursor] = upline;
                 amounts[cursor] = totalUpline;
@@ -329,19 +319,16 @@ contract DegenerusAffiliate {
                 }
             }
         } else {
-            uint256 totalFlipAwardPre = affiliateShareBase;
-            presaleCoinEarned[affiliateAddr] += totalFlipAwardPre;
-            presaleClaimableTotal += totalFlipAwardPre;
+            uint256 presaleTotalIncrease = affiliateShareBase;
+            presaleCoinEarned[affiliateAddr] += affiliateShareBase;
 
             // Upline bonus (20% of base amount); no stake bonus applied to uplines.
             address uplinePre = _referrerAddress(affiliateAddr);
             if (uplinePre != address(0) && uplinePre != sender) {
                 uint256 baseBonusPre = scaledAmount / 5;
-                uint256 bonusPre = baseBonusPre;
-                uint256 uplineTotalPre = bonusPre;
-                earned[uplinePre] = earned[uplinePre] + bonusPre;
-                presaleCoinEarned[uplinePre] += uplineTotalPre;
-                presaleClaimableTotal += uplineTotalPre;
+                earned[uplinePre] = earned[uplinePre] + baseBonusPre;
+                presaleCoinEarned[uplinePre] += baseBonusPre;
+                presaleTotalIncrease += baseBonusPre;
 
                 // Second upline bonus (20% of first upline share)
                 address upline2Pre = _referrerAddress(uplinePre);
@@ -349,13 +336,17 @@ contract DegenerusAffiliate {
                     uint256 bonus2Pre = baseBonusPre / 5;
                     earned[upline2Pre] = earned[upline2Pre] + bonus2Pre;
                     presaleCoinEarned[upline2Pre] += bonus2Pre;
-                    presaleClaimableTotal += bonus2Pre;
+                    presaleTotalIncrease += bonus2Pre;
                 }
             }
 
             if (playerRakeback != 0) {
                 presaleCoinEarned[sender] += playerRakeback;
-                presaleClaimableTotal += playerRakeback;
+                presaleTotalIncrease += playerRakeback;
+            }
+
+            if (presaleTotalIncrease != 0) {
+                presaleClaimableTotal += presaleTotalIncrease;
             }
         }
 
@@ -421,11 +412,6 @@ contract DegenerusAffiliate {
             uint256 alt = _affiliateBonusPointsAt(prevLevel - 1, player);
             return alt > best ? alt : best;
         }
-    }
-
-    /// @notice Presale pricing via ETH is disabled; return zero to signal no rate.
-    function presalePriceCoinEstimate() external pure returns (uint256 priceCoinUnit) {
-        return 0;
     }
 
     // ---------------------------------------------------------------------
