@@ -50,11 +50,6 @@ interface IWiring {
     function wire(address[] calldata addresses) external;
 }
 
-interface IDegenerusAffiliateLink {
-    function presaleActive() external view returns (bool);
-    function addPresaleLinkCredit(address player, uint256 amount) external;
-}
-
 /// @notice Minimal Chainlink price feed surface (used for LINK/ETH conversion).
 interface IAggregatorV3 {
     function latestRoundData()
@@ -101,9 +96,6 @@ contract DegenerusAdmin {
     event LinkEthFeedUpdated(address indexed feed);
     event AffiliateWired(address indexed affiliate);
     event VaultSet(address indexed vault);
-    event CoinSet(address indexed coin);
-    event BondsGameWired(address indexed game);
-    event BondsVrfWired(address indexed coordinator, uint256 indexed subId, bytes32 keyHash);
     event PresaleShutdown();
     event PresaleJackpotRun(bool advanced);
 
@@ -123,6 +115,8 @@ contract DegenerusAdmin {
     bytes32 public vrfKeyHash;
     mapping(address => uint256) public pendingLinkCredit;
     address public linkEthPriceFeed; // Chainlink LINK/ETH price feed (optional; zero address disables)
+    bool private linkEthPriceScaleUp;
+    uint256 private linkEthPriceScale;
     uint256 private constant PRICE_COIN_UNIT = 1_000_000_000; // 1000 BURNIE (6 decimals)
 
     // -----------------------
@@ -171,15 +165,6 @@ contract DegenerusAdmin {
             if (bondKeyHash != currentKeyHash) revert AlreadyWired();
         }
 
-        // Wire bonds exactly once.
-        try IVRFCoordinatorV2_5Owner(coordinator).addConsumer(subscriptionId, bonds) {
-            emit ConsumerAdded(bonds);
-        } catch {}
-        IDegenerusBondsAdmin(bonds).wire(
-            _packBondsWire(address(0), address(0), address(0), coordinator, address(0), address(0), address(0)),
-            subscriptionId,
-            vrfKeyHash
-        );
     }
 
     /// @notice Consolidated wiring helper: creates VRF sub if needed, wires bonds, then downstream modules directly.
@@ -272,6 +257,10 @@ contract DegenerusAdmin {
             IDegenerusGameVrf(game_).wireVrf(coord, subscriptionId, keyHash);
         }
 
+        try IVRFCoordinatorV2_5Owner(coord).addConsumer(subscriptionId, bondsAddr) {
+            emit ConsumerAdded(bondsAddr);
+        } catch {}
+
         IDegenerusBondsAdmin(bondsAddr).wire(
             _packBondsWire(game_, vault_, coin_, coord, questModule_, trophies_, affiliate_),
             subscriptionId,
@@ -351,6 +340,23 @@ contract DegenerusAdmin {
         address current = linkEthPriceFeed;
         if (current != address(0) && _feedHealthy(current)) revert FeedHealthy();
         linkEthPriceFeed = feed;
+
+        if (feed == address(0)) {
+            linkEthPriceScale = 0;
+            linkEthPriceScaleUp = true;
+            emit LinkEthFeedUpdated(feed);
+            return;
+        }
+
+        uint8 dec = IAggregatorV3(feed).decimals();
+        if (dec <= 18) {
+            linkEthPriceScale = 10 ** (18 - dec);
+            linkEthPriceScaleUp = true;
+        } else {
+            linkEthPriceScale = 10 ** (dec - 18);
+            linkEthPriceScaleUp = false;
+        }
+
         emit LinkEthFeedUpdated(feed);
     }
 
@@ -516,16 +522,9 @@ contract DegenerusAdmin {
         if (answer <= 0) return 0;
 
         uint256 price = uint256(answer);
-        uint8 dec = IAggregatorV3(feed).decimals();
-
-        uint256 priceWei;
-        if (dec < 18) {
-            priceWei = price * (10 ** (18 - dec));
-        } else if (dec > 18) {
-            priceWei = price / (10 ** (dec - 18));
-        } else {
-            priceWei = price;
-        }
+        uint256 scale = linkEthPriceScale;
+        if (scale == 0) return 0;
+        uint256 priceWei = linkEthPriceScaleUp ? price * scale : price / scale;
 
         if (priceWei == 0) return 0;
         ethAmount = (amount * priceWei) / 1 ether;
