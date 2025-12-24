@@ -118,7 +118,7 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
     function rollDailyQuest(
         uint48 day,
         uint256 entropy
-    ) external onlyCoin returns (bool rolled, uint8 questType, bool highDifficulty) {
+    ) external onlyCoin returns (bool rolled, uint8[2] memory questTypes, bool highDifficulty) {
         return _rollDailyQuest(day, entropy, false, false);
     }
 
@@ -128,7 +128,7 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         uint256 entropy,
         bool forceMintEth,
         bool forceBurn
-    ) external onlyCoin returns (bool rolled, uint8 questType, bool highDifficulty) {
+    ) external onlyCoin returns (bool rolled, uint8[2] memory questTypes, bool highDifficulty) {
         return _rollDailyQuest(day, entropy, forceMintEth, forceBurn);
     }
 
@@ -153,7 +153,7 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         uint256 entropy,
         bool forceMintEth,
         bool forceBurn
-    ) private returns (bool rolled, uint8 questType, bool highDifficulty) {
+    ) private returns (bool rolled, uint8[2] memory questTypes, bool highDifficulty) {
         DailyQuest[QUEST_SLOT_COUNT] storage quests = activeQuests;
         bool burnAllowed = _canRollBurnQuest(day) || forceBurn;
         bool decAllowed = _canRollDecimatorQuest();
@@ -167,12 +167,15 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
             ? QUEST_TYPE_BURN
             : _bonusQuestType(bonusEntropy, primaryType, burnAllowed, decAllowed, bafOpen);
 
-        _seedQuestType(quests[0], day, primaryEntropy, primaryType);
+        // Single difficulty roll per day, shared by both slots.
+        uint8 flags = _difficultyFlags(uint16(primaryEntropy & 0x3FF));
+        _seedQuestType(quests[0], day, primaryEntropy, primaryType, flags);
+        _seedQuestType(quests[1], day, bonusEntropy, bonusType, flags);
 
-        _seedQuestType(quests[1], day, bonusEntropy, bonusType);
-
-        bool hardMode = (quests[0].flags & QUEST_FLAG_HIGH_DIFFICULTY) != 0;
-        return (true, quests[0].questType, hardMode);
+        questTypes[0] = quests[0].questType;
+        questTypes[1] = quests[1].questType;
+        highDifficulty = (flags & QUEST_FLAG_HIGH_DIFFICULTY) != 0;
+        return (true, questTypes, highDifficulty);
     }
 
     /// @notice Handle mint progress for a player; covers both coin and ETH paid mints.
@@ -1020,12 +1023,13 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         return bonus;
     }
 
-    /// @dev Seeds a quest slot with a given type and difficulty flags.
-    function _seedQuestType(DailyQuest storage quest, uint48 day, uint256 entropy, uint8 questType) private {
-        uint16 difficulty = uint16(entropy & 0x3FF);
+    /// @dev Seeds a quest slot with a given type and shared difficulty flags.
+    function _seedQuestType(DailyQuest storage quest, uint48 day, uint256 entropy, uint8 questType, uint8 flags)
+        private
+    {
         quest.day = day;
         quest.questType = questType;
-        quest.flags = _difficultyFlags(difficulty);
+        quest.flags = flags;
         quest.entropy = entropy;
         quest.version = _nextQuestVersion();
     }

@@ -298,7 +298,8 @@ contract DegenerusCoin {
     /// @notice Burn BURNIE during an active Decimator window to accrue weighted participation.
     /// @param amount Amount (6 decimals) to burn; must satisfy the global minimum.
     function decimatorBurn(uint256 amount) external {
-        (bool decOn, uint24 lvl) = degenerusGame.decWindow();
+        IDegenerusGame game = degenerusGame;
+        (bool decOn, uint24 lvl) = game.decWindow();
         if (!decOn) revert NotDecimatorWindow();
         if (amount < MIN) revert AmountLTMin();
 
@@ -313,11 +314,14 @@ contract DegenerusCoin {
         uint256 effectiveAmount = amount;
 
         // Quest module can also grant extra dec burn weight; fold into the base record to save gas.
-        (uint256 reward, bool hardMode, uint8 questType, uint32 streak2, bool completed) = module.handleDecimator(
-            caller,
-            amount
-        );
-        uint256 questReward = _questApplyReward(caller, reward, hardMode, questType, streak2, completed);
+        (
+            uint256 reward,
+            bool hardMode,
+            uint8 questType,
+            uint32 questStreak,
+            bool completed
+        ) = module.handleDecimator(caller, amount);
+        uint256 questReward = _questApplyReward(caller, reward, hardMode, questType, questStreak, completed);
         if (questReward != 0) {
             effectiveAmount += questReward;
         }
@@ -326,14 +330,13 @@ contract DegenerusCoin {
         // Bucket logic selects how many people share a jackpot slice; special every DECIMATOR_SPECIAL_LEVEL.
         bool specialDec = (lvl % DECIMATOR_SPECIAL_LEVEL) == 0;
         uint8 bucket = specialDec
-            ? _decBucketDenominatorFromLevels(degenerusGame.ethMintLevelCount(caller))
-            : _decBucketDenominator(degenerusGame.ethMintStreakCount(caller));
+            ? _decBucketDenominatorFromLevels(game.ethMintLevelCount(caller))
+            : _decBucketDenominator(game.ethMintStreakCount(caller));
         uint8 bucketUsed = IDegenerusJackpots(moduleAddr).recordDecBurn(caller, lvl, bucket, effectiveAmount);
 
-        (uint32 streak, , , ) = module.playerQuestStates(caller);
-        if (streak != 0) {
+        if (questStreak != 0) {
             // Quest streak: bonus contribution capped at 25%.
-            uint256 bonusBps = uint256(streak) * 25; // (streak/4)%
+            uint256 bonusBps = uint256(questStreak) * 25; // (streak/4)%
             if (bonusBps > 2500) bonusBps = 2500; // cap at 25%
             uint256 streakBonus = (effectiveAmount * bonusBps) / BPS_DENOMINATOR;
             IDegenerusJackpots(moduleAddr).recordDecBurn(caller, lvl, bucketUsed, streakBonus);
@@ -497,15 +500,10 @@ contract DegenerusCoin {
 
     function rollDailyQuest(uint48 day, uint256 entropy) external onlyDegenerusGameContract {
         IDegenerusQuestModule module = questModule;
-        (bool rolled, , ) = module.rollDailyQuest(day, entropy);
+        (bool rolled, uint8[2] memory questTypes, bool highDifficulty) = module.rollDailyQuest(day, entropy);
         if (rolled) {
-            QuestInfo[2] memory quests = module.getActiveQuests();
             for (uint256 i; i < 2; ) {
-                QuestInfo memory info = quests[i];
-                if (info.day == day) {
-                    emit DailyQuestRolled(day, info.questType, info.highDifficulty);
-                    break;
-                }
+                emit DailyQuestRolled(day, questTypes[i], highDifficulty);
                 unchecked {
                     ++i;
                 }
@@ -520,15 +518,15 @@ contract DegenerusCoin {
         bool forceBurn
     ) external onlyDegenerusGameContract {
         IDegenerusQuestModule module = questModule;
-        (bool rolled, , ) = module.rollDailyQuestWithOverrides(day, entropy, forceMintEth, forceBurn);
+        (bool rolled, uint8[2] memory questTypes, bool highDifficulty) = module.rollDailyQuestWithOverrides(
+            day,
+            entropy,
+            forceMintEth,
+            forceBurn
+        );
         if (rolled) {
-            QuestInfo[2] memory quests = module.getActiveQuests();
             for (uint256 i; i < 2; ) {
-                QuestInfo memory info = quests[i];
-                if (info.day == day) {
-                    emit DailyQuestRolled(day, info.questType, info.highDifficulty);
-                    break;
-                }
+                emit DailyQuestRolled(day, questTypes[i], highDifficulty);
                 unchecked {
                     ++i;
                 }
@@ -662,7 +660,7 @@ contract DegenerusCoin {
             }
         }
 
-        if (processed != 0 && processed != lastCoinflipClaim[player]) {
+        if (processed != 0 && processed != start) {
             lastCoinflipClaim[player] = processed;
         }
     }
@@ -684,7 +682,7 @@ contract DegenerusCoin {
     ///      2. Arm bounties on the first payout window.
     ///      3. Perform cleanup and reopen betting (flip claims happen lazily per player).
     /// @param level Current DegenerusGame level (used to gate 1/run and propagate flip stakes).
-    /// @param bonusFlip Adds 6 percentage points to the payout roll for the last flip of the purchase phase.
+    /// @param bonusFlip Adds 7 percentage points to the payout roll for the last flip of the purchase phase.
     /// @return finished True when all payouts and cleanup are complete.
     function processCoinflipPayouts(
         uint24 level,
@@ -795,22 +793,21 @@ contract DegenerusCoin {
         }
 
         // Determine which future day this stake applies to (always the next window).
-        bool rngLocked = degenerusGame.rngLocked();
+        IDegenerusGame game = degenerusGame;
+        bool rngLocked = game.rngLocked();
         uint48 targetDay = _targetFlipDay();
-        uint24 currLevel = degenerusGame.level();
+        uint24 currLevel = game.level();
 
         uint256 prevStake = coinflipBalance[targetDay][player];
 
         uint256 newStake = prevStake + coinflipDeposit;
-        uint256 eligibleStake = bountyEligible ? newStake : prevStake;
 
         coinflipBalance[targetDay][player] = newStake;
         _updateTopDayBettor(player, newStake, targetDay);
 
         address module = jackpots;
-        uint24 bafLvl = _bafBracketLevel(currLevel);
-
         if (module != address(0) && coinflipDeposit != 0) {
+            uint24 bafLvl = _bafBracketLevel(currLevel);
             IDegenerusJackpots(module).recordBafFlip(player, bafLvl, coinflipDeposit);
         }
 
@@ -825,7 +822,7 @@ contract DegenerusCoin {
                 if (canArmBounty && bountyEligible) {
                     // Bounty arms when the same player sets a new record with an eligible stake.
                     uint256 threshold = (bountyOwedTo != address(0)) ? (record + record / 100) : record;
-                    if (eligibleStake >= threshold) {
+                    if (newStake >= threshold) {
                         bountyOwedTo = player;
                         emit BountyOwed(player, currentBounty, newStake);
                     }

@@ -26,10 +26,10 @@ interface IDegenerusQuestModule {
 
     function rollDailyQuest(uint48 day, uint256 entropy)
         external
-        returns (bool rolled, uint8 questType, bool highDifficulty);
+        returns (bool rolled, uint8[2] memory questTypes, bool highDifficulty);
     function rollDailyQuestWithOverrides(uint48 day, uint256 entropy, bool forceMintEth, bool forceBurn)
         external
-        returns (bool rolled, uint8 questType, bool highDifficulty);
+        returns (bool rolled, uint8[2] memory questTypes, bool highDifficulty);
 
     function normalizeActiveBurnQuests() external;
 
