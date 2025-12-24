@@ -627,15 +627,13 @@ contract DegenerusGame is DegenerusGameStorage {
 
         uint24 lvl = level;
         uint8 mod10 = uint8(lvl % 10);
-        bool isSeventhStep = mod10 == 7;
         bool isDoubleCountStep = mod10 == 2;
         bool levelNinety = (lvl == 90);
-        uint32 endLevelFlag = isSeventhStep ? 1 : 0;
-        uint256 priceCoinLocal = PRICE_COIN_UNIT;
+        uint32 endLevelFlag = mod10 == 7 ? 1 : 0;
         uint16 prevExterminated = lastExterminatedTrait;
+        bool hasPrevExterminated = prevExterminated != TRAIT_ID_TIMEOUT;
 
         uint256 bonusTenths;
-        uint256 stakeBonusCoin;
 
         address[][256] storage tickets = traitBurnTicket[lvl];
 
@@ -659,7 +657,7 @@ contract DegenerusGame is DegenerusGameStorage {
                 }
             }
 
-            bool tokenHasPrevExterminated = prevExterminated != TRAIT_ID_TIMEOUT &&
+            bool tokenHasPrevExterminated = hasPrevExterminated &&
                 (uint16(trait0) == prevExterminated ||
                     uint16(trait1) == prevExterminated ||
                     uint16(trait2) == prevExterminated ||
@@ -706,7 +704,7 @@ contract DegenerusGame is DegenerusGameStorage {
         }
 
         if (isDoubleCountStep) count <<= 1;
-        _creditBurnFlip(caller, stakeBonusCoin, priceCoinLocal, count, bonusTenths);
+        _creditBurnFlip(caller, count, bonusTenths);
         emit Degenerus(caller, tokenIds);
 
         if (winningTrait != TRAIT_ID_TIMEOUT) {
@@ -782,13 +780,11 @@ contract DegenerusGame is DegenerusGameStorage {
         }
 
         traitRebuildCursor = 0;
+        uint8 jackpotCounterSnapshot = jackpotCounter;
         jackpotCounter = 0;
         // Reset daily burn counters so the next level's jackpots start fresh.
-        for (uint8 i; i < 80; ) {
-            dailyBurnCount[i] = 0;
-            unchecked {
-                ++i;
-            }
+        if (jackpotCounterSnapshot < JACKPOT_LEVEL_CAP) {
+            _clearDailyBurnCount();
         }
 
         uint256 cycleOffset = levelSnapshot % 100; // position within the 100-level schedule (0 == 100)
@@ -1407,18 +1403,27 @@ contract DegenerusGame is DegenerusGameStorage {
 
     function _creditBurnFlip(
         address caller,
-        uint256 stakeBonusCoin,
-        uint256 priceCoinLocal,
         uint256 count,
         uint256 bonusTenths
     ) private {
-        uint256 priceUnit = priceCoinLocal / 10;
-        uint256 flipCredit = stakeBonusCoin;
+        uint256 priceUnit = PRICE_COIN_UNIT / 10;
+        uint256 flipCredit;
         unchecked {
-            flipCredit += (count + bonusTenths) * priceUnit;
+            flipCredit = (count + bonusTenths) * priceUnit;
         }
 
         coin.creditFlip(caller, flipCredit);
+    }
+
+    function _clearDailyBurnCount() private {
+        // 80 uint32 values packed into 10 consecutive storage slots.
+        assembly ("memory-safe") {
+            let slot := dailyBurnCount.slot
+            let end := add(slot, 10)
+            for { let s := slot } lt(s, end) { s := add(s, 1) } {
+                sstore(s, 0)
+            }
+        }
     }
 
     function _traitWeight(uint32 rnd) private pure returns (uint8) {
@@ -1484,10 +1489,7 @@ contract DegenerusGame is DegenerusGameStorage {
         } else if (len > idx) {
             arr[idx] = ex;
         } else {
-            while (arr.length < idx) {
-                arr.push();
-            }
-            arr.push(ex);
+            revert E();
         }
     }
 

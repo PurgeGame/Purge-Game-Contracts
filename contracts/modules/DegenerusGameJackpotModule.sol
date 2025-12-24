@@ -145,9 +145,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
             unchecked {
                 ++jackpotCounter;
             }
-            if (jackpotCounter < JACKPOT_LEVEL_CAP) {
-                _clearDailyBurnCount();
-            }
+            _clearDailyBurnCount();
 
             _rollQuestForJackpot(coinContract, randWord, false, questDay);
             return;
@@ -1234,10 +1232,12 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
     }
 
     function _clearDailyBurnCount() private {
-        for (uint8 i; i < 80; ) {
-            dailyBurnCount[i] = 0;
-            unchecked {
-                ++i;
+        // 80 uint32 values packed into 10 consecutive storage slots.
+        assembly ("memory-safe") {
+            let slot := dailyBurnCount.slot
+            let end := add(slot, 10)
+            for { let s := slot } lt(s, end) { s := add(s, 1) } {
+                sstore(s, 0)
             }
         }
     }
