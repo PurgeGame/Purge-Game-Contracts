@@ -87,6 +87,7 @@ contract DegenerusJackpots is IDegenerusJackpots {
     uint256 private constant MILLION = 1e6;
     uint256 private constant BAF_SCATTER_MASK_OFFSET = 128;
     uint8 private constant BAF_SCATTER_BOND_WINNERS = 40;
+    uint8 private constant DECIMATOR_MAX_DENOM = 10;
 
     // ---------------------------------------------------------------------
     // BAF / Decimator state (lives here; DegenerusCoin storage is unaffected)
@@ -797,7 +798,7 @@ contract DegenerusJackpots is IDegenerusJackpots {
         uint256 totalBurn;
 
         uint256 decSeed = rngWord;
-        for (uint8 denom = 2; denom <= 20; ) {
+        for (uint8 denom = 2; denom <= DECIMATOR_MAX_DENOM; ) {
             // Pick a random winning subbucket for each denominator and accumulate its burn total.
             uint8 winningSub = _decWinningSubbucket(decSeed, denom);
             decBucketOffset[lvl][denom] = winningSub;

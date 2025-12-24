@@ -195,7 +195,7 @@ contract DegenerusCoin {
     uint16 private constant COINFLIP_EXTRA_MIN_PERCENT = 78; // base % on non-extreme flips
     uint16 private constant COINFLIP_EXTRA_RANGE = 38; // roll range (add to min) => [78..115]
     uint16 private constant BPS_DENOMINATOR = 10_000; // basis point math helper
-    uint8 private constant DECIMATOR_BUCKET = 10; // unified bucket for decimator scoring
+    uint8 private constant DECIMATOR_BUCKET = 10; // base denom; lvl100/non-100 adjust down with mins
     uint48 private constant JACKPOT_RESET_TIME = 82620; // anchor timestamp for day indexing
     uint8 private constant COIN_CLAIM_DAYS = 30; // claim window for flips
     uint24 private constant MAX_BAF_BRACKET = (type(uint24).max / 10) * 10;
@@ -331,7 +331,19 @@ contract DegenerusCoin {
         uint256 baseAmount = amount + questReward;
         uint256 effectiveAmount = (baseAmount * multBps) / BPS_DENOMINATOR;
 
-        uint8 bucketUsed = IDegenerusJackpots(moduleAddr).recordDecBurn(caller, lvl, DECIMATOR_BUCKET, effectiveAmount);
+        uint8 bucket = DECIMATOR_BUCKET;
+        if (lvl % 100 != 0) {
+            uint24 dec = game.ethMintStreakCount(caller) / 10;
+            bucket = dec >= 5 ? uint8(5) : uint8(DECIMATOR_BUCKET - uint8(dec));
+        } else {
+            uint24 streak = game.ethMintStreakCount(caller);
+            uint24 mintLvls = game.ethMintLevelCount(caller);
+            uint256 dec = uint256(streak / 20) + uint256(mintLvls / 25);
+            uint256 reduced = dec >= DECIMATOR_BUCKET ? 0 : uint256(DECIMATOR_BUCKET) - dec;
+            bucket = reduced < 2 ? uint8(2) : uint8(reduced);
+        }
+
+        uint8 bucketUsed = IDegenerusJackpots(moduleAddr).recordDecBurn(caller, lvl, bucket, effectiveAmount);
 
         emit DecimatorBurn(caller, amount, bucketUsed);
     }
