@@ -379,9 +379,6 @@ contract DegenerusGame is DegenerusGameStorage {
             levelCount,
             streak
         );
-        if (multiplierBps == 0) {
-            multiplierBps = 10000;
-        }
     }
 
     /// @notice Record a mint, funded by ETH (`msg.value`) or claimable winnings.

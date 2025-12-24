@@ -328,9 +328,6 @@ contract DegenerusCoin {
 
         // Scale decimator weight using the shared bond multiplier.
         uint256 multBps = game.bondMultiplierBps(caller);
-        if (multBps < BPS_DENOMINATOR) {
-            multBps = BPS_DENOMINATOR;
-        }
         uint256 baseAmount = amount + questReward;
         uint256 effectiveAmount = (baseAmount * multBps) / BPS_DENOMINATOR;
 

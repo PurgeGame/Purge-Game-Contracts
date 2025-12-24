@@ -184,7 +184,6 @@ contract DegenerusJackpots is IDegenerusJackpots {
             entry.level = lvl;
             entry.total = 0;
         }
-        if (amount == 0) return;
         uint256 multBps = degenerusGame.bondMultiplierBps(player);
         uint256 weighted = (amount * multBps) / 10000;
         unchecked {
@@ -220,7 +219,7 @@ contract DegenerusJackpots is IDegenerusJackpots {
         e.burn = uint192(updated);
 
         uint192 delta = e.burn - prevBurn;
-        if (delta != 0 && bucketUsed != 0) {
+        if (delta != 0) {
             _decUpdateSubbucket(lvl, bucketUsed, e.subBucket, delta, player, e.burn);
         }
 
