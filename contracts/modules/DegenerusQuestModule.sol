@@ -157,7 +157,6 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         DailyQuest[QUEST_SLOT_COUNT] storage quests = activeQuests;
         bool burnAllowed = _canRollBurnQuest(day) || forceBurn;
         bool decAllowed = _canRollDecimatorQuest();
-        bool bafOpen = _isBafOpen();
 
         uint256 primaryEntropy = entropy;
         uint256 bonusEntropy = (entropy >> 128) | (entropy << 128); // swap halves for slot1
@@ -165,7 +164,7 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         uint8 primaryType = forceMintEth ? QUEST_TYPE_MINT_ETH : _primaryQuestType(primaryEntropy);
         uint8 bonusType = forceBurn
             ? QUEST_TYPE_BURN
-            : _bonusQuestType(bonusEntropy, primaryType, burnAllowed, decAllowed, bafOpen);
+            : _bonusQuestType(bonusEntropy, primaryType, burnAllowed, decAllowed);
 
         // Single difficulty roll per day, shared by both slots.
         uint8 flags = _difficultyFlags(uint16(primaryEntropy & 0x3FF));
@@ -599,16 +598,6 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         return (currLevel % 10) < 5;
     }
 
-    /// @dev BAF weighting is active when the current level is in a BAF-open window (divisible by 10 in burn state).
-    function _isBafOpen() private view returns (bool) {
-        IDegenerusGame game_ = questGame;
-        if (address(game_) == address(0)) {
-            return false;
-        }
-        uint24 lvl = game_.level();
-        return game_.isBafLevelActive(lvl);
-    }
-
     function _clampedAdd128(uint128 current, uint256 delta) private pure returns (uint128) {
         unchecked {
             uint256 sum = uint256(current) + delta;
@@ -804,8 +793,7 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         uint256 entropy,
         uint8 primaryType,
         bool burnAllowed,
-        bool decAllowed,
-        bool bafOpen
+        bool decAllowed
     ) private pure returns (uint8) {
         uint16[QUEST_TYPE_COUNT] memory weights;
         uint16 total;
@@ -833,8 +821,6 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
             uint16 weight = 1;
             if (candidate == QUEST_TYPE_DECIMATOR && decAllowed) {
                 weight = 4; // 4x weight during decimator windows
-            } else if (candidate == QUEST_TYPE_FLIP && bafOpen) {
-                weight = 4; // 4x weight during BAF windows
             } else if (candidate == QUEST_TYPE_BURN && burnAllowed) {
                 weight = 2; // 2x weight when burn quests are enabled
             }
