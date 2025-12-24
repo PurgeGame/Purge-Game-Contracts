@@ -176,7 +176,7 @@ contract DegenerusJackpots is IDegenerusJackpots {
     // ---------------------------------------------------------------------
     // Hooks from DegenerusCoin
     // ---------------------------------------------------------------------
-    /// @dev Track leaderboard state for BAF using total manual flips during the BAF period.
+    /// @dev Track leaderboard state for BAF using multiplier-weighted flips during the BAF period.
     /// @param amount The newly added flip amount to credit for this level.
     function recordBafFlip(address player, uint24 lvl, uint256 amount) external override onlyCoin {
         BafEntry storage entry = bafTotals[player];
@@ -185,8 +185,10 @@ contract DegenerusJackpots is IDegenerusJackpots {
             entry.total = 0;
         }
         if (amount == 0) return;
+        uint256 multBps = degenerusGame.bondMultiplierBps(player);
+        uint256 weighted = (amount * multBps) / 10000;
         unchecked {
-            entry.total += amount;
+            entry.total += weighted;
         }
         _updateBafTop(lvl, player, entry.total);
     }
@@ -262,8 +264,7 @@ contract DegenerusJackpots is IDegenerusJackpots {
             // Slice A: 10% to the top BAF bettor for the level.
             uint256 topPrize = P / 10;
             (address w, ) = _bafTop(lvl, 0);
-            uint256 s0 = _bafScore(w, lvl);
-            if (_creditOrRefund(w, topPrize, tmpW, tmpA, n, s0, true)) {
+            if (_creditOrRefund(w, topPrize, tmpW, tmpA, n)) {
                 mask |= (uint256(1) << n);
                 unchecked {
                     ++n;
@@ -277,8 +278,7 @@ contract DegenerusJackpots is IDegenerusJackpots {
             // Slice A2: 10% to the top coinflip bettor from the last day window.
             uint256 topPrize = P / 10;
             (address w, ) = coin.coinflipTopLastDay();
-            uint256 s0 = _bafScore(w, lvl);
-            if (_creditOrRefund(w, topPrize, tmpW, tmpA, n, s0, true)) {
+            if (_creditOrRefund(w, topPrize, tmpW, tmpA, n)) {
                 mask |= (uint256(1) << n);
                 unchecked {
                     ++n;
@@ -297,8 +297,7 @@ contract DegenerusJackpots is IDegenerusJackpots {
             uint8 pick = 2 + uint8(entropy & 1);
             (address w, ) = _bafTop(lvl, pick);
             // Slice B: 5% to either the 3rd or 4th BAF leaderboard slot (pseudo-random tie-break).
-            uint256 sPick = _bafScore(w, lvl);
-            if (_creditOrRefund(w, prize, tmpW, tmpA, n, sPick, true)) {
+            if (_creditOrRefund(w, prize, tmpW, tmpA, n)) {
                 mask |= (uint256(1) << n);
                 unchecked {
                     ++n;
@@ -385,10 +384,9 @@ contract DegenerusJackpots is IDegenerusJackpots {
 
             for (uint8 i; i < exCount && exWinCount < 4; ) {
                 address cand = exCandidates[i];
-                uint256 scoreHint = exScores[i];
-                if (cand != address(0) && _eligible(cand, scoreHint, true)) {
+                if (_eligible(cand)) {
                     exWinners[exWinCount] = cand;
-                    exWinnerScores[exWinCount] = scoreHint;
+                    exWinnerScores[exWinCount] = exScores[i];
                     unchecked {
                         ++exWinCount;
                     }
@@ -525,10 +523,9 @@ contract DegenerusJackpots is IDegenerusJackpots {
 
                 for (uint8 i; i < candidateCount && winnerCount < 4; ) {
                     address cand = candidates[i];
-                    uint256 scoreHint = candidateScores[i];
-                    if (cand != address(0) && _eligible(cand, scoreHint, true)) {
+                    if (_eligible(cand)) {
                         affiliateWinners[winnerCount] = cand;
-                        affiliateScores[winnerCount] = scoreHint;
+                        affiliateScores[winnerCount] = candidateScores[i];
                         unchecked {
                             ++winnerCount;
                         }
@@ -603,39 +600,34 @@ contract DegenerusJackpots is IDegenerusJackpots {
                 }
                 entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
                 uint24 lvlA = _recentLevel(lvl, entropy);
-                (address candA, uint96 scoreA) = coin.coinflipTop(lvlA);
+                (address candA, ) = coin.coinflipTop(lvlA);
 
                 unchecked {
                     ++salt;
                 }
                 entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
                 uint24 lvlB = _recentLevel(lvl, entropy);
-                (address candB, uint96 scoreB) = coin.coinflipTop(lvlB);
+                (address candB, ) = coin.coinflipTop(lvlB);
 
                 address chosen;
-                uint256 chosenScore;
                 bool validA = candA != address(0);
                 bool validB = candB != address(0);
                 if (validA && validB) {
                     if (lvlA <= lvlB) {
                         chosen = candA;
-                        chosenScore = uint256(scoreA) * MILLION;
                     } else {
                         chosen = candB;
-                        chosenScore = uint256(scoreB) * MILLION;
                     }
                 } else if (validA) {
                     chosen = candA;
-                    chosenScore = uint256(scoreA) * MILLION;
                 } else if (validB) {
                     chosen = candB;
-                    chosenScore = uint256(scoreB) * MILLION;
                 }
 
                 uint256 prize = prizes[s];
                 bool credited;
-                if (prize != 0 && chosen != address(0) && _eligible(chosen, chosenScore, true)) {
-                    credited = _creditOrRefund(chosen, prize, tmpW, tmpA, n, chosenScore, true);
+                if (prize != 0) {
+                    credited = _creditOrRefund(chosen, prize, tmpW, tmpA, n);
                 }
                 if (credited) {
                     unchecked {
@@ -681,17 +673,15 @@ contract DegenerusJackpots is IDegenerusJackpots {
 
                 for (uint256 i; i < limit; ) {
                     address cand = tickets[i];
-                    if (cand != address(0)) {
-                        uint256 score = _bafScore(cand, lvl);
-                        if (score > bestScore) {
-                            second = best;
-                            secondScore = bestScore;
-                            best = cand;
-                            bestScore = score;
-                        } else if (score > secondScore && cand != best) {
-                            second = cand;
-                            secondScore = score;
-                        }
+                    uint256 score = _bafScore(cand, lvl);
+                    if (score > bestScore) {
+                        second = best;
+                        secondScore = bestScore;
+                        best = cand;
+                        bestScore = score;
+                    } else if (score > secondScore && cand != best) {
+                        second = cand;
+                        secondScore = score;
                     }
                     unchecked {
                         ++i;
@@ -699,13 +689,13 @@ contract DegenerusJackpots is IDegenerusJackpots {
                 }
 
                 // Bucket winners if eligible and capacity not exceeded; otherwise refund their would-be share later.
-                if (best != address(0) && firstCount < 50 && _eligible(best, bestScore, true)) {
+                if (firstCount < 50 && _eligible(best)) {
                     firstWinners[firstCount] = best;
                     unchecked {
                         ++firstCount;
                     }
                 }
-                if (second != address(0) && secondCount < 50 && _eligible(second, secondScore, true)) {
+                if (secondCount < 50 && _eligible(second)) {
                     secondWinners[secondCount] = second;
                     unchecked {
                         ++secondCount;
@@ -724,8 +714,7 @@ contract DegenerusJackpots is IDegenerusJackpots {
                 uint256 rem = scatterTop - per * firstCount;
                 toReturn += rem;
                 for (uint256 i; i < firstCount; ) {
-                    uint256 scoreHint = _bafScore(firstWinners[i], lvl);
-                    if (per != 0 && _creditOrRefund(firstWinners[i], per, tmpW, tmpA, n, scoreHint, true)) {
+                    if (per != 0 && _creditOrRefund(firstWinners[i], per, tmpW, tmpA, n)) {
                         unchecked {
                             ++n;
                         }
@@ -745,8 +734,7 @@ contract DegenerusJackpots is IDegenerusJackpots {
                 uint256 rem2 = scatterSecond - per2 * secondCount;
                 toReturn += rem2;
                 for (uint256 i; i < secondCount; ) {
-                    uint256 scoreHint = _bafScore(secondWinners[i], lvl);
-                    if (per2 != 0 && _creditOrRefund(secondWinners[i], per2, tmpW, tmpA, n, scoreHint, true)) {
+                    if (per2 != 0 && _creditOrRefund(secondWinners[i], per2, tmpW, tmpA, n)) {
                         unchecked {
                             ++n;
                         }
@@ -883,12 +871,10 @@ contract DegenerusJackpots is IDegenerusJackpots {
     // ---------------------------------------------------------------------
     // Helpers
     // ---------------------------------------------------------------------
-    // Eligibility gate reused across jackpot slices; accepts optional coinflip score hint to save a read.
-    function _eligible(address player, uint256 /*scoreHint*/, bool /*hasHint*/) internal view returns (bool) {
-        uint256 score = coin.coinflipAmountLastDay(player);
-        if (score < 5_000 * MILLION) return false;
-        // Require at least a 6-level ETH mint streak to ensure winners are active players.
-        return degenerusGame.ethMintStreakCount(player) >= 6;
+    // Eligibility gate reused across jackpot slices.
+    function _eligible(address player) internal view returns (bool) {
+        if (coin.coinflipAmountLastDay(player) < 5_000 * MILLION) return false;
+        return degenerusGame.ethMintStreakCount(player) >= 3;
     }
 
     function _creditOrRefund(
@@ -896,13 +882,11 @@ contract DegenerusJackpots is IDegenerusJackpots {
         uint256 prize,
         address[] memory winnersBuf,
         uint256[] memory amountsBuf,
-        uint256 idx,
-        uint256 scoreHint,
-        bool hasHint
+        uint256 idx
     ) private view returns (bool credited) {
         if (prize == 0) return false;
         // Writes into the preallocated buffers; caller controls idx and increments only on success.
-        if (candidate != address(0) && _eligible(candidate, scoreHint, hasHint)) {
+        if (_eligible(candidate)) {
             winnersBuf[idx] = candidate;
             amountsBuf[idx] = prize;
             return true;

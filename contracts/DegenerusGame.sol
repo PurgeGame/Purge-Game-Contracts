@@ -15,6 +15,7 @@ import {
 import {MintPaymentKind} from "./interfaces/IDegenerusGame.sol";
 import {DegenerusGameExternalOp} from "./interfaces/IDegenerusGameExternal.sol";
 import {DegenerusGameStorage} from "./storage/DegenerusGameStorage.sol";
+import {DegenerusBondsScoringLib} from "./libraries/DegenerusBondsScoringLib.sol";
 
 interface IStETH {
     function submit(address referral) external payable returns (uint256);
@@ -352,6 +353,35 @@ contract DegenerusGame is DegenerusGameStorage {
         lvl = level;
         levelCount = uint24((packed >> ETH_LEVEL_COUNT_SHIFT) & MINT_MASK_24);
         streak = uint24((packed >> ETH_LEVEL_STREAK_SHIFT) & MINT_MASK_24);
+    }
+
+    /// @notice Return the bond-scoring multiplier in bps (10000 == 1.0x).
+    function bondMultiplierBps(address player) external view returns (uint256 multiplierBps) {
+        if (player == address(0)) return 10000;
+
+        uint256 packed = mintPacked_[player];
+        uint24 levelCount = uint24((packed >> ETH_LEVEL_COUNT_SHIFT) & MINT_MASK_24);
+        uint24 streak = uint24((packed >> ETH_LEVEL_STREAK_SHIFT) & MINT_MASK_24);
+        uint24 currLevel = level;
+
+        address questModuleAddr;
+        try IDegenerusCoin(address(coin)).questModuleAddr() returns (address qm) {
+            questModuleAddr = qm;
+        } catch {}
+
+        multiplierBps = DegenerusBondsScoringLib.scoreWithMultiplier(
+            affiliateProgramAddr,
+            questModuleAddr,
+            trophies,
+            player,
+            10000,
+            currLevel,
+            levelCount,
+            streak
+        );
+        if (multiplierBps == 0) {
+            multiplierBps = 10000;
+        }
     }
 
     /// @notice Record a mint, funded by ETH (`msg.value`) or claimable winnings.

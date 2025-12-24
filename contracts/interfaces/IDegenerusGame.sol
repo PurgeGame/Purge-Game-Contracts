@@ -39,6 +39,8 @@ interface IDegenerusGame is IDegenerusGameExternal {
 
     function ethMintStreakCount(address player) external view returns (uint24);
 
+    function bondMultiplierBps(address player) external view returns (uint256);
+
     function enqueueMap(address buyer, uint32 quantity) external;
 
     function recordMint(

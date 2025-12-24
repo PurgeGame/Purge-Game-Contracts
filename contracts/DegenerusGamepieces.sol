@@ -183,14 +183,10 @@ contract DegenerusGamepieces {
     mapping(address => uint32) private _tokensOwed;
     uint256 private _mintQueueIndex; // Tracks # of queue entries fully processed during airdrop rotation
 
-    // Tracks how many level-100 mints (tokens + maps) a player has purchased with ETH for price scaling.
-    mapping(address => uint32) private _levelHundredMintCount;
-
     uint32 private constant MINT_AIRDROP_PLAYER_BATCH_SIZE = 210; // Max unique recipients per airdrop batch
     uint32 private constant MINT_AIRDROP_TOKEN_CAP = 3_000; // Max tokens distributed per airdrop batch
 
     uint256 private constant CLAIMABLE_BONUS_DIVISOR = 10; // 10% of token coin cost
-    uint256 private constant CLAIMABLE_MAP_BONUS_DIVISOR = 40; // 10% of per-map coin cost (priceUnit/4)
     uint256 private constant PRICE_COIN_UNIT = 1_000_000_000;
 
     uint32 private constant DORMANT_EMIT_BATCH = 3500;
@@ -274,8 +270,6 @@ contract DegenerusGamepieces {
             return regularRenderer.tokenURI(tokenId, 0, emptyRemaining);
         }
 
-        if (tokenId < _currentBaseTokenId()) revert InvalidToken();
-
         uint32 traitsPacked = DegenerusTraitUtils.packedTraitsForToken(tokenId);
         uint8 t0 = uint8(traitsPacked);
         uint8 t1 = uint8(traitsPacked >> 8);
@@ -341,14 +335,15 @@ contract DegenerusGamepieces {
         if (rngLocked_) revert RngNotReady();
 
         uint256 coinCost = quantity * PRICE_COIN_UNIT;
-        uint256 expectedWei = priceWei * quantity;
-
-        uint32 levelHundredCount;
+        uint256 expectedWei;
+        uint256 mintQuantity = quantity;
         if (!payInCoin && targetLevel == 100) {
-            // Level-100 ETH purchases scale price based on ETH mint history and prior level-100 mints.
-            (expectedWei, levelHundredCount) = _levelHundredCost(payer, priceWei, uint32(quantity));
+            uint256 multBps = game.bondMultiplierBps(payer);
+            mintQuantity = (quantity * multBps) / 10000;
+            if (mintQuantity > type(uint32).max) revert InvalidQuantity();
         }
         if (!payInCoin) {
+            expectedWei = priceWei * quantity;
             expectedWei += _initiationFee(targetLevel, payer, priceWei);
         }
 
@@ -363,7 +358,7 @@ contract DegenerusGamepieces {
             bonus = _processEthPurchase(
                 payer,
                 buyer,
-                quantity * 100,
+                mintQuantity * 100,
                 affiliateCode,
                 targetLevel,
                 state,
@@ -372,9 +367,6 @@ contract DegenerusGamepieces {
                 payKind,
                 expectedWei
             );
-            if (targetLevel == 100) {
-                _levelHundredMintCount[payer] = levelHundredCount;
-            }
             if (mapJackpotReady && (targetLevel % 100) > 90) {
                 bonus += (quantity * PRICE_COIN_UNIT) / 5;
             }
@@ -391,18 +383,19 @@ contract DegenerusGamepieces {
             coin.creditFlip(buyer, bonus);
         }
 
-        uint32 qty32 = uint32(quantity);
+        uint32 purchasedQty32 = uint32(quantity);
+        uint32 mintQty32 = uint32(mintQuantity);
         if (!payInCoin && state == 3) {
-            game.enqueueMap(buyer, qty32);
+            game.enqueueMap(buyer, mintQty32);
         }
         unchecked {
-            _purchaseCount += qty32;
+            _purchaseCount += mintQty32;
         }
 
-        _recordPurchase(buyer, qty32);
+        _recordPurchase(buyer, mintQty32);
 
         uint256 costAmount = payInCoin ? coinCost : expectedWei;
-        emit TokenPurchase(buyer, qty32, payInCoin, payKind != MintPaymentKind.DirectEth, costAmount, bonus);
+        emit TokenPurchase(buyer, purchasedQty32, payInCoin, payKind != MintPaymentKind.DirectEth, costAmount, bonus);
     }
 
     function _mintAndBurn(
@@ -424,17 +417,20 @@ contract DegenerusGamepieces {
         if (quantity == 0 || quantity > type(uint32).max) revert InvalidQuantity();
         if (rngLocked_) revert RngNotReady();
         uint256 coinCost = quantity * (PRICE_COIN_UNIT / 4);
-        uint256 scaledQty = quantity * 25;
         uint256 mapRebate = (quantity / 4) * (PRICE_COIN_UNIT / 10);
-        uint256 mapBonus = (quantity / 40) * PRICE_COIN_UNIT;
-        uint256 expectedWei = (priceWei * quantity) / 4;
-
-        uint32 levelHundredCount;
+        uint256 mapBonus;
+        uint256 expectedWei;
+        uint256 scaledQty;
+        uint256 mintQuantity = quantity;
         if (!payInCoin && lvl == 100) {
-            // Level-100 ETH map mints share the same scaling rules as token mints.
-            (expectedWei, levelHundredCount) = _levelHundredCost(payer, priceWei / 4, uint32(quantity));
+            uint256 multBps = game.bondMultiplierBps(payer);
+            mintQuantity = (quantity * multBps) / 10000;
+            if (mintQuantity > type(uint32).max) revert InvalidQuantity();
         }
         if (!payInCoin) {
+            scaledQty = mintQuantity * 25;
+            mapBonus = (quantity / 40) * PRICE_COIN_UNIT;
+            expectedWei = (priceWei * quantity) / 4;
             expectedWei += _initiationFee(lvl, payer, priceWei);
         }
 
@@ -459,9 +455,6 @@ contract DegenerusGamepieces {
                 payKind,
                 expectedWei
             );
-            if (lvl == 100) {
-                _levelHundredMintCount[payer] = levelHundredCount;
-            }
             if (mapJackpotReady && (lvl % 100) > 90) {
                 bonus += coinCost / 5;
             }
@@ -482,7 +475,7 @@ contract DegenerusGamepieces {
             coin.creditFlip(buyer, rebateMint);
         }
 
-        game.enqueueMap(buyer, uint32(quantity));
+        game.enqueueMap(buyer, uint32(mintQuantity));
 
         uint256 costAmount = payInCoin ? coinCost : expectedWei;
         emit MapPurchase(
@@ -508,12 +501,15 @@ contract DegenerusGamepieces {
         uint256 costWei
     ) private returns (uint256 bonusMint) {
         // ETH purchases optionally bypass payment when in-game credit is used; all flows are forwarded to game logic.
+        uint256 valueToSend;
         if (payKind == MintPaymentKind.DirectEth) {
             if (msg.value != costWei) revert E();
+            valueToSend = costWei;
         } else if (payKind == MintPaymentKind.Claimable) {
             if (msg.value != 0) revert E();
         } else if (payKind == MintPaymentKind.Combined) {
             if (msg.value > costWei) revert E();
+            valueToSend = msg.value;
         } else {
             revert E();
         }
@@ -522,14 +518,7 @@ contract DegenerusGamepieces {
         uint32 mintedQuantity = uint32(scaledQty / 100);
         uint32 mintUnits = mapPurchase ? mintedQuantity : 4;
 
-        uint256 streakBonus;
-        if (payKind == MintPaymentKind.DirectEth) {
-            streakBonus = game.recordMint{value: costWei}(payer, lvl, costWei, mintUnits, payKind);
-        } else if (payKind == MintPaymentKind.Combined) {
-            streakBonus = game.recordMint{value: msg.value}(payer, lvl, costWei, mintUnits, payKind);
-        } else {
-            streakBonus = game.recordMint(payer, lvl, costWei, mintUnits, payKind);
-        }
+        uint256 streakBonus = game.recordMint{value: valueToSend}(payer, lvl, costWei, mintUnits, payKind);
 
         if (mintedQuantity != 0) {
             coin.notifyQuestMint(payer, mintedQuantity, true);
@@ -577,39 +566,6 @@ contract DegenerusGamepieces {
         if (lvl <= 3 || priceWei == 0) return 0;
         if (game.ethMintLevelCount(player) != 0) return 0;
         return priceWei / 5;
-    }
-
-    function _levelHundredCost(
-        address buyer,
-        uint256 unitPriceWei,
-        uint32 quantity
-    ) private view returns (uint256 cost, uint32 newCount) {
-        // Progressive ETH pricing for level-100 purchases: ramps up to full price after a history of prior mints.
-        uint32 prev = _levelHundredMintCount[buyer];
-        uint256 levelCount = game.ethMintLevelCount(buyer);
-        uint256 streakCount = game.ethMintStreakCount(buyer);
-        if (levelCount > 100) levelCount = 100;
-        if (streakCount > 100) streakCount = 100;
-
-        // Base factor is (1 - score/200), where score combines level count and streak.
-        uint256 baseFactorBps = 10000 - ((levelCount + streakCount) * 50);
-
-        for (uint32 i; i < quantity; ) {
-            uint256 ramp = prev + i;
-            if (ramp > 20) {
-                ramp = 20;
-            }
-            uint256 factorBps = baseFactorBps + (ramp * 500); // +5% per prior mint, capped at full price
-            if (factorBps > 10000) {
-                factorBps = 10000;
-            }
-            cost += (unitPriceWei * factorBps) / 10000;
-            unchecked {
-                ++i;
-            }
-        }
-
-        newCount = prev + quantity;
     }
 
     function _coinReceive(address payer, uint256 amount, uint24 lvl, uint256 discount) private {
@@ -666,7 +622,10 @@ contract DegenerusGamepieces {
             uint32 minted;
             if (multiplier == 0) multiplier = 1;
             while (index < end) {
-                uint256 rawIdx = (index + offset) % total;
+                uint256 rawIdx = index + offset;
+                if (rawIdx >= total) {
+                    rawIdx -= total;
+                }
                 address player = _pendingMintQueue[rawIdx];
                 uint32 owed = _tokensOwed[player];
                 if (owed == 0) {
@@ -960,7 +919,7 @@ contract DegenerusGamepieces {
 
             _packedAddressData[to] = packedData;
 
-            uint256 toMasked = uint256(uint160(to)) & _BITMASK_ADDRESS;
+        uint256 toMasked = uint256(uint160(to));
 
             uint256 end = startTokenId + quantity;
             uint256 tokenId = startTokenId;
@@ -1054,8 +1013,6 @@ contract DegenerusGamepieces {
         address seller = ask.seller;
         uint256 prevOwnershipPacked = _packedOwnershipOf(tokenId);
         if (address(uint160(prevOwnershipPacked)) != seller) revert Unauthorized();
-
-        delete asks[tokenId];
 
         address buyer = msg.sender;
         _collectPayment(buyer, seller, ask.price);
@@ -1223,7 +1180,6 @@ contract DegenerusGamepieces {
         }
 
         uint256 tokensRemaining = limit == 0 ? uint256(DORMANT_EMIT_BATCH) : uint256(limit);
-        if (tokensRemaining == 0) tokensRemaining = uint256(DORMANT_EMIT_BATCH);
 
         uint256 currentIndex = _currentIndex;
         uint256 limitToken = cursor + tokensRemaining;

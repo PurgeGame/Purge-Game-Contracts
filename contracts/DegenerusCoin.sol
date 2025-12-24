@@ -116,6 +116,11 @@ contract DegenerusCoin {
         return totalSupply + _vaultMintAllowance;
     }
 
+    /// @notice Expose the quest module address for cross-module scoring.
+    function questModuleAddr() external view returns (address) {
+        return address(questModule);
+    }
+
     /// @notice Virtual coin reserved for the vault (not yet circulating).
     /// @dev Exposed for the vault share math and external dashboards.
     function vaultMintAllowance() external view returns (uint256) {
@@ -190,7 +195,7 @@ contract DegenerusCoin {
     uint16 private constant COINFLIP_EXTRA_MIN_PERCENT = 78; // base % on non-extreme flips
     uint16 private constant COINFLIP_EXTRA_RANGE = 38; // roll range (add to min) => [78..115]
     uint16 private constant BPS_DENOMINATOR = 10_000; // basis point math helper
-    uint24 private constant DECIMATOR_SPECIAL_LEVEL = 100; // special bucket rules every 100 levels
+    uint8 private constant DECIMATOR_BUCKET = 10; // unified bucket for decimator scoring
     uint48 private constant JACKPOT_RESET_TIME = 82620; // anchor timestamp for day indexing
     uint8 private constant COIN_CLAIM_DAYS = 30; // claim window for flips
     uint24 private constant MAX_BAF_BRACKET = (type(uint24).max / 10) * 10;
@@ -311,9 +316,7 @@ contract DegenerusCoin {
         _burn(caller, amount);
 
         IDegenerusQuestModule module = questModule;
-        uint256 effectiveAmount = amount;
 
-        // Quest module can also grant extra dec burn weight; fold into the base record to save gas.
         (
             uint256 reward,
             bool hardMode,
@@ -322,25 +325,16 @@ contract DegenerusCoin {
             bool completed
         ) = module.handleDecimator(caller, amount);
         uint256 questReward = _questApplyReward(caller, reward, hardMode, questType, questStreak, completed);
-        if (questReward != 0) {
-            effectiveAmount += questReward;
-        }
 
-        // Trophies can boost the effective contribution.
-        // Bucket logic selects how many people share a jackpot slice; special every DECIMATOR_SPECIAL_LEVEL.
-        bool specialDec = (lvl % DECIMATOR_SPECIAL_LEVEL) == 0;
-        uint8 bucket = specialDec
-            ? _decBucketDenominatorFromLevels(game.ethMintLevelCount(caller))
-            : _decBucketDenominator(game.ethMintStreakCount(caller));
-        uint8 bucketUsed = IDegenerusJackpots(moduleAddr).recordDecBurn(caller, lvl, bucket, effectiveAmount);
-
-        if (questStreak != 0) {
-            // Quest streak: bonus contribution capped at 25%.
-            uint256 bonusBps = uint256(questStreak) * 25; // (streak/4)%
-            if (bonusBps > 2500) bonusBps = 2500; // cap at 25%
-            uint256 streakBonus = (effectiveAmount * bonusBps) / BPS_DENOMINATOR;
-            IDegenerusJackpots(moduleAddr).recordDecBurn(caller, lvl, bucketUsed, streakBonus);
+        // Scale decimator weight using the shared bond multiplier.
+        uint256 multBps = game.bondMultiplierBps(caller);
+        if (multBps < BPS_DENOMINATOR) {
+            multBps = BPS_DENOMINATOR;
         }
+        uint256 baseAmount = amount + questReward;
+        uint256 effectiveAmount = (baseAmount * multBps) / BPS_DENOMINATOR;
+
+        uint8 bucketUsed = IDegenerusJackpots(moduleAddr).recordDecBurn(caller, lvl, DECIMATOR_BUCKET, effectiveAmount);
 
         emit DecimatorBurn(caller, amount, bucketUsed);
     }
@@ -843,40 +837,6 @@ contract DegenerusCoin {
         // Event captures quest progress for indexers/UI; raw reward is returned to the caller.
         emit QuestCompleted(player, questType, streak, reward, hardMode);
         return reward;
-    }
-
-    function _decBucketDenominator(uint256 streak) internal pure returns (uint8) {
-        if (streak <= 5) {
-            return uint8(15 - streak);
-        }
-
-        if (streak <= 15) {
-            uint256 denom = 9 - ((streak - 6) / 2);
-            if (denom < 4) denom = 4;
-            return uint8(denom);
-        }
-
-        if (streak < 25) {
-            return 5;
-        }
-
-        return 4;
-    }
-
-    function _decBucketDenominatorFromLevels(uint256 levels) internal pure returns (uint8) {
-        if (levels >= 100) return 2;
-        if (levels >= 90) return 3;
-        if (levels >= 80) return 4;
-
-        uint256 reductions = levels / 5;
-        uint256 denom = 20;
-        if (reductions >= 20) {
-            denom = 2;
-        } else {
-            denom -= reductions;
-            if (denom < 4) denom = 4; // should only hit for >=80 but guard anyway
-        }
-        return uint8(denom);
     }
 
     function _score96(uint256 s) private pure returns (uint96) {
