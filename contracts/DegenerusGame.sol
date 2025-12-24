@@ -25,13 +25,8 @@ interface IStETH {
 }
 
 interface IDegenerusBonds {
-    function depositCurrentFor(address beneficiary) external payable returns (uint256 scoreAwarded);
-    function depositFromGame(address beneficiary, uint256 amount) external returns (uint256 scoreAwarded);
-    function payBonds(uint256 coinAmount, uint256 stEthAmount, uint256 rngWord) external payable;
     function bondMaintenance(uint256 rngWord, uint32 workCapOverride) external returns (bool done);
     function setRngLock(bool locked) external;
-    function notifyGameOver() external;
-    function purchasesEnabled() external view returns (bool);
 }
 
 /**
@@ -1173,6 +1168,34 @@ contract DegenerusGame is DegenerusGameStorage {
             if (minted != 0) {
                 _sendStethOrEth(msg.sender, minted);
             }
+        }
+    }
+
+    /// @notice Admin-only swap: owner sends ETH in and receives game-held stETH.
+    function adminSwapEthForStEth(address recipient, uint256 amount) external payable {
+        if (msg.sender != vrfAdmin) revert E();
+        if (recipient == address(0)) revert E();
+        if (amount == 0 || msg.value != amount) revert E();
+
+        uint256 stBal = steth.balanceOf(address(this));
+        if (stBal < amount) revert E();
+        if (!steth.transfer(recipient, amount)) revert E();
+    }
+
+    /// @notice Admin-only stake of game-held ETH into stETH.
+    function adminStakeEthForStEth(uint256 amount) external {
+        if (msg.sender != vrfAdmin) revert E();
+        if (amount == 0) revert E();
+
+        uint256 ethBal = address(this).balance;
+        if (ethBal < amount) revert E();
+        uint256 reserve = claimablePool;
+        if (ethBal <= reserve) revert E();
+        uint256 stakeable = ethBal - reserve;
+        if (amount > stakeable) revert E();
+
+        try steth.submit{value: amount}(address(0)) returns (uint256) {} catch {
+            revert E();
         }
     }
 

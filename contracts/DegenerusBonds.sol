@@ -40,16 +40,6 @@ interface IStETHLike {
 
 interface IVaultLike {
     function deposit(uint256 coinAmount, uint256 stEthAmount) external payable;
-    function swapWithBonds(bool stEthForEth, uint256 amount) external payable;
-    function steth() external view returns (address);
-}
-
-interface IVaultCoin {
-    function vaultEscrow(uint256 amount) external;
-}
-
-interface ICoinLike {
-    function transfer(address to, uint256 amount) external returns (bool);
 }
 
 interface ICoinFlipCreditor {
@@ -57,7 +47,6 @@ interface ICoinFlipCreditor {
 }
 
 interface IDegenerusGamePricing {
-    function mintPrice() external view returns (uint256);
     function purchaseInfo()
         external
         view
@@ -81,15 +70,6 @@ interface IAffiliatePresaleShutdown {
 
 interface IAffiliatePresaleStatus {
     function presaleActive() external view returns (bool);
-}
-
-interface IDegenerusQuestView {
-    function playerQuestStates(
-        address player
-    )
-        external
-        view
-        returns (uint32 streak, uint32 lastCompletedDay, uint128[2] memory progress, bool[2] memory completed);
 }
 
 /**
@@ -441,7 +421,7 @@ contract DegenerusBonds {
     address private vault;
     address private coin;
     address private affiliate;
-    IDegenerusQuestView private questModule;
+    address private questModule;
     address private trophies;
     BondToken private tokenDGNRS;
     mapping(address => uint8) private autoBurnDgnrsPref;
@@ -469,13 +449,17 @@ contract DegenerusBonds {
         _;
     }
 
+    modifier onlyAdmin() {
+        if (msg.sender != admin) revert Unauthorized();
+        _;
+    }
+
     // ---------------------------------------------------------------------
     // External write API
     // ---------------------------------------------------------------------
 
     /// @notice Wire bonds like other modules: [game, vault, coin, vrfCoordinator, questModule, trophies, affiliate] + subId/keyHash (partial allowed).
-    function wire(address[] calldata addresses, uint256 vrfSubId, bytes32 vrfKeyHash_) external {
-        if (msg.sender != admin) revert Unauthorized();
+    function wire(address[] calldata addresses, uint256 vrfSubId, bytes32 vrfKeyHash_) external onlyAdmin {
         _wire(
             WireConfig({
                 game: addresses.length > 0 ? addresses[0] : address(0),
@@ -493,8 +477,7 @@ contract DegenerusBonds {
 
     /// @notice Emergency VRF rewire; callable only by the admin contract.
     /// @dev Intended to be called from the admin's emergencyRecover flow once the game has been declared stalled.
-    function emergencySetVrf(address coordinator_, uint256 subId, bytes32 keyHash_) external {
-        if (msg.sender != admin) revert Unauthorized();
+    function emergencySetVrf(address coordinator_, uint256 subId, bytes32 keyHash_) external onlyAdmin {
         if (coordinator_ == address(0) || keyHash_ == bytes32(0) || subId == 0) revert Unauthorized();
 
         vrfCoordinator = coordinator_;
@@ -511,8 +494,7 @@ contract DegenerusBonds {
     }
 
     /// @notice Configure the target stETH share (in bps) for game-held liquidity; 0 disables staking.
-    function setRewardStakeTargetBps(uint16 bps) external {
-        if (msg.sender != admin) revert Unauthorized();
+    function setRewardStakeTargetBps(uint16 bps) external onlyAdmin {
         if (bps > 10_000) revert InvalidBps();
         rewardStakeTargetBps = bps;
     }
@@ -538,6 +520,8 @@ contract DegenerusBonds {
 
         address aff = affiliate;
         if (aff == address(0) || !IAffiliatePresaleStatus(aff).presaleActive()) revert PresaleClosed();
+
+        _getOrCreateSeries(0);
 
         address vaultAddr = vault;
         address gameAddr = address(game);
@@ -576,8 +560,7 @@ contract DegenerusBonds {
     /// @notice Run one presale jackpot round (0-4); mints DGNRS to weighted winners.
     /// @dev Manual trigger; callable only by the admin contract. Final round applies a growth multiplier
     ///      anchored to a fixed previous raise of 50 ETH.
-    function runPresaleJackpot() external returns (bool advanced) {
-        if (msg.sender != admin) revert Unauthorized();
+    function runPresaleJackpot() external onlyAdmin returns (bool advanced) {
         (uint256 rngWord, bool requested) = _prepareEntropy(0, true);
         if (rngWord == 0) {
             if (requested) return false;
@@ -661,8 +644,7 @@ contract DegenerusBonds {
 
     /// @notice Close presale and lock the presale payout budget to presale raise * growth factor.
     /// @dev Calls affiliate.shutdownPresale() (best effort) and finalizes once; reverts if no presale raise.
-    function shutdownPresale() external {
-        if (msg.sender != admin) revert Unauthorized();
+    function shutdownPresale() external onlyAdmin {
         if (firstSeriesBudgetFinalized) revert AlreadySet();
 
         (uint256 rngWord, bool requested) = _prepareEntropy(0, true);
@@ -755,7 +737,7 @@ contract DegenerusBonds {
         if (isPresale) {
             targetMat = 0;
             target = series[0];
-            if (address(target.token) == address(0) || target.resolved) return false;
+            if (target.resolved) return false;
         } else {
             uint24 currLevel = _currentLevel();
             (target, targetMat) = _selectActiveSeries(currLevel);
@@ -779,7 +761,7 @@ contract DegenerusBonds {
         for (uint24 i = activeMaturityIndex; i < len; ) {
             BondSeries storage iter = series[maturities[i]];
             // Consider unresolved series that can still accept burns (before maturity) or are in grace window.
-            if (address(iter.token) != address(0) && !iter.resolved && currLevel < iter.maturityLevel) {
+            if (!iter.resolved && currLevel < iter.maturityLevel) {
                 maturityLevel = iter.maturityLevel;
                 return (iter, maturityLevel);
             }
@@ -831,7 +813,7 @@ contract DegenerusBonds {
             unchecked {
                 ++i;
             }
-            if (address(s.token) == address(0) || s.resolved) continue;
+            if (s.resolved) continue;
 
             uint256 burned = s.lanes[0].total + s.lanes[1].total;
             if (burned == 0) {
@@ -864,7 +846,7 @@ contract DegenerusBonds {
             unchecked {
                 ++j;
             }
-            if (address(rem.token) == address(0) || rem.resolved) continue;
+            if (rem.resolved) continue;
             rem.resolved = true;
         }
 
@@ -980,8 +962,6 @@ contract DegenerusBonds {
         scoreAwarded = _scoreWithMultiplier(beneficiary, amount, currLevel, mintLevelCount, mintStreak);
         if (!fromGame) {
             _payAffiliateReward(beneficiary, amount, AFFILIATE_BOND_BPS);
-        }
-        if (!fromGame) {
             address coinAddr = coin;
             if (coinAddr != address(0)) {
                 IDegenerusCoin(coinAddr).notifyQuestBond(beneficiary, amount);
@@ -1069,7 +1049,7 @@ contract DegenerusBonds {
             unchecked {
                 ++i;
             }
-            if (address(s.token) == address(0) || s.resolved) continue;
+            if (s.resolved) continue;
             bool consumedWork;
 
             uint8 maxRuns = _maxEmissionRuns(s.maturityLevel);
@@ -1333,12 +1313,6 @@ contract DegenerusBonds {
         uint24 len = uint24(maturities.length);
         for (uint24 i = activeMaturityIndex; i < len; ) {
             BondSeries storage s = series[maturities[i]];
-            if (address(s.token) == address(0)) {
-                unchecked {
-                    ++i;
-                }
-                continue;
-            }
             if (s.maturityLevel > currLevel) break;
             if (s.resolved) {
                 owed += s.unclaimedBudget;
@@ -1370,7 +1344,6 @@ contract DegenerusBonds {
             }
         }
         BondSeries storage target = series[targetMat];
-        if (address(target.token) == address(0)) return 0;
         burned = target.lanes[0].total + target.lanes[1].total;
     }
 
@@ -1418,7 +1391,7 @@ contract DegenerusBonds {
         return
             DegenerusBondsScoringLib.scoreWithMultiplier(
                 affiliate,
-                address(questModule),
+                questModule,
                 trophies,
                 player,
                 baseScore,
@@ -1482,7 +1455,6 @@ contract DegenerusBonds {
     }
 
     function _requiredCover(BondSeries storage s, uint24 currLevel) private view returns (uint256 required) {
-        if (address(s.token) == address(0)) return 0;
         if (s.resolved) return s.unclaimedBudget;
 
         uint256 burned = s.lanes[0].total + s.lanes[1].total;
@@ -1636,9 +1608,9 @@ contract DegenerusBonds {
 
     function _setQuestModule(address questModule_) private {
         if (questModule_ == address(0)) return;
-        address current = address(questModule);
+        address current = questModule;
         if (current != address(0)) revert AlreadySet();
-        questModule = IDegenerusQuestView(questModule_);
+        questModule = questModule_;
     }
 
     function _setTrophies(address trophies_) private {
@@ -1726,9 +1698,6 @@ contract DegenerusBonds {
                 emit BondJackpot(s.maturityLevel, s.jackpotsRun, toMint, rngWord);
             }
         } else {
-            if (s.payoutBudget < s.raised) {
-                s.payoutBudget = s.raised; // keep pre-final budget at least 1.0x the raise
-            }
             if (s.payoutBudget == 0 || s.mintedBudget >= s.payoutBudget) return;
 
             uint256 pct = _emissionPct(s.maturityLevel, s.jackpotsRun, false);

@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {IDegenerusGame as IDegenerusGameCore} from "./interfaces/IDegenerusGame.sol";
-
 /// @notice Minimal VRF coordinator surface needed for subscription admin actions.
 interface IVRFCoordinatorV2_5Owner {
     function addConsumer(uint256 subId, address consumer) external;
@@ -16,7 +14,7 @@ interface IVRFCoordinatorV2_5Owner {
         returns (uint96 balance, uint96 nativeBalance, uint64 reqCount, address owner, address[] memory consumers);
 }
 
-interface IDegenerusGameVrf is IDegenerusGameCore {
+interface IDegenerusGameVrf {
     function rngStalledForThreeDays() external view returns (bool);
     function updateVrfCoordinatorAndSub(address newCoordinator, uint256 newSubId, bytes32 newKeyHash) external;
     function wireVrf(address coordinator_, uint256 subId, bytes32 keyHash_) external;
@@ -35,6 +33,11 @@ interface IDegenerusBondsPresaleAdmin {
 interface IDegenerusBondsGameOverFlag {
     function gameOverEntropyAttempted() external view returns (bool);
     function gameOverStarted() external view returns (bool);
+}
+
+interface IDegenerusGameLiquidityAdmin {
+    function adminSwapEthForStEth(address recipient, uint256 amount) external payable;
+    function adminStakeEthForStEth(uint256 amount) external;
 }
 
 interface ILinkTokenLike {
@@ -373,6 +376,21 @@ contract DegenerusAdmin {
         if (bondsAddr == address(0)) revert NotWired();
         advanced = IDegenerusBondsPresaleAdmin(bondsAddr).runPresaleJackpot();
         emit PresaleJackpotRun(advanced);
+    }
+
+    /// @notice Swap owner ETH for game-held stETH (1:1).
+    function swapGameEthForStEth(uint256 amount) external payable onlyOwner {
+        address gameAddr = game;
+        if (gameAddr == address(0)) revert GameNotWired();
+        if (amount == 0 || msg.value != amount) revert InvalidAmount();
+        IDegenerusGameLiquidityAdmin(gameAddr).adminSwapEthForStEth{value: msg.value}(msg.sender, amount);
+    }
+
+    /// @notice Stake game-held ETH into stETH.
+    function stakeGameEthToStEth(uint256 amount) external onlyOwner {
+        address gameAddr = game;
+        if (gameAddr == address(0)) revert GameNotWired();
+        IDegenerusGameLiquidityAdmin(gameAddr).adminStakeEthForStEth(amount);
     }
 
     // -----------------------
