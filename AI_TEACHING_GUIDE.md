@@ -142,7 +142,7 @@ Key wiring surfaces:
 - The “price coin unit” is `PRICE_COIN_UNIT = 1_000_000_000` (1e9) which equals **1000 BURNIE** (because 1000 * 1e6) (`contracts/DegenerusCoin.sol`, `contracts/DegenerusGameStorage.sol`).
 - Uncirculated BURNIE to know about:
   - Vault reserve mint allowance: `_vaultMintAllowance` is seeded to **2,000,000 BURNIE** and only mints out when the vault pays claims (`vaultMintAllowance()`, `vaultMintTo`, `contracts/DegenerusCoin.sol`).
-  - Presale/early affiliate claimable: `presaleClaimableRemaining` is separate from the vault allowance and is minted only when users call `claimPresale()` after `affiliatePrimePresale()` initializes escrow (`contracts/DegenerusCoin.sol`).
+  - Presale/early affiliate claimable: tracked in `DegenerusAffiliate` (`presaleCoinEarned`, `presaleClaimableTotal`) and minted only when users call `claimPresale()` after presale shutdown (`contracts/DegenerusAffiliate.sol`, `contracts/DegenerusCoin.sol`).
 
 ### Day Indexing (Jackpot / Flip Day Boundary)
 

@@ -7,7 +7,6 @@ interface IDegenerusCoinAffiliate {
     function creditFlip(address player, uint256 amount) external;
     function creditFlipBatch(address[3] calldata players, uint256[3] calldata amounts) external;
     function affiliateQuestReward(address player, uint256 amount) external returns (uint256);
-    function affiliatePrimePresale() external;
 }
 
 interface IDegenerusGamepiecesAffiliate {
@@ -106,7 +105,6 @@ contract DegenerusAffiliate {
         address current = address(coin);
         if (current == address(0)) {
             coin = IDegenerusCoinAffiliate(coinAddr);
-            coin.affiliatePrimePresale();
         } else if (coinAddr != current) {
             revert AlreadyConfigured();
         }

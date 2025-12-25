@@ -12,8 +12,6 @@ import {IDegenerusJackpots} from "./interfaces/IDegenerusJackpots.sol";
 
 interface IDegenerusAffiliateCoin {
     function consumePresaleCoin(address player) external returns (uint256 amount);
-    function presaleClaimableTotal() external view returns (uint256);
-    function addPresaleCoinCredit(address player, uint256 amount) external;
 }
 
 contract DegenerusCoin {
@@ -91,7 +89,6 @@ contract DegenerusCoin {
     mapping(uint48 => CoinflipDayResult) internal coinflipDayResult;
     mapping(address => uint48) internal lastCoinflipClaim;
     uint48 internal flipsClaimableDay; // Last day that has been opened for claims (active day = flipsClaimableDay)
-    bool private presaleEscrowInitialized; // packed with flipsClaimableDay to save a slot
 
     // Vault escrow: tracks coin reserved for the vault; minted only when vault pays out.
     // Virtual supply the vault is authorized to mint (not yet circulated). Seeded to 2m BURNIE.
@@ -127,9 +124,6 @@ contract DegenerusCoin {
     function vaultMintAllowance() external view returns (uint256) {
         return _vaultMintAllowance;
     }
-    // Tracks total unclaimed presale allocation (bond-purchase affiliate rewards); minted on claim.
-    // Note: separate from the vault's `_vaultMintAllowance` seed.
-    uint256 public presaleClaimableRemaining;
 
     // Bounty state; bounty is credited as future coinflip stake for the owed player.
     uint128 public currentBounty = 1_000_000_000;
@@ -303,11 +297,6 @@ contract DegenerusCoin {
     function claimPresale() external {
         uint256 amount = affiliateProgram.consumePresaleCoin(msg.sender);
         if (amount == 0) return;
-        if (amount <= presaleClaimableRemaining) {
-            presaleClaimableRemaining -= amount;
-        } else {
-            presaleClaimableRemaining = 0;
-        }
         _mint(msg.sender, amount);
     }
 
@@ -434,17 +423,6 @@ contract DegenerusCoin {
         } else if (jackpots_ != current) {
             revert AlreadyWired();
         }
-    }
-
-    /// @notice One-time presale mint from the affiliate contract; callable only by affiliate.
-    function affiliatePrimePresale() external {
-        if (msg.sender != address(affiliateProgram)) revert OnlyAffiliate();
-        if (presaleEscrowInitialized) revert AlreadyWired();
-        presaleEscrowInitialized = true;
-        uint256 presaleTotal = affiliateProgram.presaleClaimableTotal();
-        if (presaleTotal == 0) return;
-        // Record escrow only; tokens are minted lazily on claim.
-        presaleClaimableRemaining += presaleTotal;
     }
 
     /// @notice Escrow virtual coin to the vault (no token movement); increases mint allowance.
