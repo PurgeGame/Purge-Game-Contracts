@@ -87,30 +87,6 @@ contract IconRendererRegular32 {
         string calldata diamondHex, // "" to clear
         string calldata squareHex // "" to clear
     ) external returns (bool) {
-        // Delegate to overload with no trophy size change.
-        return
-            setCustomColorsForMany(
-                tokenIds,
-                outlineHex,
-                flameHex,
-                diamondHex,
-                squareHex,
-                /*trophyOuterPct1e6=*/ 0
-            );
-    }
-
-    /// @notice Batch set per‑token color overrides AND trophy badge size.
-    /// @dev
-    /// - `trophyOuterPct1e6`: 0 = leave size unchanged; 1 = reset to default per trophy type;
-    ///                         else clamp-checked in [50_000..1_000_000] (5%..100% of inner side).
-    function setCustomColorsForMany(
-        uint256[] calldata tokenIds,
-        string calldata outlineHex, // "" to clear
-        string calldata flameHex, // "" to clear
-        string calldata diamondHex, // "" to clear
-        string calldata squareHex, // "" to clear
-        uint32 trophyOuterPct1e6
-    ) public returns (bool) {
         return
             registry.setCustomColorsForMany(
                 msg.sender,
@@ -120,35 +96,8 @@ contract IconRendererRegular32 {
                 flameHex,
                 diamondHex,
                 squareHex,
-                trophyOuterPct1e6
+                0
             );
-    }
-
-    /// @notice Set per-token overrides plus Top Affiliate trophy color in one call.
-    /// @dev Pass "" for any channel (or `trophyHex`) to clear that specific override.
-    function setTopAffiliateColors(
-        uint256 tokenId,
-        string calldata outlineHex,
-        string calldata flameHex,
-        string calldata diamondHex,
-        string calldata squareHex,
-        uint32 trophyOuterPct1e6,
-        string calldata trophyHex
-    ) external returns (bool) {
-        uint256[] memory ids = new uint256[](1);
-        ids[0] = tokenId;
-        bool ok = registry.setCustomColorsForMany(
-            msg.sender,
-            address(nft),
-            ids,
-            outlineHex,
-            flameHex,
-            diamondHex,
-            squareHex,
-            trophyOuterPct1e6
-        );
-        bool ok2 = registry.setTopAffiliateColor(msg.sender, address(nft), tokenId, trophyHex);
-        return ok && ok2;
     }
 
     // ---------------------------------------------------------------------
@@ -225,15 +174,6 @@ contract IconRendererRegular32 {
     // Linked contracts (set once).
     IDegenerusGameStartRemaining private game; // DegenerusGame contract
     IERC721Lite private nft; // DegenerusGamepieces ERC721 contract
-    // --- Square geometry (for trophy sizing vs inner side) -----------------
-    uint32 private constant SQUARE_SIDE_100 = 100; // <rect width/height>
-    uint32 private constant BORDER_STROKE_W = 2; // stroke-width in _svgHeader()
-
-    /// @dev Inner usable side length (inside the stroke).
-    function _innerSquareSide() private pure returns (uint32) {
-        return SQUARE_SIDE_100 - BORDER_STROKE_W; // 98 with current header
-    }
-
     // ---------------------------------------------------------------------
     // Game wiring & trait baselines
     // ---------------------------------------------------------------------
@@ -245,7 +185,7 @@ contract IconRendererRegular32 {
 
     /// @notice Wire both the game controller and ERC721 contract in a single call.
     /// @dev Callable only by the admin contract; set-once semantics. Optional extra addresses are registered as allowed
-    ///      token contracts in the color registry (e.g., trophies, bonds).
+    ///      token contracts in the color registry (e.g., trophies).
     function wire(address[] calldata addresses) external onlyAdmin {
         _setGame(addresses.length > 0 ? addresses[0] : address(0));
         _setNft(addresses.length > 1 ? addresses[1] : address(0));
@@ -281,16 +221,12 @@ contract IconRendererRegular32 {
     // ---------------------------------------------------------------------
 
     // ---------------------------------------------------------------------
-    // Trophy helpers
+    // Metadata helpers
     // ---------------------------------------------------------------------
 
-    /// @dev Read the exterminated trait from a packed trophy `data` word.
-    ///      Bits [167:152] hold: 0xFFFF for placeholder (unwon), else uint8 trait id.
-    ///      Bit 200 is reserved for MAP trophies (1 = MAP, 0 = level trophy).
-    /// @notice Render metadata + image for a BURNIE token (regular or trophy).
+    /// @notice Render metadata + image for a Degenerus token.
     /// @param tokenId   NFT id.
     /// @param data      Packed game data:
-    ///                  - Trophy: bits [167:152] exterminated trait (0xFFFF = placeholder), bits [151:128] level, bit 200 = MAP flag.
     ///                  - Regular: bits [63:48] last exterminated trait (0..255 or 420 sentinel),
     ///                             bits [47:24] level, bits [23:00] packed traits.
     /// @param remaining Live remaining counts for this token’s four traits (regular only).
@@ -337,7 +273,7 @@ contract IconRendererRegular32 {
             )
         );
 
-        return _pack(tokenId, false, img2, lvl, desc2, "", attrs);
+        return _pack(tokenId, img2, lvl, desc2, attrs);
     }
 
     function _genesisTokenURI() private view returns (string memory) {
@@ -377,7 +313,7 @@ contract IconRendererRegular32 {
             );
     }
 
-    /// @dev Compose the full SVG for a regular token (non‑trophy).
+    /// @dev Compose the full SVG for a regular token.
     /// @param tokenId      NFT id.
     /// @param traitsPacked Packed 4×6‑bit traits (low→high).
     /// @param col          Color indices per quadrant (0..7).
@@ -559,20 +495,7 @@ contract IconRendererRegular32 {
             );
     }
 
-    // ---------------- Trophy / SVG helpers -----------------------------------------------------------
-
-    /**
-     * @dev Build the complete SVG for a trophy token.
-     *      - If `exterminatedTrait == 0xFFFF`: trophy is *unwon/placeholder* (red outer ring,
-     *        other colors resolved via owner/referrer defaults).
-     *      - Otherwise: “won” trophy; ring uses the trait’s color family and the symbol is
-     *        always tinted (fills the inner white circle).
-     *
-     * Size:
-     * - Outer ring DIAMETER = `pct × innerSquareSide`, where `pct` is either the per-token override
-     *   in `_trophyOuterPct1e6[tokenId]` (5%..100%), or a default mapped from prior fixed radii:
-     *   88px for placeholder, 76px for won, over an inner side of 98px.
-     */
+    // ---------------- SVG helpers -----------------------------------------------------------
     /**
      * @dev SVG root header. Defines the inversion filter (#inv), then draws the outer rounded square.
      * @param borderColor Stroke color for the outer square (resolved border).
@@ -603,7 +526,7 @@ contract IconRendererRegular32 {
     }
 
     /**
-     * @dev Draw guides + central diamond/flame motif (shared by regular token and trophy SVGs).
+     * @dev Draw guides + central diamond/flame motif (shared by regular and genesis SVGs).
      */
     function _guides(
         string memory borderColor,
@@ -662,37 +585,25 @@ contract IconRendererRegular32 {
     /**
      * @dev Build ERC‑721 metadata as data:application/json;base64 with an embedded
      *      data:image/svg+xml;base64 image.
-     * @param trophyType For trophies, short label (e.g. "Map"); ignored for regular tokens.
      */
     function _pack(
         uint256 tokenId,
-        bool isTrophy,
         string memory svg,
         uint256 level,
         string memory desc,
-        string memory trophyType,
         string memory attrs
     ) private pure returns (string memory) {
         string memory lvlStr = (level == 0) ? "TBD" : level.toString();
-        string memory nm = isTrophy
-            ? string.concat("Degenerus Level ", lvlStr, " ", trophyType, " Trophy")
-            : string.concat("Degenerus Level ", lvlStr, " #", tokenId.toString());
+        string memory nm = string.concat("Degenerus Level ", lvlStr, " #", tokenId.toString());
 
         // Image: inline SVG → base64 data URL
         string memory imgData = string.concat("data:image/svg+xml;base64,", Base64.encode(bytes(svg)));
 
-        // Minimal trait list; attributes[] intentionally empty for compactness
+        // Return as data:application/json;base64
         string memory j = string.concat('{"name":"', nm);
         j = string.concat(j, '","description":"', desc);
         j = string.concat(j, '","image":"', imgData, '","attributes":');
-        if (isTrophy) {
-            string memory trophyAttrs = string.concat('[{"trait_type":"Trophy","value":"', trophyType, '"}]');
-            j = string.concat(j, trophyAttrs, "}");
-        } else {
-            j = string.concat(j, attrs, "}");
-        }
-
-        // Return as data:application/json;base64
+        j = string.concat(j, attrs, "}");
         return string.concat("data:application/json;base64,", Base64.encode(bytes(j)));
     }
 

@@ -11,7 +11,7 @@ For a code-grounded contract map, trust assumptions, and “source of truth” p
 - **Yield Can Subsidize Rewards:** Some ETH in the system is staked to Lido (stETH). When yield is harvested, it can increase reward budgets. This can increase prize pools over time, but it does not guarantee profits.
 - **Anti-Nit:** Designed to deter risk-averse players, MEV exploiters, and those seeking guaranteed returns.
 - **Redistribution:** Later participation helps fund jackpots, affiliates, and bond payouts, while early/active players tend to get more chances at major prizes.
-- **ETH-Anchored Tokenomics:** BURNIE is created as coinflip stakes (not liquid tokens) tied to ETH spent. Supply fluctuates through gambling variance. Gamepiece prices rise in ETH over time while staying stable in BURNIE.
+- **ETH-Anchored Tokenomics:** BURNIE is created as coinflip stakes (not liquid tokens) tied to ETH spent. Supply fluctuates through gambling variance. Gamepiece prices rise in ETH over time; BURNIE pricing is mostly flat but has level-based modifiers.
 
 ---
 
@@ -42,7 +42,7 @@ For a code-grounded contract map, trust assumptions, and “source of truth” p
 
 1. **Purchase Phase:** Players buy gamepieces with ETH. Must hit a target before burning phase unlocks.
 2. **Degenerus Phase:** Players burn gamepieces to reduce trait counts. First trait to hit zero = "Exterminated."
-3. **Exterminator wins** the prize pool and a Trophy. Level advances.
+3. **Exterminator wins** a slice of the prize pool and a Trophy. The remaining pool funds extermination jackpots/purchase rewards. Level advances.
 4. **Timeout:** If no extermination after ~10 daily jackpots, level auto-advances.
 
 **Goal:** Advance levels as fast as possible. Faster = more gambling activity = higher returns for winners.
@@ -95,14 +95,15 @@ BURNIE is **not minted on purchase**. Instead:
 ## ETH Flow
 
 ```
-ETH in (no “house wallet”)
+ETH in (no "house wallet")
   - Gamepiece/MAP buys (ETH)
   - Bond deposits (ETH)
         ↓
-On-chain pots
+On-chain buckets
   - Prize pools + jackpots
   - Bond backing (bond pool)
-  - Vault reserve
+  - Reward pool + untracked surplus (yield)
+  - Vault transfers (ETH or stETH)
         ↓
 Payouts (rule-based only)
   - Jackpot / exterminator winners (claimable)
@@ -122,7 +123,13 @@ Bonds are the game’s **time-locked payout** layer. You only get paid when a fu
 
 - **Maturities:** every 10 levels (levels ending in 0)
 - **Sale window:** first 5 levels of each 10-level cycle (bootstraps at levels 1-5 for maturity 10)
-- **Where the money goes:** bond deposits are split on-chain between the vault reserve, bond backing, and jackpot funding (reward pool)
+- **Where the money goes (external bond deposits):**
+  - 20% to bond backing (`bondPool`)
+  - 10% to the reward pool
+  - 70% to untracked yield in the game
+  - Plus a vault share: the bonds contract tries to pull 40% worth of stETH from the game into the vault; if that fails, 40% of the deposit's ETH goes to the vault and the yield slice drops to 30%
+- **Presale deposits:** 30% vault / 50% reward pool / 20% yield (no bondPool credit)
+- **Game-originated bond buys (jackpots/endgame):** tracked as bond positions but do not split inside bonds; they use ETH already inside the game
 - **Some wins roll into bonds:** certain payout paths can convert a slice of winnings into a bond position, which only pays at maturity
 - **Anti-runaway payouts:** the maturity’s payout budget is derived from what was raised, with a multiplier that drops as raises grow too fast
 
@@ -138,7 +145,7 @@ Bonds are the game’s **time-locked payout** layer. You only get paid when a fu
 
 ### If the Game Ends (Bond Backing on Shutdown)
 
-- If the game goes inactive for long enough, it triggers an on-chain shutdown that drains remaining ETH/stETH into the bond system.
+- If the game goes inactive for long enough (or never starts for ~2.5 years after deploy), it triggers an on-chain shutdown that drains remaining ETH/stETH into the bond system.
 - Bonds then resolves maturities oldest-first using the funds that exist at shutdown (later maturities are the ones at risk of being partially funded).
 - After shutdown, claims remain open for 1 year; any leftovers after that are swept to the vault (not to an admin wallet).
 
@@ -218,15 +225,16 @@ Affiliate advice (normie-friendly):
 
 Long-term safety net backing all value.
 
-- **DGVCOIN shares** → claim BURNIE
-- **DGVETH shares** → claim ETH/stETH
-- Receives: bond deposit splits, excess from resolutions, final sweep after game over
+- **DGVB shares** → claim BURNIE
+- **DGVN shares** → claim DGNRS
+- **DGVE shares** → claim ETH/stETH
+- Receives: bond deposit vault share (ETH or stETH), DGNRS escrow, bond-upkeep surplus, final sweep after game over
 
 ---
 
 ## Game Over
 
-- **Trigger:** 1 year with no level advancement
+- **Trigger:** 1 year with no level advancement (or ~2.5 years if the game never starts)
 - **Sequence:** Drain to bonds → resolve maturities in order → 1-year claim grace period → sweep to vault
 
 ---

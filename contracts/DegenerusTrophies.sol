@@ -23,8 +23,7 @@ contract DegenerusTrophies is IDegenerusTrophies {
     enum TrophyKind {
         Exterminator,
         Baf,
-        Affiliate,
-        Stake
+        Affiliate
     }
 
     event Transfer(address indexed from, address indexed to, uint256 indexed tokenId);
@@ -38,10 +37,8 @@ contract DegenerusTrophies is IDegenerusTrophies {
     uint256 private constant TROPHY_FLAG_INVERT = uint256(1) << 229;
     uint256 private constant AFFILIATE_TROPHY_FLAG = uint256(1) << 201;
     uint256 private constant BAF_TROPHY_FLAG = uint256(1) << 203;
-    uint256 private constant STAKE_TROPHY_FLAG = uint256(1) << 202;
     uint256 private constant AFFILIATE_TRAIT_SENTINEL = 0xFFFE;
     uint256 private constant BAF_TRAIT_SENTINEL = 0xFFFA;
-    uint256 private constant STAKE_TRAIT_SENTINEL = 0xFFFD;
 
     // ---------------------------------------------------------------------
     // Immutable wiring
@@ -118,13 +115,6 @@ contract DegenerusTrophies is IDegenerusTrophies {
         _trophyData[tokenId] = data;
         _affiliateScore[tokenId] = score;
         emit TrophyMinted(tokenId, to, TrophyKind.Affiliate, level, 0);
-    }
-
-    function mintStake(address to, uint24 level) external override onlyGame returns (uint256 tokenId) {
-        tokenId = _mint(to);
-        uint256 data = (STAKE_TRAIT_SENTINEL << 152) | (uint256(level) << 128) | STAKE_TROPHY_FLAG;
-        _trophyData[tokenId] = data;
-        emit TrophyMinted(tokenId, to, TrophyKind.Stake, level, 0);
     }
 
     function _mint(address to) private returns (uint256 tokenId) {

@@ -5,5 +5,4 @@ interface IDegenerusTrophies {
     function mintExterminator(address to, uint24 level, uint8 trait, bool invertFlag) external returns (uint256);
     function mintBaf(address to, uint24 level) external returns (uint256);
     function mintAffiliate(address to, uint24 level, uint96 score) external returns (uint256);
-    function mintStake(address to, uint24 level) external returns (uint256);
 }

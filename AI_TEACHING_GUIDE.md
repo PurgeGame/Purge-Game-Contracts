@@ -16,7 +16,7 @@ Degenerus is an on-chain, high-variance NFT game with:
 - An ERC721 “gamepiece” NFT (`contracts/DegenerusGamepieces.sol`)
 - An ERC20-like token with 6 decimals (“BURNIE”) plus coinflip/quests (`contracts/DegenerusCoin.sol`)
 - A bond system with maturity cycles and game-over resolution (`contracts/DegenerusBonds.sol`)
-- A vault with two share classes (coin-claims vs ETH/stETH-claims) (`contracts/DegenerusVault.sol`)
+- A vault with three share classes (BURNIE, DGNRS, and ETH/stETH claims) (`contracts/DegenerusVault.sol`)
 - Jackpot side-systems (BAF + Decimator) (`contracts/DegenerusJackpots.sol`)
 - Referrals/affiliate payouts (`contracts/DegenerusAffiliate.sol`)
 - Cosmetic, non-transferable trophies (`contracts/DegenerusTrophies.sol`)
@@ -55,7 +55,7 @@ It’s intentional. Any system that offers a clean, low-variance edge gets farme
 **Why does the game “pay” a wide range of participants (if it keeps progressing)?**  
 Degenerus spreads incentives across multiple player types so there isn’t just one way to win: early MAPers get more exposure to carryover/cross-level jackpots, active burners get more ticket volume and extermination upside, bondholders want levels to keep advancing so maturities actually settle, and affiliates get paid for bringing real new buy volume (new ETH in) that keeps the state machine moving. The faster the community can fund start targets and keep levels turning over, the more often these reward layers resolve, which is why “bringing in new players” matters so much in practice. None of this is guaranteed — it’s still gambling and depends on player equilibrium, participation, and RNG — but it’s intentionally designed so that *many* participants can have positive long-run EV **conditional on continued progression**.
 
-There is also a hard “doomsday clock”: if a level doesn’t progress for ~1 year, the contracts force a shutdown/settlement path. The important design effect is what this threat does *before* it happens: anyone with meaningful exposure (tickets, bonds, affiliate pipelines) is economically pressured to help fund the next start target rather than let the system terminate. In practice, that makes a year-long stall something the community is incentivized to avoid. Because the deadline is far out, most participants discount it until it becomes close — at which point the incentive to “finish the raise” becomes urgent. Even if the “last mile” funding is closer to break-even than early positioning, it keeps the game alive and proves resilience. If the community succeeds, the same incentives immediately reset on the next level.
+There is also a hard “doomsday clock”: if a started level doesn’t progress for ~1 year (or if the game never starts for ~2.5 years after deploy), the contracts force a shutdown/settlement path. The important design effect is what this threat does *before* it happens: anyone with meaningful exposure (tickets, bonds, affiliate pipelines) is economically pressured to help fund the next start target rather than let the system terminate. In practice, that makes a year-long stall something the community is incentivized to avoid. Because the deadline is far out, most participants discount it until it becomes close — at which point the incentive to “finish the raise” becomes urgent. Even if the “last mile” funding is closer to break-even than early positioning, it keeps the game alive and proves resilience. If the community succeeds, the same incentives immediately reset on the next level.
 
 The key point for “resilience” is that these roles aren’t gated: once someone joins, they can also become an affiliate and/or take longer-horizon positions, so they inherit the same incentive to keep the game moving and to recruit/activity-boost when it slows down.
 
@@ -88,7 +88,7 @@ Coinflip is designed to be close to break-even in BURNIE over time (high varianc
 Bonds are the game's time-locked payout layer: you take a position that only settles at a future maturity level (every 10 levels, with a 5-level sale window each cycle). If the game keeps advancing, that maturity resolves and pays out under on-chain rules. It's intentionally high variance: positions are split into two lanes, one lane wins and the other is eliminated, and winners split the payout (part as a claimable share, part as draw prizes). Some payout paths can also roll a slice of a win into bonds, so you may see "future maturity" rewards instead of immediate claimable ETH.
 
 **Are bonds backed, and what happens if the game ends?**  
-Bond payouts only come from ETH that is already inside the system (bond backing + drained funds on shutdown). During normal play, maturities only resolve when there’s enough backing to cover them; there are no unbacked “IOUs.” If the game stalls for a year, it triggers an on-chain shutdown that drains remaining ETH/stETH into bonds and settles maturities oldest-first (later maturities are the ones at risk of partial funding). After shutdown, you have 1 year to claim; leftover funds are swept to the vault, not to an admin wallet.
+Bond payouts only come from ETH that is already inside the system (bond backing + drained funds on shutdown). During normal play, maturities only resolve when there’s enough backing to cover them; there are no unbacked “IOUs.” If the game stalls for a year after a level has started (or if the game never starts for ~2.5 years after deploy), it triggers an on-chain shutdown that drains remaining ETH/stETH into bonds and settles maturities oldest-first (later maturities are the ones at risk of partial funding). After shutdown, you have 1 year to claim; leftover funds are swept to the vault, not to an admin wallet.
 
 **Why the system stays solvent (and why the admin can’t steal):**  
 The contracts don’t create ETH “debts” out of thin air: payouts are only credited when the ETH is already inside the system, and each pot is accounted for on-chain. There’s no “admin withdraw” button that lets someone drain prize pools or redirect player winnings; payouts only go to the addresses that actually won/earned them under the rules. The admin role is primarily wiring + keeping Chainlink VRF running (and some bond settings), not accessing the money.
@@ -169,7 +169,7 @@ The main tick function is `DegenerusGame.advanceGame(uint32 cap)` (`contracts/De
 
 Tracked ETH liabilities in `contracts/storage/DegenerusGameStorage.sol`:
 - `claimablePool`: sum of all player claimable ETH (`claimableWinnings`)
-- `bondPool`: ETH reserved for bond obligations (deposited from bonds with `trackPool=true`)
+- `bondPool`: ETH reserved for bond obligations (external deposits use `trackPool=true`; game-originated bond buys also add `amount / 2`)
 - `currentPrizePool`, `nextPrizePool`, `rewardPool`: gameplay/jackpot pots
 - plus special reserved pools at level-100 (`decimatorHundredPool`, `bafHundredPool`)
 
@@ -231,7 +231,7 @@ Trait mechanics:
 Entry: `DegenerusGame.advanceGame(uint32 cap)` (`contracts/DegenerusGame.sol`).
 
 Key ideas:
-- Anyone can call, but the standard path requires the caller to have “minted today” in ETH (`MustMintToday` check inside `advanceGame`).
+- Anyone can call, but the standard path requires the caller to have “minted today” via a purchase path that records the mint day (DirectEth/Claimable/Combined). Coin-only purchases do not satisfy `MustMintToday`.
 - `cap != 0` is an emergency path to do bounded work without enforcing the daily mint requirement; it also disables the “advance reward” flip credit (`coin.creditFlip` at the end).
 
 During daily progression, the game requests Chainlink VRF and locks RNG:
@@ -389,11 +389,13 @@ Avoid claiming:
 Core contract: `contracts/DegenerusBonds.sol`
 
 Deposits:
-- External deposits and game-originated deposits split ETH into:
-  - vault share (sent to `DegenerusVault`)
-  - bond share (credited into `DegenerusGame.bondPool` via `bondDeposit(trackPool=true)`)
-  - reward share (sent to `DegenerusGame` as `rewardPool` funding)
-  - See `_processDeposit(...)` in `contracts/DegenerusBonds.sol`
+- External deposits (players calling `depositCurrentFor`) split the **ETH they send** as:
+  - 20% → `bondPool` (tracked liability via `bondDeposit(trackPool=true)`)
+  - 10% → `rewardPool` (sent to game, hits `receive()` and increments `rewardPool`)
+  - 70% → untracked yield (`bondDeposit(trackPool=false)`)
+  - Plus a **vault share**: bonds *try* to pull 40% worth of stETH from the game and send it to the vault. If that stETH pull fails, 40% of the deposit’s ETH is sent to the vault instead, reducing the yield slice to 30%.
+- Game-originated bond buys (from jackpots/endgame) call `depositFromGame(...)` and **do not split inside bonds**; the game module decides how to account for those flows.
+- Presale deposits split ETH 30% vault / 50% rewardPool / 20% yield (no bondPool credit).
 
 Entropy and fairness:
 - Bonds uses VRF (separate from the game’s coordinator interface) to resolve jackpots/lanes (see `_prepareEntropy` and the `IVRFCoordinatorV2Like` surface in `contracts/DegenerusBonds.sol`).
@@ -409,7 +411,7 @@ The bonds admin can change the staking target:
 ### Game Over (Shutdown + Sweep)
 
 If the game is inactive long enough, `advanceGame` triggers shutdown:
-- In `DegenerusGame.advanceGame`, if `block.timestamp - levelStartTime > 365 days` then `gameOverDrainToBonds()` executes (`contracts/DegenerusGame.sol`).
+- In `DegenerusGame.advanceGame`, if `block.timestamp - levelStartTime > 365 days` then `gameOverDrainToBonds()` executes. If the game never started (`levelStartTime` sentinel), a separate 2.5-year deploy idle timeout triggers the same drain path (`contracts/DegenerusGame.sol`).
 - `gameOverDrainToBonds()` delegatecalls `DegenerusGameBondModule.drainToBonds(...)` which zeros buckets and transfers ETH/stETH into bonds (`contracts/modules/DegenerusGameBondModule.sol`).
 
 Bonds then resolves maturities in order:
@@ -432,7 +434,7 @@ Resilience properties (code-backed):
 Key dependencies / centralization points to disclose:
 - Chainlink VRF + a funded subscription are required for day-to-day randomness (`DegenerusGame._requestRng`, `DegenerusAdmin` subscription ownership).
 - Lido stETH is an external dependency when staking is enabled (`DegenerusGameBondModule.stakeForTargetRatio`).
-- `DegenerusAdmin` can pause bond purchases and migrate VRF after a 3-day stall; it is not a gameplay “upgrade key” but it is still privileged.
+- Bond purchases are paused automatically during RNG lock windows; `DegenerusAdmin` can migrate VRF after a 3-day stall and manage bond presale + staking target, but it is not a gameplay “upgrade key”.
 
 ### Wide View: Why It Tends To Keep Going
 
@@ -459,7 +461,7 @@ Use these patterns when responding:
 - **How do I check the current level/phase/price?** Use `DegenerusGame.purchaseInfo()` and `DegenerusGame.mintPrice()` (`contracts/DegenerusGame.sol`).
 - **Why hasn’t the burn phase (“Degenerus”) started yet?** The purchase phase only advances once `nextPrizePool >= lastPrizePool` (checked in `DegenerusGame.advanceGame`, `contracts/DegenerusGame.sol`). You can watch progress with `DegenerusGame.nextPrizePoolView()` vs `DegenerusGame.prizePoolTargetView()` (`contracts/DegenerusGame.sol`).
 - **Why does burning revert with `RngNotReady`?** Burning is blocked while VRF is in-flight (`rngLockedFlag`); see `DegenerusGame.burnTokens(...)` and `DegenerusGame.rngLocked()` (`contracts/DegenerusGame.sol`).
-- **Why does `advanceGame` revert with `MustMintToday`?** Standard advancement requires the caller to have made an ETH mint today (checked inside `DegenerusGame.advanceGame(...)`). An emergency/bounded work path exists via `advanceGame(cap != 0)` (`contracts/DegenerusGame.sol`).
+- **Why does `advanceGame` revert with `MustMintToday`?** Standard advancement requires the caller to have made a mint today via DirectEth/Claimable/Combined (checked inside `DegenerusGame.advanceGame(...)`). Coin-only purchases don’t set the mint day. An emergency/bounded work path exists via `advanceGame(cap != 0)` (`contracts/DegenerusGame.sol`).
 - **How do I claim my ETH winnings?** Call `DegenerusGame.getWinnings()` to view, then `DegenerusGame.claimWinnings()` to withdraw (`contracts/DegenerusGame.sol`).
 - **Can ETH claims pay out as stETH?** Yes. If raw ETH is short, payouts fall back to stETH transfers (`DegenerusGame._payoutWithStethFallback`, `contracts/DegenerusGame.sol`).
 - **How do I “claim” my coinflip (BURNIE) winnings?** Coin winnings are minted lazily when you interact. Calling `DegenerusCoin.depositCoinflip(0)` triggers netting/minting via `addFlip(...)` and `_claimCoinflipsInternal(...)` (`contracts/DegenerusCoin.sol`).
