@@ -918,11 +918,11 @@ contract DegenerusBonds {
 
         if (!fromGame) {
             // Split ETH: direct purchases (40% vault, preferring stETH from game; 20% bondPool, 10% reward,
-            // remainder yield).
+            // 30% yield). If we pay the vault in stETH, route the vault-share ETH back to the game as a swap.
             uint256 vaultShare = (amount * 40) / 100;
             uint256 bondShare = (amount * 20) / 100;
             uint256 rewardShare = (amount * 10) / 100;
-            uint256 yieldShare = amount - bondShare - rewardShare;
+            uint256 yieldShare = amount - bondShare - rewardShare - vaultShare;
 
             address vaultAddr = vault;
             if (vaultAddr == address(0)) revert BankCallFailed();
@@ -947,7 +947,9 @@ contract DegenerusBonds {
             }
             if (vaultShare != 0 && !usedStEth) {
                 IVaultLike(vaultAddr).deposit{value: vaultShare}(0, 0);
-                yieldShare -= vaultShare;
+            } else if (vaultShare != 0) {
+                // Swap path: vault got stETH; send the vault-share ETH to the game.
+                IDegenerusGameBondBank(gameAddr).bondDeposit{value: vaultShare}(false);
             }
 
             if (bondShare != 0) {

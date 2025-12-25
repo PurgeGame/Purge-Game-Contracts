@@ -127,7 +127,6 @@ contract DegenerusAdmin {
     // -----------------------
 
     constructor(address linkToken_) {
-        if (linkToken_ == address(0)) revert ZeroAddress();
         creator = msg.sender;
         linkToken = linkToken_;
     }
