@@ -2,12 +2,12 @@
 pragma solidity ^0.8.26;
 
 import {IDegenerusCoin} from "./interfaces/IDegenerusCoin.sol";
-import {DegenerusBondsScoringLib} from "./libraries/DegenerusBondsScoringLib.sol";
 
 /// @notice Minimal view into the core game to read the current level.
 interface IDegenerusGameLevel {
     function level() external view returns (uint24);
     function ethMintStats(address player) external view returns (uint24 lvl, uint24 levelCount, uint24 streak);
+    function playerBonusMultiplier(address player) external view returns (uint256);
 }
 
 /// @notice Minimal view into the game for bond banking (ETH pooling + claim credit).
@@ -70,6 +70,10 @@ interface IAffiliatePresaleShutdown {
 
 interface IAffiliatePresaleStatus {
     function presaleActive() external view returns (bool);
+}
+
+interface IAffiliatePresaleCredit {
+    function addPresaleCoinCredit(address player, uint256 amount) external;
 }
 
 /**
@@ -501,6 +505,7 @@ contract DegenerusBonds {
 
     /// @notice Game hook to pause/resume bond purchases and burns while RNG is locked for jackpots.
     function setRngLock(bool locked) external onlyGame {
+        if (rngLock == locked) return;
         rngLock = locked;
     }
 
@@ -732,8 +737,6 @@ contract DegenerusBonds {
 
     function _payCoinJackpot(uint256 amount, uint256 rngWord, bool isPresale) private returns (bool paid) {
         if (amount == 0 || rngWord == 0) return false;
-        address coinAddr = coin;
-
         BondSeries storage target;
         uint24 targetMat;
         if (isPresale) {
@@ -753,7 +756,13 @@ contract DegenerusBonds {
         address winner = _weightedLanePick(target.lanes[lane], rngWord);
         if (winner == address(0)) return false;
 
-        ICoinFlipCreditor(coinAddr).creditFlip(winner, amount);
+        if (isPresale) {
+            address affiliateAddr = affiliate;
+            if (affiliateAddr == address(0)) return false;
+            IAffiliatePresaleCredit(affiliateAddr).addPresaleCoinCredit(winner, amount);
+        } else {
+            ICoinFlipCreditor(coin).creditFlip(winner, amount);
+        }
         emit BondCoinJackpot(winner, amount, targetMat, lane);
         return true;
     }
@@ -963,7 +972,7 @@ contract DegenerusBonds {
             }
         }
 
-        scoreAwarded = _scoreWithMultiplier(beneficiary, amount, currLevel, mintLevelCount, mintStreak);
+        scoreAwarded = _scoreWithMultiplier(beneficiary, amount);
         if (!fromGame) {
             _payAffiliateReward(beneficiary, amount, AFFILIATE_BOND_BPS);
             address coinAddr = coin;
@@ -1273,7 +1282,7 @@ contract DegenerusBonds {
                 boosted = true;
             }
         } else if (currLevel < s.maturityLevel && s.jackpotsRun < 5 && s.mintedBudget < s.payoutBudget) {
-            uint256 boostedScore = _scoreWithMultiplier(player, amount, currLevel, mintLevelCount, mintStreak);
+            uint256 boostedScore = _scoreWithMultiplier(player, amount);
             s.totalScore = _recordScore(s.jackpotParticipants, s.jackpotCumulative, s.totalScore, player, boostedScore);
             boosted = true;
         }
@@ -1385,24 +1394,9 @@ contract DegenerusBonds {
         }
     }
 
-    function _scoreWithMultiplier(
-        address player,
-        uint256 baseScore,
-        uint24 currLevel,
-        uint24 mintLevelCount,
-        uint24 mintStreak
-    ) private view returns (uint256) {
-        return
-            DegenerusBondsScoringLib.scoreWithMultiplier(
-                affiliate,
-                questModule,
-                trophies,
-                player,
-                baseScore,
-                currLevel,
-                mintLevelCount,
-                mintStreak
-            );
+    function _scoreWithMultiplier(address player, uint256 baseScore) private view returns (uint256) {
+        uint256 multBps = game.playerBonusMultiplier(player);
+        return (baseScore * multBps) / 10000;
     }
 
     function _prepareEntropy(uint256 provided, bool isPresale) private returns (uint256 entropy, bool requested) {
@@ -1590,7 +1584,6 @@ contract DegenerusBonds {
         if (yieldEth != 0) {
             IDegenerusGameBondBank(gameAddr).bondDeposit{value: yieldEth}(false);
         }
-
     }
 
     function _setVault(address vault_) private {

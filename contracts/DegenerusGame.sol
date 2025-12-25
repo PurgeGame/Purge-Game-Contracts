@@ -4,6 +4,7 @@ pragma solidity ^0.8.26;
 import {IDegenerusGamepieces} from "./DegenerusGamepieces.sol";
 import {IDegenerusCoinModule} from "./interfaces/DegenerusGameModuleInterfaces.sol";
 import {IDegenerusCoin} from "./interfaces/IDegenerusCoin.sol";
+import {IDegenerusAffiliate} from "./interfaces/IDegenerusAffiliate.sol";
 import {IDegenerusJackpots} from "./interfaces/IDegenerusJackpots.sol";
 import {IDegenerusTrophies} from "./interfaces/IDegenerusTrophies.sol";
 import {
@@ -15,7 +16,6 @@ import {
 import {MintPaymentKind} from "./interfaces/IDegenerusGame.sol";
 import {DegenerusGameExternalOp} from "./interfaces/IDegenerusGameExternal.sol";
 import {DegenerusGameStorage} from "./storage/DegenerusGameStorage.sol";
-import {DegenerusBondsScoringLib} from "./libraries/DegenerusBondsScoringLib.sol";
 
 interface IStETH {
     function submit(address referral) external payable returns (uint256);
@@ -28,6 +28,19 @@ interface IStETH {
 interface IDegenerusBonds {
     function bondMaintenance(uint256 rngWord, uint32 workCapOverride) external returns (bool done);
     function setRngLock(bool locked) external;
+}
+
+interface IDegenerusQuestView {
+    function playerQuestStates(
+        address player
+    )
+        external
+        view
+        returns (uint32 streak, uint32 lastCompletedDay, uint128[2] memory progress, bool[2] memory completed);
+}
+
+interface IERC721BalanceOf {
+    function balanceOf(address owner) external view returns (uint256);
 }
 
 /**
@@ -90,7 +103,7 @@ contract DegenerusGame is DegenerusGameStorage {
     IVRFCoordinator private vrfCoordinator; // Chainlink VRF coordinator (mutable for emergencies)
     bytes32 private vrfKeyHash; // VRF key hash (rotatable with coordinator/sub)
     uint256 private vrfSubscriptionId; // VRF subscription identifier (mutable for coordinator swaps)
-    address private immutable vrfAdmin; // VRF subscription owner contract allowed to rotate/wire VRF config
+    address private immutable admin; // VRF subscription owner contract allowed to rotate/wire VRF config
     // Trusted collaborators: coin/nft/jackpots/modules are expected to be non-reentrant and non-malicious.
 
     uint256 private constant DEPLOY_IDLE_TIMEOUT = (365 days * 5) / 2; // 2.5 years
@@ -133,8 +146,8 @@ contract DegenerusGame is DegenerusGameStorage {
      * @param bonds_            Bonds contract address
      * @param trophies_         Standalone trophy ERC721 contract (cosmetic only)
      * @param affiliateProgram_ Affiliate program contract address (for payouts/trophies)
-     * @param vault_            Reward vault contract address
-     * @param vrfAdmin_         VRF owner/admin contract authorized to rotate the coordinator/subscription on stalls
+     * @param vault_            Creator vault contract address
+     * @param admin_            VRF owner/admin contract authorized to rotate the coordinator/subscription on stalls
      */
     constructor(
         address degenerusCoinContract,
@@ -149,7 +162,7 @@ contract DegenerusGame is DegenerusGameStorage {
         address trophies_,
         address affiliateProgram_,
         address vault_,
-        address vrfAdmin_
+        address admin_
     ) {
         coin = IDegenerusCoin(degenerusCoinContract);
         nft = IDegenerusGamepieces(nftContract);
@@ -157,8 +170,8 @@ contract DegenerusGame is DegenerusGameStorage {
         jackpotModule = jackpotModule_;
         mintModule = mintModule_;
         bondModule = bondModule_;
-        if (vrfAdmin_ == address(0)) revert E();
-        vrfAdmin = vrfAdmin_;
+
+        admin = admin_;
         steth = IStETH(stEthToken_);
         jackpots = jackpots_;
         bonds = bonds_;
@@ -218,8 +231,6 @@ contract DegenerusGame is DegenerusGameStorage {
 
     /// @notice Convert a bond payout into MAP mints, debiting the bond pool.
     function bondSpendToMaps(address player, uint256 amount, uint32 quantity) external onlyBonds {
-        if (bondGameOver) revert E();
-        if (amount == 0 || quantity == 0 || player == address(0)) return;
         bondPool -= amount;
         nextPrizePool += amount;
 
@@ -254,10 +265,6 @@ contract DegenerusGame is DegenerusGameStorage {
         return price;
     }
 
-    function coinPriceUnit() external pure returns (uint256) {
-        return PRICE_COIN_UNIT;
-    }
-
     function rngWordForDay(uint48 day) external view returns (uint256) {
         return rngWordByDay[day];
     }
@@ -288,7 +295,7 @@ contract DegenerusGame is DegenerusGameStorage {
 
     /// @notice One-time wiring of VRF config from the VRF admin contract.
     function wireVrf(address coordinator_, uint256 subId, bytes32 keyHash_) external {
-        if (msg.sender != vrfAdmin) revert E();
+        if (msg.sender != admin) revert E();
         if (coordinator_ == address(0) || subId == 0 || keyHash_ == bytes32(0)) revert E();
 
         // Idempotent once wired: allow only no-op repeats with identical config.
@@ -306,16 +313,21 @@ contract DegenerusGame is DegenerusGameStorage {
         emit VrfCoordinatorUpdated(current, coordinator_);
     }
 
+    /// @notice One-time wiring of the quest module address.
+    function wireQuestModule(address questModule_) external {
+        if (msg.sender != admin) revert E();
+        if (questModule_ == address(0)) return;
+        address current = questModule;
+        if (current == address(0)) {
+            questModule = questModule_;
+        } else if (questModule_ != current) {
+            revert E();
+        }
+    }
+
     function decWindow() external view returns (bool on, uint24 lvl) {
         on = decWindowOpen && !rngLockedFlag;
         lvl = level;
-    }
-
-    function isBafLevelActive(uint24 lvl) external view returns (bool) {
-        if (lvl == 0) return false;
-        if ((lvl % 10) != 0) return false;
-        if (rngLockedFlag && jackpotCounter >= 9) return false; // freeze BAF once the 10th jackpot RNG is in-flight
-        return gameState == 3;
     }
 
     function purchaseInfo()
@@ -355,8 +367,8 @@ contract DegenerusGame is DegenerusGameStorage {
         streak = uint24((packed >> ETH_LEVEL_STREAK_SHIFT) & MINT_MASK_24);
     }
 
-    /// @notice Return the bond-scoring multiplier in bps (10000 == 1.0x).
-    function bondMultiplierBps(address player) external view returns (uint256 multiplierBps) {
+    /// @notice Return the player bonus multiplier in bps (10000 == 1.0x).
+    function playerBonusMultiplier(address player) external view returns (uint256 multiplierBps) {
         if (player == address(0)) return 10000;
 
         uint256 packed = mintPacked_[player];
@@ -364,21 +376,52 @@ contract DegenerusGame is DegenerusGameStorage {
         uint24 streak = uint24((packed >> ETH_LEVEL_STREAK_SHIFT) & MINT_MASK_24);
         uint24 currLevel = level;
 
-        address questModuleAddr;
-        try IDegenerusCoin(address(coin)).questModuleAddr() returns (address qm) {
-            questModuleAddr = qm;
-        } catch {}
+        address questModuleAddr = questModule;
+        uint256 bonusBps;
 
-        multiplierBps = DegenerusBondsScoringLib.scoreWithMultiplier(
-            affiliateProgramAddr,
-            questModuleAddr,
-            trophies,
-            player,
-            10000,
-            currLevel,
-            levelCount,
-            streak
-        );
+        unchecked {
+            // Mint streak: cap at 25, worth 1% each (100 bps)
+            uint256 mintStreakPoints = streak > 25 ? 25 : uint256(streak);
+            bonusBps = mintStreakPoints * 100;
+
+            // Quest streak: cap at 50, worth 0.5% each (50 bps)
+
+            (uint32 streak, , , ) = IDegenerusQuestView(questModuleAddr).playerQuestStates(player);
+            uint256 questStreak = streak > 50 ? 50 : uint256(streak);
+            bonusBps += questStreak * 50;
+        
+
+            // Affiliate bonus: only if currLevel >= 1 and affiliate is set
+
+            bonusBps +=
+                IDegenerusAffiliate(affiliateProgramAddr).affiliateBonusPointsBest(currLevel, player) *
+                100;
+        
+
+            // Mint count bonus: 1% each
+            bonusBps += _mintCountBonusPoints(levelCount, currLevel) * 100;
+
+            // Trophy bonus: +10% per trophy, capped at +50%
+
+            uint256 trophyCount = IERC721BalanceOf(trophies).balanceOf(player);
+            if (trophyCount > 5) trophyCount = 5;
+            bonusBps += trophyCount * 1000;
+        
+        }
+
+        multiplierBps = 10000 + bonusBps;
+    }
+
+    function _mintCountBonusPoints(uint24 mintCount, uint24 currLevel) private pure returns (uint256) {
+        unchecked {
+            uint24 cyclePos = currLevel % 100;
+            if (cyclePos == 0 || cyclePos <= 25) {
+                return mintCount > 25 ? 25 : uint256(mintCount);
+            }
+
+            uint256 scaled = (uint256(mintCount) * 25) / uint256(cyclePos);
+            return scaled > 25 ? 25 : scaled;
+        }
     }
 
     /// @notice Record a mint, funded by ETH (`msg.value`) or claimable winnings.
@@ -404,7 +447,6 @@ contract DegenerusGame is DegenerusGameStorage {
     /// @notice Track coinflip deposits during the last purchase day for prize pool tuning.
     function recordCoinflipDeposit(uint256 amount) external {
         if (msg.sender != address(coin)) revert E();
-        if (amount == 0) return;
         if (gameState == 2 && lastPurchaseDay) {
             lastPurchaseDayFlipTotal += amount;
         }
@@ -450,11 +492,7 @@ contract DegenerusGame is DegenerusGameStorage {
             revert E();
         }
         if (claimableUsed != 0) {
-            if (claimablePool >= claimableUsed) {
-                claimablePool -= claimableUsed;
-            } else {
-                claimablePool = 0;
-            }
+            claimablePool -= claimableUsed;
         }
         return prizeContribution;
     }
@@ -486,20 +524,17 @@ contract DegenerusGame is DegenerusGameStorage {
             gameOverDrainToBonds();
             return;
         }
-
         uint24 lvl = level;
-
         bool lastPurchase = (_gameState == 2) && lastPurchaseDay;
 
-        uint48 gateIdx = dailyIdx;
-        uint32 currentDay = uint32(day);
-        uint32 minAllowedDay = gateIdx == 0 ? currentDay : uint32(gateIdx);
-
         do {
-            if (cap == 0 && _gameState != 0) {
-                uint256 mintData = mintPacked_[caller];
-                uint32 lastEthDay = uint32((mintData >> ETH_DAY_SHIFT) & MINT_MASK_32);
-                if (lastEthDay < minAllowedDay) revert MustMintToday();
+            if (cap == 0) {
+                uint32 gateIdx = uint32(dailyIdx);
+                if (gateIdx != 0) {
+                    uint256 mintData = mintPacked_[caller];
+                    uint32 lastEthDay = uint32((mintData >> ETH_DAY_SHIFT) & MINT_MASK_32);
+                    if (lastEthDay < gateIdx) revert MustMintToday();
+                }
             }
 
             // Allow dormant cleanup bounty even before the daily gate unlocks. If no work is done,
@@ -1162,41 +1197,9 @@ contract DegenerusGame is DegenerusGameStorage {
 
     // --- Reward vault & liquidity -----------------------------------------------------
 
-    /// @notice Swap ETH <-> stETH with the bonds contract to rebalance liquidity.
-    /// @dev Access: bonds only. stEthForEth=true pulls stETH from bonds and sends back ETH; false stakes incoming ETH and forwards minted stETH.
-    function swapWithBonds(bool stEthForEth, uint256 amount) external payable {
-        if (msg.sender != bonds) revert E();
-
-        if (stEthForEth) {
-            if (msg.value != 0) revert E();
-            if (!steth.transferFrom(msg.sender, address(this), amount)) revert E();
-
-            if (address(this).balance < amount) revert E();
-            if (rewardPool >= amount) {
-                rewardPool -= amount;
-            } else {
-                rewardPool = 0;
-            }
-
-            (bool ok, ) = payable(msg.sender).call{value: amount}("");
-            if (!ok) revert E();
-        } else {
-            if (msg.value != amount) revert E();
-            uint256 minted;
-            try steth.submit{value: amount}(address(0)) returns (uint256 m) {
-                minted = m;
-            } catch {
-                revert E();
-            }
-            if (minted != 0) {
-                _sendStethOrEth(msg.sender, minted);
-            }
-        }
-    }
-
     /// @notice Admin-only swap: owner sends ETH in and receives game-held stETH.
     function adminSwapEthForStEth(address recipient, uint256 amount) external payable {
-        if (msg.sender != vrfAdmin) revert E();
+        if (msg.sender != admin) revert E();
         if (recipient == address(0)) revert E();
         if (amount == 0 || msg.value != amount) revert E();
 
@@ -1207,7 +1210,7 @@ contract DegenerusGame is DegenerusGameStorage {
 
     /// @notice Admin-only stake of game-held ETH into stETH.
     function adminStakeEthForStEth(uint256 amount) external {
-        if (msg.sender != vrfAdmin) revert E();
+        if (msg.sender != admin) revert E();
         if (amount == 0) revert E();
 
         uint256 ethBal = address(this).balance;
@@ -1287,10 +1290,8 @@ contract DegenerusGame is DegenerusGameStorage {
     }
 
     function _requestRng(uint8 gameState_, bool isMapJackpotDay, uint24 lvl, uint48 /*day*/) private {
-        bool shouldLockBonds = (gameState_ == 1) || (gameState_ == 3 && (jackpotCounter + 1) >= JACKPOT_LEVEL_CAP);
-        if (shouldLockBonds) {
-            IDegenerusBonds(bonds).setRngLock(true);
-        }
+        // Lock manual bond purchases/burns for the full RNG window to prevent post-request manipulation.
+        IDegenerusBonds(bonds).setRngLock(true);
 
         // Hard revert if Chainlink request fails; this intentionally halts game progress until VRF funding/config is fixed.
         uint256 id = vrfCoordinator.requestRandomWords(
@@ -1314,9 +1315,9 @@ contract DegenerusGame is DegenerusGameStorage {
     }
 
     /// @notice Rotate VRF coordinator + subscription id after a 3-day RNG stall.
-    /// @dev Access: vrfAdmin (VRF owner contract).
+    /// @dev Access: admin (VRF owner contract).
     function updateVrfCoordinatorAndSub(address newCoordinator, uint256 newSubId, bytes32 newKeyHash) external {
-        if (msg.sender != vrfAdmin) revert E();
+        if (msg.sender != admin) revert E();
         if (!_threeDayRngGap(_currentDayIndex())) revert VrfUpdateNotReady();
         _setVrfConfig(newCoordinator, newSubId, newKeyHash, address(vrfCoordinator));
     }
@@ -1344,7 +1345,7 @@ contract DegenerusGame is DegenerusGameStorage {
         vrfRequestId = 0;
         rngRequestTime = 0;
         // If bonds were locked for an RNG window, release the lock once this RNG window is over.
-        try IDegenerusBonds(bonds).setRngLock(false) {} catch {}
+        IDegenerusBonds(bonds).setRngLock(false);
     }
 
     /// @notice Pay BURNIE to nudge the next RNG word by +1; cost scales +50% per queued nudge and resets after fulfillment.

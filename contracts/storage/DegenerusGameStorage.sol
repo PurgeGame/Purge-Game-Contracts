@@ -102,6 +102,7 @@ abstract contract DegenerusGameStorage {
     // ---------------------------------------------------------------------
     address internal trophies; // standalone trophy contract (purely cosmetic)
     address internal affiliateProgramAddr; // cached affiliate program (for trophies)
+    address internal questModule; // quest module used for multiplier scoring
 
     // ---------------------------------------------------------------------
     // Coinflip deposit tracking (last purchase day)

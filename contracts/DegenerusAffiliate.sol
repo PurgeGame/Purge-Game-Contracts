@@ -229,9 +229,6 @@ contract DegenerusAffiliate {
                 playerReferralCode[sender] = referralLocksActive ? REF_CODE_LOCKED : bytes32(0);
                 return 0;
             }
-            if (referralJoinLevel[sender] == 0) {
-                _recordReferralJoinLevel(sender, lvl);
-            }
         }
 
         address affiliateAddr = info.owner;
@@ -358,6 +355,7 @@ contract DegenerusAffiliate {
     /// @dev Access: coin only.
     function consumePresaleCoin(address player) external returns (uint256 amount) {
         if (msg.sender != address(coin)) revert OnlyAuthorized();
+        if (!presaleShutdown) return 0;
         amount = presaleCoinEarned[player];
         if (amount != 0) {
             presaleCoinEarned[player] = 0;
@@ -369,8 +367,8 @@ contract DegenerusAffiliate {
         }
     }
 
-    /// @notice Credit presale coin from LINK funding (VRF sub); callable by coin/bonds.
-    function addPresaleLinkCredit(address player, uint256 amount) external {
+    /// @notice Credit presale coin from external sources; callable by coin/bonds/bonds admin.
+    function addPresaleCoinCredit(address player, uint256 amount) external {
         address caller = msg.sender;
         if (caller != address(coin) && caller != bonds && caller != bondsAdmin) revert OnlyAuthorized();
         if (player == address(0) || amount == 0) return;

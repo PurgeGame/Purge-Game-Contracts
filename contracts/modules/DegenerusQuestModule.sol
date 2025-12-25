@@ -314,7 +314,7 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         _questSyncState(state, currentDay);
 
         IDegenerusGame game_ = questGame;
-        if (address(game_) == address(0) || !_bondPurchasesOpen(game_.level())) {
+        if (!_bondPurchasesOpen(game_.level())) {
             return (0, false, quests[0].questType, state.streak, false);
         }
 
@@ -572,18 +572,12 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
     /// @dev Burn quests are only enabled when the core game is in burn state (gameState == 3).
     function _canRollBurnQuest(uint48 /*questDay*/) private view returns (bool) {
         IDegenerusGame game_ = questGame;
-        if (address(game_) == address(0)) {
-            return false;
-        }
         return game_.gameState() == 3;
     }
 
     /// @dev Decimator quests are unlocked at specific level boundaries.
     function _canRollDecimatorQuest() private view returns (bool) {
         IDegenerusGame game_ = questGame;
-        if (address(game_) == address(0)) {
-            return false;
-        }
         (bool decOn, ) = game_.decWindow();
         if (!decOn) return false;
         uint24 lvl = game_.level();

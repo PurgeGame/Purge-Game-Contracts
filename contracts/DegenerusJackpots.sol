@@ -175,7 +175,7 @@ contract DegenerusJackpots is IDegenerusJackpots {
             entry.level = lvl;
             entry.total = 0;
         }
-        uint256 multBps = degenerusGame.bondMultiplierBps(player);
+        uint256 multBps = degenerusGame.playerBonusMultiplier(player);
         uint256 weighted = (amount * multBps) / 10000;
         unchecked {
             entry.total += weighted;
@@ -452,128 +452,124 @@ contract DegenerusJackpots is IDegenerusJackpots {
             entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
 
             address affiliateAddr = affiliate;
-            if (affiliateAddr == address(0)) {
+            IDegenerusAffiliate affiliateContract = IDegenerusAffiliate(affiliateAddr);
+            address[20] memory candidates;
+            uint256[20] memory candidateScores;
+            uint8 candidateCount;
+
+            // Collect the top affiliate from each of the prior 20 levels (deduped).
+            for (uint8 offset = 1; offset <= 20; ) {
+                if (lvl <= offset) break;
+                (address player, ) = affiliateContract.affiliateTop(uint24(lvl - offset));
+                if (player != address(0)) {
+                    bool seen;
+                    for (uint8 i; i < candidateCount; ) {
+                        if (candidates[i] == player) {
+                            seen = true;
+                            break;
+                        }
+                        unchecked {
+                            ++i;
+                        }
+                    }
+                    if (!seen) {
+                        candidates[candidateCount] = player;
+                        candidateScores[candidateCount] = _bafScore(player, lvl);
+                        unchecked {
+                            ++candidateCount;
+                        }
+                    }
+                }
+                unchecked {
+                    ++offset;
+                }
+            }
+
+            // Shuffle candidate order to randomize draws.
+            for (uint8 i = candidateCount; i > 1; ) {
+                unchecked {
+                    ++salt;
+                }
+                entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
+                uint256 j = entropy % i;
+                uint8 idxA = i - 1;
+                address addrTmp = candidates[idxA];
+                candidates[idxA] = candidates[j];
+                candidates[j] = addrTmp;
+                uint256 scoreTmp = candidateScores[idxA];
+                candidateScores[idxA] = candidateScores[j];
+                candidateScores[j] = scoreTmp;
+                unchecked {
+                    --i;
+                }
+            }
+
+            address[4] memory affiliateWinners;
+            uint256[4] memory affiliateScores;
+            uint8 winnerCount;
+
+            for (uint8 i; i < candidateCount && winnerCount < 4; ) {
+                address cand = candidates[i];
+                if (_eligible(cand)) {
+                    affiliateWinners[winnerCount] = cand;
+                    affiliateScores[winnerCount] = candidateScores[i];
+                    unchecked {
+                        ++winnerCount;
+                    }
+                }
+                unchecked {
+                    ++i;
+                }
+            }
+
+            if (winnerCount == 0) {
                 toReturn += affiliateSlice;
             } else {
-                IDegenerusAffiliate affiliateContract = IDegenerusAffiliate(affiliateAddr);
-                address[20] memory candidates;
-                uint256[20] memory candidateScores;
-                uint8 candidateCount;
-
-                // Collect the top affiliate from each of the prior 20 levels (deduped).
-                for (uint8 offset = 1; offset <= 20; ) {
-                    if (lvl <= offset) break;
-                    (address player, ) = affiliateContract.affiliateTop(uint24(lvl - offset));
-                    if (player != address(0)) {
-                        bool seen;
-                        for (uint8 i; i < candidateCount; ) {
-                            if (candidates[i] == player) {
-                                seen = true;
-                                break;
-                            }
-                            unchecked {
-                                ++i;
-                            }
+                // Sort by BAF score so higher scores take the larger cuts (5/3/2/0%).
+                for (uint8 i; i < winnerCount; ) {
+                    uint8 bestIdx = i;
+                    for (uint8 j = i + 1; j < winnerCount; ) {
+                        if (affiliateScores[j] > affiliateScores[bestIdx]) {
+                            bestIdx = j;
                         }
-                        if (!seen) {
-                            candidates[candidateCount] = player;
-                            candidateScores[candidateCount] = _bafScore(player, lvl);
-                            unchecked {
-                                ++candidateCount;
-                            }
-                        }
-                    }
-                    unchecked {
-                        ++offset;
-                    }
-                }
-
-                // Shuffle candidate order to randomize draws.
-                for (uint8 i = candidateCount; i > 1; ) {
-                    unchecked {
-                        ++salt;
-                    }
-                    entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
-                    uint256 j = entropy % i;
-                    uint8 idxA = i - 1;
-                    address addrTmp = candidates[idxA];
-                    candidates[idxA] = candidates[j];
-                    candidates[j] = addrTmp;
-                    uint256 scoreTmp = candidateScores[idxA];
-                    candidateScores[idxA] = candidateScores[j];
-                    candidateScores[j] = scoreTmp;
-                    unchecked {
-                        --i;
-                    }
-                }
-
-                address[4] memory affiliateWinners;
-                uint256[4] memory affiliateScores;
-                uint8 winnerCount;
-
-                for (uint8 i; i < candidateCount && winnerCount < 4; ) {
-                    address cand = candidates[i];
-                    if (_eligible(cand)) {
-                        affiliateWinners[winnerCount] = cand;
-                        affiliateScores[winnerCount] = candidateScores[i];
                         unchecked {
-                            ++winnerCount;
+                            ++j;
                         }
+                    }
+                    if (bestIdx != i) {
+                        address wTmp = affiliateWinners[i];
+                        affiliateWinners[i] = affiliateWinners[bestIdx];
+                        affiliateWinners[bestIdx] = wTmp;
+                        uint256 sTmp = affiliateScores[i];
+                        affiliateScores[i] = affiliateScores[bestIdx];
+                        affiliateScores[bestIdx] = sTmp;
                     }
                     unchecked {
                         ++i;
                     }
                 }
 
-                if (winnerCount == 0) {
-                    toReturn += affiliateSlice;
-                } else {
-                    // Sort by BAF score so higher scores take the larger cuts (5/3/2/0%).
-                    for (uint8 i; i < winnerCount; ) {
-                        uint8 bestIdx = i;
-                        for (uint8 j = i + 1; j < winnerCount; ) {
-                            if (affiliateScores[j] > affiliateScores[bestIdx]) {
-                                bestIdx = j;
-                            }
-                            unchecked {
-                                ++j;
-                            }
-                        }
-                        if (bestIdx != i) {
-                            address wTmp = affiliateWinners[i];
-                            affiliateWinners[i] = affiliateWinners[bestIdx];
-                            affiliateWinners[bestIdx] = wTmp;
-                            uint256 sTmp = affiliateScores[i];
-                            affiliateScores[i] = affiliateScores[bestIdx];
-                            affiliateScores[bestIdx] = sTmp;
-                        }
+                uint256 paid;
+                uint8 maxWinners = winnerCount;
+                if (maxWinners > 4) {
+                    maxWinners = 4;
+                }
+                for (uint8 i; i < maxWinners; ) {
+                    uint256 prize = affiliatePrizes[i];
+                    paid += prize;
+                    if (prize != 0) {
+                        tmpW[n] = affiliateWinners[i];
+                        tmpA[n] = prize;
                         unchecked {
-                            ++i;
+                            ++n;
                         }
                     }
-
-                    uint256 paid;
-                    uint8 maxWinners = winnerCount;
-                    if (maxWinners > 4) {
-                        maxWinners = 4;
+                    unchecked {
+                        ++i;
                     }
-                    for (uint8 i; i < maxWinners; ) {
-                        uint256 prize = affiliatePrizes[i];
-                        paid += prize;
-                        if (prize != 0) {
-                            tmpW[n] = affiliateWinners[i];
-                            tmpA[n] = prize;
-                            unchecked {
-                                ++n;
-                            }
-                        }
-                        unchecked {
-                            ++i;
-                        }
-                    }
-                    if (paid < affiliateSlice) {
-                        toReturn += affiliateSlice - paid;
-                    }
+                }
+                if (paid < affiliateSlice) {
+                    toReturn += affiliateSlice - paid;
                 }
             }
         }

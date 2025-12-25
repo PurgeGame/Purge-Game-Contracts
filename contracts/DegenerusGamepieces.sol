@@ -338,7 +338,7 @@ contract DegenerusGamepieces {
         uint256 expectedWei;
         uint256 mintQuantity = quantity;
         if (!payInCoin && targetLevel == 100) {
-            uint256 multBps = game.bondMultiplierBps(payer);
+            uint256 multBps = game.playerBonusMultiplier(payer);
             mintQuantity = (quantity * multBps) / 10000;
             if (mintQuantity > type(uint32).max) revert InvalidQuantity();
         }
@@ -423,7 +423,7 @@ contract DegenerusGamepieces {
         uint256 scaledQty;
         uint256 mintQuantity = quantity;
         if (!payInCoin && lvl == 100) {
-            uint256 multBps = game.bondMultiplierBps(payer);
+            uint256 multBps = game.playerBonusMultiplier(payer);
             mintQuantity = (quantity * multBps) / 10000;
             if (mintQuantity > type(uint32).max) revert InvalidQuantity();
         }
@@ -539,16 +539,14 @@ contract DegenerusGamepieces {
 
         uint256 rakebackMint;
         address affiliateAddr = affiliateProgram;
-        if (affiliateAddr != address(0)) {
-            rakebackMint = IDegenerusAffiliate(affiliateAddr).payAffiliate(
-                affiliateAmount,
-                affiliateCode,
-                buyer,
-                lvl,
-                gameState,
-                rngLocked
-            );
-        }
+        rakebackMint = IDegenerusAffiliate(affiliateAddr).payAffiliate(
+            affiliateAmount,
+            affiliateCode,
+            buyer,
+            lvl,
+            gameState,
+            rngLocked
+        );
 
         if (rakebackMint != 0) {
             unchecked {

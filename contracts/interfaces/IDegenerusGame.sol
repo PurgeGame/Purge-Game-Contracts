@@ -26,8 +26,6 @@ interface IDegenerusGame is IDegenerusGameExternal {
 
     function decWindow() external view returns (bool on, uint24 lvl);
 
-    function isBafLevelActive(uint24 lvl) external view returns (bool);
-
     function purchaseInfo()
         external
         view
@@ -39,7 +37,7 @@ interface IDegenerusGame is IDegenerusGameExternal {
 
     function ethMintStreakCount(address player) external view returns (uint24);
 
-    function bondMultiplierBps(address player) external view returns (uint256);
+    function playerBonusMultiplier(address player) external view returns (uint256);
 
     function enqueueMap(address buyer, uint32 quantity) external;
 

@@ -13,7 +13,7 @@ import {IDegenerusJackpots} from "./interfaces/IDegenerusJackpots.sol";
 interface IDegenerusAffiliateCoin {
     function consumePresaleCoin(address player) external returns (uint256 amount);
     function presaleClaimableTotal() external view returns (uint256);
-    function addPresaleLinkCredit(address player, uint256 amount) external;
+    function addPresaleCoinCredit(address player, uint256 amount) external;
 }
 
 contract DegenerusCoin {
@@ -47,6 +47,7 @@ contract DegenerusCoin {
     error OnlyAffiliate();
     error AlreadyWired();
     error OnlyNft();
+    error CoinflipLocked();
 
     // ---------------------------------------------------------------------
     // ERC20 state
@@ -268,6 +269,7 @@ contract DegenerusCoin {
             emit CoinflipDeposit(msg.sender, 0);
             return;
         }
+        if (_coinflipLockedDuringMapJackpot()) revert CoinflipLocked();
         if (amount < MIN) revert AmountLTMin();
 
         address caller = msg.sender;
@@ -292,11 +294,20 @@ contract DegenerusCoin {
         emit CoinflipDeposit(caller, amount);
     }
 
+    function _coinflipLockedDuringMapJackpot() private view returns (bool locked) {
+        (, uint8 gameState_, bool lastPurchaseDay_, bool rngLocked_, ) = degenerusGame.purchaseInfo();
+        locked = (gameState_ == 2) && lastPurchaseDay_ && rngLocked_;
+    }
+
     /// @notice Claim presale/early affiliate bonuses that were deferred to the affiliate contract.
     function claimPresale() external {
         uint256 amount = affiliateProgram.consumePresaleCoin(msg.sender);
         if (amount == 0) return;
-        presaleClaimableRemaining -= amount;
+        if (amount <= presaleClaimableRemaining) {
+            presaleClaimableRemaining -= amount;
+        } else {
+            presaleClaimableRemaining = 0;
+        }
         _mint(msg.sender, amount);
     }
 
@@ -309,7 +320,6 @@ contract DegenerusCoin {
         if (amount < MIN) revert AmountLTMin();
 
         address moduleAddr = jackpots;
-        if (moduleAddr == address(0)) revert ZeroAddress();
 
         address caller = msg.sender;
         // Burn first to anchor the amount used for bonuses.
@@ -326,8 +336,8 @@ contract DegenerusCoin {
         ) = module.handleDecimator(caller, amount);
         uint256 questReward = _questApplyReward(caller, reward, hardMode, questType, questStreak, completed);
 
-        // Scale decimator weight using the shared bond multiplier.
-        uint256 multBps = game.bondMultiplierBps(caller);
+        // Scale decimator weight using the shared player bonus multiplier.
+        uint256 multBps = game.playerBonusMultiplier(caller);
         uint256 baseAmount = amount + questReward;
         uint256 effectiveAmount = (baseAmount * multBps) / BPS_DENOMINATOR;
 
@@ -489,7 +499,7 @@ contract DegenerusCoin {
     function affiliateQuestReward(address player, uint256 amount) external returns (uint256 questReward) {
         if (msg.sender != address(affiliateProgram)) revert OnlyAffiliate();
         IDegenerusQuestModule module = questModule;
-        if (address(module) == address(0) || player == address(0) || amount == 0) return 0;
+        if (player == address(0) || amount == 0) return 0;
         (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleAffiliate(
             player,
             amount
@@ -540,7 +550,6 @@ contract DegenerusCoin {
     /// @notice Normalize burn quests mid-day when extermination ends the burn window.
     function normalizeActiveBurnQuests() external onlyDegenerusGameContract {
         IDegenerusQuestModule module = questModule;
-        if (address(module) == address(0)) return;
         module.normalizeActiveBurnQuests();
     }
 
@@ -561,7 +570,7 @@ contract DegenerusCoin {
     function notifyQuestBond(address player, uint256 basePerBondWei) external {
         if (msg.sender != bonds) revert OnlyBonds();
         IDegenerusQuestModule module = questModule;
-        if (address(module) == address(0) || player == address(0) || basePerBondWei == 0) return;
+        if (player == address(0) || basePerBondWei == 0) return;
         (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleBondPurchase(
             player,
             basePerBondWei
@@ -809,7 +818,7 @@ contract DegenerusCoin {
         _updateTopDayBettor(player, newStake, targetDay);
 
         address module = jackpots;
-        if (module != address(0) && coinflipDeposit != 0) {
+        if (coinflipDeposit != 0) {
             uint24 bafLvl = _bafBracketLevel(currLevel);
             IDegenerusJackpots(module).recordBafFlip(player, bafLvl, coinflipDeposit);
         }

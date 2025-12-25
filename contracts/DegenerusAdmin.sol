@@ -20,6 +20,10 @@ interface IDegenerusGameVrf {
     function wireVrf(address coordinator_, uint256 subId, bytes32 keyHash_) external;
 }
 
+interface IDegenerusGameQuest {
+    function wireQuestModule(address questModule_) external;
+}
+
 interface IDegenerusBondsAdmin {
     function wire(address[] calldata addresses, uint256 vrfSubId, bytes32 vrfKeyHash_) external;
     function emergencySetVrf(address coordinator_, uint256 vrfSubId, bytes32 vrfKeyHash_) external;
@@ -47,6 +51,11 @@ interface ILinkTokenLike {
 
 interface IDegenerusCoinPresaleLink {
     function creditLinkReward(address player, uint256 amount) external;
+}
+
+interface IAffiliatePresaleCredit {
+    function presaleActive() external view returns (bool);
+    function addPresaleCoinCredit(address player, uint256 amount) external;
 }
 
 interface IWiring {
@@ -257,6 +266,11 @@ contract DegenerusAdmin {
 
             if (keyHash == bytes32(0)) revert NotWired();
             IDegenerusGameVrf(game_).wireVrf(coord, subscriptionId, keyHash);
+        }
+
+        address gameAddr = game_ == address(0) ? game : game_;
+        if (questModule_ != address(0) && gameAddr != address(0)) {
+            IDegenerusGameQuest(gameAddr).wireQuestModule(questModule_);
         }
 
         try IVRFCoordinatorV2_5Owner(coord).addConsumer(subscriptionId, bondsAddr) {
@@ -513,13 +527,25 @@ contract DegenerusAdmin {
         if (credit == 0) return;
 
         bool minted;
-        // LINK funding rewards are not part of presale claimable; if the coin isn't wired yet, cache them here.
-        if (coin != address(0)) {
-            IDegenerusCoinPresaleLink(coin).creditLinkReward(from, credit);
-            minted = true;
-        } else {
-            pendingLinkCredit[from] += credit;
-            minted = false;
+        bool presaleCredited;
+        address affiliateAddr = affiliate;
+        if (affiliateAddr != address(0)) {
+            try IAffiliatePresaleCredit(affiliateAddr).presaleActive() returns (bool active) {
+                if (active) {
+                    IAffiliatePresaleCredit(affiliateAddr).addPresaleCoinCredit(from, credit);
+                    presaleCredited = true;
+                }
+            } catch {}
+        }
+        // When presale is open, accrue credits in the affiliate escrow; otherwise credit live coin or cache until wired.
+        if (!presaleCredited) {
+            if (coin != address(0)) {
+                IDegenerusCoinPresaleLink(coin).creditLinkReward(from, credit);
+                minted = true;
+            } else {
+                pendingLinkCredit[from] += credit;
+                minted = false;
+            }
         }
         emit LinkCreditRecorded(from, credit, minted);
     }
