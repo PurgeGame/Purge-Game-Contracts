@@ -531,7 +531,7 @@ contract DegenerusBonds {
         uint256 rewardShare = (amount * 50) / 100;
         uint256 yieldShare = amount - vaultShare - rewardShare; // 20%
 
-        _sendEthOrRevert(vaultAddr, vaultShare);
+        IVaultLike(vaultAddr).deposit{value: vaultShare}(0, 0);
         // Presale should not depend on the game being wired; cache the game shares until wiring.
         if (gameAddr == address(0)) {
             if (rewardShare != 0) presalePendingRewardEth += rewardShare;
@@ -711,7 +711,9 @@ contract DegenerusBonds {
         }
         _runCoinJackpot(rngWord);
         if (gameOverStarted) return;
-        IVaultLike(vault).deposit{value: msg.value}(0, pulledStEth);
+        if (msg.value != 0 || pulledStEth != 0) {
+            IVaultLike(vault).deposit{value: msg.value}(0, pulledStEth);
+        }
     }
 
     // ---------------------------------------------------------------------
@@ -862,11 +864,18 @@ contract DegenerusBonds {
             }
         }
 
-        // Any surplus after resolving in order is forwarded to the vault if configured.
+        // Any surplus after resolving in order is forwarded to the vault if configured (stETH preferred).
         if (remainingEth > totalReserved && vault != address(0)) {
             uint256 surplus = remainingEth - totalReserved;
-            (bool ok, ) = payable(vault).call{value: surplus}("");
-            if (ok) {
+            if (surplus != 0) {
+                address gameAddr = address(game);
+                uint256 stBal = _stEthBalance();
+                if (stBal >= surplus && gameAddr != address(0)) {
+                    IDegenerusGameBondBank(gameAddr).bondDeposit{value: surplus}(false);
+                    IVaultLike(vault).deposit{value: 0}(0, surplus);
+                } else {
+                    IVaultLike(vault).deposit{value: surplus}(0, 0);
+                }
                 remainingEth -= surplus;
             }
         }
@@ -884,14 +893,9 @@ contract DegenerusBonds {
         if (v == address(0)) revert BankCallFailed();
 
         uint256 ethBal = address(this).balance;
-        if (ethBal != 0) {
-            (bool ok, ) = payable(v).call{value: ethBal}("");
-            ok; // best effort
-        }
-
         uint256 stBal = _stEthBalance();
-        if (stBal != 0) {
-            try IStETHLike(steth).transfer(v, stBal) {} catch {}
+        if (ethBal != 0 || stBal != 0) {
+            IVaultLike(v).deposit{value: ethBal}(0, stBal);
         }
 
         emit ExpiredSweep(ethBal, stBal);
@@ -913,41 +917,39 @@ contract DegenerusBonds {
         BondSeries storage s = _getOrCreateSeries(maturityLevel);
 
         if (!fromGame) {
-            // Split ETH: direct purchases (40% vault paid in stETH with ETH retained by game, fallback to ETH if needed,
-            // 30% yield, 20% bondPool, 10% reward).
+            // Split ETH: direct purchases (40% vault, preferring stETH from game; 20% bondPool, 10% reward,
+            // remainder yield).
             uint256 vaultShare = (amount * 40) / 100;
             uint256 bondShare = (amount * 20) / 100;
             uint256 rewardShare = (amount * 10) / 100;
-            uint256 yieldShare = amount - vaultShare - bondShare - rewardShare;
+            uint256 yieldShare = amount - bondShare - rewardShare;
 
             address vaultAddr = vault;
             if (vaultAddr == address(0)) revert BankCallFailed();
             address gameAddr = address(game);
-            uint256 vaultEthShare = vaultShare;
-            if (vaultShare != 0) {
-                uint256 stethCover = vaultShare;
-                uint256 stethBal;
+
+            bool usedStEth;
+            if (vaultShare != 0 && gameAddr != address(0)) {
+                uint256 stBal;
                 try IStETHLike(steth).balanceOf(gameAddr) returns (uint256 b) {
-                    stethBal = b;
+                    stBal = b;
                 } catch {}
-                if (stethBal < stethCover) stethCover = stethBal;
-                if (stethCover != 0) {
-                    bool ok;
-                    try IStETHLike(steth).transferFrom(gameAddr, vaultAddr, stethCover) returns (bool success) {
-                        ok = success;
-                    } catch {
-                        ok = false;
-                    }
-                    if (ok) {
-                        vaultEthShare = vaultShare - stethCover;
-                        yieldShare += stethCover; // keep ETH in the game; vault gets stETH instead
+                if (stBal >= vaultShare) {
+                    bool pulled;
+                    try IStETHLike(steth).transferFrom(gameAddr, address(this), vaultShare) returns (bool ok) {
+                        pulled = ok;
+                    } catch {}
+                    if (pulled) {
+                        IVaultLike(vaultAddr).deposit{value: 0}(0, vaultShare);
+                        usedStEth = true;
                     }
                 }
             }
-
-            if (vaultEthShare != 0) {
-                _sendEthOrRevert(vaultAddr, vaultEthShare);
+            if (vaultShare != 0 && !usedStEth) {
+                IVaultLike(vaultAddr).deposit{value: vaultShare}(0, 0);
+                yieldShare -= vaultShare;
             }
+
             if (bondShare != 0) {
                 IDegenerusGameBondBank(gameAddr).bondDeposit{value: bondShare}(true);
             }
@@ -1535,8 +1537,14 @@ contract DegenerusBonds {
         }
 
         uint256 excess = bal - required;
-        (bool ok, ) = payable(v).call{value: excess}("");
-        if (ok) {
+        address gameAddr = address(game);
+        uint256 stBal = _stEthBalance();
+        if (stBal >= excess && gameAddr != address(0)) {
+            IDegenerusGameBondBank(gameAddr).bondDeposit{value: excess}(false);
+            IVaultLike(v).deposit{value: 0}(0, excess);
+            swept = true;
+        } else {
+            IVaultLike(v).deposit{value: excess}(0, 0);
             swept = true;
         }
     }

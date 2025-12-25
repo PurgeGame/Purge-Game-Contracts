@@ -2,7 +2,6 @@
 pragma solidity ^0.8.26;
 
 import "./interfaces/IDegenerusTrophies.sol";
-import "./interfaces/IconRendererTypes.sol"; // for IERC721Lite compat
 
 /**
  * @title DegenerusTrophies
@@ -16,7 +15,8 @@ contract DegenerusTrophies is IDegenerusTrophies {
     error NotGame();
     error InvalidToken();
     error InvalidRenderer();
-    error NotOwner();
+    error ZeroAddress();
+    error OnlyAdmin();
     error GameAlreadySet();
     error TransfersDisabled();
 
@@ -48,21 +48,21 @@ contract DegenerusTrophies is IDegenerusTrophies {
     // ---------------------------------------------------------------------
     address public game;
     address public immutable renderer;
-    address private immutable _owner;
+    address private immutable admin;
 
     // ---------------------------------------------------------------------
     // Storage
     // ---------------------------------------------------------------------
     uint256 private _nextId = 1;
-    uint256 private _totalSupply;
     mapping(uint256 => address) private _owners;
     mapping(address => uint256) private _balances;
     mapping(uint256 => uint256) private _trophyData;
     mapping(uint256 => uint96) private _affiliateScore;
 
-    constructor(address renderer_) {
+    constructor(address renderer_, address admin_) {
         if (renderer_ == address(0)) revert InvalidRenderer();
-        _owner = msg.sender;
+        if (admin_ == address(0)) revert ZeroAddress();
+        admin = admin_;
         renderer = renderer_;
     }
 
@@ -71,22 +71,20 @@ contract DegenerusTrophies is IDegenerusTrophies {
     // ---------------------------------------------------------------------
     modifier onlyGame() {
         address g = game;
-        if (g == address(0) || msg.sender != g) revert NotGame();
+        if (msg.sender != g) revert NotGame();
         _;
     }
 
-    modifier onlyOwner() {
-        if (msg.sender != _owner) revert NotOwner();
+    modifier onlyAdmin() {
+        if (msg.sender != admin) revert OnlyAdmin();
         _;
     }
 
-    function setGame(address game_) external onlyOwner {
-        if (game == address(0)) {
-            if (game_ == address(0)) revert InvalidRenderer();
-            game = game_;
-        } else {
-            revert GameAlreadySet();
-        }
+    function wire(address[] calldata addresses) external onlyAdmin {
+        address game_ = addresses.length > 0 ? addresses[0] : address(0);
+        if (game_ == address(0)) return;
+        if (game != address(0)) revert GameAlreadySet();
+        game = game_;
     }
 
     // ---------------------------------------------------------------------
@@ -131,11 +129,13 @@ contract DegenerusTrophies is IDegenerusTrophies {
 
     function _mint(address to) private returns (uint256 tokenId) {
         if (to == address(0)) revert InvalidToken();
-        tokenId = _nextId++;
+        tokenId = _nextId;
+        unchecked {
+            _nextId = tokenId + 1;
+        }
         _owners[tokenId] = to;
         unchecked {
             ++_balances[to];
-            ++_totalSupply;
         }
         emit Transfer(address(0), to, tokenId);
     }
@@ -152,7 +152,9 @@ contract DegenerusTrophies is IDegenerusTrophies {
     }
 
     function totalSupply() external view returns (uint256) {
-        return _totalSupply;
+        unchecked {
+            return _nextId - 1;
+        }
     }
 
     function balanceOf(address owner) external view returns (uint256) {

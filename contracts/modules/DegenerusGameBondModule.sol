@@ -72,10 +72,10 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
         uint256 stSpend;
         uint256 ethSpend;
         if (leftover != 0) {
-            stSpend = leftover <= stBal ? leftover : stBal;
-            if (stSpend < leftover) {
-                uint256 gap = leftover - stSpend;
-                ethSpend = gap <= ethBal ? gap : ethBal;
+            if (stBal >= leftover) {
+                stSpend = leftover;
+            } else {
+                ethSpend = leftover <= ethBal ? leftover : ethBal;
             }
         }
         if (coinSlice != 0) {
@@ -90,17 +90,21 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
         if (bondPoolLocal > required) {
             uint256 excess = bondPoolLocal - required;
             address v = vault;
-            if (v != address(0)) {
-                ethBal = address(this).balance;
-                uint256 ethAvail = ethBal;
-                uint256 sendAmt = excess < ethAvail ? excess : ethAvail;
-                if (sendAmt != 0) {
-                    (bool ok, ) = payable(v).call{value: sendAmt}("");
-                    if (ok) {
-                        bondPoolLocal -= sendAmt;
-                    }
-                }
+
+            uint256 stBalLocal = IStETHLite(stethAddr).balanceOf(address(this));
+            uint256 ethBalLocal = address(this).balance;
+            uint256 stSend;
+            uint256 ethSend;
+            if (stBalLocal >= excess) {
+                stSend = excess;
+            } else {
+                ethSend = excess <= ethBalLocal ? excess : ethBalLocal;
             }
+            if (stSend != 0 || ethSend != 0) {
+                bondContract.payBonds{value: ethSend}(0, stSend, 0);
+                bondPoolLocal -= (stSend + ethSend);
+            }
+            
         }
 
         if (bondPoolLocal != bondPool) {

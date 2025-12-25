@@ -21,7 +21,6 @@ contract DegenerusJackpots is IDegenerusJackpots {
     // ---------------------------------------------------------------------
     // Errors
     // ---------------------------------------------------------------------
-    error InvalidKind();
     error DecClaimInactive();
     error DecAlreadyClaimed();
     error DecNotWinner();
@@ -63,14 +62,7 @@ contract DegenerusJackpots is IDegenerusJackpots {
     struct DecClaimRound {
         uint256 poolWei;
         uint256 totalBurn;
-        uint24 level;
         bool active;
-    }
-
-    // Leading contributor inside a subbucket (used to pick the subbucket winner).
-    struct DecSubbucketTop {
-        address player;
-        uint192 burn;
     }
 
     // ---------------------------------------------------------------------
@@ -98,8 +90,6 @@ contract DegenerusJackpots is IDegenerusJackpots {
 
     // Decimator aggregates
     mapping(uint24 => mapping(uint8 => mapping(uint8 => uint256))) internal decBucketBurnTotal;
-    mapping(uint24 => mapping(uint8 => mapping(uint8 => DecSubbucketTop))) internal decBucketTop;
-
     // Active Decimator claim round by level.
     mapping(uint24 => DecClaimRound) internal decClaimRound;
 
@@ -221,7 +211,7 @@ contract DegenerusJackpots is IDegenerusJackpots {
 
         uint192 delta = e.burn - prevBurn;
         if (delta != 0) {
-            _decUpdateSubbucket(lvl, bucketUsed, e.subBucket, delta, player, e.burn);
+            _decUpdateSubbucket(lvl, bucketUsed, e.subBucket, delta);
         }
 
         return bucketUsed;
@@ -250,9 +240,9 @@ contract DegenerusJackpots is IDegenerusJackpots {
         returns (address[] memory winners, uint256[] memory amounts, uint256 bondMask, uint256 returnAmountWei)
     {
         uint256 P = poolWei;
-        // Max distinct winners: 1 (top BAF) + 1 (top flip) + 1 (pick) + 4 (exterminator draw) + 4 (affiliate draw) + 3 (retro) + 50 + 50 (scatter buckets) = 114.
-        address[] memory tmpW = new address[](120);
-        uint256[] memory tmpA = new uint256[](120);
+        // Max distinct winners: 1 (top BAF) + 1 (top flip) + 1 (pick) + 3 (exterminator draw) + 3 (affiliate draw) + 3 (retro) + 50 + 50 (scatter buckets) = 112.
+        address[] memory tmpW = new address[](112);
+        uint256[] memory tmpA = new uint256[](112);
         uint256 n;
         uint256 toReturn;
         uint256 mask;
@@ -713,16 +703,14 @@ contract DegenerusJackpots is IDegenerusJackpots {
                 uint256 per = scatterTop / firstCount;
                 uint256 rem = scatterTop - per * firstCount;
                 toReturn += rem;
-                for (uint256 i; i < firstCount; ) {
-                    if (per != 0 && _creditOrRefund(firstWinners[i], per, tmpW, tmpA, n)) {
+                if (per != 0) {
+                    for (uint256 i; i < firstCount; ) {
+                        tmpW[n] = firstWinners[i];
+                        tmpA[n] = per;
                         unchecked {
                             ++n;
+                            ++i;
                         }
-                    } else {
-                        toReturn += per;
-                    }
-                    unchecked {
-                        ++i;
                     }
                 }
             }
@@ -733,16 +721,14 @@ contract DegenerusJackpots is IDegenerusJackpots {
                 uint256 per2 = scatterSecond / secondCount;
                 uint256 rem2 = scatterSecond - per2 * secondCount;
                 toReturn += rem2;
-                for (uint256 i; i < secondCount; ) {
-                    if (per2 != 0 && _creditOrRefund(secondWinners[i], per2, tmpW, tmpA, n)) {
+                if (per2 != 0) {
+                    for (uint256 i; i < secondCount; ) {
+                        tmpW[n] = secondWinners[i];
+                        tmpA[n] = per2;
                         unchecked {
                             ++n;
+                            ++i;
                         }
-                    } else {
-                        toReturn += per2;
-                    }
-                    unchecked {
-                        ++i;
                     }
                 }
             }
@@ -819,7 +805,6 @@ contract DegenerusJackpots is IDegenerusJackpots {
 
         round.poolWei = poolWei;
         round.totalBurn = totalBurn;
-        round.level = lvl;
         round.active = true;
 
         return 0;
@@ -904,7 +889,7 @@ contract DegenerusJackpots is IDegenerusJackpots {
         address player,
         uint24 lvl
     ) internal view returns (uint256 amountWei, bool winner) {
-        if (!round.active || round.totalBurn == 0 || round.level != lvl) return (0, false);
+        if (!round.active || round.totalBurn == 0) return (0, false);
         if (decClaimed[lvl][player]) return (0, false);
 
         DecEntry storage e = decBurn[lvl][player];
@@ -923,22 +908,15 @@ contract DegenerusJackpots is IDegenerusJackpots {
         winner = true;
     }
 
-    // Update aggregated burn totals for a subbucket and track the leading burner.
+    // Update aggregated burn totals for a subbucket.
     function _decUpdateSubbucket(
         uint24 lvl,
         uint8 denom,
         uint8 sub,
-        uint192 delta,
-        address player,
-        uint192 updatedBurn
+        uint192 delta
     ) internal {
         if (delta == 0 || denom == 0) return;
         decBucketBurnTotal[lvl][denom][sub] += uint256(delta);
-        DecSubbucketTop storage top = decBucketTop[lvl][denom][sub];
-        if (updatedBurn > top.burn) {
-            top.burn = updatedBurn;
-            top.player = player;
-        }
     }
 
     function _decSubbucketFor(address player, uint24 lvl, uint8 bucket) private pure returns (uint8) {

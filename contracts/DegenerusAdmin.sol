@@ -307,6 +307,12 @@ contract DegenerusAdmin {
             IWiring(jackpots_).wire(jpWire);
         }
 
+        if (trophies_ != address(0)) {
+            address[] memory trophyWire = new address[](1);
+            trophyWire[0] = game_;
+            IWiring(trophies_).wire(trophyWire);
+        }
+
         uint256 moduleCount = modules.length;
         if (moduleCount != moduleWires.length) revert LengthMismatch();
         for (uint256 i; i < moduleCount; ) {
