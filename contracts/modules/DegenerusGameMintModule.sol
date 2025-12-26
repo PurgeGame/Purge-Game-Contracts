@@ -104,27 +104,16 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
         data = _setPacked(data, ETH_LEVEL_BONUS_SHIFT, 1, bonusPaid ? 1 : 0);
 
         uint256 rewardUnit = priceCoinLocal / 10;
-        uint256 streakReward;
-        if (streak >= 2) {
-            uint256 capped = streak >= 61 ? 60 : uint256(streak - 1);
-            streakReward = capped * rewardUnit;
-        }
-
         uint256 totalReward;
         if (total >= 2) {
             uint256 cappedTotal = total >= 61 ? 60 : uint256(total - 1);
             totalReward = (cappedTotal * rewardUnit * 30) / 100;
         }
 
-        if (streakReward != 0 || totalReward != 0) {
+        if (totalReward != 0) {
             unchecked {
-                coinReward += streakReward + totalReward;
+                coinReward += totalReward;
             }
-        }
-
-        if (streak == lvl && lvl >= 20 && (lvl % 10 == 0)) {
-            uint256 milestoneBonus = (uint256(lvl) / 2) * priceCoinLocal;
-            coinReward += milestoneBonus;
         }
 
         if (total >= 20 && (total % 10 == 0)) {

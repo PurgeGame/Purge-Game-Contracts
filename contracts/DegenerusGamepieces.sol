@@ -353,6 +353,10 @@ contract DegenerusGamepieces {
         if (payInCoin) {
             if (msg.value != 0) revert E();
             _coinReceive(payer, quantity * PRICE_COIN_UNIT, targetLevel, 0);
+            uint32 questQuantity = uint32(mintQuantity);
+            if (questQuantity != 0) {
+                coin.notifyQuestMint(payer, questQuantity, false);
+            }
         } else {
             bonusCoinReward = (quantity / 10) * PRICE_COIN_UNIT;
             bonus = _processEthPurchase(
@@ -440,6 +444,10 @@ contract DegenerusGamepieces {
         if (payInCoin) {
             if (msg.value != 0) revert E();
             _coinReceive(payer, coinCost, lvl, 0);
+            uint32 questQuantity = uint32(mintQuantity / 4);
+            if (questQuantity != 0) {
+                coin.notifyQuestMint(payer, questQuantity, false);
+            }
             // Affiliate coin-triggered mints should not earn rebates/bonuses.
             bonus = payKind == MintPaymentKind.Claimable ? 0 : mapRebate;
         } else {

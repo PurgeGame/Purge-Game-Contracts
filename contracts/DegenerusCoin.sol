@@ -254,7 +254,7 @@ contract DegenerusCoin {
         vault = vault_;
     }
 
-    /// @notice Burn BURNIE to increase the caller’s coinflip stake, applying streak bonuses when eligible.
+    /// @notice Burn BURNIE to increase the caller’s coinflip stake, applying quest rewards when eligible.
     /// @param amount Amount (6 decimals) to burn; must satisfy the global minimum, or zero to just cash out.
     function depositCoinflip(uint256 amount) external {
         // Allow zero-amount calls to act as a cash-out of pending winnings without adding a new stake.

@@ -647,7 +647,10 @@ contract DegenerusGame is DegenerusGameStorage {
             // --- State 3 - Degenerus ---
             if (_gameState == 3) {
                 payDailyJackpot(true, lvl, rngWord);
-                if (!_handleJackpotLevelCap()) break;
+                if (jackpotCounter >= JACKPOT_LEVEL_CAP) {
+                    _endLevel(TRAIT_ID_TIMEOUT);
+                    break;
+                }
                 _unlockRng(day);
                 break;
             }
@@ -655,7 +658,7 @@ contract DegenerusGame is DegenerusGameStorage {
 
         emit Advance(_gameState);
 
-        if (_gameState != 0 && cap == 0) coinContract.creditFlip(caller, PRICE_COIN_UNIT >> 1);
+        if (cap == 0) coinContract.creditFlip(caller, PRICE_COIN_UNIT >> 1);
     }
 
     // --- Purchases: schedule NFT mints (traits precomputed) ----------------------------------------
@@ -679,8 +682,6 @@ contract DegenerusGame is DegenerusGameStorage {
 
     function burnTokens(uint256[] calldata tokenIds) external {
         if (rngLockedFlag) revert RngNotReady();
-        if (gameState != 3) revert NotTimeYet();
-
         uint256 count = tokenIds.length;
         if (count == 0 || count > 75) revert InvalidQuantity();
         address caller = msg.sender;
@@ -1177,14 +1178,6 @@ contract DegenerusGame is DegenerusGameStorage {
             )
         );
         if (!ok) _revertDelegate(data);
-    }
-
-    function _handleJackpotLevelCap() internal returns (bool) {
-        if (jackpotCounter >= JACKPOT_LEVEL_CAP) {
-            _endLevel(TRAIT_ID_TIMEOUT);
-            return false;
-        }
-        return true;
     }
 
     function gameOverDrainToBonds() private {
