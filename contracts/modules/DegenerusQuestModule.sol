@@ -104,6 +104,12 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
         _;
     }
 
+    modifier onlyCoinOrGame() {
+        address sender = msg.sender;
+        if (sender != coin && sender != address(questGame)) revert OnlyCoin();
+        _;
+    }
+
     modifier onlyAdmin() {
         if (msg.sender != admin) revert OnlyAdmin();
         _;
@@ -130,7 +136,7 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
     }
 
     /// @notice Normalize active quests when burning becomes disallowed mid-day (extermination to game state 1).
-    function normalizeActiveBurnQuests() external onlyCoin {
+    function normalizeActiveBurnQuests() external onlyCoinOrGame {
         DailyQuest[QUEST_SLOT_COUNT] storage quests = activeQuests;
         bool burnAllowed = _canRollBurnQuest(quests[0].day != 0 ? quests[0].day : quests[1].day);
         if (burnAllowed) return;
@@ -578,8 +584,7 @@ contract DegenerusQuestModule is IDegenerusQuestModule {
     /// @dev Decimator quests are unlocked at specific level boundaries.
     function _canRollDecimatorQuest() private view returns (bool) {
         IDegenerusGame game_ = questGame;
-        (bool decOn, ) = game_.decWindow();
-        if (!decOn) return false;
+        if (!game_.decWindowOpenFlag()) return false;
         uint24 lvl = game_.level();
         if (lvl != 0 && (lvl % DECIMATOR_SPECIAL_LEVEL) == 0) return true;
         if (lvl < 15) return false;

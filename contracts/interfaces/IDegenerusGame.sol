@@ -24,6 +24,8 @@ interface IDegenerusGame is IDegenerusGameExternal {
 
     function decWindow() external view returns (bool on, uint24 lvl);
 
+    function decWindowOpenFlag() external view returns (bool);
+
     function purchaseInfo()
         external
         view

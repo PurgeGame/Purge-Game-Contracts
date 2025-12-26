@@ -38,6 +38,10 @@ interface IDegenerusQuestView {
         returns (uint32 streak, uint32 lastCompletedDay, uint128[2] memory progress, bool[2] memory completed);
 }
 
+interface IDegenerusQuestNormalize {
+    function normalizeActiveBurnQuests() external;
+}
+
 interface IERC721BalanceOf {
     function balanceOf(address owner) external view returns (uint256);
 }
@@ -329,6 +333,10 @@ contract DegenerusGame is DegenerusGameStorage {
         lvl = level;
     }
 
+    function decWindowOpenFlag() external view returns (bool open) {
+        return decWindowOpen;
+    }
+
     function purchaseInfo()
         external
         view
@@ -561,17 +569,18 @@ contract DegenerusGame is DegenerusGameStorage {
 
             // --- State 1 - Pregame ---
             if (_gameState == 1) {
-                _runEndgameModule(lvl, rngWord); // handles payouts, wipes, endgame dist, and jackpots
-                if (lastExterminatedTrait != TRAIT_ID_TIMEOUT) {
-                    payCarryoverExterminationJackpot(lvl, uint8(lastExterminatedTrait), rngWord);
-                }
-                _stakeForTargetRatioModule(lvl);
                 bool decOpen = ((lvl >= 25) && ((lvl % 10) == 5) && ((lvl % 100) != 95));
                 // Preserve an already-open window for the level-100 decimator special until its RNG request closes it.
                 if (!decWindowOpen && decOpen) {
                     decWindowOpen = true;
                 }
                 if (lvl % 100 == 99) decWindowOpen = true;
+
+                _runEndgameModule(lvl, rngWord); // handles payouts, wipes, endgame dist, and jackpots
+                if (lastExterminatedTrait != TRAIT_ID_TIMEOUT) {
+                    payCarryoverExterminationJackpot(lvl, uint8(lastExterminatedTrait), rngWord);
+                }
+                _stakeForTargetRatioModule(lvl);
                 _bondSetup(rngWord);
                 break;
             }
@@ -823,7 +832,7 @@ contract DegenerusGame is DegenerusGameStorage {
             );
 
             lastExterminatedTrait = exTrait;
-            coin.normalizeActiveBurnQuests();
+            IDegenerusQuestNormalize(questModule).normalizeActiveBurnQuests();
         } else {
             exterminationInvertFlag = false;
             _setExterminatorForLevel(levelSnapshot, address(0));
