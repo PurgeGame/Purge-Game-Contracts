@@ -126,8 +126,8 @@ Bonds are the game’s **time-locked payout** layer. You only get paid when a fu
 - **Where the money goes (external bond deposits):**
   - 20% to bond backing (`bondPool`)
   - 10% to the reward pool
-  - 70% to untracked yield in the game
-  - Plus a vault share: the bonds contract tries to pull 40% worth of stETH from the game into the vault; if that fails, 40% of the deposit's ETH goes to the vault and the yield slice drops to 30%
+  - 30% to untracked yield in the game
+  - 40% vault share: paid in stETH if available; any stETH used swaps the same amount of ETH back to the game as extra untracked yield, and any remainder is paid to the vault in ETH (so yield is effectively 30-70% depending on stETH availability)
 - **Presale deposits:** 30% vault / 50% reward pool / 20% yield (no bondPool credit)
 - **Game-originated bond buys (jackpots/endgame):** tracked as bond positions but do not split inside bonds; they use ETH already inside the game
 - **Some wins roll into bonds:** certain payout paths can convert a slice of winnings into a bond position, which only pays at maturity

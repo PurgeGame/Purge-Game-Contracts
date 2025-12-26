@@ -392,8 +392,8 @@ Deposits:
 - External deposits (players calling `depositCurrentFor`) split the **ETH they send** as:
   - 20% → `bondPool` (tracked liability via `bondDeposit(trackPool=true)`)
   - 10% → `rewardPool` (sent to game, hits `receive()` and increments `rewardPool`)
-  - 70% → untracked yield (`bondDeposit(trackPool=false)`)
-  - Plus a **vault share**: bonds *try* to pull 40% worth of stETH from the game and send it to the vault. If that stETH pull fails, 40% of the deposit’s ETH is sent to the vault instead, reducing the yield slice to 30%.
+  - 30% → untracked yield (`bondDeposit(trackPool=false)`)
+  - 40% → **vault share**: paid in stETH if available; any stETH used swaps the same amount of ETH back to the game as extra untracked yield, and any remainder is paid to the vault in ETH (so yield is effectively 30-70% depending on stETH availability).
 - Game-originated bond buys (from jackpots/endgame) call `depositFromGame(...)` and **do not split inside bonds**; the game module decides how to account for those flows.
 - Presale deposits split ETH 30% vault / 50% rewardPool / 20% yield (no bondPool credit).
 
