@@ -1020,6 +1020,8 @@ contract DegenerusGamepieces {
         uint256 prevOwnershipPacked = _packedOwnershipOf(tokenId);
         if (address(uint160(prevOwnershipPacked)) != seller) revert Unauthorized();
 
+        delete asks[tokenId];
+
         address buyer = msg.sender;
         _collectPayment(buyer, seller, ask.price);
         _marketTransfer(seller, buyer, tokenId, prevOwnershipPacked);
