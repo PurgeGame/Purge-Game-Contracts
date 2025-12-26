@@ -1,25 +1,15 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-/// @notice Operation types that trusted external contracts can request on DegenerusGame.
-enum DegenerusGameExternalOp {
-    DecJackpotClaim
-}
-
+/// @notice External jackpot credits wired into DegenerusGame.
 interface IDegenerusGameExternal {
-    /// @notice Apply a trusted state transition initiated by an external module.
-    /// @param op      The operation being requested.
-    /// @param account Recipient/player address to credit (when applicable).
-    /// @param amount  Amount in wei to apply for the operation.
-    function applyExternalOp(DegenerusGameExternalOp op, address account, uint256 amount) external;
+    /// @notice Credit a decimator jackpot claim into the game's claimable balance.
+    /// @param account Player address to credit.
+    /// @param amount  Amount in wei to credit.
+    function creditDecJackpotClaim(address account, uint256 amount) external;
 
-    /// @notice Batched variant of applyExternalOp to aggregate accounting updates.
-    /// @param op       Operation selector.
-    /// @param accounts Recipients to credit.
-    /// @param amounts  Wei amounts to apply per recipient.
-    function applyExternalOpBatch(
-        DegenerusGameExternalOp op,
-        address[] calldata accounts,
-        uint256[] calldata amounts
-    ) external;
+    /// @notice Batch variant to credit decimator jackpot claims.
+    /// @param accounts Player addresses to credit.
+    /// @param amounts  Wei amounts to credit per player.
+    function creditDecJackpotClaimBatch(address[] calldata accounts, uint256[] calldata amounts) external;
 }

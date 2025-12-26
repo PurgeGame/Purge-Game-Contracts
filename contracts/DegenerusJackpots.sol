@@ -4,7 +4,6 @@ pragma solidity ^0.8.26;
 import {IDegenerusGame} from "./interfaces/IDegenerusGame.sol";
 import {IDegenerusAffiliate} from "./interfaces/IDegenerusAffiliate.sol";
 import {IDegenerusJackpots} from "./interfaces/IDegenerusJackpots.sol";
-import {DegenerusGameExternalOp} from "./interfaces/IDegenerusGameExternal.sol";
 
 interface IDegenerusCoinJackpotView {
     function coinflipAmountLastDay(address player) external view returns (uint256);
@@ -53,15 +52,15 @@ contract DegenerusJackpots is IDegenerusJackpots {
     // Per-player Decimator burn tracking for the active level.
     struct DecEntry {
         uint192 burn;
-        uint24 level;
         uint8 bucket;
         uint8 subBucket;
+        uint8 claimed;
     }
 
     // Snapshot of a Decimator claim round for a level.
     struct DecClaimRound {
         uint256 poolWei;
-        uint256 totalBurn;
+        uint248 totalBurn;
         bool active;
     }
 
@@ -89,15 +88,12 @@ contract DegenerusJackpots is IDegenerusJackpots {
     mapping(uint24 => mapping(address => DecEntry)) internal decBurn;
 
     // Decimator aggregates
-    mapping(uint24 => mapping(uint8 => mapping(uint8 => uint256))) internal decBucketBurnTotal;
+    mapping(uint24 => uint256[11][11]) internal decBucketBurnTotal;
     // Active Decimator claim round by level.
     mapping(uint24 => DecClaimRound) internal decClaimRound;
 
-    // Track whether a player has claimed their Decimator share for a level.
-    mapping(uint24 => mapping(address => bool)) internal decClaimed;
-
-    // Winning subbucket index per denominator for a level (derived during selection).
-    mapping(uint24 => mapping(uint8 => uint32)) internal decBucketOffset;
+    // Packed winning subbucket per denominator for a level (4 bits each, denom 2..10).
+    mapping(uint24 => uint64) internal decBucketOffsetPacked;
 
     // Top-4 coinflip bettors for BAF per level.
     mapping(uint24 => PlayerScore[4]) internal bafTop;
@@ -193,23 +189,20 @@ contract DegenerusJackpots is IDegenerusJackpots {
         DecEntry storage e = decBurn[lvl][player];
         uint192 prevBurn = e.burn;
 
-        if (e.level != lvl) {
-            e.level = lvl;
-            e.burn = 0;
+        if (e.bucket == 0) {
             e.bucket = bucket;
             e.subBucket = _decSubbucketFor(player, lvl, bucket);
-        } else if (e.bucket == 0) {
-            e.bucket = bucket;
-            e.subBucket = _decSubbucketFor(player, lvl, bucket);
+            e.claimed = 0;
         }
 
         bucketUsed = e.bucket;
 
-        uint256 updated = uint256(e.burn) + amount;
+        uint256 updated = uint256(prevBurn) + amount;
         if (updated > type(uint192).max) updated = type(uint192).max;
-        e.burn = uint192(updated);
+        uint192 newBurn = uint192(updated);
+        e.burn = newBurn;
 
-        uint192 delta = e.burn - prevBurn;
+        uint192 delta = newBurn - prevBurn;
         if (delta != 0) {
             _decUpdateSubbucket(lvl, bucketUsed, e.subBucket, delta);
         }
@@ -778,12 +771,13 @@ contract DegenerusJackpots is IDegenerusJackpots {
         }
 
         uint256 totalBurn;
+        uint64 packedOffsets;
 
         uint256 decSeed = rngWord;
         for (uint8 denom = 2; denom <= DECIMATOR_MAX_DENOM; ) {
             // Pick a random winning subbucket for each denominator and accumulate its burn total.
             uint8 winningSub = _decWinningSubbucket(decSeed, denom);
-            decBucketOffset[lvl][denom] = winningSub;
+            packedOffsets = _packDecWinningSubbucket(packedOffsets, denom, winningSub);
 
             uint256 subTotal = decBucketBurnTotal[lvl][denom][winningSub];
             if (subTotal != 0) {
@@ -795,12 +789,14 @@ contract DegenerusJackpots is IDegenerusJackpots {
             }
         }
 
+        decBucketOffsetPacked[lvl] = packedOffsets;
+
         if (totalBurn == 0) {
             return poolWei;
         }
 
         round.poolWei = poolWei;
-        round.totalBurn = totalBurn;
+        round.totalBurn = uint248(totalBurn);
         round.active = true;
 
         return 0;
@@ -813,12 +809,15 @@ contract DegenerusJackpots is IDegenerusJackpots {
     function _consumeDecClaim(address player, uint24 lvl) internal returns (uint256 amountWei) {
         DecClaimRound storage round = decClaimRound[lvl];
         if (!round.active) revert DecClaimInactive();
-        if (decClaimed[lvl][player]) revert DecAlreadyClaimed();
+        DecEntry storage e = decBurn[lvl][player];
+        if (e.claimed != 0) revert DecAlreadyClaimed();
 
-        (amountWei, ) = _decClaimable(round, player, lvl);
+        uint64 packedOffsets = decBucketOffsetPacked[lvl];
+        uint256 totalBurn = uint256(round.totalBurn);
+        amountWei = _decClaimableFromEntry(round.poolWei, totalBurn, e, lvl, packedOffsets);
         if (amountWei == 0) revert DecNotWinner();
 
-        decClaimed[lvl][player] = true;
+        e.claimed = 1;
     }
 
     function consumeDecClaim(address player, uint24 lvl) external onlyGame returns (uint256 amountWei) {
@@ -827,7 +826,7 @@ contract DegenerusJackpots is IDegenerusJackpots {
 
     function claimDecimatorJackpot(uint24 lvl) external {
         uint256 amountWei = _consumeDecClaim(msg.sender, lvl);
-        degenerusGame.applyExternalOp(DegenerusGameExternalOp.DecJackpotClaim, msg.sender, amountWei);
+        degenerusGame.creditDecJackpotClaim(msg.sender, amountWei);
     }
 
     function claimDecimatorJackpotBatch(address[] calldata players, uint24 lvl) external {
@@ -841,7 +840,7 @@ contract DegenerusJackpots is IDegenerusJackpots {
                 ++i;
             }
         }
-        degenerusGame.applyExternalOpBatch(DegenerusGameExternalOp.DecJackpotClaim, players, amounts);
+        degenerusGame.creditDecJackpotClaimBatch(players, amounts);
     }
 
     function decClaimable(address player, uint24 lvl) external view returns (uint256 amountWei, bool winner) {
@@ -880,28 +879,54 @@ contract DegenerusJackpots is IDegenerusJackpots {
         return uint8(uint256(keccak256(abi.encode(entropy, denom))) % denom);
     }
 
+    function _packDecWinningSubbucket(uint64 packed, uint8 denom, uint8 sub) private pure returns (uint64) {
+        uint8 shift = (denom - 2) << 2;
+        uint64 mask = uint64(0xF) << shift;
+        return (packed & ~mask) | ((uint64(sub) & 0xF) << shift);
+    }
+
+    function _unpackDecWinningSubbucket(uint64 packed, uint8 denom) private pure returns (uint8) {
+        if (denom < 2) return 0;
+        uint8 shift = (denom - 2) << 2;
+        return uint8((packed >> shift) & 0xF);
+    }
+
+    function _decClaimableFromEntry(
+        uint256 poolWei,
+        uint256 totalBurn,
+        DecEntry storage e,
+        uint24 lvl,
+        uint64 packedOffsets
+    ) private view returns (uint256 amountWei) {
+        if (totalBurn == 0) return 0;
+        uint8 denom = e.bucket;
+        uint8 sub = e.subBucket;
+        uint192 entryBurn = e.burn;
+        if (denom == 0 || entryBurn == 0) return 0;
+
+        uint8 winningSub = _unpackDecWinningSubbucket(packedOffsets, denom);
+        if (sub != winningSub) return 0;
+
+        if (decBucketBurnTotal[lvl][denom][winningSub] == 0) return 0;
+
+        // Pro-rata share of the Decimator pool based on the burn inside the winning subbucket.
+        amountWei = (poolWei * uint256(entryBurn)) / totalBurn;
+    }
+
     function _decClaimable(
         DecClaimRound storage round,
         address player,
         uint24 lvl
     ) internal view returns (uint256 amountWei, bool winner) {
-        if (!round.active || round.totalBurn == 0) return (0, false);
-        if (decClaimed[lvl][player]) return (0, false);
+        uint256 totalBurn = uint256(round.totalBurn);
+        if (!round.active || totalBurn == 0) return (0, false);
 
         DecEntry storage e = decBurn[lvl][player];
-        uint8 denom = e.bucket;
-        uint8 sub = e.subBucket;
-        uint192 entryBurn = e.burn;
-        if (e.level != lvl || denom == 0 || entryBurn == 0) return (0, false);
+        if (e.claimed != 0) return (0, false);
 
-        uint8 winningSub = uint8(decBucketOffset[lvl][denom]);
-        if (sub != winningSub) return (0, false);
-
-        if (decBucketBurnTotal[lvl][denom][winningSub] == 0) return (0, false);
-
-        // Pro-rata share of the Decimator pool based on the burn inside the winning subbucket.
-        amountWei = (round.poolWei * uint256(entryBurn)) / round.totalBurn;
-        winner = true;
+        uint64 packedOffsets = decBucketOffsetPacked[lvl];
+        amountWei = _decClaimableFromEntry(round.poolWei, totalBurn, e, lvl, packedOffsets);
+        winner = amountWei != 0;
     }
 
     // Update aggregated burn totals for a subbucket.

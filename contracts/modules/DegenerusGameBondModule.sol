@@ -72,11 +72,10 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
         uint256 stSpend;
         uint256 ethSpend;
         if (leftover != 0) {
-            if (stBal >= leftover) {
-                stSpend = leftover;
-            } else {
-                ethSpend = leftover <= ethBal ? leftover : ethBal;
-            }
+            uint256 remaining = leftover;
+            stSpend = stBal < remaining ? stBal : remaining;
+            remaining -= stSpend;
+            ethSpend = ethBal < remaining ? ethBal : remaining;
         }
         if (coinSlice != 0) {
             IVaultEscrowCoin(coinAddr).vaultEscrow(coinSlice);
@@ -89,22 +88,19 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
         // If bondPool exceeds required cover (including upcoming maturities), sweep the excess to the vault.
         if (bondPoolLocal > required) {
             uint256 excess = bondPoolLocal - required;
-            address v = vault;
 
             uint256 stBalLocal = IStETHLite(stethAddr).balanceOf(address(this));
             uint256 ethBalLocal = address(this).balance;
             uint256 stSend;
             uint256 ethSend;
-            if (stBalLocal >= excess) {
-                stSend = excess;
-            } else {
-                ethSend = excess <= ethBalLocal ? excess : ethBalLocal;
-            }
+            uint256 remaining = excess;
+            stSend = stBalLocal < remaining ? stBalLocal : remaining;
+            remaining -= stSend;
+            ethSend = ethBalLocal < remaining ? ethBalLocal : remaining;
             if (stSend != 0 || ethSend != 0) {
                 bondContract.payBonds{value: ethSend}(0, stSend, 0);
                 bondPoolLocal -= (stSend + ethSend);
             }
-            
         }
 
         if (bondPoolLocal != bondPool) {

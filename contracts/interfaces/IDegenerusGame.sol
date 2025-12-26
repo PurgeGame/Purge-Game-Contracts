@@ -22,8 +22,6 @@ interface IDegenerusGame is IDegenerusGameExternal {
 
     function mintPrice() external view returns (uint256);
 
-    function coinPriceUnit() external view returns (uint256);
-
     function decWindow() external view returns (bool on, uint24 lvl);
 
     function purchaseInfo()

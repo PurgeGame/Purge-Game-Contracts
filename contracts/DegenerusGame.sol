@@ -14,7 +14,6 @@ import {
     IDegenerusGameBondModule
 } from "./interfaces/IDegenerusGameModules.sol";
 import {MintPaymentKind} from "./interfaces/IDegenerusGame.sol";
-import {DegenerusGameExternalOp} from "./interfaces/IDegenerusGameExternal.sol";
 import {DegenerusGameStorage} from "./storage/DegenerusGameStorage.sol";
 
 interface IStETH {
@@ -386,8 +385,8 @@ contract DegenerusGame is DegenerusGameStorage {
 
             // Quest streak: cap at 50, worth 0.5% each (50 bps)
 
-            (uint32 streak, , , ) = IDegenerusQuestView(questModuleAddr).playerQuestStates(player);
-            uint256 questStreak = streak > 50 ? 50 : uint256(streak);
+            (uint32 questStreakRaw, , , ) = IDegenerusQuestView(questModuleAddr).playerQuestStates(player);
+            uint256 questStreak = questStreakRaw > 50 ? 50 : uint256(questStreakRaw);
             bonusBps += questStreak * 50;
         
 
@@ -682,6 +681,7 @@ contract DegenerusGame is DegenerusGameStorage {
 
     function burnTokens(uint256[] calldata tokenIds) external {
         if (rngLockedFlag) revert RngNotReady();
+        if (gameState != 3) revert NotTimeYet();
         uint256 count = tokenIds.length;
         if (count == 0 || count > 75) revert InvalidQuantity();
         address caller = msg.sender;
@@ -966,50 +966,31 @@ contract DegenerusGame is DegenerusGameStorage {
         if (!ok) _revertDelegate(data);
     }
 
-    /// @notice Unified external hook for trusted modules to adjust DegenerusGame accounting.
-    /// @param op      Operation selector.
-    /// @param account Player to credit (when applicable).
-    /// @param amount  Wei amount associated with the operation.
-    function applyExternalOp(DegenerusGameExternalOp op, address account, uint256 amount) external {
-        if (op == DegenerusGameExternalOp.DecJackpotClaim) {
-            _applyDecJackpotClaim(account, amount);
-            return;
-        }
-        revert E();
-    }
-
-    /// @notice Batch variant for external modules to aggregate claimable accounting.
-    function applyExternalOpBatch(
-        DegenerusGameExternalOp op,
-        address[] calldata accounts,
-        uint256[] calldata amounts
-    ) external {
-        if (op == DegenerusGameExternalOp.DecJackpotClaim) {
-            uint256 len = accounts.length;
-            if (len != amounts.length) revert E();
-            address jackpotsAddr = jackpots;
-            if (msg.sender != jackpotsAddr) revert E();
-
-            for (uint256 i; i < len; ) {
-                uint256 amt = amounts[i];
-                address account = accounts[i];
-                if (amt != 0 && account != address(0)) {
-                    _addClaimableEth(account, amt);
-                }
-                unchecked {
-                    ++i;
-                }
-            }
-            return;
-        }
-        revert E();
-    }
-
-    function _applyDecJackpotClaim(address account, uint256 amount) private {
-        address jackpotsAddr = jackpots;
-        if (jackpotsAddr == address(0) || msg.sender != jackpotsAddr) revert E();
+    /// @notice Credit a decimator jackpot claim into the game's claimable balance.
+    /// @param account Player to credit.
+    /// @param amount  Wei amount associated with the claim.
+    function creditDecJackpotClaim(address account, uint256 amount) external {
+        if (msg.sender != jackpots) revert E();
         if (amount == 0 || account == address(0)) return;
         _addClaimableEth(account, amount);
+    }
+
+    /// @notice Batch variant to aggregate decimator jackpot claim credits.
+    function creditDecJackpotClaimBatch(address[] calldata accounts, uint256[] calldata amounts) external {
+        if (msg.sender != jackpots) revert E();
+        uint256 len = accounts.length;
+        if (len != amounts.length) revert E();
+
+        for (uint256 i; i < len; ) {
+            uint256 amt = amounts[i];
+            address account = accounts[i];
+            if (amt != 0 && account != address(0)) {
+                _addClaimableEth(account, amt);
+            }
+            unchecked {
+                ++i;
+            }
+        }
     }
 
     // --- Claiming winnings (ETH) --------------------------------------------------------------------

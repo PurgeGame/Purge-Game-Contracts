@@ -6,7 +6,6 @@ import {IDegenerusCoin} from "./interfaces/IDegenerusCoin.sol";
 /// @notice Minimal view into the core game to read the current level.
 interface IDegenerusGameLevel {
     function level() external view returns (uint24);
-    function ethMintStats(address player) external view returns (uint24 lvl, uint24 levelCount, uint24 streak);
     function playerBonusMultiplier(address player) external view returns (uint256);
 }
 
@@ -74,6 +73,10 @@ interface IAffiliatePresaleStatus {
 
 interface IAffiliatePresaleCredit {
     function addPresaleCoinCredit(address player, uint256 amount) external;
+}
+
+interface IBondTokenFactory {
+    function createDgnrsToken(address minter) external returns (address);
 }
 
 /**
@@ -262,6 +265,15 @@ contract BondToken {
     }
 }
 
+contract BondTokenFactory is IBondTokenFactory {
+    error ZeroAddress();
+
+    function createDgnrsToken(address minter) external returns (address) {
+        if (minter == address(0)) revert ZeroAddress();
+        return address(new BondToken("Degenerus Bond DGNRS", "DGNRS", minter));
+    }
+}
+
 /**
  * @title DegenerusBonds
  * @notice Bond system wired for the Degenerus game:
@@ -437,15 +449,14 @@ contract DegenerusBonds {
     // ---------------------------------------------------------------------
     // Constructor
     // ---------------------------------------------------------------------
-    constructor(address admin_, address steth_) {
-        if (admin_ == address(0)) revert Unauthorized();
-        if (steth_ == address(0)) revert Unauthorized();
+    constructor(address admin_, address steth_, address bondTokenFactory_) {
+        if (admin_ == address(0) || steth_ == address(0) || bondTokenFactory_ == address(0)) revert Unauthorized();
         admin = admin_;
         steth = steth_;
         rewardStakeTargetBps = 10_000;
 
         // Predeploy the shared bond token used across all active maturities.
-        tokenDGNRS = new BondToken("Degenerus Bond DGNRS", "DGNRS", address(this));
+        tokenDGNRS = BondToken(IBondTokenFactory(bondTokenFactory_).createDgnrsToken(address(this)));
     }
 
     modifier onlyGame() {
@@ -505,7 +516,6 @@ contract DegenerusBonds {
 
     /// @notice Game hook to pause/resume bond purchases and burns while RNG is locked for jackpots.
     function setRngLock(bool locked) external onlyGame {
-        if (rngLock == locked) return;
         rngLock = locked;
     }
 
@@ -920,7 +930,7 @@ contract DegenerusBonds {
         if (gameOverStarted) revert SaleClosed();
         if (!fromGame && rngLock) revert PurchasesDisabled();
 
-        (uint24 currLevel, uint24 mintLevelCount, uint24 mintStreak) = game.ethMintStats(beneficiary);
+        uint24 currLevel = game.level();
         if (!_bondPurchasesOpen(currLevel)) revert PurchasesDisabled();
         uint24 maturityLevel = _activeMaturityAt(currLevel);
         BondSeries storage s = _getOrCreateSeries(maturityLevel);
@@ -1137,15 +1147,13 @@ contract DegenerusBonds {
 
         bool presaleActive = _presaleActive();
         uint24 currLevel;
-        uint24 mintLevelCount;
-        uint24 mintStreak;
         if (presaleActive) {
             currLevel = 0;
         } else {
             if (address(game) == address(0)) revert NotReady();
-            (currLevel, mintLevelCount, mintStreak) = game.ethMintStats(msg.sender);
+            currLevel = game.level();
         }
-        _burnDgnrsFor(msg.sender, amount, currLevel, mintLevelCount, mintStreak, true);
+        _burnDgnrsFor(msg.sender, amount, currLevel, true);
     }
 
     /// @dev bondMaintenance runs mid-level; before the first maintenance pass for the current level,
@@ -1164,8 +1172,6 @@ contract DegenerusBonds {
         address player,
         uint256 amount,
         uint24 currLevel,
-        uint24 mintLevelCount,
-        uint24 mintStreak,
         bool burnToken
     ) private {
         uint24 burnLevel = _burnEffectiveLevel(currLevel);
@@ -1180,9 +1186,7 @@ contract DegenerusBonds {
             resolvedTargetMat,
             amount,
             currLevel,
-            player,
-            mintLevelCount,
-            mintStreak
+            player
         );
         emit BondBurned(player, resolvedTargetMat, lane, amount, boosted);
     }
@@ -1262,9 +1266,7 @@ contract DegenerusBonds {
         uint24 maturityLevel,
         uint256 amount,
         uint24 currLevel,
-        address player,
-        uint24 mintLevelCount,
-        uint24 mintStreak
+        address player
     ) private returns (uint8 lane, bool boosted) {
         // Deterministic lane assignment based on maturity level and player address (laneHint ignored).
         lane = uint8(uint256(keccak256(abi.encodePacked(maturityLevel, player))) & 1);
@@ -1828,12 +1830,7 @@ contract DegenerusBonds {
             if (amount != 0) {
                 address winner = _weightedPickFrom(participants, cumulative, totalScore, entropy);
                 if (canAutoBurn && _autoBurnEnabled(winner, presaleActive)) {
-                    if (currLevel == 0) {
-                        _burnDgnrsFor(winner, amount, currLevel, 0, 0, false);
-                    } else {
-                        (, uint24 mintLevelCount, uint24 mintStreak) = game.ethMintStats(winner);
-                        _burnDgnrsFor(winner, amount, currLevel, mintLevelCount, mintStreak, false);
-                    }
+                    _burnDgnrsFor(winner, amount, currLevel, false);
                 } else {
                     token.mint(winner, amount);
                 }
@@ -1853,12 +1850,7 @@ contract DegenerusBonds {
             if (amount != 0) {
                 address winner = _weightedPickFrom(participants, cumulative, totalScore, entropy);
                 if (canAutoBurn && _autoBurnEnabled(winner, presaleActive)) {
-                    if (currLevel == 0) {
-                        _burnDgnrsFor(winner, amount, currLevel, 0, 0, false);
-                    } else {
-                        (, uint24 mintLevelCount, uint24 mintStreak) = game.ethMintStats(winner);
-                        _burnDgnrsFor(winner, amount, currLevel, mintLevelCount, mintStreak, false);
-                    }
+                    _burnDgnrsFor(winner, amount, currLevel, false);
                 } else {
                     token.mint(winner, amount);
                 }
