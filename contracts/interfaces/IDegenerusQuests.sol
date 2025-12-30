@@ -21,7 +21,7 @@ struct PlayerQuestView {
     uint32 baseStreak;
 }
 
-interface IDegenerusQuestModule {
+interface IDegenerusQuests {
     function wire(address[] calldata addresses) external;
 
     function rollDailyQuest(uint48 day, uint256 entropy)

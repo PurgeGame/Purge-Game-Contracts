@@ -7,7 +7,7 @@ pragma solidity ^0.8.26;
 ///      gameplay flows; there is intentionally no public mint.
 import {DegenerusGamepieces} from "./DegenerusGamepieces.sol";
 import {IDegenerusGame} from "./interfaces/IDegenerusGame.sol";
-import {IDegenerusQuestModule, QuestInfo, PlayerQuestView} from "./interfaces/IDegenerusQuestModule.sol";
+import {IDegenerusQuests, QuestInfo, PlayerQuestView} from "./interfaces/IDegenerusQuests.sol";
 import {IDegenerusJackpots} from "./interfaces/IDegenerusJackpots.sol";
 
 interface IDegenerusAffiliateCoin {
@@ -78,7 +78,7 @@ contract DegenerusCoin {
     // Core modules; set once via `wire`.
     IDegenerusGame internal degenerusGame;
     DegenerusGamepieces internal degenerusGamepieces;
-    IDegenerusQuestModule internal questModule;
+    IDegenerusQuests internal questModule;
     IDegenerusAffiliateCoin private immutable affiliateProgram;
     address private jackpots;
     address private vault;
@@ -272,7 +272,7 @@ contract DegenerusCoin {
         _burn(caller, amount);
 
         // Quests can layer on bonus flip credit when the quest is active/completed.
-        IDegenerusQuestModule module = questModule;
+        IDegenerusQuests module = questModule;
         uint256 questReward;
         (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleFlip(
             caller,
@@ -314,7 +314,7 @@ contract DegenerusCoin {
         // Burn first to anchor the amount used for bonuses.
         _burn(caller, amount);
 
-        IDegenerusQuestModule module = questModule;
+        IDegenerusQuests module = questModule;
 
         (
             uint256 reward,
@@ -409,7 +409,7 @@ contract DegenerusCoin {
         if (questModule_ == address(0)) return;
         address current = address(questModule);
         if (current == address(0)) {
-            questModule = IDegenerusQuestModule(questModule_);
+            questModule = IDegenerusQuests(questModule_);
         } else if (questModule_ != current) {
             revert AlreadyWired();
         }
@@ -476,7 +476,7 @@ contract DegenerusCoin {
     /// @dev Access: affiliate contract only.
     function affiliateQuestReward(address player, uint256 amount) external returns (uint256 questReward) {
         if (msg.sender != address(affiliateProgram)) revert OnlyAffiliate();
-        IDegenerusQuestModule module = questModule;
+        IDegenerusQuests module = questModule;
         if (player == address(0) || amount == 0) return 0;
         (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleAffiliate(
             player,
@@ -490,7 +490,7 @@ contract DegenerusCoin {
     // ---------------------------------------------------------------------
 
     function rollDailyQuest(uint48 day, uint256 entropy) external onlyDegenerusGameContract {
-        IDegenerusQuestModule module = questModule;
+        IDegenerusQuests module = questModule;
         (bool rolled, uint8[2] memory questTypes, bool highDifficulty) = module.rollDailyQuest(day, entropy);
         if (rolled) {
             for (uint256 i; i < 2; ) {
@@ -508,7 +508,7 @@ contract DegenerusCoin {
         bool forceMintEth,
         bool forceBurn
     ) external onlyDegenerusGameContract {
-        IDegenerusQuestModule module = questModule;
+        IDegenerusQuests module = questModule;
         (bool rolled, uint8[2] memory questTypes, bool highDifficulty) = module.rollDailyQuestWithOverrides(
             day,
             entropy,
@@ -527,13 +527,13 @@ contract DegenerusCoin {
 
     /// @notice Normalize burn quests mid-day when extermination ends the burn window.
     function normalizeActiveBurnQuests() external onlyDegenerusGameContract {
-        IDegenerusQuestModule module = questModule;
+        IDegenerusQuests module = questModule;
         module.normalizeActiveBurnQuests();
     }
 
     function notifyQuestMint(address player, uint32 quantity, bool paidWithEth) external {
         if (msg.sender != address(degenerusGamepieces)) revert OnlyNft();
-        IDegenerusQuestModule module = questModule;
+        IDegenerusQuests module = questModule;
         (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleMint(
             player,
             quantity,
@@ -547,7 +547,7 @@ contract DegenerusCoin {
 
     function notifyQuestBond(address player, uint256 basePerBondWei) external {
         if (msg.sender != bonds) revert OnlyBonds();
-        IDegenerusQuestModule module = questModule;
+        IDegenerusQuests module = questModule;
         if (player == address(0) || basePerBondWei == 0) return;
         (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleBondPurchase(
             player,
@@ -561,7 +561,7 @@ contract DegenerusCoin {
 
     function notifyQuestBurn(address player, uint32 quantity) external {
         if (msg.sender != address(degenerusGame)) revert OnlyGame();
-        IDegenerusQuestModule module = questModule;
+        IDegenerusQuests module = questModule;
         (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleBurn(
             player,
             quantity
@@ -573,7 +573,7 @@ contract DegenerusCoin {
     }
 
     function getActiveQuests() external view returns (QuestInfo[2] memory quests) {
-        IDegenerusQuestModule module = questModule;
+        IDegenerusQuests module = questModule;
         return module.getActiveQuests();
     }
 
@@ -584,12 +584,12 @@ contract DegenerusCoin {
         view
         returns (uint32 streak, uint32 lastCompletedDay, uint128[2] memory progress, bool[2] memory completed)
     {
-        IDegenerusQuestModule module = questModule;
+        IDegenerusQuests module = questModule;
         return module.playerQuestStates(player);
     }
 
     function getPlayerQuestView(address player) external view returns (PlayerQuestView memory viewData) {
-        IDegenerusQuestModule module = questModule;
+        IDegenerusQuests module = questModule;
         return module.getPlayerQuestView(player);
     }
 

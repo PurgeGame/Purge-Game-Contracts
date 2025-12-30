@@ -917,4 +917,5 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
         uint256 seed = uint256(keccak256(abi.encode(rngWord, prevLevel, "ex_share")));
         uint256 roll = seed % 21; // 0-20 inclusive
         return uint16(2000 + roll * 100); // 20-40%
-    }66
+    }
+}

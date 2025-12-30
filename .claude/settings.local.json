@@ -5,7 +5,8 @@
       "Bash(grep:*)",
       "Bash(ls:*)",
       "Bash(forge build:*)",
-      "Bash(npx hardhat:*)"
+      "Bash(npx hardhat:*)",
+      "Bash(solc:*)"
     ]
   }
 }
