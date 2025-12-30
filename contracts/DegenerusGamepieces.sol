@@ -237,7 +237,7 @@ contract DegenerusGamepieces {
     /// @notice Returns balance for standard ERC721 semantics.
     function balanceOf(address owner) external view returns (uint256) {
         if (owner == address(0)) revert Zero();
-        if (!_isLiveState()) {
+        if (!_isLiveState()) {2
             if (owner == vault) return 1;
             return 0;
         }

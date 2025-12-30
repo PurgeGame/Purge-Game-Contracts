@@ -1,134 +1,170 @@
-# PurgeGame / Degenerus - Agent Guide
+# Degenerus Agent Testing Guide
 
-This repo is about verifying that the on-chain game behaves exactly as designed. Your primary goal is to write and run thorough tests for the Solidity contracts so behavior aligns with the design intent described in the docs.
+Goal: Verify on-chain behavior matches design intent via thorough testing.
 
 ## Source of Truth
-- Code is the final authority: `contracts/**/*.sol`.
-- Design intent and plain-English explanations:
-  - `AI_TEACHING_GUIDE.md` (code map + intent)
-  - `GAME_AND_ECON_OVERVIEW.md` (player-facing design intent)
-  - `ETH_BUCKETS_AND_SOLVENCY.md` (accounting + solvency invariants)
+
+1. **Code**: `contracts/**/*.sol`
+2. **Design docs**: `AI_TEACHING_GUIDE.md`, `GAME_AND_ECON_OVERVIEW.md`, `ETH_BUCKETS_AND_SOLVENCY.md`
 
 If docs disagree with code, defer to code and flag the mismatch.
 
-## Repo Map (What You Are Testing)
-- Core contracts:
-  - `contracts/DegenerusGame.sol` (state machine, ETH/stETH buckets, RNG gate)
-  - `contracts/DegenerusGamepieces.sol` (ERC721, purchase flows)
-  - `contracts/DegenerusCoin.sol` (BURNIE, coinflip, decimator burns)
-  - `contracts/DegenerusBonds.sol` (maturities, bond payouts)
-  - `contracts/DegenerusJackpots.sol` (BAF + Decimator jackpot logic)
-  - `contracts/DegenerusAffiliate.sol` (referrals + rakeback)
-  - `contracts/DegenerusVault.sol` (vault shares and claims)
-  - `contracts/DegenerusTrophies.sol` (non-transferable trophies)
-- Modules used via delegatecall:
-  - `contracts/modules/DegenerusGameMintModule.sol`
-  - `contracts/modules/DegenerusGameJackpotModule.sol`
-  - `contracts/modules/DegenerusGameEndgameModule.sol`
-  - `contracts/modules/DegenerusGameBondModule.sol`
-  - `contracts/modules/DegenerusQuestModule.sol`
-- Tests and harnesses:
-  - JS tests in `test/`
-  - Solidity harnesses/mocks in `contracts/test/`
+---
 
 ## Quick Commands
-- Install: `npm install`
-- Compile: `npm run compile`
-- Unit tests: `npm test`
-- Local sim: `npm run sim:local -- --days 30 --players 6`
-- Sim report: `npm run sim:report`
 
-## Design Intent (Short Form)
-- Non-upgradeable core; wiring is write-once.
-- RNG via Chainlink VRF; RNG stalls trigger a 3-day emergency recovery path.
-- No admin withdraw of game pots; payouts only via rules.
-- ETH accounting is bucketed and must remain solvent (assets >= liabilities).
-- High variance by design (jackpots, coinflips, bonds, time locks).
+```bash
+npm install          # Install dependencies
+npm run compile      # Compile contracts
+npm test             # Run unit tests
+npm run sim:local -- --days 30 --players 6  # Local simulation
+npm run sim:report   # Simulation report
+```
 
-## Key Units and Time
-- BURNIE decimals: 6.
-- `PRICE_COIN_UNIT = 1e9` (1000 BURNIE).
-- Day index uses `JACKPOT_RESET_TIME = 82620`.
-- Game state: 0 = shutdown, 1 = endgame, 2 = purchase, 3 = burn.
-- Level cycles: 100-level bands; BAF every 10 levels; bond maturity every 5 levels.
-- Game over: inactivity ~365 days triggers drain to bonds; 1-year claim window after.
+---
 
-## Testing Priorities (Order Matters)
-1. Solvency and bucket accounting
-2. Permissioning + write-once wiring
-3. State machine + time/RNG gating
-4. advancegame(0) must ALWAYS be under 16.7m gas (and preferably under 15m just for comfort) never use an argument with advancegame
-5. Economic flows and payout correctness
-6. Edge cases at boundaries (levels, days, caps, rounding)
+## Contract Map
 
-## Core Invariants to Prove
-- Buckets only grow from valid inflows or internal transfers.
-- Total assets (ETH + stETH) always cover total liabilities.
-- `bondDeposit(trackPool=false)` increases assets without increasing liabilities.
-- `claimablePool` only increases from existing pools or bond deposits.
-- No paths allow admin to withdraw user funds outside rules.
-- Write-once wiring cannot be overwritten after initialization.
+### Core
 
-## Subsystem Test Checklist
+| Contract | Purpose |
+|----------|---------|
+| `DegenerusGame.sol` | State machine, ETH/stETH buckets, RNG |
+| `DegenerusGamepieces.sol` | ERC721, purchase flows |
+| `DegenerusCoin.sol` | BURNIE, coinflip, decimator |
+| `DegenerusBonds.sol` | Maturities, bond payouts |
+| `DegenerusJackpots.sol` | BAF + Decimator jackpots |
+| `DegenerusAffiliate.sol` | Referrals + rakeback |
+| `DegenerusVault.sol` | Vault shares and claims |
+| `DegenerusTrophies.sol` | Non-transferable trophies |
 
-### DegenerusGame (state machine)
-- `advanceGame` transitions are correct across `gameState`.
-- Day gating: `MustMintToday`, `NotTimeYet` rules.
-- RNG gating: `rngLockedFlag` blocks burn and jackpot actions.
-- Start target: `nextPrizePool >= lastPrizePool` must be enforced.
-- Level boundaries (level % 100 == 0) reset `lastPrizePool` to `rewardPool`.
-- Game over drain after 365 days of inactivity.
+### Modules (delegatecall)
 
-### Gamepieces (purchase + MAP)
-- ETH vs claimable vs combined payment paths.
-- MAP pricing (ETH and BURNIE) and queue/processing behavior.
-- Affiliate rakeback and upline reward handling.
-- Mint streak tracking and its effect on decimator/coin logic.
+- `DegenerusGameMintModule.sol`
+- `DegenerusGameJackpotModule.sol`
+- `DegenerusGameEndgameModule.sol`
+- `DegenerusGameBondModule.sol`
+- `DegenerusQuestModule.sol`
 
-### Coin (BURNIE + coinflip)
-- Coinflip stakes are credited, wins are minted lazily.
-- Burn paths (gamepiece/MAP purchases, marketplace fees, decimator burns).
-- Flip totals affect reward pool percent (+/- 2%) with 98% cap.
+### Test Infrastructure
 
-### Jackpots (daily, extermination, MAP, BAF, Decimator)
-- Daily jackpot runs for current and next level (carryover).
-- Extermination and carryover extermination payouts.
-- MAP jackpot finalization moves `nextPrizePool` -> `currentPrizePool`.
-- BAF triggers every 10 levels and uses jackpot slices correctly.
-- Decimator window enforcement and bucket weighting.
+- Tests: `test/`
+- Mocks: `contracts/test/` (MockVRFCoordinator, MockStETH, harnesses)
+
+---
+
+## Key Constants
+
+| Constant | Value |
+|----------|-------|
+| BURNIE decimals | 6 |
+| PRICE_COIN_UNIT | 1e9 (= 1000 BURNIE) |
+| JACKPOT_RESET_TIME | 82620 seconds |
+| Game states | 0=shutdown, 1=endgame, 2=purchase, 3=burn |
+| BAF trigger | Every 10 levels |
+| Bond maturity | Every 5 levels |
+| Game over | ~365 days inactive |
+
+---
+
+## Testing Priorities
+
+1. **Solvency**: Bucket accounting, assets >= liabilities
+2. **Permissions**: Write-once wiring, access control
+3. **State machine**: Time/RNG gating, phase transitions
+4. **Gas**: `advanceGame(0)` must stay under 16.7M (target <15M)
+5. **Economics**: Payout correctness, jackpot math
+6. **Edge cases**: Level/day boundaries, caps, rounding
+
+---
+
+## Core Invariants
+
+- Buckets grow only from valid inflows or internal transfers
+- `(ETH + stETH) >= sum(all tracked buckets)`
+- `bondDeposit(trackPool=false)` increases assets without liabilities
+- `claimablePool` increases only from existing pools or bond deposits
+- No admin paths to withdraw user funds
+- Write-once wiring cannot be overwritten
+
+---
+
+## Subsystem Checklist
+
+### Game State Machine
+
+- [ ] `advanceGame` transitions correctly across states
+- [ ] `MustMintToday` / `NotTimeYet` rules enforced
+- [ ] `rngLockedFlag` blocks burn and jackpots
+- [ ] Start target: `nextPrizePool >= lastPrizePool`
+- [ ] Level-100 resets `lastPrizePool` to `rewardPool`
+- [ ] Game over drain after 365 days inactive
+
+### Gamepieces
+
+- [ ] ETH vs claimable vs combined payments
+- [ ] MAP pricing (ETH and BURNIE) and queue processing
+- [ ] Affiliate rakeback and upline rewards
+- [ ] Mint streak tracking
+
+### Coin (BURNIE)
+
+- [ ] Coinflip stakes credited, wins minted lazily
+- [ ] Burn paths (purchases, marketplace, decimator)
+- [ ] Flip totals affect reward pool % (+/- 2%, max 98%)
+
+### Jackpots
+
+- [ ] Daily: current + next level (carryover)
+- [ ] Extermination + carryover extermination
+- [ ] MAP jackpot finalizes pool transitions
+- [ ] BAF every 10 levels
+- [ ] Decimator window enforcement
 
 ### Bonds
-- Maturity cadence (every 5 levels) and lane selection.
-- Deposit splits: vault share, bond backing, reward share.
-- Game-over drain resolves maturities in order.
-- stETH/ETH liquidity handling for payouts.
+
+- [ ] Maturity every 5 levels, lane selection
+- [ ] Deposit splits correct
+- [ ] Game-over drain resolves in order
+- [ ] stETH/ETH fallback for payouts
 
 ### Vault
-- Share issuance and claim flows for BURNIE and ETH/stETH.
-- Vault mint allowance and presale claim flows.
+
+- [ ] Share issuance and claims
+- [ ] Mint allowance and presale flows
 
 ### Affiliate
-- Multi-level upline rewards and rakeback.
-- Auto MAP purchase behavior during purchase phase.
 
-### Trophies / NFT utils
-- Trophy transfers are blocked; approvals revert.
-- Trait generation is deterministic for tokenId.
+- [ ] Multi-level upline rewards
+- [ ] Auto-MAP during purchase phase
 
-## Suggested Testing Techniques
-- Use Hardhat time travel to simulate day/level boundaries.
-- Use mocks in `contracts/test/`:
-  - `MockVRFCoordinator.sol` for RNG.
-  - `MockStETH.sol` for stETH fallback.
-  - `EndgameHarness.sol` / `ExposedDegenerusGamepieces.sol` for internal access.
-- Prefer property-like tests for invariants (bucket sums, state transitions).
-- When adding tests, keep them deterministic and isolate RNG inputs.
+### Trophies
 
-## Dependencies and Trust Assumptions to Validate
-- Chainlink VRF availability and subscription wiring.
-- Lido stETH integration for yield/solvency.
-- `DegenerusAdmin` can rotate VRF after 3-day stall and toggle bond settings.
+- [ ] Transfers blocked, approvals revert
+- [ ] Trait generation deterministic
 
-## How to Report Issues
-- Provide the contract/function and a minimal repro.
-- If the issue is a mismatch with intent, cite the doc and the code location.
+---
+
+## Testing Techniques
+
+- **Time travel**: Hardhat for day/level boundaries
+- **Mocks**: `MockVRFCoordinator`, `MockStETH`, harnesses
+- **Property tests**: Invariants on bucket sums, state transitions
+- **Determinism**: Isolate RNG inputs
+
+---
+
+## Dependencies to Validate
+
+- Chainlink VRF availability and subscription
+- Lido stETH integration
+- `DegenerusAdmin` can rotate VRF after 3-day stall
+
+---
+
+## Reporting Issues
+
+Include:
+- Contract/function name
+- Minimal reproduction steps
+- If doc mismatch: cite doc section and code location
