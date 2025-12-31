@@ -1,16 +1,135 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+/*╔══════════════════════════════════════════════════════════════════════════════╗
+  ║                                                                              ║
+  ║                        DEGENERUS GAMEPIECES CONTRACT                         ║
+  ║                                                                              ║
+  ║  ERC721 NFT contract for the Degenerus game. Implements gas-optimized        ║
+  ║  batch minting inspired by ERC721A, with integrated marketplace and          ║
+  ║  game-specific mechanics.                                                    ║
+  ║                                                                              ║
+  ╠══════════════════════════════════════════════════════════════════════════════╣
+  ║                           ARCHITECTURE OVERVIEW                              ║
+  ╠══════════════════════════════════════════════════════════════════════════════╣
+  ║                                                                              ║
+  ║  ┌─────────────────────────────────────────────────────────────────────────┐ ║
+  ║  │                         TOKEN LIFECYCLE                                 │ ║
+  ║  │                                                                         │ ║
+  ║  │  Purchase ──► Queue ──► Airdrop Mint ──► Active Token ──► Burn/Retire  │ ║
+  ║  │     │           │            │                │               │         │ ║
+  ║  │  ETH/BURNIE  _tokensOwed  processPending    Transfer      burnFromGame  │ ║
+  ║  │  payment     tracking     Mints()           /Trade        or advanceBase│ ║
+  ║  └─────────────────────────────────────────────────────────────────────────┘ ║
+  ║                                                                              ║
+  ║  ┌─────────────────────────────────────────────────────────────────────────┐ ║
+  ║  │                      OWNERSHIP LAYOUT (ERC721A-style)                   │ ║
+  ║  │                                                                         │ ║
+  ║  │  _packedOwnerships[tokenId]: 256 bits                                   │ ║
+  ║  │  ┌────────────────┬────────────────┬────────────┬─────────────────────┐ │ ║
+  ║  │  │ owner (160)    │ startTime (64) │ burned (1) │ nextInit (1) │ ...  │ │ ║
+  ║  │  └────────────────┴────────────────┴────────────┴─────────────────────┘ │ ║
+  ║  │                                                                         │ ║
+  ║  │  _packedAddressData[address]: 256 bits                                  │ ║
+  ║  │  ┌────────────────┬────────────────┬────────────────┬─────────────────┐ │ ║
+  ║  │  │ balance (64)   │ numMinted (64) │ numBurned (64) │ startTs (64)    │ │ ║
+  ║  │  └────────────────┴────────────────┴────────────────┴─────────────────┘ │ ║
+  ║  └─────────────────────────────────────────────────────────────────────────┘ ║
+  ║                                                                              ║
+  ║  ┌─────────────────────────────────────────────────────────────────────────┐ ║
+  ║  │                        PURCHASE FLOW                                    │ ║
+  ║  │                                                                         │ ║
+  ║  │  Player Purchase (PurchaseKind.Player):                                 │ ║
+  ║  │  • Pay in ETH or BURNIE                                                 │ ║
+  ║  │  • Record in _tokensOwed queue                                          │ ║
+  ║  │  • Mint later via processPendingMints() after RNG                       │ ║
+  ║  │  • In State 3: also enqueue maps for jackpot tickets                    │ ║
+  ║  │                                                                         │ ║
+  ║  │  Map Purchase (PurchaseKind.Map):                                       │ ║
+  ║  │  • Pay in ETH or BURNIE (25% of player price)                           │ ║
+  ║  │  • Enqueue maps directly (4:1 scaled quantity)                          │ ║
+  ║  │  • No actual NFT minted; maps = jackpot tickets                         │ ║
+  ║  └─────────────────────────────────────────────────────────────────────────┘ ║
+  ║                                                                              ║
+  ║  ┌─────────────────────────────────────────────────────────────────────────┐ ║
+  ║  │                      MARKETPLACE (ON-CHAIN)                             │ ║
+  ║  │                                                                         │ ║
+  ║  │  Asks (Listings):                                                       │ ║
+  ║  │  • Seller places ask with price/expiry (burns ASK_FEE = 10 BURNIE)      │ ║
+  ║  │  • Buyer calls buy() to purchase at listed price                        │ ║
+  ║  │  • 2% BURNIE burn on sale (BURN_BPS = 200)                              │ ║
+  ║  │                                                                         │ ║
+  ║  │  Offers (Bids):                                                         │ ║
+  ║  │  • Bidder places offer with amount/expiry (burns OFFER_FEE = 10 BURNIE) │ ║
+  ║  │  • Seller calls acceptOffer() to sell to bidder                         │ ║
+  ║  │  • Balance checked at acceptance time (not escrowed)                    │ ║
+  ║  └─────────────────────────────────────────────────────────────────────────┘ ║
+  ║                                                                              ║
+  ╠══════════════════════════════════════════════════════════════════════════════╣
+  ║                         SECURITY CONSIDERATIONS                              ║
+  ╠══════════════════════════════════════════════════════════════════════════════╣
+  ║                                                                              ║
+  ║  1. REENTRANCY:                                                              ║
+  ║     • State changes before external calls in transferFrom                    ║
+  ║     • Marketplace uses CEI pattern                                           ║
+  ║     • ERC721Receiver callback happens after state updates                    ║
+  ║                                                                              ║
+  ║  2. ACCESS CONTROL:                                                          ║
+  ║     • onlyGame modifier for game-only functions                              ║
+  ║     • onlyAdmin modifier for admin wiring                                    ║
+  ║     • Game address is set-once (cannot be changed after wiring)              ║
+  ║                                                                              ║
+  ║  3. RNG MANIPULATION:                                                        ║
+  ║     • Purchases blocked when rngLocked (prevents post-VRF manipulation)      ║
+  ║     • Mint queue randomized with VRF offset                                  ║
+  ║                                                                              ║
+  ║  4. OVERFLOW PROTECTION:                                                     ║
+  ║     • Solidity 0.8+ automatic checks                                         ║
+  ║     • Explicit overflow checks in packed data manipulation                   ║
+  ║     • Quantity validation (0 < qty <= type(uint32).max)                      ║
+  ║                                                                              ║
+  ║  5. MARKETPLACE SAFETY:                                                      ║
+  ║     • Expiry validation on asks/offers                                       ║
+  ║     • Balance check at acceptance time (no escrow = no stuck funds)          ║
+  ║     • Ownership verified before transfer                                     ║
+  ║     • Asks cleared on transfer                                               ║
+  ║                                                                              ║
+  ╠══════════════════════════════════════════════════════════════════════════════╣
+  ║                           TRUST ASSUMPTIONS                                  ║
+  ╠══════════════════════════════════════════════════════════════════════════════╣
+  ║                                                                              ║
+  ║  TRUSTED CONTRACTS (immutable after construction):                           ║
+  ║  • game:            Core game contract (can burn tokens, process mints)      ║
+  ║  • coin:            BURNIE token (burn/credit/notify operations)             ║
+  ║  • affiliateProgram: Affiliate payouts and bonus calculations                ║
+  ║  • regularRenderer: Token metadata generation                                ║
+  ║  • admin:           One-time wiring only                                     ║
+  ║                                                                              ║
+  ║  EXTERNAL INTERFACES (called by this contract):                              ║
+  ║  • IDegenerusGame:  purchaseInfo, recordMint, enqueueMap, etc.               ║
+  ║  • IDegenerusCoin:  burnCoin, creditFlip, notifyQuestMint                    ║
+  ║  • IDegenerusAffiliate: payAffiliate for referral rewards                    ║
+  ║  • ITokenRenderer:  tokenURI for metadata                                    ║
+  ║                                                                              ║
+  ╚══════════════════════════════════════════════════════════════════════════════╝*/
+
 import {DegenerusTraitUtils} from "./DegenerusTraitUtils.sol";
 import {IDegenerusGame, MintPaymentKind} from "./interfaces/IDegenerusGame.sol";
 import {IDegenerusCoin} from "./interfaces/IDegenerusCoin.sol";
 import {IDegenerusAffiliate} from "./interfaces/IDegenerusAffiliate.sol";
 
+// ===========================================================================
+// Enums & External Interfaces
+// ===========================================================================
+
+/// @notice Purchase type for token/map acquisition.
+/// @dev Player = NFT mint, Map = jackpot ticket (no NFT minted).
 enum PurchaseKind {
     Player,
     Map
 }
 
+/// @notice Standard ERC721 receiver interface for safe transfers.
 interface IERC721Receiver {
     function onERC721Received(
         address operator,
@@ -20,6 +139,8 @@ interface IERC721Receiver {
     ) external returns (bytes4);
 }
 
+/// @notice Token metadata renderer interface.
+/// @dev Called by tokenURI to generate on-chain or off-chain metadata.
 interface ITokenRenderer {
     function tokenURI(
         uint256 tokenId,
@@ -28,14 +149,18 @@ interface ITokenRenderer {
     ) external view returns (string memory);
 }
 
+/// @notice Parameters for purchase() function.
+/// @dev Bundles all purchase options into single struct for gas efficiency.
 struct PurchaseParams {
-    uint256 quantity;
-    PurchaseKind kind;
-    MintPaymentKind payKind;
-    bool payInCoin;
-    bytes32 affiliateCode;
+    uint256 quantity;        // Number of tokens/maps to purchase
+    PurchaseKind kind;       // Player (NFT) or Map (jackpot ticket)
+    MintPaymentKind payKind; // DirectEth, Claimable, or Combined
+    bool payInCoin;          // True = pay in BURNIE, False = pay in ETH
+    bytes32 affiliateCode;   // Affiliate/referral code (ETH purchases only)
 }
 
+/// @notice Interface for DegenerusGamepieces contract.
+/// @dev Used by game contract and other ecosystem components.
 interface IDegenerusGamepieces {
     function tokenTraitsPacked(uint256 tokenId) external view returns (uint32);
     function purchaseCount() external view returns (uint32);
@@ -56,45 +181,107 @@ interface IDegenerusGamepieces {
     function purchaseMapForAffiliate(address buyer, uint256 quantity) external;
 }
 
+/// @notice Minimal BURNIE token interface for marketplace operations.
 interface IBurnieToken {
     function transferFrom(address from, address to, uint256 amount) external returns (bool);
     function burnCoin(address target, uint256 amount) external;
     function balanceOf(address account) external view returns (uint256);
 }
 
-/// @title DegenerusGamepieces
-/// @notice ERC721 surface for Degenerus player tokens.
-/// @dev Uses a packed ownership layout inspired by ERC721A; relies on external wiring from the admin contract
-///      to set the trusted game address.
+// ===========================================================================
+// Contract
+// ===========================================================================
+
+/**
+ * @title DegenerusGamepieces
+ * @author Burnie Degenerus
+ * @notice ERC721 NFT contract for Degenerus player tokens with integrated marketplace.
+ * @dev Implements ERC721A-style packed ownership for gas-efficient batch minting.
+ *      Key features:
+ *      - Batch minting with deferred ownership resolution
+ *      - On-chain marketplace (asks/offers) using BURNIE token
+ *      - Integration with game contract for burns and level transitions
+ *      - Two-phase minting: purchase → queue → airdrop mint
+ * @custom:security-contact burnie@degener.us
+ */
 contract DegenerusGamepieces {
-    // ---------------------------------------------------------------------
-    // Errors
-    // ---------------------------------------------------------------------
+    /*╔══════════════════════════════════════════════════════════════════════╗
+      ║                              ERRORS                                  ║
+      ╠══════════════════════════════════════════════════════════════════════╣
+      ║  Custom errors for gas-efficient reverts. Each error maps to a       ║
+      ║  specific failure condition.                                         ║
+      ╚══════════════════════════════════════════════════════════════════════╝*/
+
+    /// @notice Approval caller is not owner nor approved for all.
     error ApprovalCallerNotOwnerNorApproved();
 
+    /// @notice Transfer from address is not the current owner.
     error TransferFromIncorrectOwner();
+
+    /// @notice Transfer to non-ERC721Receiver implementer.
     error TransferToNonERC721ReceiverImplementer();
+
+    /// @notice Zero address not allowed.
     error Zero();
+
+    /// @notice Generic validation failure.
     error E();
 
+    /// @notice Caller is not the coin contract.
     error OnlyCoin();
+
+    /// @notice Caller is not the admin.
     error OnlyAdmin();
+
+    /// @notice Token ID is invalid (burned, out of range, or not minted).
     error InvalidToken();
+
+    /// @notice Action not allowed in current game state/timing.
     error NotTimeYet();
+
+    /// @notice RNG is locked; purchases blocked during VRF window.
     error RngNotReady();
+
+    /// @notice Invalid quantity (0 or exceeds max).
     error InvalidQuantity();
+
+    /// @notice Ask/offer has expired.
     error Expired();
+
+    /// @notice Caller not authorized for this operation.
     error Unauthorized();
+
+    /// @notice Price cannot be zero.
     error PriceZero();
+
+    /// @notice BURNIE transfer failed.
     error PaymentFailed();
+
+    /// @notice Insufficient BURNIE balance for offer.
     error InsufficientBalance();
 
-    // ---------------------------------------------------------------------
-    // Events & types
-    // ---------------------------------------------------------------------
+    /*╔══════════════════════════════════════════════════════════════════════╗
+      ║                              EVENTS                                  ║
+      ╠══════════════════════════════════════════════════════════════════════╣
+      ║  Events for ERC721 compliance and marketplace operations.            ║
+      ╚══════════════════════════════════════════════════════════════════════╝*/
+
+    /// @notice Emitted on token transfer (ERC721 standard).
     event Transfer(address indexed from, address indexed to, uint256 indexed tokenId);
+
+    /// @notice Emitted on single token approval (ERC721 standard).
     event Approval(address indexed owner, address indexed approved, uint256 indexed tokenId);
+
+    /// @notice Emitted on operator approval (ERC721 standard).
     event ApprovalForAll(address indexed owner, address indexed operator, bool approved);
+
+    /// @notice Emitted when player tokens are purchased.
+    /// @param buyer The address receiving the tokens.
+    /// @param quantity Number of tokens purchased.
+    /// @param payInCoin True if paid with BURNIE, false if ETH.
+    /// @param usedClaimable True if claimable winnings were used.
+    /// @param costAmount Total cost (in BURNIE or wei).
+    /// @param bonusCoinCredit BURNIE bonus credited to buyer.
     event TokenPurchase(
         address indexed buyer,
         uint32 quantity,
@@ -103,6 +290,8 @@ contract DegenerusGamepieces {
         uint256 costAmount,
         uint256 bonusCoinCredit
     );
+
+    /// @notice Emitted when map entries are purchased.
     event MapPurchase(
         address indexed buyer,
         uint32 quantity,
@@ -111,108 +300,276 @@ contract DegenerusGamepieces {
         uint256 costAmount,
         uint256 bonusCoinCredit
     );
+
+    /// @notice Emitted when a listing (ask) is created.
     event AskPlaced(address indexed seller, uint256 indexed tokenId, uint256 price, uint256 expiry);
+
+    /// @notice Emitted when a listing is canceled.
     event AskCanceled(address indexed seller, uint256 indexed tokenId);
+
+    /// @notice Emitted when a listing is filled (sale completed).
     event AskFilled(address indexed buyer, address indexed seller, uint256 tokenId, uint256 price);
+
+    /// @notice Emitted when an offer (bid) is created.
     event OfferPlaced(address indexed bidder, uint256 indexed tokenId, uint256 amount, uint256 expiry);
+
+    /// @notice Emitted when an offer is canceled.
     event OfferCanceled(address indexed bidder, uint256 indexed tokenId);
+
+    /// @notice Emitted when an offer is accepted (sale completed).
     event OfferFilled(address indexed seller, address indexed buyer, uint256 tokenId, uint256 amount);
 
+    /*╔══════════════════════════════════════════════════════════════════════╗
+      ║                        MARKETPLACE TYPES                             ║
+      ╠══════════════════════════════════════════════════════════════════════╣
+      ║  Structs for on-chain marketplace (asks and offers).                 ║
+      ╚══════════════════════════════════════════════════════════════════════╝*/
+
+    /// @notice On-chain listing structure.
+    /// @dev Packed for gas efficiency: seller + expiry in first slot.
     struct Ask {
-        address seller; // 160 bits
-        uint40 expiry; // 40 bits
-        uint256 price;
+        address seller; // 160 bits - listing owner
+        uint40 expiry;  // 40 bits - expiration timestamp
+        uint256 price;  // Full slot - listing price in BURNIE
     }
 
+    /// @notice On-chain offer structure.
+    /// @dev Packed into single slot for gas efficiency.
     struct Offer {
-        uint216 amount; // 216 bits
-        uint40 expiry; // 40 bits
+        uint216 amount; // 216 bits - offer amount in BURNIE
+        uint40 expiry;  // 40 bits - expiration timestamp
     }
 
+    /// @notice View struct for best offer queries.
     struct BestOffer {
-        address bidder;
-        uint216 amount;
-        uint40 expiry;
+        address bidder;  // Bidder address
+        uint216 amount;  // Offer amount
+        uint40 expiry;   // Expiration timestamp
     }
 
-    // ---------------------------------------------------------------------
-    // ERC721 storage
-    // ---------------------------------------------------------------------
-    // Packed address/ownership layout mirrors ERC721A style: balance/numberMinted/numberBurned are 64-bit fields
-    // followed by startTimestamp.
+    /*╔══════════════════════════════════════════════════════════════════════╗
+      ║                    ERC721A-STYLE CONSTANTS                           ║
+      ╠══════════════════════════════════════════════════════════════════════╣
+      ║  Bit masks and positions for packed ownership/address data.          ║
+      ║                                                                      ║
+      ║  _packedAddressData layout (per address):                            ║
+      ║  [0-63]   balance        - Current token balance                     ║
+      ║  [64-127] numberMinted   - Total minted to this address              ║
+      ║  [128-191] numberBurned  - Total burned from this address            ║
+      ║  [160-223] startTimestamp - First interaction timestamp              ║
+      ║                                                                      ║
+      ║  _packedOwnerships layout (per token):                               ║
+      ║  [0-159]  owner address                                              ║
+      ║  [160-223] start timestamp                                           ║
+      ║  [224]    burned flag                                                ║
+      ║  [225]    nextInitialized flag                                       ║
+      ╚══════════════════════════════════════════════════════════════════════╝*/
+
+    /// @dev Mask for 64-bit address data fields (balance, minted, burned).
     uint256 private constant _BITMASK_ADDRESS_DATA_ENTRY = (1 << 64) - 1;
+
+    /// @dev Bit position for numberMinted in packed address data.
     uint256 private constant _BITPOS_NUMBER_MINTED = 64;
+
+    /// @dev Bit position for numberBurned in packed address data.
     uint256 private constant _BITPOS_NUMBER_BURNED = 128;
+
+    /// @dev Bit position for startTimestamp in packed ownership.
     uint256 private constant _BITPOS_START_TIMESTAMP = 160;
+
+    /// @dev Bit flag indicating token is burned.
     uint256 private constant _BITMASK_BURNED = 1 << 224;
+
+    /// @dev Bit flag indicating next token slot is initialized.
     uint256 private constant _BITMASK_NEXT_INITIALIZED = 1 << 225;
+
+    /// @dev Mask for 160-bit address extraction.
     uint256 private constant _BITMASK_ADDRESS = (1 << 160) - 1;
+
+    /// @dev Increment unit for burn counter (shifts to correct bit position).
     uint256 private constant _BURN_COUNT_INCREMENT_UNIT = (uint256(1) << _BITPOS_NUMBER_BURNED);
+
+    /// @dev Token ID 0 is the eternal/trophy token (never burned).
     uint256 private constant SPECIAL_TOKEN_ID = 0;
+
+    /// @dev Regular tokens start at ID 1.
     uint256 private constant BASE_TOKEN_START = 1;
 
+    /// @dev keccak256("Transfer(address,address,uint256)") for gas-efficient event emission.
     bytes32 private constant _TRANSFER_EVENT_SIGNATURE =
         0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef;
 
+    /*╔══════════════════════════════════════════════════════════════════════╗
+      ║                    ERC721 STATE VARIABLES                            ║
+      ╠══════════════════════════════════════════════════════════════════════╣
+      ║  Core ERC721 tracking: token index, burn count, ownership maps.      ║
+      ╚══════════════════════════════════════════════════════════════════════╝*/
+
+    /// @dev Next token ID to mint. Tokens are minted sequentially starting from 1.
     uint256 private _currentIndex;
+
+    /// @dev Total number of tokens burned.
     uint256 private _burnCounter;
+
+    /// @dev Base token ID for current level. Tokens below this are "retired".
     uint256 private _baseTokenId = BASE_TOKEN_START;
 
+    /// @dev ERC721 name.
     string private _name = "Degenerus";
+
+    /// @dev ERC721 symbol.
     string private _symbol = "DGN";
 
+    /// @dev tokenId => packed ownership data (owner, timestamp, flags).
     mapping(uint256 => uint256) private _packedOwnerships;
+
+    /// @dev address => packed address data (balance, minted, burned, timestamp).
     mapping(address => uint256) private _packedAddressData;
+
+    /// @dev tokenId => approved address for single-token approval.
     mapping(uint256 => address) private _tokenApprovals;
+
+    /// @dev owner => operator => approved for operator approval.
     mapping(address => mapping(address => bool)) private _operatorApprovals;
 
-    // ---------------------------------------------------------------------
-    // Degenerus game storage
-    // ---------------------------------------------------------------------
+    /*╔══════════════════════════════════════════════════════════════════════╗
+      ║                    GAME INTEGRATION STORAGE                          ║
+      ╠══════════════════════════════════════════════════════════════════════╣
+      ║  Trusted contract addresses and game-specific state.                 ║
+      ╚══════════════════════════════════════════════════════════════════════╝*/
+
+    /// @dev Core game contract (set via wire(), cannot be changed once set).
     IDegenerusGame private game;
+
+    /// @dev Token metadata renderer (immutable).
     ITokenRenderer private immutable regularRenderer;
+
+    /// @dev BURNIE token contract for purchases/marketplace (immutable).
     IDegenerusCoin private immutable coin;
+
+    /// @dev Admin address for one-time wiring (immutable).
     address private immutable admin;
+
+    /// @dev BURNIE token interface for marketplace transfers (immutable).
     IBurnieToken private immutable burnie;
+
+    /// @dev Vault address receiving eternal token #0 (immutable).
     address private immutable vault;
+
+    /// @dev Affiliate program contract for referral payouts (immutable).
     address private immutable affiliateProgram;
 
+    /*╔══════════════════════════════════════════════════════════════════════╗
+      ║                    MINT QUEUE STATE                                  ║
+      ╠══════════════════════════════════════════════════════════════════════╣
+      ║  Two-phase minting: purchases queue tokens, then processPendingMints ║
+      ║  actually mints after VRF provides randomness.                       ║
+      ╚══════════════════════════════════════════════════════════════════════╝*/
+
+    /// @dev Total purchases for current level (reset after processing).
     uint32 private _purchaseCount;
-    // Pending mint queue holds players that bought tokens before the RNG roll; tokens are minted in batches later.
+
+    /// @dev Queue of addresses with pending mint allocations.
     address[] private _pendingMintQueue;
+
+    /// @dev address => number of tokens owed (pending mint).
     mapping(address => uint32) private _tokensOwed;
-    uint256 private _mintQueueIndex; // Tracks # of queue entries fully processed during airdrop rotation
 
-    uint32 private constant MINT_AIRDROP_PLAYER_BATCH_SIZE = 210; // Max unique recipients per airdrop batch
-    uint32 private constant MINT_AIRDROP_TOKEN_CAP = 3_000; // Max tokens distributed per airdrop batch
+    /// @dev Index tracking processing progress in _pendingMintQueue.
+    uint256 private _mintQueueIndex;
 
-    uint256 private constant CLAIMABLE_BONUS_DIVISOR = 10; // 10% of token coin cost
+    /*╔══════════════════════════════════════════════════════════════════════╗
+      ║                    CONSTANTS                                         ║
+      ╠══════════════════════════════════════════════════════════════════════╣
+      ║  Gas limits, fees, and pricing constants.                            ║
+      ╚══════════════════════════════════════════════════════════════════════╝*/
+
+    /// @dev Max unique recipients per airdrop batch (gas limit protection).
+    uint32 private constant MINT_AIRDROP_PLAYER_BATCH_SIZE = 210;
+
+    /// @dev Max tokens distributed per airdrop batch (gas limit protection).
+    uint32 private constant MINT_AIRDROP_TOKEN_CAP = 3_000;
+
+    /// @dev Bonus divisor for claimable purchases (10% bonus = 1/10).
+    uint256 private constant CLAIMABLE_BONUS_DIVISOR = 10;
+
+    /// @dev BURNIE token unit (6 decimals = 1e6, scaled by 1000 = 1e9).
     uint256 private constant PRICE_COIN_UNIT = 1_000_000_000;
 
+    /// @dev Max tokens to emit burn events for in processDormant batch.
     uint32 private constant DORMANT_EMIT_BATCH = 3500;
-    uint256 private constant OFFER_FEE = 10 * 1e6; // 10 BURNIE (6 decimals)
-    uint256 private constant ASK_FEE = 10 * 1e6; // 10 BURNIE
-    uint256 private constant BURN_BPS = 200; // 2%
+
+    /// @dev Fee to place an offer (10 BURNIE, burned).
+    uint256 private constant OFFER_FEE = 10 * 1e6;
+
+    /// @dev Fee to place an ask/listing (10 BURNIE, burned).
+    uint256 private constant ASK_FEE = 10 * 1e6;
+
+    /// @dev Burn percentage on marketplace sales (2% = 200 bps).
+    uint256 private constant BURN_BPS = 200;
+
+    /// @dev Basis points denominator (10000 = 100%).
     uint256 private constant BPS_DENOMINATOR = 10_000;
 
+    /*╔══════════════════════════════════════════════════════════════════════╗
+      ║                    MARKETPLACE STATE                                 ║
+      ╠══════════════════════════════════════════════════════════════════════╣
+      ║  On-chain asks (listings) and offers (bids) for token trading.       ║
+      ╚══════════════════════════════════════════════════════════════════════╝*/
+
+    /// @dev tokenId => Ask struct (listing).
     mapping(uint256 => Ask) private asks;
+
+    /// @dev tokenId => bidder => Offer struct.
     mapping(uint256 => mapping(address => Offer)) private offers;
+
+    /// @dev tokenId => array of bidder addresses (for enumeration).
     mapping(uint256 => address[]) private offerBidders;
+
+    /// @dev tokenId => bidder => whether bidder has been added to offerBidders.
     mapping(uint256 => mapping(address => bool)) private offerSeen;
 
-    // Cursor over the most-recently-retired level range (used to emit burn Transfer events for indexers).
+    /*╔══════════════════════════════════════════════════════════════════════╗
+      ║                    DORMANT TOKEN STATE                               ║
+      ╠══════════════════════════════════════════════════════════════════════╣
+      ║  Cursor for emitting burn Transfer events for retired tokens.        ║
+      ║  Used by indexers to track token burns at level transitions.         ║
+      ╚══════════════════════════════════════════════════════════════════════╝*/
+
+    /// @dev Current position in dormant range being processed.
     uint256 private _dormantCursor;
+
+    /// @dev End of dormant range (exclusive).
     uint256 private _dormantEnd;
+
+    /// @dev Last known packed ownership for backtracking.
     uint256 private _dormantPacked;
 
+    /// @dev Internal getter for base token ID.
     function _currentBaseTokenId() private view returns (uint256) {
         return _baseTokenId;
     }
 
+    /// @notice Get the next token ID that will be minted.
+    /// @return The next sequential token ID.
     function nextTokenId() external view returns (uint256) {
         return _currentIndex;
     }
 
+    /*╔══════════════════════════════════════════════════════════════════════╗
+      ║                           CONSTRUCTOR                                ║
+      ╠══════════════════════════════════════════════════════════════════════╣
+      ║  Initialize immutable addresses and mint eternal token #0 to vault.  ║
+      ╚══════════════════════════════════════════════════════════════════════╝*/
+
+    /// @notice Initialize the gamepieces contract.
+    /// @dev Mints token #0 (eternal trophy) to vault immediately.
+    ///      All immutable addresses must be non-zero except affiliateProgram.
+    /// @param regularRenderer_ Token metadata renderer contract.
+    /// @param coin_ BURNIE token contract address.
+    /// @param affiliateProgram_ Affiliate program contract.
+    /// @param vault_ Vault address receiving eternal token #0.
+    /// @param admin_ Admin address for one-time wiring.
     constructor(address regularRenderer_, address coin_, address affiliateProgram_, address vault_, address admin_) {
         regularRenderer = ITokenRenderer(regularRenderer_);
         coin = IDegenerusCoin(coin_);
@@ -224,7 +581,15 @@ contract DegenerusGamepieces {
         _mint(vault, 1); // Mint the eternal token #0 to vault
     }
 
-    /// @notice Total supply = minted tokens (including the eternal token #0) minus burned tokens.
+    /*╔══════════════════════════════════════════════════════════════════════╗
+      ║                      ERC721 VIEW FUNCTIONS                           ║
+      ╠══════════════════════════════════════════════════════════════════════╣
+      ║  Standard ERC721 view functions for token enumeration and metadata.  ║
+      ╚══════════════════════════════════════════════════════════════════════╝*/
+
+    /// @notice Get total supply of tokens.
+    /// @dev Returns minted - burned. In non-live state, only token #0 exists.
+    /// @return Total number of existing tokens.
     function totalSupply() external view returns (uint256) {
         if (!_isLiveState()) {
             return 1;
@@ -234,7 +599,10 @@ contract DegenerusGamepieces {
         return minted - burned;
     }
 
-    /// @notice Returns balance for standard ERC721 semantics.
+    /// @notice Get token balance of an address.
+    /// @dev In non-live state, only vault has balance of 1.
+    /// @param owner Address to query.
+    /// @return Number of tokens owned.
     function balanceOf(address owner) external view returns (uint256) {
         if (owner == address(0)) revert Zero();
         if (!_isLiveState()) {
@@ -244,6 +612,10 @@ contract DegenerusGamepieces {
         return _packedAddressData[owner] & _BITMASK_ADDRESS_DATA_ENTRY;
     }
 
+    /// @notice Check if contract supports an interface.
+    /// @dev Supports ERC165, ERC721, and ERC721Metadata.
+    /// @param interfaceId Interface identifier to check.
+    /// @return True if interface is supported.
     function supportsInterface(bytes4 interfaceId) external pure returns (bool) {
         return
             interfaceId == 0x01ffc9a7 || // ERC165 interface ID for ERC165.
@@ -251,16 +623,23 @@ contract DegenerusGamepieces {
             interfaceId == 0x5b5e139f; // ERC165 interface ID for ERC721Metadata.
     }
 
+    /// @notice Get collection name.
+    /// @return Collection name ("Degenerus").
     function name() external view returns (string memory) {
         return _name;
     }
 
+    /// @notice Get collection symbol.
+    /// @return Collection symbol ("DGN").
     function symbol() external view returns (string memory) {
         return _symbol;
     }
 
-    /// @notice Renders metadata via the regular renderer; reverts for nonexistent/burned tokens.
-    /// @dev Token #0 is a special vault-minted genesis token and renders as a trophy placeholder.
+    /// @notice Get token metadata URI.
+    /// @dev Token #0 is special (eternal trophy). All other tokens get traits.
+    ///      Reverts for nonexistent or burned tokens.
+    /// @param tokenId Token ID to query.
+    /// @return Metadata URI string.
     function tokenURI(uint256 tokenId) external view returns (string memory) {
         // Revert for nonexistent or burned tokens (keeps ERC721-consistent surface for indexers).
         _packedOwnershipOf(tokenId);
@@ -284,16 +663,40 @@ contract DegenerusGamepieces {
         return regularRenderer.tokenURI(tokenId, metaPacked, remaining);
     }
 
-    // ---------------------------------------------------------------------
-    // Purchase entrypoints (proxy to game logic)
-    // ---------------------------------------------------------------------
+    /*╔══════════════════════════════════════════════════════════════════════╗
+      ║                      PURCHASE ENTRYPOINTS                            ║
+      ╠══════════════════════════════════════════════════════════════════════╣
+      ║  Main entry points for purchasing tokens and maps.                   ║
+      ║                                                                      ║
+      ║  Purchase Types:                                                     ║
+      ║  • Player (PurchaseKind.Player): Queue NFT mints                     ║
+      ║  • Map (PurchaseKind.Map): Queue jackpot tickets                     ║
+      ║                                                                      ║
+      ║  Payment Methods:                                                    ║
+      ║  • ETH (payInCoin=false): Pay with ETH, optional affiliate code      ║
+      ║  • BURNIE (payInCoin=true): Burn BURNIE tokens                       ║
+      ║  • Claimable: Use claimable winnings from game contract              ║
+      ║  • Combined: Mix of ETH and claimable                                ║
+      ║                                                                      ║
+      ║  SECURITY:                                                           ║
+      ║  • Blocked when RNG is locked (prevents VRF manipulation)            ║
+      ║  • Level 16 (L%20=16) purchases blocked                              ║
+      ║  • Quantity validated (0 < qty <= uint32.max)                        ║
+      ╚══════════════════════════════════════════════════════════════════════╝*/
 
+    /// @notice Purchase tokens or maps.
+    /// @dev Main entry point for all purchases. Routes to _purchase or _mintAndBurn.
+    ///      SECURITY: Blocked when RNG is locked.
+    /// @param params Purchase parameters (quantity, kind, payKind, payInCoin, affiliateCode).
     function purchase(PurchaseParams calldata params) external payable {
         _routePurchase(msg.sender, msg.sender, params);
     }
 
-    /// @notice MAP purchase for affiliate rewards (affiliate-only, zero bonus/payout).
-    /// @dev Access: affiliate program only; bypasses payments and just enqueues maps.
+    /// @notice MAP purchase for affiliate rewards.
+    /// @dev Access: affiliate program only. Bypasses payments, just enqueues maps.
+    ///      Used when affiliates redeem accumulated rewards for maps.
+    /// @param buyer Address to credit maps to.
+    /// @param quantity Number of maps to enqueue.
     function purchaseMapForAffiliate(address buyer, uint256 quantity) external {
         if (msg.sender != affiliateProgram) revert OnlyCoin();
         if (game.rngLocked()) revert RngNotReady();
@@ -302,6 +705,10 @@ contract DegenerusGamepieces {
         emit MapPurchase(buyer, uint32(quantity), true, true, 0, 0);
     }
 
+    /// @dev Route purchase to appropriate handler based on PurchaseKind.
+    /// @param buyer Address to receive tokens/maps.
+    /// @param payer Address paying for purchase.
+    /// @param params Purchase parameters.
     function _routePurchase(address buyer, address payer, PurchaseParams memory params) private {
         bytes32 affiliateCode = params.payKind == MintPaymentKind.DirectEth ? params.affiliateCode : bytes32(0);
         if (params.kind == PurchaseKind.Player) {
@@ -957,25 +1364,39 @@ contract DegenerusGamepieces {
         _tokenApprovals[tokenId] = to;
         emit Approval(owner, to, tokenId);
     }
-    // ---------------------------------------------------------------------
-    // Degenerus game wiring
-    // ---------------------------------------------------------------------
+    /*╔══════════════════════════════════════════════════════════════════════╗
+      ║                      GAME WIRING & MODIFIERS                         ║
+      ╠══════════════════════════════════════════════════════════════════════╣
+      ║  Access control modifiers and one-time wiring for game contract.     ║
+      ║                                                                      ║
+      ║  SECURITY:                                                           ║
+      ║  • Game address can only be set once (set-once pattern)              ║
+      ║  • Admin is immutable from construction                              ║
+      ║  • Game contract has elevated privileges (burn, mint, advanceBase)   ║
+      ╚══════════════════════════════════════════════════════════════════════╝*/
 
+    /// @dev Restricts function to game contract only.
     modifier onlyGame() {
         if (msg.sender != address(game)) revert E();
         _;
     }
 
+    /// @dev Restricts function to admin only.
     modifier onlyAdmin() {
         if (msg.sender != admin) revert OnlyAdmin();
         _;
     }
 
-    /// @notice Wire the game module using an address array ([game]); set-once per slot.
+    /// @notice Wire the game contract address (one-time setup).
+    /// @dev Access: admin only. Can only be set once.
+    ///      SECURITY: Game address is set-once to prevent malicious replacement.
+    /// @param addresses Array containing game address at index 0.
     function wire(address[] calldata addresses) external onlyAdmin {
         _setGame(addresses.length > 0 ? addresses[0] : address(0));
     }
 
+    /// @dev Internal set-once game address setter.
+    ///      Reverts if attempting to change after initial set.
     function _setGame(address gameAddr) private {
         if (gameAddr == address(0)) return;
         address current = address(game);
@@ -986,11 +1407,40 @@ contract DegenerusGamepieces {
         }
     }
 
-    // ---------------------------------------------------------------------
-    // Marketplace (offers/asks)
-    // ---------------------------------------------------------------------
+    /*╔══════════════════════════════════════════════════════════════════════╗
+      ║                      ON-CHAIN MARKETPLACE                            ║
+      ╠══════════════════════════════════════════════════════════════════════╣
+      ║  Peer-to-peer trading using BURNIE tokens.                           ║
+      ║                                                                      ║
+      ║  ASKS (Listings):                                                    ║
+      ║  • placeAsk: List token for sale (burns 10 BURNIE fee)               ║
+      ║  • cancelAsk: Remove listing (no refund)                             ║
+      ║  • buy: Purchase listed token at ask price                           ║
+      ║                                                                      ║
+      ║  OFFERS (Bids):                                                      ║
+      ║  • placeOffer: Make offer on token (burns 10 BURNIE fee)             ║
+      ║  • cancelOffer: Remove offer (no refund)                             ║
+      ║  • acceptOffer: Seller accepts specific offer                        ║
+      ║  • bestOffer: View highest valid offer                               ║
+      ║                                                                      ║
+      ║  FEES:                                                               ║
+      ║  • 10 BURNIE to place ask (burned)                                   ║
+      ║  • 10 BURNIE to place offer (burned)                                 ║
+      ║  • 2% of sale price burned on successful trade                       ║
+      ║                                                                      ║
+      ║  SECURITY:                                                           ║
+      ║  • No escrow: balance checked at acceptance time                     ║
+      ║  • Expiry validation prevents stale orders                           ║
+      ║  • Ownership verified before transfer                                ║
+      ║  • Asks auto-cleared on any transfer                                 ║
+      ╚══════════════════════════════════════════════════════════════════════╝*/
 
-    /// @notice Place an on-chain ask (listing) for a tokenId.
+    /// @notice Place an on-chain ask (listing) for a token.
+    /// @dev Burns ASK_FEE (10 BURNIE). Caller must own the token.
+    ///      Listing is cleared on any transfer of the token.
+    /// @param tokenId Token ID to list.
+    /// @param price Listing price in BURNIE.
+    /// @param expiry Expiration timestamp.
     function placeAsk(uint256 tokenId, uint256 price, uint40 expiry) external {
         if (price == 0) revert PriceZero();
         if (expiry < block.timestamp) revert Expired();

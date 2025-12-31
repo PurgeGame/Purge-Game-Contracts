@@ -18,7 +18,6 @@ interface IVaultCoin {
     function vaultEscrow(uint256 amount) external;
     function vaultMintTo(address to, uint256 amount) external;
     function vaultMintAllowance() external view returns (uint256);
-    function setVault(address vault_) external;
 }
 
 interface IDegenerusBondsDgnrs {
@@ -200,7 +199,6 @@ contract DegenerusVault {
             msg.sender
         );
         ethShare = new DegenerusVaultShare("Degenerus Vault Eth", "DGVE", address(this), INITIAL_SUPPLY, msg.sender);
-        IVaultCoin(coin_).setVault(address(this));
     }
 
     // ---------------------------------------------------------------------

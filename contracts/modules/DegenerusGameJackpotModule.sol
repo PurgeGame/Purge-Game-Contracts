@@ -19,7 +19,7 @@ interface IDegenerusBondsJackpot {
 
 /**
  * @title DegenerusGameJackpotModule
- * @author Degenerus Team
+ * @author Burnie Degenerus
  * @notice Delegate-called module that hosts the jackpot distribution logic for `DegenerusGame`.
  *
  * @dev ARCHITECTURE NOTES:

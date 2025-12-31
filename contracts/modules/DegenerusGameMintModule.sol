@@ -5,7 +5,7 @@ import {DegenerusGameStorage} from "../storage/DegenerusGameStorage.sol";
 
 /**
  * @title DegenerusGameMintModule
- * @author Degenerus
+ * @author Burnie Degenerus
  * @notice Delegate-called module handling mint history, airdrop math, and trait rebuilding.
  *
  * @dev This module is called via `delegatecall` from DegenerusGame, meaning all storage

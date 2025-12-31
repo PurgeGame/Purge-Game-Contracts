@@ -3,24 +3,164 @@ pragma solidity ^0.8.26;
 
 import {IDegenerusCoin} from "./interfaces/IDegenerusCoin.sol";
 
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════
+// @title DegenerusBonds
+// @author Burnie Degenerus
+// @notice Bond system with 10-level maturity cycles, DGNRS token jackpots, and two-lane resolution.
+//
+// ┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
+// │ ARCHITECTURE OVERVIEW                                                                           │
+// ├─────────────────────────────────────────────────────────────────────────────────────────────────┤
+// │                                                                                                 │
+// │  1. BOND SERIES LIFECYCLE                                                                       │
+// │     ┌─────────────────────────────────────────────────────────────────────────────────────────┐ │
+// │     │ Level:    [1-5]    [6-9]   [10-14]  [15-19]  [20-24]  [25-29]  [30] ...                 │ │
+// │     │ Series:   Mat=10   ---     Mat=20   ---      Mat=30   ---      Resolve                  │ │
+// │     │ Phase:    SALE     WAIT    SALE     WAIT     SALE     WAIT     PAYOUT                   │ │
+// │     └─────────────────────────────────────────────────────────────────────────────────────────┘ │
+// │     • Maturities occur every 10 levels (10, 20, 30, ...)                                        │
+// │     • Sale windows: 5 levels each (1-5, 10-14, 20-24, ...)                                      │
+// │     • Resolution: At maturity level, if bondPool is funded                                      │
+// │                                                                                                 │
+// │  2. TOKEN FLOW                                                                                  │
+// │     Deposit ETH → Score recorded → DGNRS minted via jackpots → Burn DGNRS → Enter lane →       │
+// │     → At maturity: Winning lane splits pool (50% pro-rata, 50% draw prizes)                    │
+// │                                                                                                 │
+// │  3. DGNRS TOKEN MECHANICS                                                                       │
+// │     • Single shared token across all series (not per-maturity)                                  │
+// │     • Jackpot emissions: 10%+10%+10%+10%+60% of raised over 5 runs (before maturity-5)          │
+// │     • Final emission uses growth multiplier based on raise vs previous series                   │
+// │     • Burning enters a two-lane system; lane determined by hash(maturity, player)               │
+// │                                                                                                 │
+// │  4. TWO-LANE RESOLUTION                                                                         │
+// │     ┌────────────────────────────────────────────────────────────────────────────┐              │
+// │     │ Lane 0 (burns)     Lane 1 (burns)                                          │              │
+// │     │      ↓                  ↓                                                  │              │
+// │     │ [RNG picks winning lane at maturity]                                       │              │
+// │     │      ↓                                                                     │              │
+// │     │ Winning Lane:                                                              │              │
+// │     │   50% → Decimator (pro-rata to burned amount, pull pattern)                │              │
+// │     │   50% → Draw prizes (20%, 10%, 5%, 5%, 1%×10)                               │              │
+// │     └────────────────────────────────────────────────────────────────────────────┘              │
+// │                                                                                                 │
+// │  5. PRESALE PHASE                                                                               │
+// │     • Before game wiring, bonds sold go to maturity=0 (presale series)                          │
+// │     • ETH split: 30% vault, 50% reward pool, 20% yield pool                                     │
+// │     • 5 manual jackpot runs via admin; final run applies growth multiplier                      │
+// │     • Coin rewards distributed: 5% run1, 10% runs2-4, 65% shutdown                              │
+// │                                                                                                 │
+// │  6. ETH ROUTING (normal deposits)                                                               │
+// │     • External: 40% vault (stETH preferred), 20% bondPool, 10% reward, 30% yield                │
+// │     • From game: Already split in-game; score recorded only                                     │
+// │                                                                                                 │
+// │  7. GROWTH MULTIPLIER                                                                           │
+// │     Piecewise linear based on (raised / prevRaise):                                             │
+// │     ┌─────────────────────────────────────────────────────────────────────────────┐             │
+// │     │ Ratio       │ Multiplier │ Effect                                           │             │
+// │     ├─────────────────────────────────────────────────────────────────────────────┤             │
+// │     │ ≤0.5x       │ 3.0x       │ Declining participation → generous payout        │             │
+// │     │ 0.5x-1.0x   │ 3.0→2.0x   │ Linear interpolation                             │             │
+// │     │ 1.0x-2.0x   │ 2.0→1.0x   │ Linear interpolation                             │             │
+// │     │ ≥2.0x       │ 1.0x       │ Strong growth → standard payout                  │             │
+// │     └─────────────────────────────────────────────────────────────────────────────┘             │
+// │                                                                                                 │
+// └─────────────────────────────────────────────────────────────────────────────────────────────────┘
+//
+// ┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
+// │ SECURITY CONSIDERATIONS                                                                         │
+// ├─────────────────────────────────────────────────────────────────────────────────────────────────┤
+// │                                                                                                 │
+// │  1. ACCESS CONTROL                                                                              │
+// │     • onlyAdmin: wire(), emergencySetVrf(), setRewardStakeTargetBps(), runPresaleJackpot(),     │
+// │                  shutdownPresale()                                                              │
+// │     • onlyGame: setRngLock(), depositFromGame(), payBonds(), bondMaintenance(),                 │
+// │                 notifyGameOver(), gameOver()                                                    │
+// │     • Public: depositCurrentFor(), presaleDeposit(), burnDGNRS(), claim(),                      │
+// │               sweepExpiredPools(), setAutoBurnDgnrs()                                           │
+// │                                                                                                 │
+// │  2. ONE-TIME WIRING                                                                             │
+// │     • Game, vault, coin, affiliate, questModule, trophies: AlreadySet guard                     │
+// │     • VRF: Initial wire only; rewire via emergencySetVrf() (admin-gated)                        │
+// │                                                                                                 │
+// │  3. VRF SECURITY                                                                                │
+// │     • fulfillRandomWords(): Validates msg.sender == vrfCoordinator                              │
+// │     • Request ID matching prevents stale/duplicate responses                                    │
+// │     • Emergency rewire clears pending state to allow fresh requests                             │
+// │                                                                                                 │
+// │  4. RNG LOCK                                                                                    │
+// │     • Game can lock RNG during jackpot windows to prevent manipulation                          │
+// │     • Blocks deposits and burns while locked                                                    │
+// │                                                                                                 │
+// │  5. PULL PATTERN FOR CLAIMS                                                                     │
+// │     • Decimator payouts use claim() (pull) instead of push                                      │
+// │     • Prevents DoS via revert in recipient                                                      │
+// │     • unclaimedBudget tracked per series for accounting                                         │
+// │                                                                                                 │
+// │  6. GAME OVER HANDLING                                                                          │
+// │     • Resolves series in order (oldest first)                                                   │
+// │     • Partial payouts if funds insufficient                                                     │
+// │     • 1-year expiry for unclaimed funds → vault sweep                                           │
+// │                                                                                                 │
+// │  7. REENTRANCY PROTECTION                                                                       │
+// │     • No callback-based reentrancy vectors (ETH transfers use call with failure handling)       │
+// │     • State updates before external calls where applicable                                      │
+// │                                                                                                 │
+// └─────────────────────────────────────────────────────────────────────────────────────────────────┘
+//
+// ┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
+// │ TRUST ASSUMPTIONS                                                                               │
+// ├─────────────────────────────────────────────────────────────────────────────────────────────────┤
+// │                                                                                                 │
+// │  • admin (DegenerusAdmin): Trusted for wiring, VRF config, presale operations                   │
+// │  • game: Trusted for RNG locking, bondMaintenance calls, ETH deposits                           │
+// │  • vrfCoordinator: Chainlink VRF - trusted external dependency                                  │
+// │  • vault: Trusted to receive and manage ETH/stETH deposits                                      │
+// │  • steth: Lido stETH token - trusted external dependency                                        │
+// │                                                                                                 │
+// └─────────────────────────────────────────────────────────────────────────────────────────────────┘
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════
+
+// =====================================================================
+//                      EXTERNAL INTERFACES
+// =====================================================================
+
 /// @notice Minimal view into the core game to read the current level.
+/// @dev Used by bonds to determine which series is active and player multipliers.
 interface IDegenerusGameLevel {
+    /// @notice Get the current game level (1-indexed).
     function level() external view returns (uint24);
+    /// @notice Get a player's bonus multiplier (bps, 10000 = 1x).
     function playerBonusMultiplier(address player) external view returns (uint256);
 }
 
-/// @notice Minimal view into the game for bond banking (ETH pooling + claim credit).
+/// @notice Extended game interface for bond banking operations.
+/// @dev Used for ETH pooling, claim credits, and map purchases.
 interface IDegenerusGameBondBank is IDegenerusGameLevel {
+    /// @notice Deposit ETH to game pools.
+    /// @param trackPool If true, adds to tracked bond pool; if false, to general yield pool.
     function bondDeposit(bool trackPool) external payable;
+    /// @notice Credit claimable winnings to a player.
     function bondCreditToClaimable(address player, uint256 amount) external;
+    /// @notice Batch credit claimable winnings to multiple players.
     function bondCreditToClaimableBatch(address[] calldata players, uint256[] calldata amounts) external;
+    /// @notice Spend bond pool funds to purchase maps for a player.
     function bondSpendToMaps(address player, uint256 amount, uint32 quantity) external;
+    /// @notice Get available ETH in the bond pool.
     function bondAvailable() external view returns (uint256);
+    /// @notice Get current mint price per map.
     function mintPrice() external view returns (uint256);
 }
 
 /// @notice Minimal VRF coordinator surface for V2+ random word requests.
+/// @dev Chainlink VRF V2 compatible interface.
 interface IVRFCoordinatorV2Like {
+    /// @notice Request random words from VRF.
+    /// @param keyHash The gas lane key hash.
+    /// @param subId VRF subscription ID.
+    /// @param requestConfirmations Number of block confirmations required.
+    /// @param callbackGasLimit Gas limit for the callback.
+    /// @param numWords Number of random words requested.
+    /// @return requestId The VRF request ID.
     function requestRandomWords(
         bytes32 keyHash,
         uint256 subId,
@@ -30,6 +170,7 @@ interface IVRFCoordinatorV2Like {
     ) external returns (uint256 requestId);
 }
 
+/// @notice Lido stETH interface for balance queries and transfers.
 interface IStETHLike {
     function balanceOf(address account) external view returns (uint256);
     function transferFrom(address from, address to, uint256 amount) external returns (bool);
@@ -37,21 +178,34 @@ interface IStETHLike {
     function approve(address spender, uint256 amount) external returns (bool);
 }
 
+/// @notice Vault interface for depositing ETH and stETH.
 interface IVaultLike {
+    /// @notice Deposit ETH and/or stETH to the vault.
+    /// @param coinAmount Unused (reserved for future coin deposits).
+    /// @param stEthAmount Amount of stETH to deposit (requires prior approval).
     function deposit(uint256 coinAmount, uint256 stEthAmount) external payable;
 }
 
+/// @notice Interface for crediting FLIP tokens to players.
 interface ICoinFlipCreditor {
     function creditFlip(address player, uint256 amount) external;
 }
 
+/// @notice Game interface for pricing and state information.
 interface IDegenerusGamePricing {
+    /// @notice Get current purchase info for affiliate reward calculation.
+    /// @return lvl Current game level.
+    /// @return gameState Current FSM state.
+    /// @return lastPurchaseDay Whether this is the last purchase day of the level.
+    /// @return rngLocked Whether VRF is locked.
+    /// @return priceWei Current mint price in wei.
     function purchaseInfo()
         external
         view
         returns (uint24 lvl, uint8 gameState, bool lastPurchaseDay, bool rngLocked, uint256 priceWei);
 }
 
+/// @notice Affiliate interface for paying referral rewards.
 interface IAffiliatePayer {
     function payAffiliate(
         uint256 amount,
@@ -63,87 +217,167 @@ interface IAffiliatePayer {
     ) external returns (uint256);
 }
 
+/// @notice Affiliate interface for shutting down presale.
 interface IAffiliatePresaleShutdown {
     function shutdownPresale() external;
 }
 
+/// @notice Affiliate interface for checking presale status.
 interface IAffiliatePresaleStatus {
     function presaleActive() external view returns (bool);
 }
 
+/// @notice Affiliate interface for crediting presale coin rewards.
 interface IAffiliatePresaleCredit {
     function addPresaleCoinCredit(address player, uint256 amount) external;
 }
 
+/// @notice Factory interface for creating DGNRS bond tokens.
 interface IBondTokenFactory {
     function createDgnrsToken(address minter) external returns (address);
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════
+//                                     BOND TOKEN (ERC20)
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════
+
 /**
  * @title BondToken
- * @notice Minimal mintable/burnable ERC20 representing liquid bonds for a specific maturity level.
+ * @notice Minimal mintable/burnable ERC20 representing liquid bonds (DGNRS).
+ * @dev Shared across all bond series. Controlled by DegenerusBonds contract (minter).
+ *
+ * FEATURES:
+ * - Standard ERC20 (transfer, transferFrom, approve)
+ * - Minter-controlled mint/burn
+ * - Vault escrow system for pre-allocated liquidity
+ * - Nuke function to permanently disable all operations
+ *
+ * SECURITY:
+ * - Only minter (DegenerusBonds) can mint tokens
+ * - Only minter can burn without approval
+ * - Vault mint allowance provides capped liquidity provision
+ * - Disabled flag prevents all operations after game shutdown
  */
 contract BondToken {
-    // ---------------------------------------------------------------------
-    // Errors
-    // ---------------------------------------------------------------------
+    // =====================================================================
+    //                              ERRORS
+    // =====================================================================
+
+    /// @notice Thrown when caller lacks permission for the operation.
     error Unauthorized();
+    /// @notice Thrown when transfer/burn amount exceeds balance.
     error InsufficientBalance();
+    /// @notice Thrown when operations attempted after token is nuked.
     error Disabled();
+    /// @notice Thrown when setting vault to zero address.
     error ZeroAddress();
+    /// @notice Thrown when attempting to change already-set vault.
     error AlreadySet();
+    /// @notice Thrown when vault mint exceeds allowance.
     error InsufficientAllowance();
 
-    // ---------------------------------------------------------------------
-    // Events
-    // ---------------------------------------------------------------------
+    // =====================================================================
+    //                              EVENTS
+    // =====================================================================
+
+    /// @notice Emitted on token transfer (including mint/burn with zero addresses).
     event Transfer(address indexed from, address indexed to, uint256 value);
+    /// @notice Emitted on approval changes.
     event Approval(address indexed owner, address indexed spender, uint256 value);
 
-    // ---------------------------------------------------------------------
-    // Immutable data
-    // ---------------------------------------------------------------------
+    // =====================================================================
+    //                          IMMUTABLE DATA
+    // =====================================================================
+
+    /// @notice Token name ("Degenerus Bond DGNRS").
     string public name;
+    /// @notice Token symbol ("DGNRS").
     string public symbol;
+    /// @notice Token decimals (18, standard ERC20).
     uint8 public constant decimals = 18;
+    /// @notice The only address allowed to mint tokens (DegenerusBonds contract).
     address private immutable minter;
 
-    // ---------------------------------------------------------------------
-    // Storage
-    // ---------------------------------------------------------------------
-    uint256 public totalSupply;
-    mapping(address => uint256) public balanceOf;
-    mapping(address => mapping(address => uint256)) public allowance;
-    bool private disabled;
-    address private vault;
-    uint256 private _vaultMintAllowance = 50 ether; // seed vault escrow with 50 ETH worth
+    // =====================================================================
+    //                            STORAGE
+    // =====================================================================
 
+    /// @notice Total tokens in circulation (excludes vault allowance).
+    uint256 public totalSupply;
+    /// @notice Token balance per address.
+    mapping(address => uint256) public balanceOf;
+    /// @notice Spending allowances (owner → spender → amount).
+    mapping(address => mapping(address => uint256)) public allowance;
+    /// @notice When true, all operations are permanently disabled.
+    bool private disabled;
+    /// @notice Vault contract address (set once via setVault).
+    address private vault;
+    /// @notice Pre-allocated mint allowance for vault liquidity provision.
+    /// @dev Starts at 50 ETH equivalent; vault can mint up to this without new allocation.
+    uint256 private _vaultMintAllowance = 50 ether;
+
+    // =====================================================================
+    //                           CONSTRUCTOR
+    // =====================================================================
+
+    /**
+     * @notice Create a new bond token.
+     * @dev Called by BondTokenFactory; minter is set to DegenerusBonds.
+     * @param name_ Token name.
+     * @param symbol_ Token symbol.
+     * @param minter_ Address with mint/burn privileges (DegenerusBonds).
+     */
     constructor(string memory name_, string memory symbol_, address minter_) {
         name = name_;
         symbol = symbol_;
         minter = minter_;
     }
 
-    // ------------------------------------------------------------------
-    // ERC20 core
-    // ------------------------------------------------------------------
+    // =====================================================================
+    //                           ERC20 CORE
+    // =====================================================================
 
+    /**
+     * @notice Approve a spender to transfer tokens on behalf of the caller.
+     * @dev Standard ERC20 approve. No active check (approvals work even when disabled).
+     * @param spender Address authorized to spend.
+     * @param amount Maximum amount spender can transfer.
+     * @return Always returns true.
+     */
     function approve(address spender, uint256 amount) external returns (bool) {
         allowance[msg.sender][spender] = amount;
         emit Approval(msg.sender, spender, amount);
         return true;
     }
 
+    /**
+     * @notice Transfer tokens to another address.
+     * @dev Reverts if token is disabled or insufficient balance.
+     * @param to Recipient address.
+     * @param amount Amount to transfer.
+     * @return Always returns true on success.
+     */
     function transfer(address to, uint256 amount) external returns (bool) {
         _requireActive();
         _transfer(msg.sender, to, amount);
         return true;
     }
 
+    /**
+     * @notice Transfer tokens on behalf of another address (requires approval).
+     * @dev Reverts if token is disabled, insufficient balance, or insufficient allowance.
+     *      Infinite allowance (type(uint256).max) is not decremented.
+     * @param from Address to transfer from.
+     * @param to Recipient address.
+     * @param amount Amount to transfer.
+     * @return Always returns true on success.
+     */
     function transferFrom(address from, address to, uint256 amount) external returns (bool) {
         _requireActive();
         uint256 allowed = allowance[from][msg.sender];
+        // SECURITY: Check allowance before spending.
         if (allowed < amount) revert Unauthorized();
+        // Gas optimization: don't update infinite allowance.
         if (allowed != type(uint256).max) {
             unchecked {
                 uint256 newAllowed = allowed - amount;
@@ -155,12 +389,20 @@ contract BondToken {
         return true;
     }
 
-    // ------------------------------------------------------------------
-    // Mint / burn (minter-gated mint, holder/approved burn)
-    // ------------------------------------------------------------------
+    // =====================================================================
+    //                        MINT / BURN
+    // =====================================================================
 
+    /**
+     * @notice Mint new tokens to an address.
+     * @dev Only callable by minter (DegenerusBonds). Reverts if disabled.
+     *      Used for jackpot emissions.
+     * @param to Recipient address.
+     * @param amount Amount to mint.
+     */
     function mint(address to, uint256 amount) external {
         _requireActive();
+        // SECURITY: Only minter can create new tokens.
         if (msg.sender != minter) revert Unauthorized();
         unchecked {
             totalSupply += amount;
@@ -169,9 +411,17 @@ contract BondToken {
         emit Transfer(address(0), to, amount);
     }
 
+    /**
+     * @notice Burn tokens from an address.
+     * @dev Minter can burn without approval; others need approval or self-burn.
+     *      Reverts if disabled.
+     * @param from Address to burn from.
+     * @param amount Amount to burn.
+     */
     function burn(address from, uint256 amount) external {
         _requireActive();
-        // The bond controller (minter) can burn without allowance; all other callers need approval.
+        // SECURITY: Minter can burn without allowance (for bond redemption).
+        // Others need to be the owner or have sufficient allowance.
         if (msg.sender != minter && from != msg.sender) {
             uint256 allowed = allowance[from][msg.sender];
             if (allowed < amount) revert Unauthorized();
@@ -186,41 +436,71 @@ contract BondToken {
         _burn(from, amount);
     }
 
-    // ------------------------------------------------------------------
-    // Vault escrow / mint allowance
-    // ------------------------------------------------------------------
+    // =====================================================================
+    //                     VAULT ESCROW / MINT ALLOWANCE
+    // =====================================================================
 
+    /**
+     * @notice Set the vault address (one-time).
+     * @dev Only callable by minter. Used to authorize vault for minting.
+     * @param vault_ Address of the vault contract.
+     */
     function setVault(address vault_) external {
         _requireActive();
+        // SECURITY: Only minter can set vault.
         if (msg.sender != minter) revert Unauthorized();
         if (vault_ == address(0)) revert ZeroAddress();
         address current = vault;
-        if (current == vault_) return;
+        if (current == vault_) return; // Idempotent.
+        // SECURITY: One-time setting only.
         if (current != address(0)) revert AlreadySet();
         vault = vault_;
     }
 
+    /**
+     * @notice Get the current vault mint allowance.
+     * @return The amount the vault can still mint.
+     */
     function vaultMintAllowance() external view returns (uint256) {
         return _vaultMintAllowance;
     }
 
+    /**
+     * @notice Get total supply including uncirculated vault allowance.
+     * @dev Used for reserve calculations (total potential supply).
+     * @return Total circulating + vault allowance.
+     */
     function supplyIncUncirculated() external view returns (uint256) {
         return totalSupply + _vaultMintAllowance;
     }
 
+    /**
+     * @notice Add to the vault's mint allowance (escrow more tokens).
+     * @dev Only callable by minter or vault. Used when new series needs liquidity.
+     * @param amount Amount to add to vault allowance.
+     */
     function vaultEscrow(uint256 amount) external {
         _requireActive();
         if (amount == 0) return;
         address sender = msg.sender;
+        // SECURITY: Only minter or vault can increase allowance.
         if (sender != minter && sender != vault) revert Unauthorized();
         _vaultMintAllowance += amount;
     }
 
+    /**
+     * @notice Mint tokens using vault's pre-allocated allowance.
+     * @dev Only callable by vault. Allowance decremented before mint.
+     * @param to Recipient address.
+     * @param amount Amount to mint.
+     */
     function vaultMintTo(address to, uint256 amount) external {
         _requireActive();
+        // SECURITY: Only vault can use its allowance.
         if (msg.sender != vault) revert Unauthorized();
         if (amount == 0) return;
         uint256 allowanceVault = _vaultMintAllowance;
+        // SECURITY: Cannot exceed pre-allocated allowance.
         if (amount > allowanceVault) revert InsufficientAllowance();
         unchecked {
             _vaultMintAllowance = allowanceVault - amount;
@@ -230,14 +510,25 @@ contract BondToken {
         emit Transfer(address(0), to, amount);
     }
 
-    // ------------------------------------------------------------------
-    // Internals
-    // ------------------------------------------------------------------
+    // =====================================================================
+    //                           INTERNALS
+    // =====================================================================
 
+    /**
+     * @notice Check that the token is not disabled.
+     * @dev Reverts with Disabled() if nuked.
+     */
     function _requireActive() private view {
         if (disabled) revert Disabled();
     }
 
+    /**
+     * @notice Internal transfer implementation.
+     * @dev Reverts if insufficient balance.
+     * @param from Sender address.
+     * @param to Recipient address.
+     * @param amount Amount to transfer.
+     */
     function _transfer(address from, address to, uint256 amount) private {
         uint256 fromBal = balanceOf[from];
         if (fromBal < amount) revert InsufficientBalance();
@@ -248,6 +539,12 @@ contract BondToken {
         emit Transfer(from, to, amount);
     }
 
+    /**
+     * @notice Internal burn implementation.
+     * @dev Reverts if insufficient balance.
+     * @param from Address to burn from.
+     * @param amount Amount to burn.
+     */
     function _burn(address from, uint256 amount) private {
         uint256 fromBal = balanceOf[from];
         if (fromBal < amount) revert InsufficientBalance();
@@ -258,55 +555,117 @@ contract BondToken {
         emit Transfer(from, address(0), amount);
     }
 
-    /// @notice Permanently disable transfers/mint/burn; callable only by the minter (bond controller).
+    /**
+     * @notice Permanently disable all token operations.
+     * @dev Only callable by minter. Used during game shutdown.
+     *      IRREVERSIBLE - once nuked, token cannot be reactivated.
+     */
     function nuke() external {
+        // SECURITY: Only minter can nuke.
         if (msg.sender != minter) revert Unauthorized();
         disabled = true;
     }
 }
 
+/**
+ * @title BondTokenFactory
+ * @notice Factory contract for deploying DGNRS bond tokens.
+ * @dev Used by DegenerusBonds constructor to create the shared token.
+ */
 contract BondTokenFactory is IBondTokenFactory {
     error ZeroAddress();
 
+    /**
+     * @notice Deploy a new DGNRS bond token.
+     * @param minter Address with mint/burn privileges (DegenerusBonds).
+     * @return Address of the newly deployed BondToken.
+     */
     function createDgnrsToken(address minter) external returns (address) {
         if (minter == address(0)) revert ZeroAddress();
         return address(new BondToken("Degenerus Bond DGNRS", "DGNRS", minter));
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════
+//                                    DEGENERUS BONDS (MAIN)
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════
+
 /**
  * @title DegenerusBonds
- * @notice Bond system wired for the Degenerus game:
- *         - Bonds mature every 10 levels (ending in 0); sales open for 5 levels per cycle.
- *         - Payout budget = series raise * growth multiplier (finalized on the last emission run).
- *         - Deposits award a score (multiplier stub) used for jackpots.
- *         - Five jackpot days mint the shared ERC20 (DGNRS); total mint equals payout budget.
- *         - Burning the ERC20 enters a two-lane final jackpot at maturity; payout ~pro-rata to burned amount.
+ * @notice Bond system with 10-level maturity cycles, DGNRS token jackpots, and two-lane resolution.
+ * @dev See file header for detailed architecture documentation.
+ *
+ * KEY FUNCTIONS:
+ * - presaleDeposit(): Buy bonds during presale phase
+ * - depositCurrentFor(): Buy bonds during normal game
+ * - burnDGNRS(): Enter the two-lane system for maturity payouts
+ * - claim(): Claim pro-rata Decimator winnings after resolution
+ * - bondMaintenance(): Game-called to run jackpots and resolve maturities
+ * - gameOver(): Emergency shutdown and fund distribution
  */
 contract DegenerusBonds {
-    // ---------------------------------------------------------------------
-    // Errors
-    // ---------------------------------------------------------------------
+    // =====================================================================
+    //                              ERRORS
+    // =====================================================================
+
+    /// @notice Thrown when caller lacks permission.
     error Unauthorized();
+    /// @notice Thrown when bond sales are not open.
     error SaleClosed();
+    /// @notice Thrown when burn amount is zero.
     error InsufficientScore();
+    /// @notice Thrown when series already resolved.
     error AlreadyResolved();
+    /// @notice Thrown when attempting to re-wire an already-set address.
     error AlreadySet();
+    /// @notice Thrown when ETH transfer to game/bank fails.
     error BankCallFailed();
+    /// @notice Thrown when bond purchases are disabled (wrong level window).
     error PurchasesDisabled();
+    /// @notice Thrown when deposit below minimum (0.01 ETH).
     error MinimumDeposit();
+    /// @notice Thrown when presale is closed but presale function called.
     error PresaleClosed();
+    /// @notice Thrown when sweep attempted before 1-year expiry.
     error NotExpired();
+    /// @notice Thrown when VRF rewire attempted after initial config.
     error VrfLocked();
+    /// @notice Thrown when operation requires wiring not yet complete.
     error NotReady();
+    /// @notice Thrown when bps value exceeds 10000.
     error InvalidBps();
 
-    // ---------------------------------------------------------------------
-    // Events
-    // ---------------------------------------------------------------------
+    // =====================================================================
+    //                              EVENTS
+    // =====================================================================
+
+    /// @notice Emitted when a new bond series is created.
+    /// @param maturityLevel The level at which this series matures.
+    /// @param saleStartLevel The level when sales open.
+    /// @param token The DGNRS token address (same for all series).
+    /// @param payoutBudget Initial payout budget (0, set later).
     event BondSeriesCreated(uint24 indexed maturityLevel, uint24 saleStartLevel, address token, uint256 payoutBudget);
+
+    /// @notice Emitted on each bond deposit.
+    /// @param player The depositor address.
+    /// @param maturityLevel The series the deposit goes into.
+    /// @param amount ETH amount deposited.
+    /// @param scoreAwarded Score (amount * player multiplier) for jackpot weighting.
     event BondDeposit(address indexed player, uint24 indexed maturityLevel, uint256 amount, uint256 scoreAwarded);
+
+    /// @notice Emitted when DGNRS tokens are minted via jackpot.
+    /// @param maturityLevel The series running the jackpot.
+    /// @param dayIndex Which emission run (0-4).
+    /// @param mintedAmount Total DGNRS minted this run.
+    /// @param rngWord The entropy used for winner selection.
     event BondJackpot(uint24 indexed maturityLevel, uint8 indexed dayIndex, uint256 mintedAmount, uint256 rngWord);
+
+    /// @notice Emitted when DGNRS is burned to enter a lane.
+    /// @param player The burner address.
+    /// @param maturityLevel The target series.
+    /// @param lane Which lane (0 or 1) the burn entered.
+    /// @param amount DGNRS burned.
+    /// @param boostedScore Whether this burn also counted toward jackpot score.
     event BondBurned(
         address indexed player,
         uint24 indexed maturityLevel,
@@ -314,164 +673,372 @@ contract DegenerusBonds {
         uint256 amount,
         bool boostedScore
     );
+
+    /// @notice Emitted when a series is resolved at maturity.
+    /// @param maturityLevel The resolved series.
+    /// @param winningLane Which lane won (0 or 1).
+    /// @param payoutEth Total ETH distributed.
+    /// @param remainingToken Unused (always 0).
     event BondSeriesResolved(
         uint24 indexed maturityLevel,
         uint8 winningLane,
         uint256 payoutEth,
         uint256 remainingToken
     );
+
+    /// @notice Emitted during gameOver() resolution.
+    /// @param poolSpent Total ETH/stETH spent resolving series.
+    /// @param partialMaturity If non-zero, the last series was only partially paid.
     event BondGameOver(uint256 poolSpent, uint24 partialMaturity);
+
+    /// @notice Emitted when FLIP coin is awarded from bond pool.
+    /// @param player Winner address.
+    /// @param amount FLIP amount.
+    /// @param maturityLevel The series the jackpot came from.
+    /// @param lane The lane the winner was in.
     event BondCoinJackpot(address indexed player, uint256 amount, uint24 maturityLevel, uint8 lane);
+
+    /// @notice Emitted when expired pools are swept to vault.
+    /// @param ethAmount ETH swept.
+    /// @param stEthAmount stETH swept.
     event ExpiredSweep(uint256 ethAmount, uint256 stEthAmount);
+
+    /// @notice Emitted on presale bond deposit.
+    /// @param buyer The depositor.
+    /// @param amount ETH deposited.
+    /// @param scoreAwarded Score for presale jackpots.
     event PresaleBondDeposit(address indexed buyer, uint256 amount, uint256 scoreAwarded);
+
+    /// @notice Emitted when presale jackpot runs.
+    /// @param round Which presale run (0-4).
+    /// @param mintedTotal DGNRS minted.
+    /// @param rngWord Entropy used.
     event PresaleJackpot(uint8 indexed round, uint256 mintedTotal, uint256 rngWord);
+
+    /// @notice Emitted when VRF is requested for presale jackpot.
+    /// @param requestId The Chainlink VRF request ID.
     event PresaleJackpotVrfRequested(uint256 indexed requestId);
 
-    // ---------------------------------------------------------------------
-    // Constants
-    // ---------------------------------------------------------------------
-    // Default work budget for maintenance; each unit roughly covers one series tick or archive step.
+    // =====================================================================
+    //                            CONSTANTS
+    // =====================================================================
+
+    /// @notice Default work budget for bondMaintenance() per call.
+    /// @dev Each unit covers roughly one series tick or archive step.
     uint32 private constant BOND_MAINT_WORK_CAP = 3;
+
+    /// @notice Number of jackpot winners per emission run.
     uint8 private constant JACKPOT_SPOTS = 100;
+
+    /// @notice Top 4 jackpot prize percentages (20%, 10%, 5%, 5%).
     uint8 private constant TOP_PCT_1 = 20;
     uint8 private constant TOP_PCT_2 = 10;
     uint8 private constant TOP_PCT_3 = 5;
     uint8 private constant TOP_PCT_4 = 5;
+
+    /// @notice Minimum bond deposit (0.01 ETH).
     uint256 private constant MIN_DEPOSIT = 0.01 ether;
+
+    /// @notice Maximum presale jackpot runs.
     uint8 private constant PRESALE_MAX_RUNS = 5;
-    uint8 private constant PRESALE_JACKPOT_SPOTS = 100; // single presale draw per round; doubled winner count
+
+    /// @notice Winner count for presale jackpots.
+    uint8 private constant PRESALE_JACKPOT_SPOTS = 100;
+
+    /// @notice Fixed "previous raise" for presale growth multiplier calculation.
+    /// @dev Presale uses 50 ETH as anchor since there's no actual previous series.
     uint256 private constant PRESALE_PREV_RAISE = 50 ether;
+
+    /// @notice Gas limit for VRF callback.
     uint32 private constant VRF_CALLBACK_GAS_LIMIT = 200_000;
+
+    /// @notice Block confirmations required for VRF.
     uint16 private constant VRF_REQUEST_CONFIRMATIONS = 10;
+
+    /// @notice Auto-burn preference: not yet set (uses default).
     uint8 private constant AUTO_BURN_UNSET = 0;
+    /// @notice Auto-burn preference: enabled.
     uint8 private constant AUTO_BURN_ENABLED = 1;
+    /// @notice Auto-burn preference: disabled.
     uint8 private constant AUTO_BURN_DISABLED = 2;
-    // ---------------------------------------------------------------------
-    // Data structures
-    // ---------------------------------------------------------------------
+    // =====================================================================
+    //                         DATA STRUCTURES
+    // =====================================================================
+
+    /**
+     * @notice A single burn entry in a lane.
+     * @dev Used for tracking individual burns for draw prizes.
+     */
     struct LaneEntry {
-        address player;
-        uint256 amount;
+        address player;  // Who burned
+        uint256 amount;  // How much DGNRS burned
     }
 
+    /**
+     * @notice One of two lanes in the two-lane resolution system.
+     * @dev Players are deterministically assigned to lanes based on hash(maturity, address).
+     *      At resolution, one lane wins and splits the payout pool.
+     */
     struct Lane {
-        uint256 total;
-        LaneEntry[] entries;
-        uint256[] cumulative;
-        mapping(address => uint256) burnedAmount;
+        uint256 total;                          // Total DGNRS burned in this lane
+        LaneEntry[] entries;                    // All burn entries (for draw prizes)
+        uint256[] cumulative;                   // Cumulative totals for O(log N) weighted picks
+        mapping(address => uint256) burnedAmount; // Per-player burned amount (for Decimator claims)
     }
 
+    /**
+     * @notice Configuration struct for wire() function.
+     * @dev Groups all wirable addresses to avoid stack-too-deep.
+     */
     struct WireConfig {
-        address game;
-        address vault;
-        address coin;
-        address vrfCoordinator;
-        uint256 vrfSubId;
-        bytes32 vrfKeyHash;
-        address questModule;
-        address trophies;
-        address affiliate;
+        address game;           // DegenerusGame contract
+        address vault;          // DegenerusVault contract
+        address coin;           // DegenerusCoin contract
+        address vrfCoordinator; // Chainlink VRF coordinator
+        uint256 vrfSubId;       // VRF subscription ID
+        bytes32 vrfKeyHash;     // VRF key hash (gas lane)
+        address questModule;    // Quest module contract
+        address trophies;       // Trophies contract
+        address affiliate;      // DegenerusAffiliate contract
     }
 
+    /**
+     * @notice A bond series tied to a specific maturity level.
+     * @dev Created when sales open for that maturity; resolved at maturity.
+     *
+     * LIFECYCLE:
+     * 1. Created with saleStartLevel = maturity - 10 (or 1 for first series)
+     * 2. Deposits during sale window add to raised and totalScore
+     * 3. Jackpots run each level during sale window (5 runs total)
+     * 4. Burns accepted until maturity
+     * 5. At maturity, if funded, pick winning lane and distribute
+     */
     struct BondSeries {
-        uint24 maturityLevel;
-        uint24 saleStartLevel;
-        uint256 payoutBudget;
-        uint256 mintedBudget;
-        uint256 raised;
-        uint8 jackpotsRun;
-        uint24 lastJackpotLevel;
-        uint256 totalScore;
-        BondToken token;
-        address[] jackpotParticipants;
-        uint256[] jackpotCumulative;
-        Lane[2] lanes;
-        bool resolved;
-        uint8 winningLane;
-        uint256 decSharePrice;
-        uint256 unclaimedBudget;
+        uint24 maturityLevel;       // Level at which this series matures (10, 20, 30, ...)
+        uint24 saleStartLevel;      // Level when sales opened
+        uint256 payoutBudget;       // Target DGNRS to mint (raised * growth multiplier)
+        uint256 mintedBudget;       // DGNRS already minted via jackpots
+        uint256 raised;             // Total ETH deposited into this series
+        uint8 jackpotsRun;          // Number of jackpot runs completed (0-5)
+        uint24 lastJackpotLevel;    // Last level a jackpot ran (prevents double-run)
+        uint256 totalScore;         // Sum of all weighted scores for jackpot draws
+        BondToken token;            // DGNRS token reference (same for all series)
+        address[] jackpotParticipants; // Depositors eligible for jackpots
+        uint256[] jackpotCumulative;   // Cumulative scores for O(log N) picks
+        Lane[2] lanes;              // Two-lane burn tracking
+        bool resolved;              // True after maturity payout completed
+        uint8 winningLane;          // Which lane won (0 or 1)
+        uint256 decSharePrice;      // Price per DGNRS for Decimator claims (scaled by 1e18)
+        uint256 unclaimedBudget;    // ETH reserved for unclaimed Decimator payouts
     }
 
+    /**
+     * @notice Presale-specific series data.
+     * @dev Similar to BondSeries but for presale phase (maturity = 0).
+     *      No sale window tracking since presale is always open until shutdown.
+     */
     struct PresaleSeries {
-        uint256 payoutBudget;
-        uint256 mintedBudget;
-        uint256 raised;
-        uint8 jackpotsRun;
-        uint256 totalScore;
-        address[] jackpotParticipants;
-        uint256[] jackpotCumulative;
+        uint256 payoutBudget;          // Target DGNRS to mint
+        uint256 mintedBudget;          // DGNRS already minted
+        uint256 raised;                // Total ETH deposited
+        uint8 jackpotsRun;             // Number of jackpot runs (0-5)
+        uint256 totalScore;            // Sum of weighted scores
+        address[] jackpotParticipants; // Eligible participants
+        uint256[] jackpotCumulative;   // Cumulative for weighted picks
     }
 
-    // ---------------------------------------------------------------------
-    // Storage
-    // ---------------------------------------------------------------------
+    // =====================================================================
+    //                            STORAGE
+    // =====================================================================
+
+    /// @notice All bond series by maturity level.
     mapping(uint24 => BondSeries) internal series;
+
+    /// @notice List of all created maturity levels in order.
     uint24[] internal maturities;
+
+    /// @notice Index into maturities[] of the oldest non-archived series.
+    /// @dev Series before this index are fully resolved and archived.
     uint24 private activeMaturityIndex;
+
+    /// @notice Sum of unclaimedBudget for archived (resolved) series.
+    /// @dev Used for reserve calculations to ensure funds cover all claims.
     uint256 private resolvedUnclaimedTotal;
+
+    /// @notice DegenerusGame contract reference.
     IDegenerusGameLevel private game;
-    uint256 private coinOwed; // running total of BURNIE owed for bond jackpots
+
+    /// @notice Running total of FLIP coin owed for bond jackpots.
+    /// @dev Accumulated via payBonds(), paid out in _runCoinJackpot().
+    uint256 private coinOwed;
+
+    /// @notice Admin contract address (DegenerusAdmin), immutable.
     address private immutable admin;
+
+    /// @notice ETH raised in the previous series (for growth multiplier).
     uint256 private lastIssuanceRaise;
-    uint24 private lastBondMaintenanceLevel; // last level where bondMaintenance() ran (used for burn routing at maturity boundaries)
+
+    /// @notice Last level where bondMaintenance() ran.
+    /// @dev Used to handle burn routing at maturity boundaries.
+    uint24 private lastBondMaintenanceLevel;
+
+    // ─────────────────────────────────────────────────────────────────────
+    // VRF State
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// @notice Chainlink VRF coordinator address.
     address private vrfCoordinator;
+    /// @notice VRF key hash (gas lane selector).
     bytes32 private vrfKeyHash;
+    /// @notice VRF subscription ID.
     uint256 private vrfSubscriptionId;
+    /// @notice Current VRF request ID (for game-triggered requests).
     uint256 private vrfRequestId;
+    /// @notice Pending random word from VRF (consumed on use).
     uint256 private vrfPendingWord;
+    /// @notice Whether a game VRF request is pending.
     bool private vrfRequestPending;
+
+    /// @notice Presale VRF request ID (separate from game requests).
     uint256 private presaleVrfRequestId;
+    /// @notice Pending random word for presale (consumed on use).
     uint256 private presaleVrfPendingWord;
+    /// @notice Whether a presale VRF request is pending.
     bool private presaleVrfRequestPending;
+
+    // ─────────────────────────────────────────────────────────────────────
+    // State Flags
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// @notice True once presale budget is finalized.
     bool private firstSeriesBudgetFinalized;
-    bool public gameOverStarted; // true after game signals shutdown; disables new deposits and bank pushes
-    uint48 private gameOverTimestamp; // timestamp when game over was triggered
-    bool public gameOverEntropyAttempted; // true after gameOver() attempts to fetch entropy (request or failure)
-    bool private rngLock; // true while game has locked RNG usage (pauses deposits/burns)
-    uint16 public rewardStakeTargetBps; // target share of stETH (in bps) for game-held reward liquidity
-    uint16 private constant AFFILIATE_BOND_BPS = 300; // 3% on bond purchases
-    uint16 private constant AFFILIATE_PRESALE_BPS = 1000; // 10% on presale bond purchases
+
+    /// @notice True after game signals shutdown; disables deposits and bank pushes.
+    bool public gameOverStarted;
+
+    /// @notice Timestamp when game over was triggered (for 1-year expiry).
+    uint48 private gameOverTimestamp;
+
+    /// @notice True after gameOver() attempts to fetch entropy.
+    bool public gameOverEntropyAttempted;
+
+    /// @notice True while game has locked RNG usage (pauses deposits/burns).
+    /// @dev Set by game during jackpot windows to prevent manipulation.
+    bool private rngLock;
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Configuration
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// @notice Target share of stETH (in bps) for game-held reward liquidity.
+    uint16 public rewardStakeTargetBps;
+
+    /// @notice Affiliate reward for normal bond purchases (3% = 300 bps).
+    uint16 private constant AFFILIATE_BOND_BPS = 300;
+
+    /// @notice Affiliate reward for presale purchases (10% = 1000 bps).
+    uint16 private constant AFFILIATE_PRESALE_BPS = 1000;
+
+    /// @notice Default price per mint for affiliate calculations.
     uint256 private constant PRICE_WEI = 0.025 ether;
+
+    /// @notice Coin unit (6 decimals).
     uint256 private constant PRICE_COIN_UNIT = 1_000_000_000;
-    uint256 private constant PRESALE_COIN_ALLOCATION = 2_000 * PRICE_COIN_UNIT; // 2m BURNIE (6 decimals)
+
+    /// @notice Total FLIP allocated for presale coin jackpots (2M tokens).
+    uint256 private constant PRESALE_COIN_ALLOCATION = 2_000 * PRICE_COIN_UNIT;
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Wired Contracts
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// @notice DegenerusVault contract.
     address private vault;
+    /// @notice DegenerusCoin contract.
     address private coin;
+    /// @notice DegenerusAffiliate contract.
     address private affiliate;
+    /// @notice Quest module contract.
     address private questModule;
+    /// @notice Trophies contract.
     address private trophies;
+    /// @notice DGNRS bond token (shared across all series).
     BondToken private tokenDGNRS;
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Per-Player State
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// @notice Player preference for auto-burning jackpot DGNRS.
+    /// @dev 0 = unset (use default), 1 = enabled, 2 = disabled.
     mapping(address => uint8) private autoBurnDgnrsPref;
+
+    // ─────────────────────────────────────────────────────────────────────
+    // External Dependencies
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// @notice Lido stETH token address (immutable).
     address private immutable steth;
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Presale State
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// @notice ETH pending transfer to game reward pool (before game wired).
     uint256 private presalePendingRewardEth;
+    /// @notice ETH pending transfer to game yield pool (before game wired).
     uint256 private presalePendingYieldEth;
+    /// @notice Presale series data.
     PresaleSeries private presale;
 
-    // ---------------------------------------------------------------------
-    // Constructor
-    // ---------------------------------------------------------------------
+    // =====================================================================
+    //                           CONSTRUCTOR
+    // =====================================================================
+
+    /**
+     * @notice Initialize the bond system.
+     * @dev Deploys the shared DGNRS token via the factory.
+     *
+     * DEPLOYMENT ORDER:
+     * 1. Deploy DegenerusAdmin
+     * 2. Deploy BondTokenFactory
+     * 3. Deploy DegenerusBonds(admin, steth, factory)
+     * 4. Call wire() to connect game, vault, coin, etc.
+     *
+     * @param admin_ DegenerusAdmin contract address.
+     * @param steth_ Lido stETH token address.
+     * @param bondTokenFactory_ Factory for creating DGNRS token.
+     */
     constructor(address admin_, address steth_, address bondTokenFactory_) {
+        // SECURITY: All addresses required at construction.
         if (admin_ == address(0) || steth_ == address(0) || bondTokenFactory_ == address(0)) revert Unauthorized();
         admin = admin_;
         steth = steth_;
-        rewardStakeTargetBps = 10_000;
+        rewardStakeTargetBps = 10_000; // Default: 100% stETH preference
 
-        // Predeploy the shared bond token used across all active maturities.
+        // Deploy the shared bond token (DGNRS) with this contract as minter.
         tokenDGNRS = BondToken(IBondTokenFactory(bondTokenFactory_).createDgnrsToken(address(this)));
     }
 
+    // =====================================================================
+    //                            MODIFIERS
+    // =====================================================================
+
+    /// @notice Restrict function to game contract only.
     modifier onlyGame() {
         if (msg.sender != address(game)) revert Unauthorized();
         _;
     }
 
+    /// @notice Restrict function to admin contract only.
     modifier onlyAdmin() {
         if (msg.sender != admin) revert Unauthorized();
         _;
     }
 
-    // ---------------------------------------------------------------------
-    // External write API
-    // ---------------------------------------------------------------------
+    // =====================================================================
+    //                       EXTERNAL WRITE API
+    // =====================================================================
 
     /// @notice Wire bonds like other modules: [game, vault, coin, vrfCoordinator, questModule, trophies, affiliate] + subId/keyHash (partial allowed).
     function wire(address[] calldata addresses, uint256 vrfSubId, bytes32 vrfKeyHash_) external onlyAdmin {

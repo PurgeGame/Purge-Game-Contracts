@@ -6,7 +6,7 @@ import "./interfaces/IDegenerusGame.sol";
 
 /**
  * @title DegenerusQuests
- * @author Degenerus Team
+ * @author Burnie Degenerus
  * @notice Tracks two rotating daily quests and validates player progress against Degenerus game actions.
  *
  * @dev Architecture Overview

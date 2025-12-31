@@ -36,7 +36,7 @@ interface IDegenerusGamepiecesRewards {
 
 /**
  * @title DegenerusGameEndgameModule
- * @author Degenerus
+ * @author Burnie Degenerus
  * @notice Delegate-called module handling level settlement after extermination or timeout.
  *
  * @dev This module is called via `delegatecall` from DegenerusGame during state 1 (pregame),

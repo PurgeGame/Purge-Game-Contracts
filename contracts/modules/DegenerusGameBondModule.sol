@@ -46,7 +46,7 @@ interface IStETHLite {
 
 /**
  * @title DegenerusGameBondModule
- * @author Degenerus
+ * @author Burnie Degenerus
  * @notice Delegate-called module handling bond-related operations for the game.
  *
  * @dev This module is called via `delegatecall` from DegenerusGame, meaning:
