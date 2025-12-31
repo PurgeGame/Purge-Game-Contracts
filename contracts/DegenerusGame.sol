@@ -163,7 +163,7 @@ pragma solidity ^0.8.26;
 ║  • IDegenerusGamepieces       - processDormant, burnFromGame, advanceBase, processPendingMints        ║
 ║  • IDegenerusBonds            - bondMaintenance, setRngLock                                           ║
 ║  • IDegenerusJackpots         - runDecimatorJackpot                                                   ║
-║  • IDegenerusTrophies         - mintExterminator                                                      ║
+║  • IDegenerusTrophies         - mintExterminator (via endgame module)                                 ║
 ║  • IDegenerusAffiliate        - affiliateBonusPointsBest                                              ║
 ║  • IStETH                     - submit, balanceOf, transfer, approve                                  ║
 ║  • IVRFCoordinator            - requestRandomWords                                                    ║
@@ -177,7 +177,6 @@ import {IDegenerusCoinModule} from "./interfaces/DegenerusGameModuleInterfaces.s
 import {IDegenerusCoin} from "./interfaces/IDegenerusCoin.sol";
 import {IDegenerusAffiliate} from "./interfaces/IDegenerusAffiliate.sol";
 import {IDegenerusJackpots} from "./interfaces/IDegenerusJackpots.sol";
-import {IDegenerusTrophies} from "./interfaces/IDegenerusTrophies.sol";
 import {
     IDegenerusGameEndgameModule,
     IDegenerusGameJackpotModule,
@@ -1480,7 +1479,7 @@ contract DegenerusGame is DegenerusGameStorage {
       ║  last token with a trait) or timeout (10 daily jackpots paid).       ║
       ║                                                                      ║
       ║  Extermination End (<256):                                           ║
-      ║  • Record exterminator address and mint trophy NFT                   ║
+      ║  • Record exterminator address (trophy minted during settlement)     ║
       ║  • Apply repeat-trait penalty if same trait as last level            ║
       ║  • Preserve current prize pool for endgame settlement                ║
       ║  • Normalize active burn quests                                      ║
@@ -1502,7 +1501,7 @@ contract DegenerusGame is DegenerusGameStorage {
     ///      2. 10 daily jackpots paid without extermination - TIMEOUT
     ///
     ///      EXTERMINATION PATH (exterminated < 256):
-    ///      - Record exterminator, mint trophy NFT
+    ///      - Record exterminator (trophy minted during settlement)
     ///      - If repeat trait or level 90 special: keep 50% in reward pool
     ///      - Set exterminationInvertFlag for trait ticket jackpot
     ///      - Normalize burn quests (called on quest module)
@@ -1542,13 +1541,6 @@ contract DegenerusGame is DegenerusGameStorage {
 
             currentPrizePool = pool;
             _setExterminatorForLevel(levelSnapshot, callerExterminator);
-
-            IDegenerusTrophies(trophies).mintExterminator(
-                callerExterminator,
-                levelSnapshot,
-                exTrait,
-                exterminationInvertFlag
-            );
 
             lastExterminatedTrait = exTrait;
             IDegenerusQuestNormalize(questModule).normalizeActiveBurnQuests();

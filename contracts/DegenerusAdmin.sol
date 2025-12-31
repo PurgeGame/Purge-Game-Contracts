@@ -511,7 +511,7 @@ contract DegenerusAdmin {
     ///      7. Wire quest module to game
     ///      8. Add bonds as VRF consumer
     ///      9. Wire bonds with all dependencies
-    ///      10. Wire coin, questModule, nft, affiliate, jackpots, trophies
+    ///      10. Wire coin (incl. color registry), questModule, nft, affiliate, jackpots, trophies
     ///      11. Wire any additional modules from arrays
     ///
     ///      SECURITY NOTES:
@@ -529,6 +529,7 @@ contract DegenerusAdmin {
     /// @param questModule_ Quest module contract address.
     /// @param trophies_ Trophies contract address.
     /// @param nft_ NFT contract address.
+    /// @param colorRegistry_ IconColorRegistry contract address (for coin burn authorization).
     /// @param vault_ Vault contract address.
     /// @param modules Additional modules to wire.
     /// @param moduleWires Wiring arrays for additional modules (parallel to modules).
@@ -543,6 +544,7 @@ contract DegenerusAdmin {
         address questModule_,
         address trophies_,
         address nft_,
+        address colorRegistry_,
         address vault_,
         address[] calldata modules,
         address[][] calldata moduleWires
@@ -649,11 +651,12 @@ contract DegenerusAdmin {
         // Each contract has its own wire() expectations.
 
         if (coin_ != address(0)) {
-            address[] memory coinWire = new address[](4);
+            address[] memory coinWire = new address[](5);
             coinWire[0] = game_;
             coinWire[1] = nft_;
             coinWire[2] = questModule_;
             coinWire[3] = jackpots_;
+            coinWire[4] = colorRegistry_;
             IWiring(coin_).wire(coinWire);
         }
 

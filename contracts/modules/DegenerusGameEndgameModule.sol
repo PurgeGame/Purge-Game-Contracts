@@ -53,6 +53,7 @@ interface IDegenerusGamepiecesRewards {
  * finalizeEndgame()
  *     │
  *     ├─ IF extermination occurred (not timeout):
+ *     │   ├─ Mint exterminator trophy (winnings packed)
  *     │   ├─ Pay exterminator (20-40% of prize pool)
  *     │   │   └─ 25% of their share → bonds (if enabled)
  *     │   ├─ Pay extermination jackpot (trait ticket holders)
@@ -171,6 +172,16 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
             uint256 poolValue = currentPrizePool;
             uint16 exShareBps = _exterminatorShareBps(prevLevel, rngWord);
             uint256 exterminatorShare = (poolValue * exShareBps) / 10_000;
+
+            uint96 exterminatorWinnings =
+                exterminatorShare > type(uint96).max ? type(uint96).max : uint96(exterminatorShare);
+            IDegenerusTrophies(trophies).mintExterminator(
+                ex,
+                prevLevel,
+                traitId,
+                exterminationInvertFlag,
+                exterminatorWinnings
+            );
 
             // Pay exterminator (with bond split)
             claimableDelta += _payExterminatorShare(ex, exterminatorShare);

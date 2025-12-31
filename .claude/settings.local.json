@@ -7,7 +7,8 @@
       "Bash(forge build:*)",
       "Bash(npx hardhat:*)",
       "Bash(solc:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(git stash:*)"
     ]
   }
 }

@@ -32,7 +32,7 @@ pragma solidity ^0.8.26;
   ║  │  Bits 15-8:  Trait B (quadrant 1)                                      │  ║
   ║  │  Bits 7-0:   Trait A (quadrant 0)                                      │  ║
   ║  │                                                                        │  ║
-  ║  │  [DDDDDDDD][CCCCCCCC][BBBBBBBB][AAAAAAAA] = 32 bits                     │  ║
+  ║  │  [DDDDDDDD][CCCCCCCC][BBBBBBBB][AAAAAAAA] = 32 bits                    │  ║
   ║  └────────────────────────────────────────────────────────────────────────┘  ║
   ║                                                                              ║
   ║  WEIGHTED DISTRIBUTION:                                                      ║
@@ -198,8 +198,8 @@ library DegenerusTraitUtils {
     /// @return 32-bit packed traits value.
     function packedTraitsFromSeed(uint256 rand) internal pure returns (uint32) {
         // Extract 6-bit trait from each 64-bit word, add quadrant identifier
-        uint8 traitA = traitFromWord(uint64(rand));           // Quadrant 0: bits 7-6 = 00
-        uint8 traitB = traitFromWord(uint64(rand >> 64)) | 64;   // Quadrant 1: bits 7-6 = 01
+        uint8 traitA = traitFromWord(uint64(rand)); // Quadrant 0: bits 7-6 = 00
+        uint8 traitB = traitFromWord(uint64(rand >> 64)) | 64; // Quadrant 1: bits 7-6 = 01
         uint8 traitC = traitFromWord(uint64(rand >> 128)) | 128; // Quadrant 2: bits 7-6 = 10
         uint8 traitD = traitFromWord(uint64(rand >> 192)) | 192; // Quadrant 3: bits 7-6 = 11
 

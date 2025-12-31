@@ -1,29 +1,149 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+/*
+╔═══════════════════════════════════════════════════════════════════════════════════════════════════════╗
+║                                      IconRendererTrophy32                                             ║
+║                       ERC721 Metadata Renderer for Degenerus Trophy Tokens                            ║
+╠═══════════════════════════════════════════════════════════════════════════════════════════════════════╣
+║                                                                                                       ║
+║  ARCHITECTURE OVERVIEW                                                                                ║
+║  ─────────────────────                                                                                ║
+║  IconRendererTrophy32 generates complete ERC721 metadata (JSON + base64 SVG) for trophy tokens.       ║
+║  It orchestrates the rendering pipeline by delegating SVG generation to IconRendererTrophy32Svg.     ║
+║                                                                                                       ║
+║  ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐ ║
+║  │                              METADATA GENERATION FLOW                                            │ ║
+║  │                                                                                                  │ ║
+║  │   DegenerusTrophies.tokenURI(tokenId)                                                           │ ║
+║  │          │                                                                                       │ ║
+║  │          ├─► Read _trophyData[tokenId] ─── Packed trophy data (level, trait, flags)             │ ║
+║  │          │                                                                                       │ ║
+║  │          ▼                                                                                       │ ║
+║  │   IconRendererTrophy32.tokenURI(tokenId, data, extras)  ◄─── THIS CONTRACT                      │ ║
+║  │          │                                                                                       │ ║
+║  │          ├─► Parse trophy type (Exterminator/Affiliate/BAF)                                     │ ║
+║  │          ├─► Build description string                                                            │ ║
+║  │          ├─► Build attributes JSON array                                                         │ ║
+║  │          ├─► Call svgRenderer.trophySvg() for image                                             │ ║
+║  │          │                                                                                       │ ║
+║  │          ▼                                                                                       │ ║
+║  │   Return: data:application/json;base64,{...}                                                    │ ║
+║  │          │                                                                                       │ ║
+║  │          └─► "image": "data:image/svg+xml;base64,..."                                           │ ║
+║  └──────────────────────────────────────────────────────────────────────────────────────────────────┘ ║
+║                                                                                                       ║
+║  ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐ ║
+║  │                              TROPHY DATA BIT LAYOUT (from DegenerusTrophies)                    │ ║
+║  │                                                                                                  │ ║
+║  │   bits [0-95]:    Affiliate score or exterminator winnings (uint96, wei)                         │ ║
+║  │   bits [128-151]: Level (uint24)                                                                │ ║
+║  │   bits [152-167]: Exterminated trait (uint16) or sentinel                                       │ ║
+║  │   bit 201:        AFFILIATE_TROPHY_FLAG                                                         │ ║
+║  │   bit 203:        BAF_TROPHY_FLAG                                                               │ ║
+║  │   bit 229:        TROPHY_FLAG_INVERT (visual inversion)                                         │ ║
+║  │                                                                                                  │ ║
+║  │   Sentinel Values:                                                                               │ ║
+║  │   • 0xFFFF - Placeholder trophy (reserved, not yet awarded)                                     │ ║
+║  │   • 0xFFFE - Top affiliate trophy                                                               │ ║
+║  │   • 0xFFFA - BAF trophy                                                                         │ ║
+║  └──────────────────────────────────────────────────────────────────────────────────────────────────┘ ║
+║                                                                                                       ║
+║  ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐ ║
+║  │                              OUTPUT FORMAT                                                       │ ║
+║  │                                                                                                  │ ║
+║  │   {                                                                                              │ ║
+║  │     "name": "Degenerus Level 42 Exterminator Trophy",                                           │ ║
+║  │     "description": "Awarded for level 42 Extermination victory.",                               │ ║
+║  │     "image": "data:image/svg+xml;base64,...",                                                   │ ║
+║  │     "attributes": [                                                                              │ ║
+║  │       {"trait_type": "Level", "value": "42"},                                                   │ ║
+║  │       {"trait_type": "Trophy", "value": "Exterminator"},                                        │ ║
+║  │       {"trait_type": "Extermination Winnings", "value": "1.2 ETH"},                            │ ║
+║  │       {"trait_type": "Crypto", "value": "Pink Bitcoin"}  // if applicable                       │ ║
+║  │     ]                                                                                            │ ║
+║  │   }                                                                                              │ ║
+║  └──────────────────────────────────────────────────────────────────────────────────────────────────┘ ║
+║                                                                                                       ║
+╠═══════════════════════════════════════════════════════════════════════════════════════════════════════╣
+║  SECURITY CONSIDERATIONS                                                                              ║
+║  ───────────────────────                                                                              ║
+║                                                                                                       ║
+║  1. VIEW-ONLY                                                                                         ║
+║     • tokenURI() is a view function - no state changes                                               ║
+║     • Safe to call externally for metadata generation                                                ║
+║                                                                                                       ║
+║  2. ACCESS CONTROL                                                                                    ║
+║     • wire() is onlyAdmin for one-time setup                                                         ║
+║     • Color customization proxied to registry with msg.sender verification                           ║
+║                                                                                                       ║
+║  3. INPUT VALIDATION                                                                                  ║
+║     • Reverts if data indicates non-trophy (bits 128+ must be set)                                   ║
+║     • Handles all sentinel values explicitly                                                         ║
+║                                                                                                       ║
+╠═══════════════════════════════════════════════════════════════════════════════════════════════════════╣
+║  TRUST ASSUMPTIONS                                                                                    ║
+║  ─────────────────                                                                                    ║
+║                                                                                                       ║
+║  1. DegenerusTrophies provides valid packed trophy data                                              ║
+║  2. IconRendererTrophy32Svg generates safe SVG content                                               ║
+║  3. IconColorRegistry validates hex colors correctly                                                 ║
+║  4. Icons32Data provides valid symbol names                                                          ║
+║                                                                                                       ║
+╚═══════════════════════════════════════════════════════════════════════════════════════════════════════╝
+*/
+
 import "@openzeppelin/contracts/utils/Base64.sol";
 import "@openzeppelin/contracts/utils/Strings.sol";
 import "./interfaces/IconRendererTypes.sol";
 import {IIconRendererTrophy32Svg} from "./IconRendererTrophy32Svg.sol";
 
-/**
- * @title IconRendererTrophy32
- * @notice Dedicated renderer for Degenerus trophy metadata and SVG generation.
- */
+/// @title IconRendererTrophy32
+/// @notice ERC721 metadata renderer for Degenerus trophy tokens
+/// @dev Generates JSON metadata with base64-encoded SVG images for trophy NFTs
 contract IconRendererTrophy32 {
     using Strings for uint256;
 
+    // ─────────────────────────────────────────────────────────────────────
+    // CONSTANTS
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// @dev Flag identifying affiliate trophy type (bit 201 in packed data)
     uint256 private constant AFFILIATE_TROPHY_FLAG = uint256(1) << 201;
+
+    /// @dev Flag identifying BAF trophy type (bit 203 in packed data)
     uint256 private constant BAF_TROPHY_FLAG = uint256(1) << 203;
+
+    /// @dev Flag for visual inversion effect (bit 229 in packed data)
     uint256 private constant TROPHY_FLAG_INVERT = uint256(1) << 229;
+
+    /// @dev Sentinel value in trait field indicating BAF trophy
     uint16 private constant BAF_TRAIT_SENTINEL = 0xFFFA;
+
+    // ─────────────────────────────────────────────────────────────────────
+    // IMMUTABLES & WIRING
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// @dev Icon data source for symbol names
     IIcons32 private immutable icons;
+
+    /// @dev Color customization registry
     IColorRegistry private immutable registry;
+
+    /// @dev Admin contract for wire() authorization
     address public immutable admin;
+
+    /// @dev SVG generation engine
     IIconRendererTrophy32Svg private immutable svgRenderer;
 
+    /// @dev Trophy NFT contract (set once via wire())
     IERC721Lite private nft;
 
+    // ─────────────────────────────────────────────────────────────────────
+    // ERRORS
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// @dev Generic error for unauthorized access or invalid state
     error E();
 
     constructor(address icons_, address registry_, address svgRenderer_, address admin_) {
@@ -107,7 +227,7 @@ contract IconRendererTrophy32 {
         // `data` carries the packed trophy word emitted by the game:
         // bits [167:152]=exterminated trait (0xFFFF placeholder), [151:128]=level,
         // [203:201]=trophy type flags, [229]=invert flag.
-        // `extras` carries affiliate score in extras[0..2] when relevant.
+        // `extras` carries affiliate score or exterminator winnings in extras[0..2] when relevant.
         return _tokenURI(tokenId, data, extras);
     }
 
@@ -123,13 +243,12 @@ contract IconRendererTrophy32 {
         bool isAffiliate = (data & AFFILIATE_TROPHY_FLAG) != 0;
         bool isBaf = (data & BAF_TROPHY_FLAG) != 0;
         bool isExtermination = !isAffiliate && !isBaf;
-        uint96 affiliateScore;
-        if (isAffiliate) {
-            affiliateScore =
-                uint96(extras[0]) |
-                (uint96(extras[1]) << 32) |
-                (uint96(extras[2]) << 64);
-        }
+        uint96 extraValue =
+            uint96(extras[0]) |
+            (uint96(extras[1]) << 32) |
+            (uint96(extras[2]) << 64);
+        uint96 affiliateScore = isAffiliate ? extraValue : 0;
+        uint96 exterminationWinnings = isExtermination ? extraValue : 0;
         bool invertFlag = (data & TROPHY_FLAG_INVERT) != 0;
 
         string memory lvlStr = (lvl == 0) ? "TBD" : uint256(lvl).toString();
@@ -174,6 +293,8 @@ contract IconRendererTrophy32 {
             trophyType,
             isAffiliate,
             affiliateScore,
+            isExtermination,
+            exterminationWinnings,
             includeTraitAttr,
             traitType,
             traitValue
@@ -326,6 +447,8 @@ contract IconRendererTrophy32 {
         string memory trophyType,
         bool isAffiliate,
         uint96 affiliateScore,
+        bool isExtermination,
+        uint96 exterminationWinnings,
         bool includeTraitAttr,
         string memory traitType,
         string memory traitValue
@@ -345,6 +468,16 @@ contract IconRendererTrophy32 {
                     attrs,
                     ',{"trait_type":"Affiliate Score","value":"',
                     _formatCoinAmount(affiliateScore),
+                    '"}'
+                )
+            );
+        }
+        if (isExtermination && exterminationWinnings != 0) {
+            attrs = string(
+                abi.encodePacked(
+                    attrs,
+                    ',{"trait_type":"Extermination Winnings","value":"',
+                    _formatEthAmount(exterminationWinnings),
                     '"}'
                 )
             );
@@ -376,6 +509,13 @@ contract IconRendererTrophy32 {
         fracStr[5] = bytes1(uint8(48 + (frac % 10)));
 
         return string.concat(whole.toString(), ".", string(fracStr), " BURNIE");
+    }
+
+    function _formatEthAmount(uint256 amount) private pure returns (string memory) {
+        uint256 scaled = amount / 1e17;
+        uint256 whole = scaled / 10;
+        uint8 frac = uint8(scaled - (whole * 10));
+        return string(abi.encodePacked(whole.toString(), ".", bytes1(uint8(48 + frac)), " ETH"));
     }
 
 }

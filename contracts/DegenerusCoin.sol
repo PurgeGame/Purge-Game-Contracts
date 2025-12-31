@@ -94,7 +94,7 @@ pragma solidity ^0.8.26;
 ║                                                                                                       ║
 ║  2. ACCESS CONTROL                                                                                    ║
 ║     • onlyDegenerusGameContract: Only the game contract                                               ║
-║     • onlyTrustedContracts: Game, NFT, or affiliate                                                   ║
+║     • onlyTrustedContracts: Game, NFT, affiliate, or color registry                                   ║
 ║     • onlyFlipCreditors: Game, NFT, affiliate, or bonds                                               ║
 ║     • onlyVault: Only the vault contract                                                              ║
 ║     • Admin-only: wire(), creditLinkReward()                                                         ║
@@ -124,7 +124,7 @@ pragma solidity ^0.8.26;
 ║  ─────────────────                                                                                    ║
 ║                                                                                                       ║
 ║  1. Admin is trusted for initial wiring only; no post-wire admin capabilities                         ║
-║  2. Wired contracts (game, NFT, quest, jackpots, bonds, vault, affiliate) are trusted                 ║
+║  2. Wired contracts (game, NFT, quest, jackpots, bonds, vault, affiliate, color registry) are trusted ║
 ║  3. VRF provider (Chainlink via game) provides unbiased randomness                                    ║
 ║  4. Block.timestamp is accurate within ~15 minutes (sufficient for daily windows)                     ║
 ║                                                                                                       ║
@@ -136,6 +136,7 @@ pragma solidity ^0.8.26;
 ║  • DegenerusGame         - processCoinflipPayouts, rollDailyQuest, notifyQuestBurn, etc.              ║
 ║  • DegenerusGamepieces   - notifyQuestMint, burnCoin                                                  ║
 ║  • DegenerusAffiliate    - burnCoin, affiliateQuestReward, claimPresale trigger                       ║
+║  • IconColorRegistry     - burnCoin (per-token recolor fee)                                           ║
 ║  • DegenerusBonds        - creditFlip, notifyQuestBond, vaultEscrow                                   ║
 ║  • DegenerusVault        - vaultMintTo, vaultEscrow                                                   ║
 ║  • Players               - transfer, approve, depositCoinflip, decimatorBurn, claimPresale            ║
@@ -345,6 +346,7 @@ contract DegenerusCoin {
       ║  │  5   │ questModule           │ IDegQuests  │ onlyAdmin via wire  │ ║
       ║  │  6   │ jackpots              │ address     │ onlyAdmin via wire  │ ║
       ║  │  7   │ vault                 │ address     │ set at deploy       │ ║
+      ║  │  8   │ colorRegistry         │ address     │ onlyAdmin via wire  │ ║
       ║  └─────────────────────────────────────────────────────────────────┘ ║
       ╚══════════════════════════════════════════════════════════════════════╝*/
 
@@ -372,6 +374,10 @@ contract DegenerusCoin {
     /// @dev Set via constructor. Can only be set once.
     address private vault;
 
+    /// @notice The color registry contract authorized to burn for recoloring.
+    /// @dev Set once via wire().
+    address private colorRegistry;
+
     /// @notice The admin address authorized to wire contracts and credit LINK rewards.
     /// @dev Immutable; set in constructor. No post-wire admin capabilities.
     address private immutable admin;
@@ -392,10 +398,10 @@ contract DegenerusCoin {
       ║  ┌─────────────────────────────────────────────────────────────────┐ ║
       ║  │ Slot │ Variable              │ Type                             │ ║
       ║  ├──────┼───────────────────────┼──────────────────────────────────┤ ║
-      ║  │  8   │ coinflipBalance       │ mapping(day => mapping(addr=>u)) │ ║
-      ║  │  9   │ coinflipDayResult     │ mapping(day => CoinflipDayResult)│ ║
-      ║  │  10  │ lastCoinflipClaim     │ mapping(addr => uint48)          │ ║
-      ║  │  11  │ flipsClaimableDay     │ uint48 (packed with other?)      │ ║
+      ║  │  9   │ coinflipBalance       │ mapping(day => mapping(addr=>u)) │ ║
+      ║  │  10  │ coinflipDayResult     │ mapping(day => CoinflipDayResult)│ ║
+      ║  │  11  │ lastCoinflipClaim     │ mapping(addr => uint48)          │ ║
+      ║  │  12  │ flipsClaimableDay     │ uint48 (packed with other?)      │ ║
       ║  └─────────────────────────────────────────────────────────────────┘ ║
       ╚══════════════════════════════════════════════════════════════════════╝*/
 
@@ -498,9 +504,9 @@ contract DegenerusCoin {
       ║  ┌─────────────────────────────────────────────────────────────────┐ ║
       ║  │ Slot │ Variable         │ Type     │ Size     │ Notes           │ ║
       ║  ├──────┼──────────────────┼──────────┼──────────┼─────────────────┤ ║
-      ║  │  12  │ currentBounty    │ uint128  │ 16 bytes │ Pool size       │ ║
+      ║  │  17  │ currentBounty    │ uint128  │ 16 bytes │ Pool size       │ ║
       ║  │      │ biggestFlipEver  │ uint128  │ 16 bytes │ All-time record │ ║
-      ║  │  13  │ bountyOwedTo     │ address  │ 20 bytes │ Armed recipient │ ║
+      ║  │  18  │ bountyOwedTo     │ address  │ 20 bytes │ Armed recipient │ ║
       ║  └─────────────────────────────────────────────────────────────────┘ ║
       ╚══════════════════════════════════════════════════════════════════════╝*/
 
@@ -685,7 +691,7 @@ contract DegenerusCoin {
       ║  │  Modifier              │ Allowed Callers                        │ ║
       ║  ├────────────────────────┼────────────────────────────────────────┤ ║
       ║  │  onlyDegenerusGame     │ degenerusGame only                     │ ║
-      ║  │  onlyTrustedContracts  │ game, NFT, affiliate                   │ ║
+      ║  │  onlyTrustedContracts  │ game, NFT, affiliate, color registry   │ ║
       ║  │  onlyFlipCreditors     │ game, NFT, affiliate, bonds            │ ║
       ║  │  onlyVault             │ vault only                             │ ║
       ║  └─────────────────────────────────────────────────────────────────┘ ║
@@ -698,14 +704,15 @@ contract DegenerusCoin {
         _;
     }
 
-    /// @dev Restricts access to game, NFT, or affiliate contracts.
+    /// @dev Restricts access to game, NFT, affiliate, or color registry contracts.
     ///      Used for: burnCoin (gameplay burns).
     modifier onlyTrustedContracts() {
         address sender = msg.sender;
         if (
             sender != address(degenerusGame) &&
             sender != address(degenerusGamepieces) &&
-            sender != address(affiliateProgram)
+            sender != address(affiliateProgram) &&
+            sender != colorRegistry
         ) revert OnlyGame();
         _;
     }
@@ -934,14 +941,14 @@ contract DegenerusCoin {
       ║  Each slot can only be set once; re-wiring to a different address    ║
       ║  reverts with AlreadyWired.                                          ║
       ║                                                                      ║
-      ║  WIRE ORDER: [game, nft, questModule, jackpots]                      ║
+      ║  WIRE ORDER: [game, nft, questModule, jackpots, colorRegistry]       ║
       ╚══════════════════════════════════════════════════════════════════════╝*/
 
-    /// @notice Wire game, NFT, quest module, jackpots using an address array.
-    /// @dev Order: [game, nft, quest module, jackpots]; set-once per slot.
+    /// @notice Wire game, NFT, quest module, jackpots, and color registry using an address array.
+    /// @dev Order: [game, nft, quest module, jackpots, colorRegistry]; set-once per slot.
     ///      SECURITY: Only admin can call. Each slot protected by AlreadyWired.
     ///      Downstream modules are wired directly by the admin rather than being cascaded here.
-    /// @param addresses Array of addresses to wire: [game, nft, questModule, jackpots].
+    /// @param addresses Array of addresses to wire: [game, nft, questModule, jackpots, colorRegistry].
     function wire(address[] calldata addresses) external {
         address adminAddr = admin;
         if (msg.sender != adminAddr) revert OnlyAdmin();
@@ -951,6 +958,7 @@ contract DegenerusCoin {
         if (len > 1) _setNft(addresses[1]);
         if (len > 2) _setQuestModule(addresses[2]);
         if (len > 3) _setJackpots(addresses[3]);
+        if (len > 4) _setColorRegistry(addresses[4]);
     }
 
     /// @dev Wire the main game contract (set-once).
@@ -997,6 +1005,18 @@ contract DegenerusCoin {
         if (current == address(0)) {
             jackpots = jackpots_;
         } else if (jackpots_ != current) {
+            revert AlreadyWired();
+        }
+    }
+
+    /// @dev Wire the color registry contract (set-once).
+    /// @param registry_ The IconColorRegistry contract address.
+    function _setColorRegistry(address registry_) private {
+        if (registry_ == address(0)) return;
+        address current = colorRegistry;
+        if (current == address(0)) {
+            colorRegistry = registry_;
+        } else if (registry_ != current) {
             revert AlreadyWired();
         }
     }
