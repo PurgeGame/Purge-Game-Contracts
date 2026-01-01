@@ -4,17 +4,18 @@ Technical reference for the Degenerus quest mechanics.
 
 ## Source of Truth
 
-- `contracts/modules/DegenerusQuestModule.sol`
-- `contracts/interfaces/IDegenerusQuestModule.sol`
+- `contracts/DegenerusQuests.sol`
+- `contracts/interfaces/IDegenerusQuests.sol`
 - `contracts/DegenerusCoin.sol`
 
 ---
 
 ## Architecture
 
-- Quest state lives in `DegenerusQuestModule`
-- Coin-gated: only `DegenerusCoin` can call quest entry points
-- `DegenerusCoin` forwards gameplay events (mints, flips, burns, bonds, affiliates) to quest module
+- Quest state lives in `DegenerusQuests` (standalone contract, not delegatecall)
+- Coin-gated: only `DegenerusCoin` can call the `handle*` entry points
+- `normalizeActiveBurnQuests` can be called by `DegenerusCoin` or `DegenerusGame`
+- `DegenerusCoin` forwards gameplay events (mints, flips, burns, bonds, affiliates) to the quest contract
 - Quest rewards are applied as BURNIE coinflip credit
 - Daily quests rolled during jackpot processing using VRF entropy
 
@@ -77,7 +78,7 @@ For MAPs: 4 MAP mints = 1 quest unit.
 
 - **Burn**: Only when `gameState == 3`
 - **Decimator**: When `decWindowOpenFlag` and level meets criteria
-- **Bond**: When bond purchases are open (level-dependent)
+- **Bond**: Quest can roll any day; progress only advances when bond purchases are open (level-dependent)
 
 ---
 

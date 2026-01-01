@@ -17,8 +17,8 @@ Degenerus is a high-variance, on-chain NFT game designed for risk-seeking player
 
 ### Level Cycle
 
-1. **Purchase Phase**: Buy gamepieces with ETH. Must hit funding target before burn phase opens.
-2. **Burn Phase**: Burn gamepieces to reduce trait counts. First trait to zero = "Exterminated."
+1. **Purchase Phase**: Buy gamepieces with ETH (or BURNIE; BURNIE burns and does not add ETH to pots). Must hit funding target before burn phase opens.
+2. **Burn Phase**: Burn gamepieces to reduce trait counts. First trait to zero (or 1 on L%10=7) = "Exterminated."
 3. **Settlement**: Exterminator wins prize slice + Trophy. Level advances.
 4. **Timeout**: If no extermination after ~10 daily jackpots, level auto-advances.
 

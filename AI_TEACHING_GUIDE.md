@@ -21,6 +21,7 @@ Guide for AI assistants answering questions about the Degenerus contracts.
 | `DegenerusGame.sol` | State machine, ETH/stETH buckets, RNG gating |
 | `DegenerusGamepieces.sol` | ERC721 gamepiece NFT |
 | `DegenerusCoin.sol` | BURNIE (6 decimals), coinflip, quests |
+| `DegenerusQuests.sol` | Daily quest state and rewards (standalone) |
 | `DegenerusBonds.sol` | Maturity cycles, game-over resolution |
 | `DegenerusVault.sol` | Three share classes (BURNIE, DGNRS, ETH/stETH) |
 | `DegenerusJackpots.sol` | BAF + Decimator jackpots |
@@ -35,7 +36,8 @@ Guide for AI assistants answering questions about the Degenerus contracts.
 | `DegenerusGameJackpotModule.sol` | Daily/MAP jackpot logic |
 | `DegenerusGameEndgameModule.sol` | Extermination settlement |
 | `DegenerusGameBondModule.sol` | Staking, yield, game-over drain |
-| `DegenerusQuestModule.sol` | Quest state and rewards |
+
+Quest system is a standalone contract (`DegenerusQuests.sol`) wired once by admin; it is not a delegatecall module.
 
 ### Admin & Wiring
 
@@ -105,15 +107,19 @@ See [ETH_BUCKETS_AND_SOLVENCY.md](ETH_BUCKETS_AND_SOLVENCY.md) for full details.
 **Entry**: `DegenerusGamepieces.purchase(PurchaseParams)`
 
 **Payment options** (`MintPaymentKind`):
-- `DirectEth`: msg.value
-- `Claimable`: from DegenerusGame balance
-- `Combined`: mix
+- `payInCoin=true`: burns BURNIE, no ETH transfer
+- `payInCoin=false` uses `MintPaymentKind`:
+  - `DirectEth`: msg.value
+  - `Claimable`: from DegenerusGame balance
+  - `Combined`: mix
 
 **Flow**:
-1. NFT routes to `DegenerusGame.recordMint(...)` -> funds `nextPrizePool`
+1. `payInCoin=false`: NFT routes to `DegenerusGame.recordMint(...)` -> funds `nextPrizePool`
+   `payInCoin=true`: burns BURNIE, no ETH contribution
 2. Streak bonuses computed in `DegenerusGameMintModule`
 3. BURNIE credits via `DegenerusCoin.creditFlip(...)`
 4. Affiliate handling via `DegenerusAffiliate.payAffiliate(...)`
+5. In state 3, ETH/claimable mints also enqueue MAP tickets for jackpots
 
 ### 2. Buying MAPs
 
@@ -134,7 +140,7 @@ Same `purchase(...)` entry with `PurchaseKind.Map`.
 **Effects**:
 - Decrements `traitRemaining[traitId]`
 - Appends to `traitBurnTicket[level][traitId]`
-- If trait hits zero -> extermination, settlement on next `advanceGame`
+- If trait hits zero -> extermination (on L%10=7, triggers at 1), settlement on next `advanceGame`
 
 ### 4. Advancing Game
 

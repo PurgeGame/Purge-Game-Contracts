@@ -6,7 +6,7 @@ Plain-English basics of how the game works.
 
 ## The Big Idea
 
-- Players put ETH into the game by buying gamepieces or MAPs
+- Players put ETH into the game by buying gamepieces or MAPs (BURNIE buys burn tokens and don't add ETH)
 - That ETH becomes prize pots
 - There is no hidden "house" wallet that can take it
 - Winners get paid only by the game rules
@@ -16,10 +16,10 @@ Plain-English basics of how the game works.
 ## The Game Loop
 
 ### 1. Purchase Phase
-Players buy gamepieces. The game must raise enough ETH to hit a target before the next phase opens.
+Players buy gamepieces with ETH or BURNIE. The game must raise enough ETH to hit a target before the next phase opens.
 
 ### 2. Burn Phase
-Players burn gamepieces to get tickets for jackpots. When one trait runs out, the level ends and a winner is picked.
+Players burn gamepieces to get tickets for jackpots. When one trait runs out (or hits 1 on L%10=7), the level ends and a winner is picked.
 
 ### 3. Next Level
 The loop continues.
@@ -30,7 +30,7 @@ The loop continues.
 
 - Each gamepiece has 4 traits
 - Burning a gamepiece lowers the count for its traits and gives you jackpot tickets
-- If any trait count hits zero, that trait is "exterminated" and the level ends
+- If any trait count hits zero (or 1 on L%10=7), that trait is "exterminated" and the level ends
 
 ---
 

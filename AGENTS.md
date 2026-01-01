@@ -37,6 +37,7 @@ npm run sim:report   # Simulation report
 | `DegenerusAffiliate.sol` | Referrals + rakeback |
 | `DegenerusVault.sol` | Vault shares and claims |
 | `DegenerusTrophies.sol` | Non-transferable trophies |
+| `DegenerusQuests.sol` | Daily quest state and rewards |
 
 ### Modules (delegatecall)
 
@@ -44,7 +45,8 @@ npm run sim:report   # Simulation report
 - `DegenerusGameJackpotModule.sol`
 - `DegenerusGameEndgameModule.sol`
 - `DegenerusGameBondModule.sol`
-- `DegenerusQuestModule.sol`
+
+Quest system is standalone (`DegenerusQuests.sol`), not a delegatecall module.
 
 ### Test Infrastructure
 
@@ -60,9 +62,9 @@ npm run sim:report   # Simulation report
 | BURNIE decimals | 6 |
 | PRICE_COIN_UNIT | 1e9 (= 1000 BURNIE) |
 | JACKPOT_RESET_TIME | 82620 seconds |
-| Game states | 0=shutdown, 1=endgame, 2=purchase, 3=burn |
+| Game states | 0=shutdown, 1=pregame/endgame settlement, 2=purchase, 3=burn |
 | BAF trigger | Every 10 levels |
-| Bond maturity | Every 5 levels |
+| Bond maturity | Every 10 levels |
 | Game over | ~365 days inactive |
 
 ---

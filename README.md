@@ -9,6 +9,7 @@ On-chain, high-variance NFT game on Ethereum.
 | `DegenerusGame.sol` | State machine, ETH/stETH buckets, RNG gating |
 | `DegenerusGamepieces.sol` | ERC721 gamepiece NFTs, purchase flows |
 | `DegenerusCoin.sol` | BURNIE token (6 decimals), coinflip, quests |
+| `DegenerusQuests.sol` | Daily quest state and rewards |
 | `DegenerusBonds.sol` | Bond maturities, time-locked payouts |
 | `DegenerusJackpots.sol` | BAF + Decimator jackpots |
 | `DegenerusAffiliate.sol` | Referrals, rakeback, uplines |
