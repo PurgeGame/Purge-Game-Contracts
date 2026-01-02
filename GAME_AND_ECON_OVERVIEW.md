@@ -154,7 +154,7 @@ Long-term reserve with three share classes:
 | Share | Claims |
 |-------|--------|
 | DGVB | BURNIE |
-| DGVN | DGNRS |
+| DGVD | DGNRS |
 | DGVE | ETH/stETH |
 
 Receives: vault share of bond deposits, DGNRS escrow, bond surplus, final sweep.
