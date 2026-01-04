@@ -964,16 +964,17 @@ contract DegenerusGame is DegenerusGameStorage {
     /// @param mintUnits Number of mint units purchased.
     /// @param payKind Payment method (DirectEth, Claimable, or Combined).
     /// @return coinReward BURNIE reward credited for this mint.
+    /// @return newClaimableBalance Player's claimable balance after deduction (0 if DirectEth).
     function recordMint(
         address player,
         uint24 lvl,
         uint256 costWei,
         uint32 mintUnits,
         MintPaymentKind payKind
-    ) external payable returns (uint256 coinReward) {
+    ) external payable returns (uint256 coinReward, uint256 newClaimableBalance) {
         if (msg.sender != address(nft)) revert E();
-        uint256 amount = costWei;
-        uint256 prizeContribution = _processMintPayment(player, amount, payKind);
+        uint256 prizeContribution;
+        (prizeContribution, newClaimableBalance) = _processMintPayment(player, costWei, payKind);
         if (prizeContribution != 0) {
             nextPrizePool += prizeContribution;
         }
@@ -1006,24 +1007,27 @@ contract DegenerusGame is DegenerusGameStorage {
     /// @param amount Total cost in wei to cover.
     /// @param payKind Payment method enum.
     /// @return prizeContribution Amount flowing to nextPrizePool.
+    /// @return newClaimableBalance Player's claimable balance after deduction (0 if DirectEth).
     function _processMintPayment(
         address player,
         uint256 amount,
         MintPaymentKind payKind
-    ) private returns (uint256 prizeContribution) {
+    ) private returns (uint256 prizeContribution, uint256 newClaimableBalance) {
         uint256 claimableUsed;
         if (payKind == MintPaymentKind.DirectEth) {
             // Direct ETH: exact match required
             if (msg.value != amount) revert E();
             prizeContribution = amount;
+            // newClaimableBalance stays 0 (caller checks claimableUsed first)
         } else if (payKind == MintPaymentKind.Claimable) {
             // Pure claimable: no ETH allowed, must have sufficient balance
             if (msg.value != 0) revert E();
             uint256 claimable = claimableWinnings[player];
             if (claimable <= amount) revert E(); // Need > amount to leave 1 wei sentinel
             unchecked {
-                claimableWinnings[player] = claimable - amount;
+                newClaimableBalance = claimable - amount;
             }
+            claimableWinnings[player] = newClaimableBalance;
             claimableUsed = amount;
             prizeContribution = amount;
         } else if (payKind == MintPaymentKind.Combined) {
@@ -1037,8 +1041,9 @@ contract DegenerusGame is DegenerusGameStorage {
                     claimableUsed = remaining < available ? remaining : available;
                     if (claimableUsed != 0) {
                         unchecked {
-                            claimableWinnings[player] = claimable - claimableUsed;
+                            newClaimableBalance = claimable - claimableUsed;
                         }
+                        claimableWinnings[player] = newClaimableBalance;
                         remaining -= claimableUsed;
                     }
                 }
@@ -1052,7 +1057,6 @@ contract DegenerusGame is DegenerusGameStorage {
         if (claimableUsed != 0) {
             claimablePool -= claimableUsed;
         }
-        return prizeContribution;
     }
 
     /*╔══════════════════════════════════════════════════════════════════════╗

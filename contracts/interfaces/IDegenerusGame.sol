@@ -49,7 +49,7 @@ interface IDegenerusGame is IDegenerusGameExternal {
         uint256 costWei,
         uint32 mintUnits,
         MintPaymentKind payKind
-    ) external payable returns (uint256 coinReward);
+    ) external payable returns (uint256 coinReward, uint256 newClaimableBalance);
 
     function recordCoinflipDeposit(uint256 amount) external;
 

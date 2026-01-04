@@ -765,7 +765,6 @@ contract DegenerusGamepieces {
         }
 
         uint256 bonus;
-        uint256 claimableUsed;
 
         if (payInCoin) {
             if (msg.value != 0) revert E();
@@ -776,7 +775,9 @@ contract DegenerusGamepieces {
             unchecked {
                 scaledQty = mintQuantity * 100;
             }
-            (bonus, claimableUsed) = _processEthPurchase(
+            uint256 claimableUsed;
+            uint256 newClaimableBal;
+            (bonus, claimableUsed, newClaimableBal) = _processEthPurchase(
                 g,
                 payer,
                 buyer,
@@ -796,13 +797,16 @@ contract DegenerusGamepieces {
                 }
             }
             if (claimableUsed != 0) {
-                uint256 baseClaimableBonus = coinCost / CLAIMABLE_BONUS_DIVISOR;
-                unchecked {
-                    bonus += _proRate(baseClaimableBonus, claimableUsed, expectedWei);
-                    if (_spentClaimableMax(g, payer, claimableUsed, priceWei)) {
-                        uint256 baseFullSpendBonus = coinCost / CLAIMABLE_FULL_SPEND_BONUS_DIVISOR;
-                        bonus += _proRate(baseFullSpendBonus, claimableUsed, expectedWei);
+                // Combine base + full-spend bonus if player spent nearly all claimable
+                uint256 bonusBase = coinCost / CLAIMABLE_BONUS_DIVISOR;
+                bool spentMax = newClaimableBal <= 1 || newClaimableBal - 1 < priceWei;
+                if (spentMax) {
+                    unchecked {
+                        bonusBase += coinCost / CLAIMABLE_FULL_SPEND_BONUS_DIVISOR;
                     }
+                }
+                unchecked {
+                    bonus += _proRate(bonusBase, claimableUsed, expectedWei);
                 }
             }
         }
@@ -874,7 +878,6 @@ contract DegenerusGamepieces {
         }
 
         uint256 bonus;
-        uint256 claimableUsed;
 
         if (payInCoin) {
             if (msg.value != 0) revert E();
@@ -886,7 +889,9 @@ contract DegenerusGamepieces {
             // Affiliate coin-triggered mints should not earn rebates/bonuses.
             bonus = payKind == MintPaymentKind.Claimable ? 0 : mapRebate;
         } else {
-            (bonus, claimableUsed) = _processEthPurchase(
+            uint256 claimableUsed;
+            uint256 newClaimableBal;
+            (bonus, claimableUsed, newClaimableBal) = _processEthPurchase(
                 g,
                 payer,
                 buyer,
@@ -905,12 +910,18 @@ contract DegenerusGamepieces {
                 }
             }
             if (claimableUsed != 0) {
+                // MAP unit cost is 1/4 of standard price
                 uint256 mapUnitCostWei = priceWei / 4;
-                unchecked {
-                    bonus += _proRate(mapRebate, claimableUsed, expectedWei);
-                    if (_spentClaimableMax(g, payer, claimableUsed, mapUnitCostWei)) {
-                        bonus += _proRate(mapRebate / 2, claimableUsed, expectedWei);
+                // Combine base + full-spend bonus if player spent nearly all claimable
+                uint256 bonusBase = mapRebate;
+                bool spentMax = newClaimableBal <= 1 || newClaimableBal - 1 < mapUnitCostWei;
+                if (spentMax) {
+                    unchecked {
+                        bonusBase += mapRebate / 2;
                     }
+                }
+                unchecked {
+                    bonus += _proRate(bonusBase, claimableUsed, expectedWei);
                 }
             }
         }
@@ -950,7 +961,7 @@ contract DegenerusGamepieces {
         bool mapPurchase,
         MintPaymentKind payKind,
         uint256 costWei
-    ) private returns (uint256 bonusMint, uint256 claimableUsed) {
+    ) private returns (uint256 bonusMint, uint256 claimableUsed, uint256 newClaimableBal) {
         // ETH purchases optionally bypass payment when in-game credit is used; all flows are forwarded to game logic.
         uint256 valueToSend;
         uint256 msgValue = msg.value;
@@ -976,7 +987,8 @@ contract DegenerusGamepieces {
         uint32 mintedQuantity = uint32(scaledQty / 100);
         uint32 mintUnits = mapPurchase ? mintedQuantity : 4;
 
-        uint256 streakBonus = g.recordMint{value: valueToSend}(payer, lvl, costWei, mintUnits, payKind);
+        uint256 streakBonus;
+        (streakBonus, newClaimableBal) = g.recordMint{value: valueToSend}(payer, lvl, costWei, mintUnits, payKind);
 
         if (mintedQuantity != 0) {
             coin.notifyQuestMint(payer, mintedQuantity, true);
@@ -1026,26 +1038,6 @@ contract DegenerusGamepieces {
     function _proRate(uint256 amount, uint256 numerator, uint256 denominator) private pure returns (uint256) {
         if (amount == 0 || numerator == 0 || denominator == 0) return 0;
         return (amount * numerator) / denominator;
-    }
-
-    /// @dev True if claimable spending leaves less than one unit cost (excludes sentinel).
-    function _spentClaimableMax(
-        IDegenerusGame g,
-        address payer,
-        uint256 claimableUsed,
-        uint256 unitCostWei
-    ) private view returns (bool spentMax) {
-        if (claimableUsed == 0 || unitCostWei == 0) return false;
-
-        uint256 claimableBal = g.claimableWinningsOf(payer);
-        if (claimableBal <= 1) return false;
-        uint256 available = claimableBal - 1;
-        if (available < claimableUsed) return false;
-
-        unchecked {
-            uint256 remaining = available - claimableUsed;
-            return remaining < unitCostWei;
-        }
     }
 
     function _initiationFee(
