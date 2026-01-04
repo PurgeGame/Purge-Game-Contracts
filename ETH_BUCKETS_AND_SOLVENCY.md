@@ -36,7 +36,9 @@ Yield on this ETH is **not** added here (falls through as untracked surplus).
 | `nextPrizePool` | Accumulating pot for next level |
 | `rewardPool` | General fund for daily jackpots, BAF, side-prizes |
 
-Funded by ETH inflows and internal transfers during MAP-jackpot finalization. RewardPool save % adjusts +/- 2% based on coinflip deposits (capped at 98%).
+Funded by ETH inflows and internal transfers. When jackpots pay MAP rewards, the MAP cost is moved into
+`nextPrizePool`, recycling value into future prize pools. RewardPool save % adjusts +/- 2% based on
+coinflip deposits (capped at 98%).
 
 ### Reserved Pools
 
@@ -68,6 +70,7 @@ Every bucket increase is coupled with an ETH inflow:
 | Mints | `nextPrizePool` increases by ETH paid (or claimable decreases by same amount) |
 | Bond deposits | `bondPool` increases only with `trackPool=true` or game-originated `amount/2` |
 | Jackpot allocations | Created by subtracting from other valid pools |
+| Jackpot MAP rewards | `nextPrizePool` increases by the MAP cost taken from prize/reward pools |
 
 ### Mechanism 2: Untracked Surplus (Yield)
 

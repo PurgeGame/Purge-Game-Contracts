@@ -1851,6 +1851,11 @@ contract DegenerusGame is DegenerusGameStorage {
         return stored - 1;
     }
 
+    /// @notice Get a player's raw claimable balance (includes the 1 wei sentinel).
+    function claimableWinningsOf(address player) external view returns (uint256) {
+        return claimableWinnings[player];
+    }
+
     /*╔══════════════════════════════════════════════════════════════════════╗
       ║                    TRAIT TICKET SAMPLING                             ║
       ╠══════════════════════════════════════════════════════════════════════╣

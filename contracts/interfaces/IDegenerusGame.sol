@@ -39,6 +39,8 @@ interface IDegenerusGame is IDegenerusGameExternal {
 
     function playerBonusMultiplier(address player) external view returns (uint256);
 
+    function claimableWinningsOf(address player) external view returns (uint256);
+
     function enqueueMap(address buyer, uint32 quantity) external;
 
     function recordMint(

@@ -39,6 +39,7 @@ The loop continues.
 - **Daily jackpots** run during the burn phase
 - **Carryover jackpots** reward next-level tickets early
 - **MAPs** cost 1/4 of a gamepiece and give one trait ticket + level jackpot entry
+- Some jackpot rewards are paid as MAP tickets; the MAP cost is routed into `nextPrizePool`
 
 ---
 

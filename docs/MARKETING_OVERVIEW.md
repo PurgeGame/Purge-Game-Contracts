@@ -30,7 +30,7 @@ The level jackpot fires at end of each purchase phase, weighted by MAP holdings.
 
 All ETH entering the system flows directly into prize pools, jackpots, and reserves governed by immutable smart contracts. Every mechanism is designed to make depositing ETH the rational choice at every stage.
 
-The flow is straightforward: deposits are algorithmically split into prize pools, bond backing, and yield reserves; jackpots and maturities pay back out to active participants; and external yield refills reward pools between cycles. Money flows in this direction because every role benefits from progression: early players get more draws, bondholders need levels to advance, affiliates earn on volume, and some rewards recycle back into play through auto-bought MAPs and DGNRS burns.
+The flow is straightforward: deposits are algorithmically split into prize pools, bond backing, and yield reserves; jackpots and maturities pay back out to active participants; and external yield refills reward pools between cycles. Some jackpots pay part of winnings as MAP tickets, and that MAP cost rolls into the next prize pool. Money flows in this direction because every role benefits from progression: early players get more draws, bondholders need levels to advance, affiliates earn on volume, and some rewards recycle back into play through auto-bought MAPs and DGNRS burns.
 
 For players, early entry is always advantaged. Early burns enter more jackpot drawings with fewer competitors. Early MAPs capture next-level tickets before burn phase opens. Waiting is costly.
 

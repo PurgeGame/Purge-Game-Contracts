@@ -73,6 +73,9 @@ Bond deposits              →    Bond backing (bondPool)  →   Maturities
 
 **stETH**: Some ETH can be staked to Lido. Yield increases system backing and can expand reward budgets.
 
+Some jackpots pay a MAP-ticket slice. The ETH value of those MAP rewards is routed into `nextPrizePool`,
+so ticket rewards recycle ETH into future prize pools.
+
 ---
 
 ## Jackpots
@@ -85,6 +88,8 @@ Bond deposits              →    Bond backing (bondPool)  →   Maturities
 | **Level** | End of purchase phase | Weighted by MAPs |
 | **BAF** | Every 10 levels | Reward pool slice |
 | **Decimator** | Periodic windows | BURNIE burns, bucketed by streak |
+
+Note: jackpot payouts can convert a portion of ETH into MAP tickets; the MAP cost is added to `nextPrizePool`.
 
 ### Early Entry Advantage
 

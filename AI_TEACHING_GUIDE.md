@@ -120,6 +120,7 @@ See [ETH_BUCKETS_AND_SOLVENCY.md](ETH_BUCKETS_AND_SOLVENCY.md) for full details.
 3. BURNIE credits via `DegenerusCoin.creditFlip(...)`
 4. Affiliate handling via `DegenerusAffiliate.payAffiliate(...)`
 5. In state 3, ETH/claimable mints also enqueue MAP tickets for jackpots
+6. Jackpot payouts can convert a slice into MAP tickets; that MAP cost is routed into `nextPrizePool`
 
 ### 2. Buying MAPs
 
@@ -173,6 +174,7 @@ Level opens burn phase when: `nextPrizePool >= lastPrizePool`
 What increases `nextPrizePool`:
 - ETH/claimable mints flow through `recordMint(...) -> nextPrizePool`
 - BURNIE purchases don't add ETH (burn path)
+- MAP rewards from jackpots: the MAP cost is moved into `nextPrizePool`
 
 ### Ratchet Mechanism
 
@@ -202,6 +204,9 @@ At `level % 100 == 0`: `lastPrizePool = rewardPool` (can jump start target)
 `payDailyJackpot(true, lvl, rngWord)`:
 1. Pays current level jackpot
 2. Pays carryover jackpot for `lvl + 1` (next-level tickets)
+
+MAP rewards:
+- Some jackpots convert part of ETH payouts into MAP tickets; those units are queued and their ETH cost is added to `nextPrizePool`
 
 ### Extermination Flow
 
