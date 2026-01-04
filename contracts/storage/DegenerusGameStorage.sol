@@ -47,7 +47,7 @@ pragma solidity ^0.8.26;
  * │ [4:8]   airdropMultiplier        uint32   Bonus multiplier (scaled)         │
  * │ [8:9]   jackpotCounter           uint8    Jackpots processed this level     │
  * │ [9:10]  earlyBurnPercent         uint8    Previous pool % in early burn     │
- * │ [10:11] mapJackpotPaid           bool     Map jackpot executed flag         │
+ * │ [10:11] levelJackpotPaid         bool     Level jackpot executed flag       │
  * │ [11:12] lastPurchaseDay          bool     Prize target met flag             │
  * │ [12:13] decWindowOpen            bool     Decimator window latch            │
  * │ [13:14] earlyBurnBoostArmed      bool     Boost armed for next jackpot      │
@@ -57,9 +57,10 @@ pragma solidity ^0.8.26;
  * │ [17:18] decimatorHundredReady    bool     Level %100 special primed         │
  * │ [18:19] exterminationInvertFlag  bool     Exterminator bonus inversion      │
  * │ [19:20] bondMaintenancePending   bool     Bond maintenance needed flag      │
- * │ [20:32] <padding>                         12 bytes unused                   │
+ * │ [20:21] mapJackpotType          uint8    0=none, 1=daily, 2=purchase        │
+ * │ [21:32] <padding>                         11 bytes unused                   │
  * └─────────────────────────────────────────────────────────────────────────────┘
- *   Total: 4+4+1+1+1+1+1+1+1+1+1+1+1+1 = 20 bytes (12 bytes padding)
+ *   Total: 4+4+1+1+1+1+1+1+1+1+1+1+1+1+1+1 = 21 bytes (11 bytes padding)
  *
  * ┌─────────────────────────────────────────────────────────────────────────────┐
  * │ SLOT 2 (32 bytes) — Price                                                   │
@@ -218,11 +219,11 @@ abstract contract DegenerusGameStorage {
     ///      calculations in the jackpot module.
     uint8 internal earlyBurnPercent;
 
-    /// @dev True once the MAP (Mint-A-Piece) jackpot has been executed for the
+    /// @dev True once the level jackpot has been executed for the
     ///      current purchase phase. Prevents double-payment.
     ///
     ///      SECURITY: Critical for jackpot integrity. Reset at level transition.
-    bool internal mapJackpotPaid;
+    bool internal levelJackpotPaid;
 
     /// @dev True once the prize target is met for current level.
     ///      When true, next tick skips normal daily/jackpot prep and proceeds
@@ -271,6 +272,12 @@ abstract contract DegenerusGameStorage {
     ///      Prevents normal game progression until bonds are serviced.
     bool internal bondMaintenancePending;
 
+    /// @dev Unified MAP jackpot pending type. Daily and purchase MAP jackpots are
+    ///      mutually exclusive, so a single enum tracks which (if any) is queued:
+    ///      0 = none, 1 = daily, 2 = purchase.
+    ///      Timeout is computed on-the-fly from jackpotCounter >= JACKPOT_LEVEL_CAP.
+    uint8 internal mapJackpotType;
+
     // =========================================================================
     // SLOT 2: Mint Price
     // =========================================================================
@@ -310,7 +317,7 @@ abstract contract DegenerusGameStorage {
     uint256 internal rewardPool;
 
     /// @dev Baseline ETH allocated per daily jackpot.
-    ///      Set during calcPrizePoolForJackpot; consumed by payDailyJackpot.
+    ///      Set during calcPrizePoolForLevelJackpot; consumed by payDailyJackpot.
     ///      Escalating BPS (610-1225) applied per jackpot index.
     uint256 internal dailyJackpotBase;
 
@@ -497,4 +504,16 @@ abstract contract DegenerusGameStorage {
     ///      Compared with current to detect activity trends (doubled/halved).
     ///      Affects reward pool retention percentage in jackpot calculations.
     uint256 internal lastPurchaseDayFlipTotalPrev;
+
+    /// @dev MAP units for the pending MAP jackpot (slot 1).
+    ///      For daily: units for current-level draw.
+    ///      For purchase: the only units slot used.
+    ///      Units are computed at scheduling time to avoid price drift.
+    uint256 internal mapJackpotUnits1;
+
+    /// @dev MAP units for the pending MAP jackpot (slot 2).
+    ///      For daily: units for carryover (next-level) draw.
+    ///      For purchase: unused (remains 0).
+    uint256 internal mapJackpotUnits2;
+
 }

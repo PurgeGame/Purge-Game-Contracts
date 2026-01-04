@@ -33,7 +33,7 @@ Guide for AI assistants answering questions about the Degenerus contracts.
 | Module | Purpose |
 |--------|---------|
 | `DegenerusGameMintModule.sol` | Mint accounting, streak bonuses |
-| `DegenerusGameJackpotModule.sol` | Daily/MAP jackpot logic |
+| `DegenerusGameJackpotModule.sol` | Daily/level jackpot logic |
 | `DegenerusGameEndgameModule.sol` | Extermination settlement |
 | `DegenerusGameBondModule.sol` | Staking, yield, game-over drain |
 
@@ -176,7 +176,7 @@ What increases `nextPrizePool`:
 
 ### Ratchet Mechanism
 
-At MAP jackpot finalization:
+At level jackpot finalization:
 1. `nextPrizePool` -> `currentPrizePool`
 2. `lastPrizePool = currentPrizePool`
 
@@ -189,7 +189,7 @@ At `level % 100 == 0`: `lastPrizePool = rewardPool` (can jump start target)
 ### RewardPool Growth
 
 - Direct ETH to game: `receive() -> rewardPool`
-- Per-level save at MAP jackpot finalization
+- Per-level save at level jackpot finalization
 - Coinflip adjustment: +/- 2% based on last-purchase-day deposits (capped 98%)
 - Yield skims: `bondUpkeep(...)` adds `yieldTotal / 20` to rewardPool
 

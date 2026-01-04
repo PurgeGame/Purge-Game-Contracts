@@ -22,6 +22,11 @@ interface IDegenerusGameJackpotModule {
         IDegenerusCoinModule coinContract
     ) external;
 
+    function payMapJackpot(
+        uint24 lvl,
+        uint256 randWord
+    ) external;
+
     function payCarryoverExterminationJackpot(
         uint24 lvl,
         uint8 traitId,
@@ -37,14 +42,14 @@ interface IDegenerusGameJackpotModule {
         IDegenerusCoinModule coinContract
     ) external returns (uint256 paidEth);
 
-    function payMapJackpot(
+    function payLevelJackpot(
         uint24 lvl,
         uint256 rngWord,
         uint256 effectiveWei,
         IDegenerusCoinModule coinContract
     ) external;
 
-    function calcPrizePoolForJackpot(
+    function calcPrizePoolForLevelJackpot(
         uint24 lvl,
         uint256 rngWord,
         address stethAddr

@@ -429,6 +429,15 @@ contract DegenerusGame is DegenerusGameStorage {
     /// @dev Maximum jackpots per level before forced advancement.
     uint8 private constant JACKPOT_LEVEL_CAP = 10;
 
+    /// @dev MAP jackpot type: no MAP jackpot pending.
+    uint8 private constant MAP_JACKPOT_NONE = 0;
+
+    /// @dev MAP jackpot type: daily MAP jackpot pending (burn phase).
+    uint8 private constant MAP_JACKPOT_DAILY = 1;
+
+    /// @dev MAP jackpot type: purchase-phase MAP jackpot pending.
+    uint8 private constant MAP_JACKPOT_PURCHASE = 2;
+
     /// @dev Sentinel value for "no trait exterminated" (outside valid 0-255 range).
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
 
@@ -1202,12 +1211,17 @@ contract DegenerusGame is DegenerusGameStorage {
             // ║                    STATE 2: PURCHASE / AIRDROP                 ║
             // ║  Mint phase where players purchase NFTs and receive airdrops.  ║
             // ║  • Pay daily jackpot until prize pool target is met            ║
-            // ║  • Pay map jackpot once target is met                          ║
+            // ║  • Pay level jackpot once target is met                        ║
             // ║  • Process pending mint batches                                ║
             // ║  • Rebuild trait counts for new level                          ║
             // ║  • Transition to State 3 when all processing complete          ║
             // ╚════════════════════════════════════════════════════════════════╝
             if (_gameState == 2) {
+                if (mapJackpotType != MAP_JACKPOT_NONE) {
+                    payMapJackpot(lvl, rngWord);
+                    _unlockRng(day);
+                    break;
+                }
                 // --- Pre-target: daily jackpots while building up prize pool ---
                 if (!lastPurchaseDay) {
                     payDailyJackpot(false, lvl, rngWord);
@@ -1216,12 +1230,15 @@ contract DegenerusGame is DegenerusGameStorage {
                         lastPurchaseDay = true;
                         lastPurchaseDayFlipTotal = 0;
                     }
+                    if (mapJackpotType != MAP_JACKPOT_NONE) {
+                        break; // MAP jackpot queued, will process next tick
+                    }
                     _unlockRng(day);
                     break;
                 }
 
-                // --- Target met: pay map jackpot ---
-                if (!mapJackpotPaid) {
+                // --- Target met: pay level jackpot ---
+                if (!levelJackpotPaid) {
                     // Level 100 multiples get special decimator/BAF jackpot
                     if (lvl % 100 == 0) {
                         if (!_runDecimatorHundredJackpot(lvl, rngWord)) {
@@ -1229,10 +1246,10 @@ contract DegenerusGame is DegenerusGameStorage {
                         }
                     }
 
-                    // Calculate and pay map jackpot
-                    uint256 mapEffectiveWei = _calcPrizePoolForJackpot(lvl, rngWord);
-                    payMapJackpot(lvl, rngWord, mapEffectiveWei);
-                    mapJackpotPaid = true;
+                    // Calculate and pay level jackpot
+                    uint256 levelJackpotWei = _calcPrizePoolForLevelJackpot(lvl, rngWord);
+                    payLevelJackpot(lvl, rngWord, levelJackpotWei);
+                    levelJackpotPaid = true;
 
                     // Reset airdrop processing state
                     airdropMapsProcessedCount = 0;
@@ -1240,6 +1257,7 @@ contract DegenerusGame is DegenerusGameStorage {
                         airdropIndex = 0;
                         delete pendingMapMints;
                     }
+                    break;
                 }
 
                 // --- Process pending NFT mints ---
@@ -1276,10 +1294,10 @@ contract DegenerusGame is DegenerusGameStorage {
                 earlyBurnPercent = 0;
                 levelStartTime = ts;
                 gameState = 3;
-                mapJackpotPaid = false;
+                levelJackpotPaid = false;
                 lastPurchaseDay = false;
                 if (lvl % 100 == 99) decWindowOpen = true;
-                _unlockRng(day); // Open RNG after map jackpot is finalized
+                _unlockRng(day); // Open RNG after level jackpot is finalized
                 break;
             }
 
@@ -1291,7 +1309,21 @@ contract DegenerusGame is DegenerusGameStorage {
             // ║  • Transition to State 1 on level end                          ║
             // ╚════════════════════════════════════════════════════════════════╝
             if (_gameState == 3) {
+                if (mapJackpotType != MAP_JACKPOT_NONE) {
+                    payMapJackpot(lvl, rngWord);
+                    // Check timeout on-the-fly (jackpotCounter was incremented before pending was set)
+                    if (jackpotCounter >= JACKPOT_LEVEL_CAP) {
+                        _endLevel(TRAIT_ID_TIMEOUT);
+                        break;
+                    }
+                    _unlockRng(day);
+                    break;
+                }
+
                 payDailyJackpot(true, lvl, rngWord);
+                if (mapJackpotType != MAP_JACKPOT_NONE) {
+                    break; // MAP jackpot queued, will process next tick
+                }
                 // Check for timeout end (10 jackpots paid without extermination)
                 if (jackpotCounter >= JACKPOT_LEVEL_CAP) {
                     _endLevel(TRAIT_ID_TIMEOUT); // Force level end
@@ -1896,7 +1928,7 @@ contract DegenerusGame is DegenerusGameStorage {
       ║                                                                      ║
       ║  Jackpot Types:                                                      ║
       ║  • Daily jackpot - Paid each day to burn ticket holders              ║
-      ║  • Map jackpot - Paid when prize pool target is met                  ║
+      ║  • Level jackpot - Paid when prize pool target is met                ║
       ║  • Decimator - Special 100-level milestone jackpot (40% of pool)     ║
       ║  • BAF - Big-ass-flip jackpot (10% of pool at L%100=0)               ║
       ║  • Carryover extermination - Trait-specific jackpot                  ║
@@ -1938,15 +1970,15 @@ contract DegenerusGame is DegenerusGameStorage {
         return true;
     }
 
-    /// @dev Pay map jackpot via jackpot module delegatecall.
+    /// @dev Pay level jackpot via jackpot module delegatecall.
     ///      Called when prize pool target is met during State 2.
     /// @param lvl Current level.
     /// @param rngWord VRF random word for winner selection.
     /// @param effectiveWei Prize pool amount to distribute.
-    function payMapJackpot(uint24 lvl, uint256 rngWord, uint256 effectiveWei) internal {
+    function payLevelJackpot(uint24 lvl, uint256 rngWord, uint256 effectiveWei) internal {
         (bool ok, bytes memory data) = jackpotModule.delegatecall(
             abi.encodeWithSelector(
-                IDegenerusGameJackpotModule.payMapJackpot.selector,
+                IDegenerusGameJackpotModule.payLevelJackpot.selector,
                 lvl,
                 rngWord,
                 effectiveWei,
@@ -1956,15 +1988,15 @@ contract DegenerusGame is DegenerusGameStorage {
         if (!ok) _revertDelegate(data);
     }
 
-    /// @dev Calculate prize pool for jackpot via jackpot module delegatecall.
+    /// @dev Calculate prize pool for level jackpot via jackpot module delegatecall.
     ///      Factors in stETH balance and other pool considerations.
     /// @param lvl Current level.
     /// @param rngWord VRF random word.
     /// @return effectiveWei The prize pool amount available for jackpot.
-    function _calcPrizePoolForJackpot(uint24 lvl, uint256 rngWord) internal returns (uint256 effectiveWei) {
+    function _calcPrizePoolForLevelJackpot(uint24 lvl, uint256 rngWord) internal returns (uint256 effectiveWei) {
         (bool ok, bytes memory data) = jackpotModule.delegatecall(
             abi.encodeWithSelector(
-                IDegenerusGameJackpotModule.calcPrizePoolForJackpot.selector,
+                IDegenerusGameJackpotModule.calcPrizePoolForLevelJackpot.selector,
                 lvl,
                 rngWord,
                 address(steth)
@@ -1988,6 +2020,20 @@ contract DegenerusGame is DegenerusGameStorage {
                 lvl,
                 randWord,
                 IDegenerusCoinModule(address(coin))
+            )
+        );
+        if (!ok) _revertDelegate(data);
+    }
+
+    /// @dev Pay the queued MAP jackpot (daily or purchase) via jackpot module delegatecall.
+    /// @param lvl Current level.
+    /// @param randWord VRF random word for winner selection.
+    function payMapJackpot(uint24 lvl, uint256 randWord) internal {
+        (bool ok, bytes memory data) = jackpotModule.delegatecall(
+            abi.encodeWithSelector(
+                IDegenerusGameJackpotModule.payMapJackpot.selector,
+                lvl,
+                randWord
             )
         );
         if (!ok) _revertDelegate(data);

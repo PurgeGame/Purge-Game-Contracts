@@ -18,7 +18,7 @@ Expected-only buckets
 │ (index) │ bucket                           │ expected     │
 ├─────────┼──────────────────────────────────┼──────────────┤
 │ 0       │ 'Total pool (carry + prize)'     │ '190.00 ETH' │
-│ 1       │ 'Map jackpot (effective pool)'   │ '25.52 ETH'  │
+│ 1       │ 'Level jackpot (effective pool)' │ '25.52 ETH'  │
 │ 2       │ 'Carry saved for next level'     │ '39.90 ETH'  │
 │ 3       │ 'Reserved prize pool after calc' │ '124.58 ETH' │
 │ 4       │ 'Map trophy direct award'        │ '7.66 ETH'   │
@@ -47,7 +47,7 @@ Level 1 top map winners
 │ 8       │ '0xefb6…4D2d' │ '0.48 ETH' │
 │ 9       │ '0x0518…3422' │ '0.36 ETH' │
 └─────────┴───────────────┴────────────┘
-Level 1 after map jackpot bucket snapshot
+Level 1 after level jackpot bucket snapshot
 ┌─────────┬──────────────────────┬──────────────┐
 │ (index) │ bucket               │ amount       │
 ├─────────┼──────────────────────┼──────────────┤
@@ -139,7 +139,7 @@ Expected-only buckets
 │ (index) │ bucket                           │ expected     │
 ├─────────┼──────────────────────────────────┼──────────────┤
 │ 0       │ 'Total pool (carry + prize)'     │ '217.36 ETH' │
-│ 1       │ 'Map jackpot (effective pool)'   │ '25.87 ETH'  │
+│ 1       │ 'Level jackpot (effective pool)' │ '25.87 ETH'  │
 │ 2       │ 'Carry saved for next level'     │ '65.21 ETH'  │
 │ 3       │ 'Reserved prize pool after calc' │ '126.29 ETH' │
 │ 4       │ 'Map trophy direct award'        │ '7.76 ETH'   │
@@ -168,7 +168,7 @@ Level 2 top map winners
 │ 8       │ '0xF68C…eeA6' │ '0.41 ETH' │
 │ 9       │ '0x3FA2…e89D' │ '0.41 ETH' │
 └─────────┴───────────────┴────────────┘
-Level 2 after map jackpot bucket snapshot
+Level 2 after level jackpot bucket snapshot
 ┌─────────┬──────────────────────┬──────────────┐
 │ (index) │ bucket               │ amount       │
 ├─────────┼──────────────────────┼──────────────┤
@@ -262,7 +262,7 @@ Expected-only buckets
 │ (index) │ bucket                           │ expected     │
 ├─────────┼──────────────────────────────────┼──────────────┤
 │ 0       │ 'Total pool (carry + prize)'     │ '260.34 ETH' │
-│ 1       │ 'Map jackpot (effective pool)'   │ '27.00 ETH'  │
+│ 1       │ 'Level jackpot (effective pool)' │ '27.00 ETH'  │
 │ 2       │ 'Carry saved for next level'     │ '101.53 ETH' │
 │ 3       │ 'Reserved prize pool after calc' │ '131.81 ETH' │
 │ 4       │ 'Map trophy direct award'        │ '8.10 ETH'   │
@@ -291,7 +291,7 @@ Level 3 top map winners
 │ 8       │ '0xDfdc…3203' │ '0.36 ETH' │
 │ 9       │ '0x0518…3422' │ '0.36 ETH' │
 └─────────┴───────────────┴────────────┘
-Level 3 after map jackpot bucket snapshot
+Level 3 after level jackpot bucket snapshot
 ┌─────────┬──────────────────────┬──────────────┐
 │ (index) │ bucket               │ amount       │
 ├─────────┼──────────────────────┼──────────────┤
@@ -385,7 +385,7 @@ Expected-only buckets
 │ (index) │ bucket                           │ expected     │
 ├─────────┼──────────────────────────────────┼──────────────┤
 │ 0       │ 'Total pool (carry + prize)'     │ '314.71 ETH' │
-│ 1       │ 'Map jackpot (effective pool)'   │ '31.57 ETH'  │
+│ 1       │ 'Level jackpot (effective pool)' │ '31.57 ETH'  │
 │ 2       │ 'Carry saved for next level'     │ '129.03 ETH' │
 │ 3       │ 'Reserved prize pool after calc' │ '154.11 ETH' │
 │ 4       │ 'Map trophy direct award'        │ '9.47 ETH'   │
@@ -414,7 +414,7 @@ Level 4 top map winners
 │ 8       │ '0x7405…298B' │ '0.56 ETH' │
 │ 9       │ '0xC11a…64Df' │ '0.50 ETH' │
 └─────────┴───────────────┴────────────┘
-Level 4 after map jackpot bucket snapshot
+Level 4 after level jackpot bucket snapshot
 ┌─────────┬──────────────────────┬──────────────┐
 │ (index) │ bucket               │ amount       │
 ├─────────┼──────────────────────┼──────────────┤
@@ -508,7 +508,7 @@ Expected-only buckets
 │ (index) │ bucket                           │ expected     │
 ├─────────┼──────────────────────────────────┼──────────────┤
 │ 0       │ 'Total pool (carry + prize)'     │ '364.44 ETH' │
-│ 1       │ 'Map jackpot (effective pool)'   │ '32.53 ETH'  │
+│ 1       │ 'Level jackpot (effective pool)' │ '32.53 ETH'  │
 │ 2       │ 'Carry saved for next level'     │ '173.11 ETH' │
 │ 3       │ 'Reserved prize pool after calc' │ '158.81 ETH' │
 │ 4       │ 'Map trophy direct award'        │ '9.76 ETH'   │
@@ -537,7 +537,7 @@ Level 5 top map winners
 │ 8       │ '0x7f33…4112' │ '0.58 ETH' │
 │ 9       │ '0xe9d7…098d' │ '0.58 ETH' │
 └─────────┴───────────────┴────────────┘
-Level 5 after map jackpot bucket snapshot
+Level 5 after level jackpot bucket snapshot
 ┌─────────┬──────────────────────┬──────────────┐
 │ (index) │ bucket               │ amount       │
 ├─────────┼──────────────────────┼──────────────┤

@@ -119,7 +119,7 @@ Quest system is standalone (`DegenerusQuests.sol`), not a delegatecall module.
 
 - [ ] Daily: current + next level (carryover)
 - [ ] Extermination + carryover extermination
-- [ ] MAP jackpot finalizes pool transitions
+- [ ] Level jackpot finalizes pool transitions
 - [ ] BAF every 10 levels
 - [ ] Decimator window enforcement
 

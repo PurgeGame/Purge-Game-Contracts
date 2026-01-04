@@ -733,10 +733,10 @@ contract DegenerusGamepieces {
 
         uint24 targetLevel;
         uint8 state;
-        bool mapJackpotReady;
+        bool levelJackpotReady;
         bool rngLocked_;
         uint256 priceWei;
-        (targetLevel, state, mapJackpotReady, rngLocked_, priceWei) = game.purchaseInfo();
+        (targetLevel, state, levelJackpotReady, rngLocked_, priceWei) = game.purchaseInfo();
 
         if ((targetLevel % 20) == 16) revert NotTimeYet();
         if (rngLocked_) revert RngNotReady();
@@ -778,7 +778,7 @@ contract DegenerusGamepieces {
                 payKind,
                 expectedWei
             );
-            if (mapJackpotReady && (targetLevel % 100) > 90) {
+            if (levelJackpotReady && (targetLevel % 100) > 90) {
                 bonus += (quantity * PRICE_COIN_UNIT) / 5;
             }
         }
@@ -820,10 +820,10 @@ contract DegenerusGamepieces {
         // Map purchase flow: mints 4:1 scaled quantity and immediately queues them for burn draws.
         uint24 lvl;
         uint8 state;
-        bool mapJackpotReady;
+        bool levelJackpotReady;
         bool rngLocked_;
         uint256 priceWei;
-        (lvl, state, mapJackpotReady, rngLocked_, priceWei) = game.purchaseInfo();
+        (lvl, state, levelJackpotReady, rngLocked_, priceWei) = game.purchaseInfo();
         if (state == 3 && payInCoin) revert NotTimeYet();
         if (quantity == 0 || quantity > type(uint32).max) revert InvalidQuantity();
         if (rngLocked_) revert RngNotReady();
@@ -870,7 +870,7 @@ contract DegenerusGamepieces {
                 payKind,
                 expectedWei
             );
-            if (mapJackpotReady && (lvl % 100) > 90) {
+            if (levelJackpotReady && (lvl % 100) > 90) {
                 bonus += coinCost / 5;
             }
             if (payKind != MintPaymentKind.DirectEth) {

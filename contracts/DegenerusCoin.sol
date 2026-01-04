@@ -266,7 +266,7 @@ contract DegenerusCoin {
     /// @notice Caller is not the authorized NFT (gamepieces) contract.
     error OnlyNft();
 
-    /// @notice Coinflip deposits are locked during map jackpot resolution.
+    /// @notice Coinflip deposits are locked during level jackpot resolution.
     error CoinflipLocked();
 
     /*╔══════════════════════════════════════════════════════════════════════╗
@@ -781,7 +781,7 @@ contract DegenerusCoin {
     /// @notice Burn BURNIE to increase the caller's coinflip stake, applying quest rewards when eligible.
     /// @dev Zero-amount calls act as cash-out of pending winnings without adding new stake.
     ///      SECURITY: Burns BEFORE downstream calls (CEI pattern) to prevent reentrancy.
-    ///      Locked during map jackpot resolution to prevent stake manipulation.
+    ///      Locked during level jackpot resolution to prevent stake manipulation.
     /// @param amount Amount (6 decimals) to burn; must satisfy MIN (100 BURNIE), or zero for cash-out.
     function depositCoinflip(uint256 amount) external {
         // Allow zero-amount calls to act as a cash-out of pending winnings without adding a new stake.
@@ -791,7 +791,7 @@ contract DegenerusCoin {
             return;
         }
         // Prevent deposits during critical RNG resolution phase
-        if (_coinflipLockedDuringMapJackpot()) revert CoinflipLocked();
+        if (_coinflipLockedDuringLevelJackpot()) revert CoinflipLocked();
         if (amount < MIN) revert AmountLTMin();
 
         address caller = msg.sender;
@@ -817,10 +817,10 @@ contract DegenerusCoin {
         emit CoinflipDeposit(caller, amount);
     }
 
-    /// @dev Check if coinflip deposits are locked during map jackpot resolution.
+    /// @dev Check if coinflip deposits are locked during level jackpot resolution.
     ///      Locked when: gameState=2 (exterminate) AND lastPurchaseDay AND rngLocked.
     /// @return locked True if deposits should be rejected.
-    function _coinflipLockedDuringMapJackpot() private view returns (bool locked) {
+    function _coinflipLockedDuringLevelJackpot() private view returns (bool locked) {
         (, uint8 gameState_, bool lastPurchaseDay_, bool rngLocked_, ) = degenerusGame.purchaseInfo();
         locked = (gameState_ == 2) && lastPurchaseDay_ && rngLocked_;
     }

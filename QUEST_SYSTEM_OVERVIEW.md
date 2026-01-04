@@ -49,7 +49,7 @@ For MAPs: 4 MAP mints = 1 quest unit.
 |---------|----------------|
 | `payDailyJackpot` | `rollDailyQuest` |
 | `payCarryoverExterminationJackpot` | `rollDailyQuest` |
-| `payMapJackpot` | Force MINT_ETH + BURN |
+| `payLevelJackpot` | Force MINT_ETH + BURN |
 
 ---
 

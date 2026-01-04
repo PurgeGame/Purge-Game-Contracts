@@ -26,7 +26,7 @@ Degenerus is a high-variance, on-chain NFT game designed for risk-seeking player
 
 - Each gamepiece has 4 traits (one per quadrant), deterministically generated
 - Burning decrements trait counts, earns BURNIE credits, enters jackpots
-- **MAPs**: Pay 1/4 gamepiece price for 1 trait ticket + MAP Jackpot entry
+- **MAPs**: Pay 1/4 gamepiece price for 1 trait ticket + level jackpot entry
 
 ### Pricing
 
@@ -82,7 +82,7 @@ Bond deposits              →    Bond backing (bondPool)  →   Maturities
 | **Daily** | Each day during burn phase | Prize pool + reward slice |
 | **Extermination** | Trait hits zero | Prize pool |
 | **Carryover** | After extermination | Reward pool (next-level tickets) |
-| **MAP** | End of purchase phase | Weighted by MAPs |
+| **Level** | End of purchase phase | Weighted by MAPs |
 | **BAF** | Every 10 levels | Reward pool slice |
 | **Decimator** | Periodic windows | BURNIE burns, bucketed by streak |
 
@@ -193,7 +193,7 @@ Non-custodial gamepiece trading. Fees (listing + trade %) are burned as BURNIE.
 | Coinflip Player | Win daily flip | ~50% total loss |
 | Bondholder | Game reaches maturity | Lane elimination |
 | Affiliate | Active referrals | Revenue depends on network |
-| MAP Buyer | Win MAP Jackpot | Sunk cost, variance |
+| MAP Buyer | Win level jackpot | Sunk cost, variance |
 | Vault Holder | Long-term accumulation | Illiquid, game-dependent |
 
 **Core principle**: Everyone is incentivized to keep the game progressing.
