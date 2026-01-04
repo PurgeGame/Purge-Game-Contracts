@@ -410,7 +410,7 @@ contract DegenerusJackpots is IDegenerusJackpots {
     /// @dev Access: bondsAdmin only. Uses set-once pattern for each address.
     ///      SECURITY: Prevents malicious contract replacement after initial wiring.
     /// @param addresses Array of addresses: [coin, game, affiliate].
-    function wire(address[] calldata addresses) external override {
+    function wire(address[] calldata addresses) external {
         address admin = bondsAdmin;
         if (msg.sender != admin) revert OnlyAdmin();
 

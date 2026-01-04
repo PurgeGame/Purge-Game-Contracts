@@ -3,28 +3,11 @@ pragma solidity ^0.8.26;
 
 import {IDegenerusCoinModule} from "../interfaces/DegenerusGameModuleInterfaces.sol";
 import {IDegenerusGameJackpotModule} from "../interfaces/IDegenerusGameModules.sol";
+import {IDegenerusBondsJackpot} from "../interfaces/IDegenerusBondsJackpot.sol";
 import {IDegenerusJackpots} from "../interfaces/IDegenerusJackpots.sol";
 import {IDegenerusTrophies} from "../interfaces/IDegenerusTrophies.sol";
 import {IDegenerusAffiliate} from "../interfaces/IDegenerusAffiliate.sol";
 import {DegenerusGameStorage} from "../storage/DegenerusGameStorage.sol";
-
-/// @notice Minimal interface for bond deposits from game-originated payouts.
-interface IDegenerusBondsJackpot {
-    /// @notice Deposit ETH for a beneficiary from an external source.
-    /// @param beneficiary Address to credit the bond position.
-    /// @return scoreAwarded Bond score credited.
-    function depositCurrentFor(address beneficiary) external payable returns (uint256 scoreAwarded);
-
-    /// @notice Deposit for a beneficiary using game's internal ETH (no msg.value).
-    /// @param beneficiary Address to credit the bond position.
-    /// @param amount ETH amount to deposit (from game's bondPool accounting).
-    /// @return scoreAwarded Bond score credited.
-    function depositFromGame(address beneficiary, uint256 amount) external returns (uint256 scoreAwarded);
-
-    /// @notice Check if bond purchases are currently enabled.
-    /// @return True if deposits are accepted.
-    function purchasesEnabled() external view returns (bool);
-}
 
 /// @notice Minimal interface for queuing NFT reward mints.
 interface IDegenerusGamepiecesRewards {

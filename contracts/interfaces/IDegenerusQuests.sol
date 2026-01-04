@@ -22,8 +22,6 @@ struct PlayerQuestView {
 }
 
 interface IDegenerusQuests {
-    function wire(address[] calldata addresses) external;
-
     function rollDailyQuest(uint48 day, uint256 entropy)
         external
         returns (bool rolled, uint8[2] memory questTypes, bool highDifficulty);

@@ -159,28 +159,6 @@ struct PurchaseParams {
     bytes32 affiliateCode;   // Affiliate/referral code (ETH purchases only)
 }
 
-/// @notice Interface for DegenerusGamepieces contract.
-/// @dev Used by game contract and other ecosystem components.
-interface IDegenerusGamepieces {
-    function tokenTraitsPacked(uint256 tokenId) external view returns (uint32);
-    function purchaseCount() external view returns (uint32);
-    function queueRewardMints(address player, uint32 quantity) external;
-    function processPendingMints(
-        uint32 playersToProcess,
-        uint32 multiplier,
-        uint256 rngWord
-    ) external returns (bool finished);
-    function advanceBase() external;
-    function nextTokenId() external view returns (uint256);
-    function burnFromGame(address owner, uint256[] calldata tokenIds) external;
-    function currentBaseTokenId() external view returns (uint256);
-    function tokensOwed(address player) external view returns (uint32);
-    function processDormant(uint32 maxCount) external returns (bool worked);
-    function clearPlaceholderPadding(uint256 startTokenId, uint256 endTokenId) external;
-    function purchase(PurchaseParams calldata params) external payable;
-    function purchaseMapForAffiliate(address buyer, uint256 quantity) external;
-}
-
 /// @notice Minimal BURNIE token interface for marketplace operations.
 interface IBurnieToken {
     function transferFrom(address from, address to, uint256 amount) external returns (bool);

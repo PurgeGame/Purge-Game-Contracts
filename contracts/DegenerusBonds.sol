@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {IDegenerusCoin} from "./interfaces/IDegenerusCoin.sol";
+import {IStETH} from "./interfaces/IStETH.sol";
 
 // ═══════════════════════════════════════════════════════════════════════════════════════════════════
 // @title DegenerusBonds
@@ -170,25 +171,12 @@ interface IVRFCoordinatorV2Like {
     ) external returns (uint256 requestId);
 }
 
-/// @notice Lido stETH interface for balance queries and transfers.
-interface IStETHLike {
-    function balanceOf(address account) external view returns (uint256);
-    function transferFrom(address from, address to, uint256 amount) external returns (bool);
-    function transfer(address to, uint256 amount) external returns (bool);
-    function approve(address spender, uint256 amount) external returns (bool);
-}
-
 /// @notice Vault interface for depositing ETH and stETH.
 interface IVaultLike {
     /// @notice Deposit ETH and/or stETH to the vault.
     /// @param coinAmount Unused (reserved for future coin deposits).
     /// @param stEthAmount Amount of stETH to deposit (requires prior approval).
     function deposit(uint256 coinAmount, uint256 stEthAmount) external payable;
-}
-
-/// @notice Interface for crediting FLIP tokens to players.
-interface ICoinFlipCreditor {
-    function creditFlip(address player, uint256 amount) external;
 }
 
 /// @notice Game interface for pricing and state information.
@@ -1282,7 +1270,7 @@ contract DegenerusBonds {
         uint256 pulledStEth;
         if (stEthAmount != 0) {
             uint256 beforeBal = _stEthBalance();
-            try IStETHLike(steth).transferFrom(msg.sender, address(this), stEthAmount) {} catch {}
+            try IStETH(steth).transferFrom(msg.sender, address(this), stEthAmount) {} catch {}
             uint256 afterBal = _stEthBalance();
             if (afterBal > beforeBal) {
                 pulledStEth = afterBal - beforeBal;
@@ -1338,7 +1326,7 @@ contract DegenerusBonds {
             if (affiliateAddr == address(0)) return false;
             IAffiliatePresaleCredit(affiliateAddr).addPresaleCoinCredit(winner, amount);
         } else {
-            ICoinFlipCreditor(coin).creditFlip(winner, amount);
+            IDegenerusCoin(coin).creditFlip(winner, amount);
         }
         emit BondCoinJackpot(winner, amount, targetMat, lane);
         return true;
@@ -1514,13 +1502,13 @@ contract DegenerusBonds {
             uint256 stUsed;
             if (vaultShare != 0 && gameAddr != address(0)) {
                 uint256 stBal;
-                try IStETHLike(steth).balanceOf(gameAddr) returns (uint256 b) {
+                try IStETH(steth).balanceOf(gameAddr) returns (uint256 b) {
                     stBal = b;
                 } catch {}
                 if (stBal != 0) {
                     uint256 stPull = stBal < vaultShare ? stBal : vaultShare;
                     bool pulled;
-                    try IStETHLike(steth).transferFrom(gameAddr, address(this), stPull) returns (bool ok) {
+                    try IStETH(steth).transferFrom(gameAddr, address(this), stPull) returns (bool ok) {
                         pulled = ok;
                     } catch {}
                     if (pulled) {
@@ -2069,7 +2057,7 @@ contract DegenerusBonds {
     }
 
     function _stEthBalance() private view returns (uint256 bal) {
-        try IStETHLike(steth).balanceOf(address(this)) returns (uint256 b) {
+        try IStETH(steth).balanceOf(address(this)) returns (uint256 b) {
             return b;
         } catch {
             return 0;
@@ -2161,7 +2149,7 @@ contract DegenerusBonds {
         if (current != address(0)) revert AlreadySet();
         vault = vault_;
         tokenDGNRS.setVault(vault_);
-        if (!IStETHLike(steth).approve(vault_, type(uint256).max)) revert BankCallFailed();
+        if (!IStETH(steth).approve(vault_, type(uint256).max)) revert BankCallFailed();
     }
 
     function _setCoin(address coin_) private {
@@ -2624,7 +2612,7 @@ contract DegenerusBonds {
         }
         if (remaining != 0) {
             address stEthToken = steth;
-            try IStETHLike(stEthToken).transfer(player, remaining) returns (bool ok) {
+            try IStETH(stEthToken).transfer(player, remaining) returns (bool ok) {
                 if (!ok) return false;
             } catch {
                 return false;

@@ -2,20 +2,10 @@
 pragma solidity ^0.8.26;
 
 import {IDegenerusCoinModule} from "../interfaces/DegenerusGameModuleInterfaces.sol";
+import {IDegenerusBondsJackpot} from "../interfaces/IDegenerusBondsJackpot.sol";
+import {IStETH} from "../interfaces/IStETH.sol";
 import {DegenerusGameStorage} from "../storage/DegenerusGameStorage.sol";
 import {DegenerusTraitUtils} from "../DegenerusTraitUtils.sol";
-
-/// @dev Read-only interface for stETH balance queries during solvency checks.
-interface IStETHView {
-    function balanceOf(address account) external view returns (uint256);
-}
-
-/// @dev Minimal interface for bond contract interactions from jackpot payouts.
-interface IDegenerusBondsJackpot {
-    function purchasesEnabled() external view returns (bool);
-    function depositCurrentFor(address beneficiary) external payable returns (uint256 scoreAwarded);
-    function depositFromGame(address beneficiary, uint256 amount) external returns (uint256 scoreAwarded);
-}
 
 /**
  * @title DegenerusGameJackpotModule
@@ -758,7 +748,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
         effectiveWei = levelJackpotWei;
 
         if ((lvl % 100) == 0) {
-            uint256 stBal = IStETHView(stethAddr).balanceOf(address(this));
+            uint256 stBal = IStETH(stethAddr).balanceOf(address(this));
             uint256 totalBal = address(this).balance + stBal;
             uint256 obligations = currentPrizePool + nextPrizePool + rewardPool + claimablePool + bondPool;
             uint256 bafPool = bafHundredPool;

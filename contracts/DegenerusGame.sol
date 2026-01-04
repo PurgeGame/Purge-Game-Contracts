@@ -172,11 +172,12 @@ pragma solidity ^0.8.26;
 ╚═══════════════════════════════════════════════════════════════════════════════════════════════════════╝
 */
 
-import {IDegenerusGamepieces} from "./DegenerusGamepieces.sol";
+import {IDegenerusGamepieces} from "./interfaces/IDegenerusGamepieces.sol";
 import {IDegenerusCoinModule} from "./interfaces/DegenerusGameModuleInterfaces.sol";
 import {IDegenerusCoin} from "./interfaces/IDegenerusCoin.sol";
 import {IDegenerusAffiliate} from "./interfaces/IDegenerusAffiliate.sol";
 import {IDegenerusJackpots} from "./interfaces/IDegenerusJackpots.sol";
+import {IStETH} from "./interfaces/IStETH.sol";
 import {
     IDegenerusGameEndgameModule,
     IDegenerusGameJackpotModule,
@@ -192,21 +193,6 @@ import {DegenerusGameStorage} from "./storage/DegenerusGameStorage.sol";
   ║  Minimal interfaces for external contracts this contract interacts with.    ║
   ║  These are defined locally to avoid circular import dependencies.           ║
   ╚══════════════════════════════════════════════════════════════════════════════╝*/
-
-/// @notice Interface for Lido stETH token operations.
-/// @dev Used for staking ETH and managing stETH balances.
-interface IStETH {
-    /// @notice Stake ETH and receive stETH.
-    function submit(address referral) external payable returns (uint256);
-    /// @notice Get stETH balance of an account.
-    function balanceOf(address account) external view returns (uint256);
-    /// @notice Transfer stETH to another address.
-    function transfer(address to, uint256 amount) external returns (bool);
-    /// @notice Approve spender to transfer stETH.
-    function approve(address spender, uint256 amount) external returns (bool);
-    /// @notice Transfer stETH from one address to another (with approval).
-    function transferFrom(address from, address to, uint256 amount) external returns (bool);
-}
 
 /// @notice Interface for DegenerusBonds operations called from game.
 interface IDegenerusBonds {

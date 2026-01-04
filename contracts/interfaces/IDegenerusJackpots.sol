@@ -24,6 +24,4 @@ interface IDegenerusJackpots {
         uint256 baseAmount,
         uint256 multBps
     ) external returns (uint8 bucketUsed);
-
-    function wire(address[] calldata addresses) external;
 }

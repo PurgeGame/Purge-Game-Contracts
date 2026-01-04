@@ -15,8 +15,6 @@ interface IDegenerusCoin is IDegenerusCoinModule {
 
     function normalizeActiveBurnQuests() external;
 
-    function questModuleAddr() external view returns (address);
-
     function notifyQuestMint(address player, uint32 quantity, bool paidWithEth) external;
 
     function notifyQuestBond(address player, uint256 basePerBondWei) external;
