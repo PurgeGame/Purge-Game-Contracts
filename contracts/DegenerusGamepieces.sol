@@ -469,6 +469,9 @@ contract DegenerusGamepieces {
     /// @dev Total purchases for current level (reset after processing).
     uint32 private _purchaseCount;
 
+    /// @dev Per-player level-100 bonus usage (packed: [level:24][usedUnits:32]) for x00 levels.
+    mapping(address => uint256) private _level100BonusPacked;
+
     /// @dev Queue of addresses with pending mint allocations.
     address[] private _pendingMintQueue;
 
@@ -493,14 +496,19 @@ contract DegenerusGamepieces {
     /// @dev Bonus divisor for claimable rebuys (10% bonus = 1/10).
     uint256 private constant CLAIMABLE_BONUS_DIVISOR = 10;
 
-    /// @dev Bonus divisor for full-claimable spend (5% bonus = 1/20).
-    uint256 private constant CLAIMABLE_FULL_SPEND_BONUS_DIVISOR = 20;
+    /// @dev Bonus divisor for full-claimable spend (10% bonus = 1/10).
+    uint256 private constant CLAIMABLE_FULL_SPEND_BONUS_DIVISOR = 10;
 
     /// @dev BURNIE token unit (6 decimals = 1e6, scaled by 1000 = 1e9).
     uint256 private constant PRICE_COIN_UNIT = 1_000_000_000;
 
     /// @dev Flat affiliate reward for claimable ETH purchases (5% of price unit).
     uint256 private constant AFFILIATE_CLAIMABLE_REWARD = PRICE_COIN_UNIT / 20;
+
+    /// @dev Level-100 bonus cap: 100 mints worth, counted in map units (4 per mint).
+    uint32 private constant LEVEL_100_BONUS_UNIT_SCALE = 4;
+    uint32 private constant LEVEL_100_BONUS_CAP_UNITS = 100 * LEVEL_100_BONUS_UNIT_SCALE;
+    uint256 private constant LEVEL_100_BONUS_LEVEL_SHIFT = 32;
 
     /// @dev Max tokens to emit burn events for in processDormant batch.
     uint32 private constant DORMANT_EMIT_BATCH = 3500;
@@ -753,15 +761,16 @@ contract DegenerusGamepieces {
             coinCost = quantity * PRICE_COIN_UNIT;
         }
         uint256 expectedWei;
+        uint256 priceCostWei;
         uint256 mintQuantity = quantity;
-        if (!payInCoin && targetLevel == 100) {
+        if (!payInCoin && (targetLevel % 100) == 0) {
             uint256 multBps = g.playerBonusMultiplier(payer);
-            mintQuantity = (quantity * multBps) / 10000;
+            mintQuantity = _applyLevel100BonusCap(payer, targetLevel, quantity, multBps, false);
             if (mintQuantity > type(uint32).max) revert InvalidQuantity();
         }
         if (!payInCoin) {
-            expectedWei = priceWei * quantity;
-            expectedWei += _initiationFee(g, targetLevel, payer, priceWei);
+            priceCostWei = priceWei * quantity;
+            expectedWei = priceCostWei + _initiationFee(g, targetLevel, payer, priceWei);
         }
 
         uint256 bonus;
@@ -797,16 +806,19 @@ contract DegenerusGamepieces {
                 }
             }
             if (claimableUsed != 0) {
-                // Combine base + full-spend bonus if player spent nearly all claimable
+                // Combine base + full-spend bonus if player spent all claimable (sentinel only)
                 uint256 bonusBase = coinCost / CLAIMABLE_BONUS_DIVISOR;
-                bool spentMax = newClaimableBal <= 1 || newClaimableBal - 1 < priceWei;
-                if (spentMax) {
+                bool spentAll = newClaimableBal <= 1;
+                if (spentAll) {
                     unchecked {
                         bonusBase += coinCost / CLAIMABLE_FULL_SPEND_BONUS_DIVISOR;
                     }
                 }
-                unchecked {
-                    bonus += _proRate(bonusBase, claimableUsed, expectedWei);
+                uint256 claimableForBonus = claimableUsed > priceCostWei ? priceCostWei : claimableUsed;
+                if (claimableForBonus != 0 && priceCostWei != 0) {
+                    unchecked {
+                        bonus += _proRate(bonusBase, claimableForBonus, priceCostWei);
+                    }
                 }
             }
         }
@@ -859,11 +871,12 @@ contract DegenerusGamepieces {
         }
         uint256 mapBonus;
         uint256 expectedWei;
+        uint256 priceCostWei;
         uint256 scaledQty;
         uint256 mintQuantity = quantity;
-        if (!payInCoin && lvl == 100) {
+        if (!payInCoin && (lvl % 100) == 0) {
             uint256 multBps = g.playerBonusMultiplier(payer);
-            mintQuantity = (quantity * multBps) / 10000;
+            mintQuantity = _applyLevel100BonusCap(payer, lvl, quantity, multBps, true);
             if (mintQuantity > type(uint32).max) revert InvalidQuantity();
         }
         if (!payInCoin) {
@@ -873,8 +886,8 @@ contract DegenerusGamepieces {
             unchecked {
                 mapBonus = (quantity / 40) * PRICE_COIN_UNIT;
             }
-            expectedWei = (priceWei * quantity) / 4;
-            expectedWei += _initiationFee(g, lvl, payer, priceWei);
+            priceCostWei = (priceWei * quantity) / 4;
+            expectedWei = priceCostWei + _initiationFee(g, lvl, payer, priceWei);
         }
 
         uint256 bonus;
@@ -910,18 +923,19 @@ contract DegenerusGamepieces {
                 }
             }
             if (claimableUsed != 0) {
-                // MAP unit cost is 1/4 of standard price
-                uint256 mapUnitCostWei = priceWei / 4;
-                // Combine base + full-spend bonus if player spent nearly all claimable
+                // Combine base + full-spend bonus if player spent all claimable (sentinel only)
                 uint256 bonusBase = mapRebate;
-                bool spentMax = newClaimableBal <= 1 || newClaimableBal - 1 < mapUnitCostWei;
-                if (spentMax) {
+                bool spentAll = newClaimableBal <= 1;
+                if (spentAll) {
                     unchecked {
-                        bonusBase += mapRebate / 2;
+                        bonusBase += mapRebate;
                     }
                 }
-                unchecked {
-                    bonus += _proRate(bonusBase, claimableUsed, expectedWei);
+                uint256 claimableForBonus = claimableUsed > priceCostWei ? priceCostWei : claimableUsed;
+                if (claimableForBonus != 0 && priceCostWei != 0) {
+                    unchecked {
+                        bonus += _proRate(bonusBase, claimableForBonus, priceCostWei);
+                    }
                 }
             }
         }
@@ -1033,6 +1047,48 @@ contract DegenerusGamepieces {
         unchecked {
             bonusMint = rakebackMint + streakBonus;
         }
+    }
+
+    function _applyLevel100BonusCap(
+        address payer,
+        uint24 lvl,
+        uint256 quantity,
+        uint256 multBps,
+        bool mapPurchase
+    ) private returns (uint256 mintQuantity) {
+        // Level-100 (x00) bonus applies only to the first 100 mint-equivalents of ETH/claimable purchases.
+        uint256 units;
+        unchecked {
+            units = mapPurchase ? quantity : quantity * LEVEL_100_BONUS_UNIT_SCALE;
+        }
+
+        uint256 packed = _level100BonusPacked[payer];
+        uint24 storedLevel = uint24(packed >> LEVEL_100_BONUS_LEVEL_SHIFT);
+        uint256 used = uint32(packed);
+        if (storedLevel != lvl) {
+            used = 0;
+        }
+
+        uint256 remaining = used >= LEVEL_100_BONUS_CAP_UNITS ? 0 : LEVEL_100_BONUS_CAP_UNITS - used;
+        uint256 eligibleUnits = units > remaining ? remaining : units;
+        uint256 ineligibleUnits = units - eligibleUnits;
+
+        if (eligibleUnits != 0 || storedLevel != lvl) {
+            unchecked {
+                _level100BonusPacked[payer] =
+                    (uint256(lvl) << LEVEL_100_BONUS_LEVEL_SHIFT) |
+                    uint256(uint32(used + eligibleUnits));
+            }
+        }
+
+        uint256 effectiveBps = multBps < BPS_DENOMINATOR ? BPS_DENOMINATOR : multBps;
+        uint256 mintedUnits;
+        unchecked {
+            mintedUnits = (eligibleUnits * effectiveBps) / BPS_DENOMINATOR + ineligibleUnits;
+        }
+
+        if (mapPurchase) return mintedUnits;
+        return mintedUnits / LEVEL_100_BONUS_UNIT_SCALE;
     }
 
     function _proRate(uint256 amount, uint256 numerator, uint256 denominator) private pure returns (uint256) {

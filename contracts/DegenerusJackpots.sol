@@ -47,7 +47,7 @@ pragma solidity ^0.8.26;
   ║  │                                                                         │ ║
   ║  │  Coin Contract                                                          │ ║
   ║  │       │                                                                 │ ║
-  ║  │       ▼ recordDecBurn(player, lvl, bucket, amount)                      │ ║
+  ║  │       ▼ recordDecBurn(player, lvl, bucket, baseAmount, multBps)         │ ║
   ║  │  ┌─────────────────────────────────────────────────────────────────┐    │ ║
   ║  │  │                    BUCKET SYSTEM                                │    │ ║
   ║  │  │                                                                 │    │ ║
@@ -297,6 +297,15 @@ contract DegenerusJackpots is IDegenerusJackpots {
     /// @dev BURNIE token base unit (6 decimals = 1e6).
     uint256 private constant MILLION = 1e6;
 
+    /// @dev BURNIE unit per ETH mint (1000 BURNIE).
+    uint256 private constant PRICE_COIN_UNIT = 1000 * MILLION;
+
+    /// @dev Basis points denominator (10000 = 100%).
+    uint16 private constant BPS_DENOMINATOR = 10_000;
+
+    /// @dev Multiplier cap for Decimator burns (200 mints worth).
+    uint256 private constant DECIMATOR_MULTIPLIER_CAP = 200 * PRICE_COIN_UNIT;
+
     /// @dev Bit offset in bondMask for scatter winner flags.
     ///      First 128 bits for direct winners, upper bits for scatter.
     uint256 private constant BAF_SCATTER_MASK_OFFSET = 128;
@@ -492,13 +501,15 @@ contract DegenerusJackpots is IDegenerusJackpots {
     /// @param player Address of the player.
     /// @param lvl Current game level.
     /// @param bucket Player's chosen denominator (2-10).
-    /// @param amount Burn amount to record.
+    /// @param baseAmount Burn amount before multiplier (includes quest rewards).
+    /// @param multBps Player bonus multiplier in bps.
     /// @return bucketUsed The bucket actually used (may differ if already locked).
     function recordDecBurn(
         address player,
         uint24 lvl,
         uint8 bucket,
-        uint256 amount
+        uint256 baseAmount,
+        uint256 multBps
     ) external override onlyCoin returns (uint8 bucketUsed) {
         DecEntry storage e = decBurn[lvl][player];
         uint192 prevBurn = e.burn;
@@ -512,8 +523,10 @@ contract DegenerusJackpots is IDegenerusJackpots {
 
         bucketUsed = e.bucket;
 
+        uint256 effectiveAmount = _decEffectiveAmount(uint256(prevBurn), baseAmount, multBps);
+
         // Accumulate burn with uint192 saturation
-        uint256 updated = uint256(prevBurn) + amount;
+        uint256 updated = uint256(prevBurn) + effectiveAmount;
         if (updated > type(uint192).max) updated = type(uint192).max;
         uint192 newBurn = uint192(updated);
         e.burn = newBurn;
@@ -525,6 +538,27 @@ contract DegenerusJackpots is IDegenerusJackpots {
         }
 
         return bucketUsed;
+    }
+
+    /// @dev Apply multiplier until the cap is reached; extra amount is counted at 1x.
+    function _decEffectiveAmount(
+        uint256 prevBurn,
+        uint256 baseAmount,
+        uint256 multBps
+    ) private pure returns (uint256 effectiveAmount) {
+        if (baseAmount == 0) return 0;
+        if (multBps <= BPS_DENOMINATOR || prevBurn >= DECIMATOR_MULTIPLIER_CAP) {
+            return baseAmount;
+        }
+
+        uint256 remaining = DECIMATOR_MULTIPLIER_CAP - prevBurn;
+        uint256 fullEffective = (baseAmount * multBps) / BPS_DENOMINATOR;
+        if (fullEffective <= remaining) return fullEffective;
+
+        uint256 maxMultBase = (remaining * BPS_DENOMINATOR) / multBps;
+        if (maxMultBase > baseAmount) maxMultBase = baseAmount;
+        uint256 multiplied = (maxMultBase * multBps) / BPS_DENOMINATOR;
+        effectiveAmount = multiplied + (baseAmount - maxMultBase);
     }
 
     /*╔══════════════════════════════════════════════════════════════════════╗

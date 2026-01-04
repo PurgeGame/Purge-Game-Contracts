@@ -845,7 +845,8 @@ contract DegenerusCoin {
       ║  • Non-100 levels: bucket = 10 - (streak / 10), min 5                ║
       ║  • 100-levels: bucket = 10 - (streak/20 + mintLvls/25), min 2        ║
       ║                                                                      ║
-      ║  The effective burn amount is scaled by player's bonus multiplier.   ║
+      ║  The effective burn amount is scaled by player's bonus multiplier,   ║
+      ║  but the multiplier is disabled once effective score reaches cap.    ║
       ╚══════════════════════════════════════════════════════════════════════╝*/
 
     /// @notice Burn BURNIE during an active Decimator window to accrue weighted participation.
@@ -879,7 +880,6 @@ contract DegenerusCoin {
         // Scale decimator weight using the shared player bonus multiplier.
         uint256 multBps = game.playerBonusMultiplier(caller);
         uint256 baseAmount = amount + questReward;
-        uint256 effectiveAmount = (baseAmount * multBps) / BPS_DENOMINATOR;
 
         // Calculate bucket based on level type and player's mint streak
         uint8 bucket = DECIMATOR_BUCKET;
@@ -898,7 +898,13 @@ contract DegenerusCoin {
         }
 
         // Record the burn with the jackpots module
-        uint8 bucketUsed = IDegenerusJackpots(moduleAddr).recordDecBurn(caller, lvl, bucket, effectiveAmount);
+        uint8 bucketUsed = IDegenerusJackpots(moduleAddr).recordDecBurn(
+            caller,
+            lvl,
+            bucket,
+            baseAmount,
+            multBps
+        );
 
         emit DecimatorBurn(caller, amount, bucketUsed);
     }
