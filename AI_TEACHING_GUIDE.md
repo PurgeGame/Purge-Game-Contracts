@@ -23,7 +23,7 @@ Guide for AI assistants answering questions about the Degenerus contracts.
 | `DegenerusCoin.sol` | BURNIE (6 decimals), coinflip, quests |
 | `DegenerusQuests.sol` | Daily quest state and rewards (standalone) |
 | `DegenerusBonds.sol` | Maturity cycles, game-over resolution |
-| `DegenerusVault.sol` | Three share classes (BURNIE, DGNRS, ETH/stETH) |
+| `DegenerusVault.sol` | Four share classes (BURNIE, DGNRS, ETH/stETH, DGVA all-share) |
 | `DegenerusJackpots.sol` | BAF + Decimator jackpots |
 | `DegenerusAffiliate.sol` | Referral payouts |
 | `DegenerusTrophies.sol` | Non-transferable trophies |

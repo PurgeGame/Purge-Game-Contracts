@@ -25,7 +25,7 @@ pragma solidity ^0.8.26;
 ║  │   │  Bit 229        │ TROPHY_FLAG_INVERT    │ Visual inversion flag for renderer            │   │ ║
 ║  │   │  Bit 203        │ BAF_TROPHY_FLAG       │ Identifies BAF trophy type                    │   │ ║
 ║  │   │  Bit 201        │ AFFILIATE_TROPHY_FLAG │ Identifies Affiliate trophy type              │   │ ║
-║  │   │  Bits 152-159   │ trait (uint8)         │ Exterminator trait ID or sentinel value       │   │ ║
+║  │   │  Bits 152-167   │ trait (uint16)        │ Exterminator trait (low 8) or sentinel value  │   │ ║
 ║  │   │  Bits 128-151   │ level (uint24)        │ Game level when trophy was earned             │   │ ║
 ║  │   │  Bits 0-95      │ score (uint96)        │ Affiliate score or exterminator winnings      │   │ ║
 ║  │   └─────────────────────────────────────────────────────────────────────────────────────────┘   │ ║
@@ -50,7 +50,7 @@ pragma solidity ^0.8.26;
 ║  KEY INVARIANTS                                                                                       ║
 ║  ──────────────                                                                                       ║
 ║  • Tokens are permanently non-transferable (soulbound)                                                ║
-║  • All transfer/approval functions revert with TransfersDisabled()                                    ║
+║  • All transfer and approval setters revert (getters return zero/false)                               ║
 ║  • Once minted, a trophy cannot be burned or moved                                                    ║
 ║  • Token IDs are sequential starting from 1                                                           ║
 ║  • Only the game contract can mint trophies                                                           ║
@@ -159,7 +159,7 @@ contract DegenerusTrophies is IDegenerusTrophies {
     // Bit layout for _trophyData (uint256):
     //   Bits 0-95:    affiliate score or exterminator winnings (uint96, wei)
     //   Bits 128-151: level (uint24)
-    //   Bits 152-159: trait (uint8)
+    //   Bits 152-167: trait (uint16; low 8 bits for exterminator)
     //   Bit 201:      AFFILIATE_TROPHY_FLAG
     //   Bit 203:      BAF_TROPHY_FLAG
     //   Bit 229:      TROPHY_FLAG_INVERT

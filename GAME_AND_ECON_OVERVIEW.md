@@ -156,15 +156,18 @@ Built-in marketing: the protocol rewards people who bring new participants.
 
 ## Vault
 
-Long-term reserve with three share classes:
+Long-term reserve with four share classes:
 
 | Share | Claims |
 |-------|--------|
 | DGVB | BURNIE |
 | DGVD | DGNRS |
 | DGVE | ETH/stETH |
+| DGVA | 20% share of ETH/stETH + BURNIE + DGNRS |
 
 Receives: vault share of bond deposits, DGNRS escrow, bond surplus, final sweep.
+
+Note: DGVA claims 20% of combined ETH+stETH deposits and 20% of BURNIE/DGNRS allowances; stETH rebase yield accrues to DGVE only.
 
 ---
 
