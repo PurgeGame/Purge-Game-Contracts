@@ -44,7 +44,6 @@ pragma solidity ^0.8.26;
 ║  │   bit 229:        TROPHY_FLAG_INVERT (visual inversion)                                         │ ║
 ║  │                                                                                                  │ ║
 ║  │   Sentinel Values:                                                                               │ ║
-║  │   • 0xFFFF - Placeholder trophy (reserved, not yet awarded)                                     │ ║
 ║  │   • 0xFFFE - Top affiliate trophy                                                               │ ║
 ║  │   • 0xFFFA - BAF trophy                                                                         │ ║
 ║  └──────────────────────────────────────────────────────────────────────────────────────────────────┘ ║
@@ -225,7 +224,7 @@ contract IconRendererTrophy32 {
         uint32[4] calldata extras
     ) external view returns (string memory) {
         // `data` carries the packed trophy word emitted by the game:
-        // bits [167:152]=exterminated trait (0xFFFF placeholder), [151:128]=level,
+        // bits [167:152]=exterminated trait (0..255 or sentinel 0xFFFE/0xFFFA), [151:128]=level,
         // [203:201]=trophy type flags, [229]=invert flag.
         // `extras` carries affiliate score or exterminator winnings in extras[0..2] when relevant.
         return _tokenURI(tokenId, data, extras);
@@ -253,23 +252,18 @@ contract IconRendererTrophy32 {
 
         string memory lvlStr = (lvl == 0) ? "TBD" : uint256(lvl).toString();
         string memory trophyType;
-        string memory trophyLabel;
         if (isAffiliate) {
             trophyType = "Affiliate";
-            trophyLabel = "Affiliate Trophy";
         } else if (isBaf) {
             trophyType = "BAF";
-            trophyLabel = "BAF Trophy";
         } else {
             trophyType = "Exterminator";
-            trophyLabel = "Exterminator Trophy";
         }
 
         string memory desc = _buildDescription(
             exTr,
             lvl,
             lvlStr,
-            trophyLabel,
             isAffiliate,
             isBaf,
             affiliateScore
@@ -319,7 +313,7 @@ contract IconRendererTrophy32 {
         uint256 data
     ) private pure returns (uint16) {
         uint16 ex16 = uint16((data >> 152) & 0xFFFF);
-        if (ex16 >= 0xFFFA) return ex16;
+        if (ex16 == 0xFFFE || ex16 == BAF_TRAIT_SENTINEL) return ex16;
         return uint16(uint8(ex16));
     }
 
@@ -398,24 +392,11 @@ contract IconRendererTrophy32 {
         uint16 exTr,
         uint24 lvl,
         string memory lvlStr,
-        string memory trophyLabel,
         bool isAffiliate,
         bool isBaf,
         uint96 affiliateScore
     ) private pure returns (string memory desc) {
-        if (exTr == 0xFFFF) {
-            if (lvl == 0) {
-                desc = string.concat("Reserved Degenerus ", trophyLabel, ".");
-            } else {
-                desc = string.concat(
-                    "Reserved for level ",
-                    lvlStr,
-                    " ",
-                    trophyLabel,
-                    "."
-                );
-            }
-        } else if (isAffiliate && exTr == 0xFFFE) {
+        if (isAffiliate && exTr == 0xFFFE) {
             desc = string.concat(
                 "Awarded to the top affiliate for level ",
                 lvlStr

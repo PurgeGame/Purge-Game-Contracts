@@ -49,10 +49,6 @@ pragma solidity ^0.8.26;
 ║  │   ├─ Gold ring color (palette index 7)                                                          │ ║
 ║  │   └─ 6-second SMIL animation loop                                                               │ ║
 ║  │                                                                                                  │ ║
-║  │   PLACEHOLDER TROPHY (exTr == 0xFFFF)                                                            │ ║
-║  │   ├─ Reserved trophy not yet awarded                                                            │ ║
-║  │   ├─ Shows flame/affiliate badge based on type flag                                             │ ║
-║  │   └─ Uses owner color preferences with larger ring                                              │ ║
 ║  └──────────────────────────────────────────────────────────────────────────────────────────────────┘ ║
 ║                                                                                                       ║
 ║  ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐ ║
@@ -94,7 +90,7 @@ pragma solidity ^0.8.26;
 ║                                                                                                       ║
 ║  4. INPUT HANDLING                                                                                    ║
 ║     • SvgParams validated by caller (IconRendererTrophy32)                                           ║
-║     • Sentinel values (0xFFFF, 0xFFFE, 0xFFFA) handled explicitly                                    ║
+║     • Sentinel values (0xFFFE, 0xFFFA) handled explicitly                                            ║
 ║                                                                                                       ║
 ╠═══════════════════════════════════════════════════════════════════════════════════════════════════════╣
 ║  TRUST ASSUMPTIONS                                                                                    ║
@@ -135,7 +131,7 @@ interface IIconRendererTrophy32Svg {
     /// @notice Parameters for trophy SVG generation
     struct SvgParams {
         uint256 tokenId;           // Trophy token ID
-        uint16 exterminatedTrait;  // Trait ID (0-255) or sentinel (0xFFFF/0xFFFE/0xFFFA)
+        uint16 exterminatedTrait;  // Trait ID (0-255) or sentinel (0xFFFE/0xFFFA)
         bool isAffiliate;          // True if affiliate trophy type
         bool isBaf;                // True if BAF trophy type
         uint24 lvl;                // Game level when trophy was earned
@@ -197,8 +193,6 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg {
 
     /// @dev Sentinel value indicating BAF trophy type in trait field
     uint16 private constant BAF_TRAIT_SENTINEL = 0xFFFA;
-    string private constant AFFILIATE_BADGE_PATH =
-        "M511.717 490.424l-85.333-136.533c-1.559-2.495-4.294-4.011-7.236-4.011H94.88c-2.942 0-5.677 1.516-7.236 4.011L2.311 490.424c-3.552 5.684 0.534 13.056 7.236 13.056H504.48c6.703 0 10.789-7.372 7.237-13.056zM24.943 486.414L99.61 366.947h314.807l74.667 119.467H24.943zM188.747 179.214c-2.942 0-5.677 1.516-7.236 4.011L96.177 319.758c-3.552 5.684 0.534 13.056 7.236 13.056h307.2c6.702 0 10.789-7.372 7.236-13.056l-45.173-72.277h73.146c3.789 14.723 17.152 25.6 33.058 25.6 18.853 0 34.133-15.281 34.133-34.133s-15.281-34.133-34.133-34.133c-15.906 0-29.269 10.877-33.058 25.6H362.01l-29.493-47.189c-1.559-2.495-4.294-4.011-7.236-4.011H188.747zM478.88 221.88c9.427 0 17.067 7.64 17.067 17.067 0 9.427-7.64 17.067-17.067 17.067s-17.067-7.64-17.067-17.067c0-9.427 7.64-17.067 17.067-17.067zM395.217 315.747H118.81l74.667-119.467h127.074l74.666 119.467zM94.88 145.08c15.906 0 29.269-10.877 33.058-25.6h74.961l-13.437 30.713c-2.467 5.638 1.664 11.954 7.818 11.954h119.467c6.154 0 10.284-6.316 7.818-11.954L264.832 13.66c-2.983-6.817-12.653-6.817-15.636 0l-38.83 88.754H127.938c-3.789-14.723-17.152-25.6-33.058-25.6-18.853 0-34.133 15.281-34.133 34.133 0 18.852 15.281 34.133 34.133 34.133zM257.014 38.37l46.686 106.71h-93.371l46.685-106.71zM94.88 93.88c9.427 0 17.067 7.64 17.067 17.067 0 9.427-7.64 17.067-17.067 17.067-9.427 0-17.067-7.64-17.067-17.067 0-9.427 7.64-17.067 17.067-17.067z";
     uint16 private constant BAF_FLIP_VB = 130;
     uint24[8] private BASE_COLOR = [0xf409cd, 0x7c2bff, 0x30d100, 0xed0e11, 0x1317f7, 0xf7931a, 0x5e5e5e, 0xab8d3f];
     string private constant MAP_CORNER_TRANSFORM = "matrix(0.51 0 0 0.51 -6.12 -6.12)";
@@ -257,57 +251,8 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg {
         bool isBaf = params.isBaf;
         uint24 lvl = params.lvl;
 
-        // Placeholder trophies skip trait-driven palette lookup and instead derive colors
-        // from owner/referrer overrides plus registry-configured sizes.
         uint32 innerSide = _innerSquareSide();
-        string memory diamondPath = icons.diamond();
         bool isExtermination = !isAffiliate && !isBaf;
-        bool placeholderTrait = exterminatedTrait == 0xFFFF;
-
-        if (placeholderTrait) {
-            uint8 ringIdx;
-            if (isAffiliate) {
-                ringIdx = 4;
-            } else if (isBaf) {
-                ringIdx = 7;
-            } else {
-                ringIdx = 3;
-            }
-            string memory borderColor = _resolve(tokenId, 0, _borderColor(tokenId, 0, uint8(1) << ringIdx, lvl));
-
-            uint32 pct = registry.trophyOuter(address(nft), tokenId);
-            uint32 diameter = (pct <= 1) ? 88 : uint32((uint256(innerSide) * pct) / 1_000_000);
-            uint32 rOut = diameter / 2;
-            uint32 rMid = uint32((uint256(rOut) * RATIO_MID_1e6) / 1_000_000);
-            uint32 rIn = uint32((uint256(rOut) * RATIO_IN_1e6) / 1_000_000);
-
-            string memory head = _svgHeader(borderColor, _resolve(tokenId, 3, "#d9d9d9"));
-            string memory placeholderFlameColor = _resolve(tokenId, 1, "#ff3300");
-            string memory ringColor = _paletteColor(ringIdx, lvl);
-            string memory bandColor = placeholderFlameColor;
-            string memory rings = _rings(
-                ringColor,
-                bandColor,
-                _resolve(tokenId, 2, "#fff"),
-                rOut,
-                rMid,
-                rIn,
-                0,
-                0
-            );
-
-            string memory clip = string(
-                abi.encodePacked(
-                    '<defs><clipPath id="ct"><circle cx="0" cy="0" r="',
-                    uint256(rIn).toString(),
-                    '"/></clipPath></defs>'
-                )
-            );
-
-            string memory centerGlyph = _centerGlyph(isAffiliate, placeholderFlameColor, ringColor, diamondPath);
-            string memory body = string(abi.encodePacked(rings, clip, centerGlyph));
-            return _composeSvg(head, body, isExtermination);
-        }
 
         bool isTopAffiliate = isAffiliate && exterminatedTrait == 0xFFFE;
         bool isBafAward = isBaf && exterminatedTrait == BAF_TRAIT_SENTINEL;
@@ -485,42 +430,6 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg {
                 )
             );
     }
-
-    function _centerGlyph(
-        bool isAffiliate,
-        string memory defaultFillColor,
-        string memory outerRingColor,
-        string memory flamePath
-    ) private pure returns (string memory) {
-        if (isAffiliate) {
-            return
-                string(
-                    abi.encodePacked(
-                        '<g clip-path="url(#ct)">',
-                        '<path fill="',
-                        outerRingColor,
-                        '" transform="matrix(0.075 0 0 0.075 -19.2 -21.0)" d="',
-                        AFFILIATE_BADGE_PATH,
-                        '"/>',
-                        "</g>"
-                    )
-                );
-        }
-
-        return
-            string(
-                abi.encodePacked(
-                    '<g clip-path="url(#ct)">',
-                    '<path fill="',
-                    defaultFillColor,
-                    '" transform="matrix(0.13 0 0 0.13 -56 -41)" d="',
-                    flamePath,
-                    '"/>',
-                    "</g>"
-                )
-            );
-    }
-
 
     function _cornerGlyph(string memory cornerTransform) private pure returns (string memory) {
         return

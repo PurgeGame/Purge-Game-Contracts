@@ -516,7 +516,7 @@ contract IconRendererRegular32 {
                 highlightInvert = true;
             }
         } else {
-            highlightInvert = (lastExterminated == 0xFFFF) ||
+            highlightInvert =
                 (lastExterminated != 420 && lastExterminated <= 255 && traitId == uint8(lastExterminated));
         }
 
