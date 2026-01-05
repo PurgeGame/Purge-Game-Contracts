@@ -306,7 +306,7 @@ contract DegenerusAffiliate {
 
     /// @notice Records the game level when a player's referral was established.
     /// @dev Used by _referralRewardScaleBps() to calculate reward decay.
-    ///      Level 0 = not yet joined via referral; decay starts after 50 levels.
+    ///      Level 0 = presale/unwired join; decay starts after 50 levels.
     mapping(address => uint24) public referralJoinLevel;
 
     /// @notice Presale-era affiliate earnings awaiting claim.
@@ -504,6 +504,9 @@ contract DegenerusAffiliate {
         address gameAddr = address(degenerusGame);
         if (gameAddr != address(0)) {
             _recordReferralJoinLevel(msg.sender, degenerusGame.level());
+        } else {
+            // Presale/unwired: record join at level 0 for decay tracking.
+            _recordReferralJoinLevel(msg.sender, 0);
         }
         emit Affiliate(0, code_, msg.sender); // 0 = player referred
     }
@@ -617,6 +620,8 @@ contract DegenerusAffiliate {
 
         AffiliateCodeInfo storage info;
         if (storedCode == bytes32(0)) {
+            // Bonds never pass a code; don't lock or set a referral on "no code" paths.
+            if (code == bytes32(0) && caller == bonds) return 0;
             // No stored code - try to use the provided code.
             AffiliateCodeInfo storage candidate = affiliateCode[code];
             if (candidate.owner == address(0) || candidate.owner == sender) {
@@ -976,12 +981,12 @@ contract DegenerusAffiliate {
     /**
      * @notice Record the level at which a player's referral was established.
      * @dev Only records if not already set (first referral wins).
-     *      Used for calculating reward decay over time.
+     *      Used for calculating reward decay over time (level 0 allowed for presale).
      * @param player The player being referred.
      * @param lvl The current game level.
      */
     function _recordReferralJoinLevel(address player, uint24 lvl) private {
-        if (player == address(0) || lvl == 0) return;
+        if (player == address(0)) return;
         // Only record the first join level (immutable after set).
         if (referralJoinLevel[player] == 0) {
             referralJoinLevel[player] = lvl;
@@ -1008,8 +1013,8 @@ contract DegenerusAffiliate {
      */
     function _referralRewardScaleBps(address player, uint24 currentLevel) private view returns (uint256 scaleBps) {
         uint24 joinLevel = referralJoinLevel[player];
-        // No join level recorded, or current is at/before join = full rewards.
-        if (joinLevel == 0 || currentLevel <= joinLevel) return 10_000;
+        // At/before join = full rewards (presale join level can be 0).
+        if (currentLevel <= joinLevel) return 10_000;
 
         uint256 delta = uint256(currentLevel - joinLevel);
         // Grace period: first 50 levels = full rewards.

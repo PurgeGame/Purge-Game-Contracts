@@ -117,6 +117,9 @@ interface IDegenerusBondsAdmin {
 
     /// @notice Emergency VRF reconfiguration during recovery.
     function emergencySetVrf(address coordinator_, uint256 vrfSubId, bytes32 vrfKeyHash_) external;
+
+    /// @notice Configure the target stETH share (in bps) for game-held liquidity; 0 disables staking.
+    function setRewardStakeTargetBps(uint16 bps) external;
 }
 
 /// @dev Bonds contract presale admin interface.
@@ -765,6 +768,17 @@ contract DegenerusAdmin {
         address bondsAddr = bonds;
         advanced = IDegenerusBondsPresaleAdmin(bondsAddr).runPresaleJackpot();
         emit PresaleJackpotRun(advanced);
+    }
+
+    // =========================================================================
+    // BONDS ADMINISTRATION
+    // =========================================================================
+
+    /// @notice Configure the target stETH share (in bps) for game-held liquidity; 0 disables staking.
+    function setRewardStakeTargetBps(uint16 bps) external onlyOwner {
+        address bondsAddr = bonds;
+        if (bondsAddr == address(0)) revert NotWired();
+        IDegenerusBondsAdmin(bondsAddr).setRewardStakeTargetBps(bps);
     }
 
     // =========================================================================

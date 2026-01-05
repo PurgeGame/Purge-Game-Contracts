@@ -826,7 +826,8 @@ contract DegenerusBonds {
         bool resolved;              // True after maturity payout completed
         uint8 winningLane;          // Which lane won (0 or 1)
         uint256 decSharePrice;      // Price per DGNRS for Decimator claims (scaled by 1e18)
-        uint256 unclaimedBudget;    // ETH reserved for unclaimed Decimator payouts
+        uint256 unclaimedBudget;    // ETH reserved for unclaimed payouts (Decimator + gameOver draw claims)
+        mapping(address => uint256) drawClaimable; // Draw claims recorded during gameOver resolution
     }
 
     /**
@@ -1456,7 +1457,7 @@ contract DegenerusBonds {
         return _bondPurchasesOpen(_currentLevel());
     }
 
-    /// @notice Emergency shutdown path: consume all ETH/stETH and resolve maturities in order, partially paying the last one.
+    /// @notice Emergency shutdown path: allocate claims across maturities in order; no direct payouts are made here.
     /// @dev If no entropy is ready, this requests VRF (if configured) and exits; call again once fulfilled.
     function gameOver() external payable {
         if (msg.sender != address(game) && !gameOverStarted) revert Unauthorized();
@@ -1471,6 +1472,7 @@ contract DegenerusBonds {
 
         uint256 initialEth = address(this).balance;
         uint256 initialStEth = _stEthBalance();
+        uint256 remainingValue = initialEth + initialStEth;
         uint256 rollingEntropy = entropy;
         uint24 partialMaturity;
 
@@ -1488,20 +1490,21 @@ contract DegenerusBonds {
                 continue;
             }
 
-            uint256 availableValue = address(this).balance + _stEthBalance();
-            if (availableValue == 0) {
+            if (remainingValue == 0) {
                 partialMaturity = s.maturityLevel;
                 s.resolved = true;
                 break;
             }
 
-            uint256 payout = burned <= availableValue ? burned : availableValue;
-            uint256 paid = _resolveSeriesGameOver(s, rollingEntropy, payout);
+            uint256 payout = burned <= remainingValue ? burned : remainingValue;
+            uint256 reserved = _resolveSeriesGameOver(s, rollingEntropy, payout);
+            if (reserved > remainingValue) reserved = remainingValue;
+            remainingValue -= reserved;
             rollingEntropy = uint256(keccak256(abi.encode(rollingEntropy, s.maturityLevel, "go")));
 
             s.resolved = true;
 
-            if (paid < burned) {
+            if (payout < burned) {
                 partialMaturity = s.maturityLevel;
                 break;
             }
@@ -1519,7 +1522,7 @@ contract DegenerusBonds {
 
         uint256 remainingEth = address(this).balance;
         uint256 remainingStEth = _stEthBalance();
-        uint256 spent = (initialEth + initialStEth) - (remainingEth + remainingStEth);
+        uint256 spent = (initialEth + initialStEth) - remainingValue;
 
         uint256 totalReserved = resolvedUnclaimedTotal;
         for (uint24 k = activeMaturityIndex; k < len; ) {
@@ -1839,24 +1842,33 @@ contract DegenerusBonds {
         emit BondBurned(player, resolvedTargetMat, lane, amount, boosted);
     }
 
-    /// @notice Claim Decimator share for a resolved bond series.
+    /// @notice Claim Decimator share and any draw prizes for a resolved bond series.
     function claim(uint24 maturityLevel) external {
         BondSeries storage s = series[maturityLevel];
         if (!s.resolved) revert SaleClosed(); // Reusing SaleClosed or similar "NotReady" error
 
-        uint256 price = s.decSharePrice;
-        if (price == 0) return;
-
+        uint256 payout;
         uint8 lane = s.winningLane;
-        uint256 burned = s.lanes[lane].burnedAmount[msg.sender];
-        if (burned == 0) return;
+        uint256 price = s.decSharePrice;
+        if (price != 0) {
+            uint256 burned = s.lanes[lane].burnedAmount[msg.sender];
+            if (burned != 0) {
+                s.lanes[lane].burnedAmount[msg.sender] = 0;
+                payout = (burned * price) / 1e18;
+            }
+        }
 
-        s.lanes[lane].burnedAmount[msg.sender] = 0;
-        uint256 payout = (burned * price) / 1e18;
+        uint256 draw = s.drawClaimable[msg.sender];
+        if (draw != 0) {
+            s.drawClaimable[msg.sender] = 0;
+            payout += draw;
+        }
+
+        if (payout == 0) return;
 
         uint256 budgetBefore = s.unclaimedBudget;
-        if (s.unclaimedBudget >= payout) {
-            s.unclaimedBudget -= payout;
+        if (budgetBefore >= payout) {
+            s.unclaimedBudget = budgetBefore - payout;
         } else {
             s.unclaimedBudget = 0;
         }
@@ -2594,11 +2606,37 @@ contract DegenerusBonds {
         }
     }
 
+    function _recordDrawClaims(
+        BondSeries storage s,
+        Lane storage chosen,
+        uint8 lane,
+        uint256 rngWord,
+        uint256 drawPool
+    ) private returns (uint256 recorded) {
+        if (drawPool == 0) return 0;
+        uint256[14] memory buckets = _drawBuckets(drawPool);
+
+        uint256 localEntropy = rngWord;
+        for (uint256 k = 0; k < 14; ) {
+            uint256 bucketIdx = k;
+            uint256 prize = buckets[bucketIdx];
+            unchecked {
+                ++k;
+            }
+            if (prize == 0) continue;
+            localEntropy = uint256(keccak256(abi.encode(localEntropy, k, lane)));
+            address winner = _weightedLanePick(chosen, localEntropy);
+            if (winner == address(0)) continue;
+            s.drawClaimable[winner] += prize;
+            recorded += prize;
+        }
+    }
+
     function _resolveSeriesGameOver(
         BondSeries storage s,
         uint256 rngWord,
         uint256 payout
-    ) private returns (uint256 paid) {
+    ) private returns (uint256 reserved) {
         if (payout == 0) return 0;
         (uint8 lane, bool ok) = _pickNonEmptyLane(s.lanes, rngWord);
         if (!ok) return 0;
@@ -2611,14 +2649,12 @@ contract DegenerusBonds {
         s.winningLane = lane;
         if (chosen.total > 0) {
             s.decSharePrice = (decPool * 1e18) / chosen.total;
-            s.unclaimedBudget = decPool;
-            paid += decPool;
         }
 
-        // Ticketed draws on the remaining pool: 20%, 10%, 5%, 5%, 1% x10.
-        if (drawPool != 0) {
-            paid += _payDrawBuckets(chosen, lane, rngWord, drawPool, false);
-        }
+        // Ticketed draws recorded as claims during gameOver (no payouts).
+        uint256 drawRecorded = _recordDrawClaims(s, chosen, lane, rngWord, drawPool);
+        reserved = decPool + drawRecorded;
+        s.unclaimedBudget = reserved;
     }
 
     function _resolveSeries(BondSeries storage s, uint256 rngWord) private returns (bool resolved) {
