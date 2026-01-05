@@ -67,7 +67,7 @@ interface IStETHLite {
  * ## Yield Distribution (bondUpkeep)
  *
  * Untracked yield (assets - obligations) is distributed as:
- * - 25% → Bonds (first to cover shortfall in bondPool, remainder to jackpots)
+ * - 25% → Bonds (first to cover shortfall in bondPool, remainder to vault)
  * - 5%  → Reward pool (future jackpot funding)
  * - 70% → Remains as untracked solvency buffer
  *
@@ -118,12 +118,7 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
      * If bondPool is under-funded, yield is used to fill the gap first.
      * If bondPool is over-funded, excess is swept to the vault.
      */
-    function bondUpkeep(
-        address bondsAddr,
-        address stethAddr,
-        address coinAddr,
-        uint256 rngWord
-    ) external {
+    function bondUpkeep(address bondsAddr, address stethAddr, address coinAddr, uint256 rngWord) external {
         IBonds bondContract = IBonds(bondsAddr);
 
         // ─────────────────────────────────────────────────────────────────────
@@ -168,8 +163,8 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
         coinSlice = coinSlice / 20; // 5%
 
         // Yield distribution: 25% to bonds, 5% to reward pool
-        uint256 bondSkim = yieldTotal / 4;      // 25% of yield
-        uint256 rewardTopUp = yieldTotal / 20;  // 5% of yield
+        uint256 bondSkim = yieldTotal / 4; // 25% of yield
+        uint256 rewardTopUp = yieldTotal / 20; // 5% of yield
 
         // ─────────────────────────────────────────────────────────────────────
         // Step 3: Check bond coverage requirements and fill shortfall
@@ -347,12 +342,12 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
 
         // Query admin-configured target ratio from bonds
         uint16 targetBps = IBonds(bondsAddr).rewardStakeTargetBps();
-        if (targetBps == 0) return;       // Staking disabled
-        if (targetBps > 10_000) return;   // Invalid config guard
+        if (targetBps == 0) return; // Staking disabled
+        if (targetBps > 10_000) return; // Invalid config guard
 
         uint256 stBal = IStETHLite(stethAddr).balanceOf(address(this));
         uint256 ethBal = address(this).balance;
-        if (ethBal == 0) return;          // Nothing to stake
+        if (ethBal == 0) return; // Nothing to stake
 
         // ─────────────────────────────────────────────────────────────────────
         // Reserve ETH for claimable withdrawals (must stay liquid)
@@ -452,7 +447,7 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
         currentPrizePool = 0;
         nextPrizePool = 0;
         rewardPool = 0;
-        claimablePool = 0;          // Note: unclaimed player winnings go to bonds
+        claimablePool = 0; // Note: unclaimed player winnings go to bonds
         decimatorHundredPool = 0;
         bafHundredPool = 0;
         dailyJackpotBase = 0;

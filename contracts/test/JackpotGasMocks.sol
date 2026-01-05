@@ -21,6 +21,8 @@ contract MockBondsJackpot {
     function depositFromGame(address, uint256) external returns (uint256) {
         return 0;
     }
+
+    function mintJackpotDgnrs(address, uint256, uint24) external {}
 }
 
 contract MockBondsJackpotEnabled {
@@ -40,4 +42,6 @@ contract MockBondsJackpotEnabled {
         totalDeposits += amount;
         return 0;
     }
+
+    function mintJackpotDgnrs(address, uint256, uint24) external {}
 }

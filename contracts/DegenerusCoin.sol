@@ -786,7 +786,7 @@ contract DegenerusCoin {
     function depositCoinflip(uint256 amount) external {
         // Allow zero-amount calls to act as a cash-out of pending winnings without adding a new stake.
         if (amount == 0) {
-            addFlip(msg.sender, 0, false, false);
+            addFlip(msg.sender, 0, false, false, true);
             emit CoinflipDeposit(msg.sender, 0);
             return;
         }
@@ -811,7 +811,7 @@ contract DegenerusCoin {
         // Principal + quest bonus become the pending flip stake.
         uint256 creditedFlip = amount + questReward;
         // canArmBounty=true, bountyEligible=true: this deposit can set new records
-        addFlip(caller, creditedFlip, true, true);
+        addFlip(caller, creditedFlip, true, true, true);
         degenerusGame.recordCoinflipDeposit(amount);
 
         emit CoinflipDeposit(caller, amount);
@@ -1071,7 +1071,7 @@ contract DegenerusCoin {
     /// @param amount The stake amount to add (6 decimals).
     function creditFlip(address player, uint256 amount) external onlyFlipCreditors {
         if (player == address(0) || amount == 0) return;
-        addFlip(player, amount, false, false);
+        addFlip(player, amount, false, false, false);
     }
 
     /// @notice Credit LINK-funded bonus directly (admin-triggered, not presale).
@@ -1096,7 +1096,7 @@ contract DegenerusCoin {
             address player = players[i];
             uint256 amount = amounts[i];
             if (player != address(0) && amount != 0) {
-                addFlip(player, amount, false, false);
+                addFlip(player, amount, false, false, false);
             }
             unchecked {
                 ++i;
@@ -1196,7 +1196,7 @@ contract DegenerusCoin {
         );
         uint256 questReward = _questApplyReward(player, reward, hardMode, questType, streak, completed);
         if (questReward != 0) {
-            addFlip(player, questReward, false, false);
+            addFlip(player, questReward, false, false, false);
         }
     }
 
@@ -1214,7 +1214,7 @@ contract DegenerusCoin {
         );
         uint256 questReward = _questApplyReward(player, reward, hardMode, questType, streak, completed);
         if (questReward != 0) {
-            addFlip(player, questReward, false, false);
+            addFlip(player, questReward, false, false, false);
         }
     }
 
@@ -1231,7 +1231,7 @@ contract DegenerusCoin {
         );
         uint256 questReward = _questApplyReward(player, reward, hardMode, questType, streak, completed);
         if (questReward != 0) {
-            addFlip(player, questReward, false, false);
+            addFlip(player, questReward, false, false, false);
         }
     }
 
@@ -1307,11 +1307,11 @@ contract DegenerusCoin {
       ║                    INTERNAL CLAIM FUNCTIONS                          ║
       ╠══════════════════════════════════════════════════════════════════════╣
       ║  Process past coinflip winnings for a player. Called lazily during   ║
-      ║  addFlip() to auto-claim wins before adding new stakes.              ║
+      ║  addFlip() (claimNow) to auto-claim wins before adding new stakes.   ║
       ╚══════════════════════════════════════════════════════════════════════╝*/
 
     /// @dev Process coinflip claims for up to COIN_CLAIM_DAYS resolved days.
-    ///      Called by addFlip() to auto-claim before depositing new stakes.
+    ///      Called by addFlip() only when claimNow=true (manual deposits).
     ///      IMPORTANT: This modifies state (coinflipBalance, lastCoinflipClaim).
     /// @param player The player to process claims for.
     /// @return claimed Total BURNIE won across all processed days.
@@ -1450,7 +1450,7 @@ contract DegenerusCoin {
             }
             if (win) {
                 // Credit as flip stake, not direct mint
-                addFlip(to, slice, false, false);
+                addFlip(to, slice, false, false, false);
                 emit BountyPaid(to, slice);
             }
             // Clear bounty owner regardless of win/loss
@@ -1471,7 +1471,7 @@ contract DegenerusCoin {
             PlayerScore memory entry = coinflipTopByLevel[level];
             if (entry.player != address(0)) {
                 // Credit lands as future flip stake; no direct mint.
-                addFlip(entry.player, PRICE_COIN_UNIT, false, false);
+                addFlip(entry.player, PRICE_COIN_UNIT, false, false, false);
                 topFlipRewardPaid[level] = true;
             }
         }
@@ -1512,7 +1512,7 @@ contract DegenerusCoin {
       ║                    INTERNAL STAKE MANAGEMENT                         ║
       ╠══════════════════════════════════════════════════════════════════════╣
       ║  Core internal function for adding coinflip stakes. Handles:         ║
-      ║  • Auto-claiming past winnings                                       ║
+      ║  • Auto-claiming past winnings (manual deposits only)                ║
       ║  • Recycling bonus (1% for rolling forward)                          ║
       ║  • Leaderboard updates                                               ║
       ║  • Bounty arming logic                                               ║
@@ -1523,7 +1523,7 @@ contract DegenerusCoin {
     /// @dev Central function for all stake additions. Called by depositCoinflip, creditFlip, etc.
     ///
     ///      RECYCLING BONUS: Players get 1% bonus (capped at 500 BURNIE) for rolling
-    ///      winnings forward instead of withdrawing.
+    ///      winnings forward instead of withdrawing (manual deposits only).
     ///
     ///      BOUNTY ARMING: Only direct deposits (canArmBounty=true, bountyEligible=true)
     ///      can set new records and arm the bounty. Requires:
@@ -1535,24 +1535,33 @@ contract DegenerusCoin {
     /// @param coinflipDeposit      Amount to add to their current pending flip stake.
     /// @param canArmBounty         If true, a sufficiently large deposit may arm a bounty.
     /// @param bountyEligible       If true, this deposit can arm the bounty (entire amount is considered).
-    function addFlip(address player, uint256 coinflipDeposit, bool canArmBounty, bool bountyEligible) internal {
-        // Auto-claim older flip winnings (without mint) so deposits net against pending payouts.
-        uint256 totalClaimed = _claimCoinflipsInternal(player);
-        uint256 mintRemainder;
+    /// @param claimNow             If true, auto-claim past flips and apply recycling bonus.
+    function addFlip(
+        address player,
+        uint256 coinflipDeposit,
+        bool canArmBounty,
+        bool bountyEligible,
+        bool claimNow
+    ) internal {
+        // Auto-claim only on manual deposits to avoid gas spikes on game-driven credits.
+        if (claimNow) {
+            uint256 totalClaimed = _claimCoinflipsInternal(player);
+            uint256 mintRemainder;
 
-        if (coinflipDeposit > totalClaimed) {
-            // Recycling: small bonus (1%) for rolling winnings forward, capped at 500 BURNIE.
-            uint256 recycled = coinflipDeposit - totalClaimed;
-            uint256 bonus = recycled / 100;
-            uint256 bonusCap = 500 * MILLION;
-            if (bonus > bonusCap) bonus = bonusCap;
-            coinflipDeposit += bonus;
-        } else if (totalClaimed > coinflipDeposit) {
-            // If claims exceed the new deposit, mint the difference to the player immediately.
-            mintRemainder = totalClaimed - coinflipDeposit;
-        }
-        if (mintRemainder != 0) {
-            _mint(player, mintRemainder);
+            if (coinflipDeposit > totalClaimed) {
+                // Recycling: small bonus (1%) for rolling winnings forward, capped at 500 BURNIE.
+                uint256 recycled = coinflipDeposit - totalClaimed;
+                uint256 bonus = recycled / 100;
+                uint256 bonusCap = 500 * MILLION;
+                if (bonus > bonusCap) bonus = bonusCap;
+                coinflipDeposit += bonus;
+            } else if (totalClaimed > coinflipDeposit) {
+                // If claims exceed the new deposit, mint the difference to the player immediately.
+                mintRemainder = totalClaimed - coinflipDeposit;
+            }
+            if (mintRemainder != 0) {
+                _mint(player, mintRemainder);
+            }
         }
 
         // Determine which future day this stake applies to (always the next window).

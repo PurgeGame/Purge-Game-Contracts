@@ -74,7 +74,7 @@ import {IStETH} from "./interfaces/IStETH.sol";
 // │  1. ACCESS CONTROL                                                                              │
 // │     • onlyAdmin: wire(), emergencySetVrf(), setRewardStakeTargetBps(), runPresaleJackpot(),     │
 // │                  shutdownPresale()                                                              │
-// │     • onlyGame: setRngLock(), depositFromGame(), payBonds(), bondMaintenance(),                 │
+// │     • onlyGame: setRngLock(), depositFromGame(), mintJackpotDgnrs(), payBonds(), bondMaintenance(),│
 // │                 notifyGameOver(), gameOver()                                                    │
 // │     • Public: depositCurrentFor(), presaleDeposit(), burnDGNRS(), claim(),                      │
 // │               sweepExpiredPools(), setAutoBurnDgnrs()                                           │
@@ -733,6 +733,15 @@ contract DegenerusBonds {
     /// @notice Winner count for presale jackpots.
     uint8 private constant PRESALE_JACKPOT_SPOTS = 100;
 
+    /// @notice Coin jackpot payout schedule (basis points of bankroll per winner).
+    uint16 private constant COIN_JACKPOT_TOP_BPS = 1500; // 15% to 1 winner
+    uint16 private constant COIN_JACKPOT_MID_BPS = 500;  // 5% to each of 5 winners
+    uint16 private constant COIN_JACKPOT_LOW_BPS = 200;  // 2% to each of 5 winners
+    uint16 private constant COIN_JACKPOT_TINY_BPS = 100; // 1% to each of 50 winners
+    uint8 private constant COIN_JACKPOT_MID_COUNT = 5;
+    uint8 private constant COIN_JACKPOT_LOW_COUNT = 5;
+    uint8 private constant COIN_JACKPOT_TINY_COUNT = 50;
+
     /// @notice Fixed "previous raise" for presale growth multiplier calculation.
     /// @dev Presale uses 50 ETH as anchor since there's no actual previous series.
     uint256 private constant PRESALE_PREV_RAISE = 50 ether;
@@ -743,7 +752,7 @@ contract DegenerusBonds {
     /// @notice Block confirmations required for VRF.
     uint16 private constant VRF_REQUEST_CONFIRMATIONS = 10;
 
-    /// @notice Auto-burn preference: not yet set (uses default).
+    /// @notice Auto-burn preference: not yet set (uses default; enabled).
     uint8 private constant AUTO_BURN_UNSET = 0;
     /// @notice Auto-burn preference: enabled.
     uint8 private constant AUTO_BURN_ENABLED = 1;
@@ -1075,7 +1084,7 @@ contract DegenerusBonds {
     }
 
     /// @notice Player toggle to auto-burn any DGNRS minted from bond jackpots.
-    /// @dev Defaults to disabled during presale; defaults to enabled once presale ends.
+    /// @dev Defaults to enabled at all times unless explicitly disabled.
     function setAutoBurnDgnrs(bool enabled) external {
         autoBurnDgnrsPref[msg.sender] = enabled ? AUTO_BURN_ENABLED : AUTO_BURN_DISABLED;
     }
@@ -1264,6 +1273,21 @@ contract DegenerusBonds {
         scoreAwarded = _processDeposit(beneficiary, amount, true);
     }
 
+    /// @notice Mint DGNRS 1:1 for jackpot bond prizes when purchases are closed.
+    /// @dev Game-only. Respects auto-burn preference; if enabled, registers burns directly.
+    function mintJackpotDgnrs(address beneficiary, uint256 amount, uint24 currLevel) external onlyGame {
+        if (amount == 0 || beneficiary == address(0)) return;
+        if (gameOverStarted) revert SaleClosed();
+
+        bool presaleActive = _presaleActive();
+        bool canAutoBurn = currLevel != 0 || presaleActive;
+        if (canAutoBurn && _autoBurnEnabled(beneficiary)) {
+            _burnDgnrsFor(beneficiary, amount, currLevel, false);
+        } else {
+            tokenDGNRS.mint(beneficiary, amount);
+        }
+    }
+
     /// @notice Funding shim used by the game to accrue jackpot coin for bonds.
     /// @dev During normal operation ETH/stETH are forwarded to the vault; during shutdown they stay here for `gameOver()`.
     function payBonds(uint256 coinAmount, uint256 stEthAmount, uint256 rngWord) external payable onlyGame {
@@ -1318,18 +1342,85 @@ contract DegenerusBonds {
         (uint8 lane, bool ok) = _pickNonEmptyLane(target.lanes, rngWord);
         if (!ok) return false;
 
-        address winner = _weightedLanePick(target.lanes[lane], rngWord);
+        address affiliateAddr;
+        if (isPresale) {
+            affiliateAddr = affiliate;
+            if (affiliateAddr == address(0)) return false;
+        }
+
+        uint256 top = (amount * COIN_JACKPOT_TOP_BPS) / 10_000;
+        uint256 mid = (amount * COIN_JACKPOT_MID_BPS) / 10_000;
+        uint256 low = (amount * COIN_JACKPOT_LOW_BPS) / 10_000;
+        uint256 tiny = (amount * COIN_JACKPOT_TINY_BPS) / 10_000;
+        uint256 distributed = top +
+            (mid * COIN_JACKPOT_MID_COUNT) +
+            (low * COIN_JACKPOT_LOW_COUNT) +
+            (tiny * COIN_JACKPOT_TINY_COUNT);
+        if (distributed < amount) {
+            unchecked {
+                top += amount - distributed;
+            }
+        }
+
+        Lane storage chosen = target.lanes[lane];
+        uint256 entropy = rngWord;
+        address winner = _weightedLanePick(chosen, entropy);
         if (winner == address(0)) return false;
 
+        _creditCoinJackpot(winner, top, targetMat, lane, isPresale, affiliateAddr);
+
+        uint256 salt = 1;
+        if (mid != 0) {
+            for (uint256 i; i < COIN_JACKPOT_MID_COUNT; ) {
+                entropy = _nextEntropy(entropy, salt);
+                winner = _weightedLanePick(chosen, entropy);
+                _creditCoinJackpot(winner, mid, targetMat, lane, isPresale, affiliateAddr);
+                unchecked {
+                    ++i;
+                    ++salt;
+                }
+            }
+        }
+        if (low != 0) {
+            for (uint256 i; i < COIN_JACKPOT_LOW_COUNT; ) {
+                entropy = _nextEntropy(entropy, salt);
+                winner = _weightedLanePick(chosen, entropy);
+                _creditCoinJackpot(winner, low, targetMat, lane, isPresale, affiliateAddr);
+                unchecked {
+                    ++i;
+                    ++salt;
+                }
+            }
+        }
+        if (tiny != 0) {
+            for (uint256 i; i < COIN_JACKPOT_TINY_COUNT; ) {
+                entropy = _nextEntropy(entropy, salt);
+                winner = _weightedLanePick(chosen, entropy);
+                _creditCoinJackpot(winner, tiny, targetMat, lane, isPresale, affiliateAddr);
+                unchecked {
+                    ++i;
+                    ++salt;
+                }
+            }
+        }
+        return true;
+    }
+
+    function _creditCoinJackpot(
+        address winner,
+        uint256 amount,
+        uint24 maturityLevel,
+        uint8 lane,
+        bool isPresale,
+        address affiliateAddr
+    ) private {
+        if (winner == address(0) || amount == 0) return;
         if (isPresale) {
-            address affiliateAddr = affiliate;
-            if (affiliateAddr == address(0)) return false;
             IAffiliatePresaleCredit(affiliateAddr).addPresaleCoinCredit(winner, amount);
         } else {
             IDegenerusCoin(coin).creditFlip(winner, amount);
         }
-        emit BondCoinJackpot(winner, amount, targetMat, lane);
-        return true;
+        emit BondCoinJackpot(winner, amount, maturityLevel, lane);
     }
 
     function _selectActiveSeries(uint24 currLevel) private view returns (BondSeries storage s, uint24 maturityLevel) {
@@ -2358,11 +2449,11 @@ contract DegenerusBonds {
         }
     }
 
-    function _autoBurnEnabled(address player, bool presaleActive) private view returns (bool enabled) {
+    function _autoBurnEnabled(address player) private view returns (bool enabled) {
         uint8 pref = autoBurnDgnrsPref[player];
         if (pref == AUTO_BURN_ENABLED) return true;
         if (pref == AUTO_BURN_DISABLED) return false;
-        return !presaleActive;
+        return true;
     }
 
     function _runMintJackpotToken(
@@ -2384,7 +2475,7 @@ contract DegenerusBonds {
             uint256 amount = payouts[i];
             if (amount != 0) {
                 address winner = _weightedPickFrom(participants, cumulative, totalScore, entropy);
-                if (canAutoBurn && _autoBurnEnabled(winner, presaleActive)) {
+                if (canAutoBurn && _autoBurnEnabled(winner)) {
                     _burnDgnrsFor(winner, amount, currLevel, false);
                 } else {
                     token.mint(winner, amount);
@@ -2404,7 +2495,7 @@ contract DegenerusBonds {
             uint256 amount = (i == totalSpots - 1) ? payouts[5] : payouts[4];
             if (amount != 0) {
                 address winner = _weightedPickFrom(participants, cumulative, totalScore, entropy);
-                if (canAutoBurn && _autoBurnEnabled(winner, presaleActive)) {
+                if (canAutoBurn && _autoBurnEnabled(winner)) {
                     _burnDgnrsFor(winner, amount, currLevel, false);
                 } else {
                     token.mint(winner, amount);

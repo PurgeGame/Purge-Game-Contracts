@@ -756,7 +756,9 @@ contract DegenerusGamepieces {
         if (payInCoin) {
             if (msg.value != 0) revert E();
             _coinReceive(payer, coinCost, targetLevel, 0);
-            coin.notifyQuestMint(payer, uint32(mintQuantity), false);
+            if (levelJackpotReady) {
+                coin.notifyQuestMint(payer, uint32(mintQuantity), false);
+            }
         } else {
             uint256 scaledQty;
             unchecked {
@@ -839,6 +841,7 @@ contract DegenerusGamepieces {
         if (state == 3 && payInCoin) revert NotTimeYet();
         if (quantity == 0 || quantity > type(uint32).max) revert InvalidQuantity();
         if (rngLocked_) revert RngNotReady();
+        if (payInCoin && !levelJackpotReady) revert NotTimeYet();
         uint256 coinCost;
         unchecked {
             coinCost = quantity * (PRICE_COIN_UNIT / 4);
@@ -873,9 +876,11 @@ contract DegenerusGamepieces {
         if (payInCoin) {
             if (msg.value != 0) revert E();
             _coinReceive(payer, coinCost, lvl, 0);
-            uint32 questQuantity = uint32(mintQuantity / 4);
-            if (questQuantity != 0) {
-                coin.notifyQuestMint(payer, questQuantity, false);
+            if (levelJackpotReady) {
+                uint32 questQuantity = uint32(mintQuantity / 4);
+                if (questQuantity != 0) {
+                    coin.notifyQuestMint(payer, questQuantity, false);
+                }
             }
             // Affiliate coin-triggered mints should not earn rebates/bonuses.
             bonus = payKind == MintPaymentKind.Claimable ? 0 : mapRebate;

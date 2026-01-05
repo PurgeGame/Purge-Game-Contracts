@@ -6,4 +6,5 @@ interface IDegenerusBondsJackpot {
     function purchasesEnabled() external view returns (bool);
     function depositCurrentFor(address beneficiary) external payable returns (uint256 scoreAwarded);
     function depositFromGame(address beneficiary, uint256 amount) external returns (uint256 scoreAwarded);
+    function mintJackpotDgnrs(address beneficiary, uint256 amount, uint24 currLevel) external;
 }

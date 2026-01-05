@@ -391,15 +391,18 @@ contract DegenerusQuests is IDegenerusQuests {
         DailyQuest[QUEST_SLOT_COUNT] storage quests = activeQuests;
         bool burnAllowed = _canRollBurnQuest(day) || forceBurn;
         bool decAllowed = _canRollDecimatorQuest();
+        bool mintBurnieAllowed = _canRollMintBurnieQuest();
 
         uint256 primaryEntropy = entropy;
         // Swap 128-bit halves to derive independent entropy for slot 1
         uint256 bonusEntropy = (entropy >> 128) | (entropy << 128);
 
-        uint8 primaryType = forceMintEth ? QUEST_TYPE_MINT_ETH : _primaryQuestType(primaryEntropy, burnAllowed, decAllowed);
+        uint8 primaryType = forceMintEth
+            ? QUEST_TYPE_MINT_ETH
+            : _primaryQuestType(primaryEntropy, burnAllowed, decAllowed, mintBurnieAllowed);
         uint8 bonusType = forceBurn
             ? QUEST_TYPE_BURN
-            : _bonusQuestType(bonusEntropy, primaryType, burnAllowed, decAllowed);
+            : _bonusQuestType(bonusEntropy, primaryType, burnAllowed, decAllowed, mintBurnieAllowed);
 
         // Single difficulty roll per day, shared by both slots for consistency
         uint8 flags = _difficultyFlags(uint16(primaryEntropy & 0x3FF));
@@ -961,6 +964,16 @@ contract DegenerusQuests is IDegenerusQuests {
     }
 
     /**
+     * @dev Mint-with-BURNIE quests are only enabled on the last purchase day.
+     * @return True if lastPurchaseDay flag is set.
+     */
+    function _canRollMintBurnieQuest() private view returns (bool) {
+        IDegenerusGame game_ = questGame;
+        (, , bool lastPurchaseDay_, , ) = game_.purchaseInfo();
+        return lastPurchaseDay_;
+    }
+
+    /**
      * @dev Decimator quests are unlocked at specific level boundaries.
      * @return True if decimator quests can be rolled.
      *
@@ -1352,16 +1365,23 @@ contract DegenerusQuests is IDegenerusQuests {
      * - DECIMATOR: 4 (when allowed)
      * - BOND: 2
      * - BURN: 2 (when allowed)
-     * - MINT_BURNIE: 1
+     * - MINT_BURNIE: 10 (when allowed)
      * - AFFILIATE: 1
      * - FLIP: 0 (not available as primary)
      */
-    function _primaryQuestType(uint256 entropy, bool burnAllowed, bool decAllowed) private pure returns (uint8) {
+    function _primaryQuestType(
+        uint256 entropy,
+        bool burnAllowed,
+        bool decAllowed,
+        bool mintBurnieAllowed
+    ) private pure returns (uint8) {
         uint16[QUEST_TYPE_COUNT] memory weights;
         uint16 total;
 
         weights[QUEST_TYPE_MINT_ETH] = 5;
-        weights[QUEST_TYPE_MINT_BURNIE] = 1;
+        if (mintBurnieAllowed) {
+            weights[QUEST_TYPE_MINT_BURNIE] = 10;
+        }
         if (burnAllowed) {
             weights[QUEST_TYPE_BURN] = 2;
         }
@@ -1412,6 +1432,7 @@ contract DegenerusQuests is IDegenerusQuests {
      * Key Differences from Primary:
      * - Excludes the primary type (no duplicate quests)
      * - Base weight is 1 for all types (more uniform)
+     * - MINT_BURNIE gets 10x weight when allowed
      * - Decimator still gets 4x weight when allowed
      * - Burn still gets 2x weight when allowed
      */
@@ -1419,7 +1440,8 @@ contract DegenerusQuests is IDegenerusQuests {
         uint256 entropy,
         uint8 primaryType,
         bool burnAllowed,
-        bool decAllowed
+        bool decAllowed,
+        bool mintBurnieAllowed
     ) private pure returns (uint8) {
         uint16[QUEST_TYPE_COUNT] memory weights;
         uint16 total;
@@ -1445,10 +1467,18 @@ contract DegenerusQuests is IDegenerusQuests {
                 }
                 continue;
             }
+            if (!mintBurnieAllowed && candidate == QUEST_TYPE_MINT_BURNIE) {
+                unchecked {
+                    ++candidate;
+                }
+                continue;
+            }
 
             // Apply type-specific weights
             uint16 weight = 1;
-            if (candidate == QUEST_TYPE_DECIMATOR && decAllowed) {
+            if (candidate == QUEST_TYPE_MINT_BURNIE && mintBurnieAllowed) {
+                weight = 10;
+            } else if (candidate == QUEST_TYPE_DECIMATOR && decAllowed) {
                 weight = 4;
             } else if (candidate == QUEST_TYPE_BURN && burnAllowed) {
                 weight = 2;
