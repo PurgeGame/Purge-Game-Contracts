@@ -726,10 +726,10 @@ contract DegenerusGamepieces {
         IDegenerusGame g = game;
         uint24 targetLevel;
         uint8 state;
-        bool levelJackpotReady;
+        bool lastPurchaseDay;
         bool rngLocked_;
         uint256 priceWei;
-        (targetLevel, state, levelJackpotReady, rngLocked_, priceWei) = g.purchaseInfo();
+        (targetLevel, state, lastPurchaseDay, rngLocked_, priceWei) = g.purchaseInfo();
 
         if ((targetLevel % 20) == 16) revert NotTimeYet();
         if (rngLocked_) revert RngNotReady();
@@ -756,7 +756,7 @@ contract DegenerusGamepieces {
         if (payInCoin) {
             if (msg.value != 0) revert E();
             _coinReceive(payer, coinCost, targetLevel, 0);
-            if (levelJackpotReady) {
+            if (lastPurchaseDay) {
                 coin.notifyQuestMint(payer, uint32(mintQuantity), false);
             }
         } else {
@@ -781,7 +781,7 @@ contract DegenerusGamepieces {
             );
             unchecked {
                 bonus += (quantity / 10) * PRICE_COIN_UNIT;
-                if (levelJackpotReady && (targetLevel % 100) > 90) {
+                if (lastPurchaseDay && (targetLevel % 100) > 90) {
                     bonus += coinCost / 5;
                 }
             }
@@ -834,14 +834,14 @@ contract DegenerusGamepieces {
         IDegenerusGame g = game;
         uint24 lvl;
         uint8 state;
-        bool levelJackpotReady;
+        bool lastPurchaseDay;
         bool rngLocked_;
         uint256 priceWei;
-        (lvl, state, levelJackpotReady, rngLocked_, priceWei) = g.purchaseInfo();
+        (lvl, state, lastPurchaseDay, rngLocked_, priceWei) = g.purchaseInfo();
         if (state == 3 && payInCoin) revert NotTimeYet();
         if (quantity == 0 || quantity > type(uint32).max) revert InvalidQuantity();
         if (rngLocked_) revert RngNotReady();
-        if (payInCoin && !levelJackpotReady) revert NotTimeYet();
+        if (payInCoin && !lastPurchaseDay) revert NotTimeYet();
         uint256 coinCost;
         unchecked {
             coinCost = quantity * (PRICE_COIN_UNIT / 4);
@@ -876,7 +876,7 @@ contract DegenerusGamepieces {
         if (payInCoin) {
             if (msg.value != 0) revert E();
             _coinReceive(payer, coinCost, lvl, 0);
-            if (levelJackpotReady) {
+            if (lastPurchaseDay) {
                 uint32 questQuantity = uint32(mintQuantity / 4);
                 if (questQuantity != 0) {
                     coin.notifyQuestMint(payer, questQuantity, false);
@@ -900,7 +900,7 @@ contract DegenerusGamepieces {
                 payKind,
                 expectedWei
             );
-            if (levelJackpotReady && (lvl % 100) > 90) {
+            if (lastPurchaseDay && (lvl % 100) > 90) {
                 unchecked {
                     bonus += coinCost / 5;
                 }
