@@ -447,7 +447,8 @@ contract DegenerusGame is DegenerusGameStorage {
       ║  [24-47]  ethLevelCount    - Total levels with ETH mints             ║
       ║  [48-71]  ethLevelStreak   - Consecutive levels with ETH mints       ║
       ║  [72-103] lastEthDay       - Day index of last ETH mint              ║
-      ║  [104-227] reserved        - Legacy fields (unused)                  ║
+      ║  [104-127] unitsLevel      - Level index for unitsAtLevel tracking   ║
+      ║  [128-227] reserved        - Legacy fields (unused)                  ║
       ║  [228-243] unitsAtLevel    - Mints at current level                  ║
       ║  [244]    bonusPaid        - Level bonus claimed flag                ║
       ╚══════════════════════════════════════════════════════════════════════╝*/
@@ -2524,16 +2525,7 @@ contract DegenerusGame is DegenerusGameStorage {
     /// @param ex The player who triggered extermination (or address(0)).
     function _setExterminatorForLevel(uint24 lvl, address ex) private {
         if (lvl == 0) return;
-        address[] storage arr = levelExterminators;
-        uint256 idx = uint256(lvl) - 1;
-        uint256 len = arr.length;
-        if (len == idx) {
-            arr.push(ex);
-        } else if (len > idx) {
-            arr[idx] = ex;
-        } else {
-            revert E();
-        }
+        levelExterminators[lvl] = ex;
     }
 
     /*╔══════════════════════════════════════════════════════════════════════╗
@@ -2547,9 +2539,7 @@ contract DegenerusGame is DegenerusGameStorage {
     /// @return The address that triggered extermination (address(0) if timeout or not reached).
     function levelExterminator(uint24 lvl) external view returns (address) {
         if (lvl == 0) return address(0);
-        address[] storage arr = levelExterminators;
-        if (arr.length < lvl) return address(0);
-        return arr[uint256(lvl) - 1];
+        return levelExterminators[lvl];
     }
 
     /// @notice Get the starting trait count for a trait at current level.

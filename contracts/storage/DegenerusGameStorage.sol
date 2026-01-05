@@ -396,10 +396,10 @@ abstract contract DegenerusGameStorage {
     ///      within a single player's owed amount.
     mapping(address => uint32) internal playerMapMintsOwed;
 
-    /// @dev Per-level exterminator addresses (index = level - 1).
+    /// @dev Per-level exterminator addresses (key = level).
     ///      Records who performed the final extermination for each level.
     ///      Used for cosmetic/trophy purposes.
-    address[] internal levelExterminators;
+    mapping(uint24 => address) internal levelExterminators;
 
     // =========================================================================
     // Token State and Jackpot Mechanics

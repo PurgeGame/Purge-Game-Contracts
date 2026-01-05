@@ -149,7 +149,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
             uint8 traitId = uint8(traitRaw);
 
             // Get exterminator address (guaranteed set when traitRaw != TRAIT_ID_TIMEOUT)
-            address ex = levelExterminators[uint256(prevLevel) - 1];
+            address ex = levelExterminators[prevLevel];
 
             // Calculate exterminator's share (20-40% of prize pool)
             uint256 poolValue = currentPrizePool;

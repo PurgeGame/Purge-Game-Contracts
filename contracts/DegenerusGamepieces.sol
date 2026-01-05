@@ -749,6 +749,7 @@ contract DegenerusGamepieces {
             mintQuantity = _applyLevel100BonusCap(payer, targetLevel, quantity, multBps, false);
             if (mintQuantity > type(uint32).max) revert InvalidQuantity();
         }
+        uint32 mintQty32 = uint32(mintQuantity);
         if (!payInCoin) {
             priceCostWei = priceWei * quantity;
             expectedWei = priceCostWei + _initiationFee(g, targetLevel, payer, priceWei);
@@ -763,17 +764,13 @@ contract DegenerusGamepieces {
                 coin.notifyQuestMint(payer, uint32(mintQuantity), false);
             }
         } else {
-            uint256 scaledQty;
-            unchecked {
-                scaledQty = mintQuantity * 100;
-            }
             uint256 claimableUsed;
             uint256 newClaimableBal;
             (bonus, claimableUsed, newClaimableBal) = _processEthPurchase(
                 g,
                 payer,
                 buyer,
-                scaledQty,
+                mintQty32,
                 affiliateCode,
                 targetLevel,
                 state,
@@ -811,7 +808,6 @@ contract DegenerusGamepieces {
         }
 
         uint32 purchasedQty32 = uint32(quantity);
-        uint32 mintQty32 = uint32(mintQuantity);
         if (!payInCoin && state == 3) {
             g.enqueueMap(buyer, mintQty32);
         }
@@ -856,17 +852,14 @@ contract DegenerusGamepieces {
         uint256 mapBonus;
         uint256 expectedWei;
         uint256 priceCostWei;
-        uint256 scaledQty;
         uint256 mintQuantity = quantity;
         if (!payInCoin && (lvl % 100) == 0) {
             uint256 multBps = g.playerBonusMultiplier(payer);
             mintQuantity = _applyLevel100BonusCap(payer, lvl, quantity, multBps, true);
             if (mintQuantity > type(uint32).max) revert InvalidQuantity();
         }
+        uint32 mintQty32 = uint32(mintQuantity);
         if (!payInCoin) {
-            unchecked {
-                scaledQty = mintQuantity * 25;
-            }
             unchecked {
                 mapBonus = (quantity / 40) * PRICE_COIN_UNIT;
             }
@@ -894,7 +887,7 @@ contract DegenerusGamepieces {
                 g,
                 payer,
                 buyer,
-                scaledQty,
+                mintQty32,
                 affiliateCode,
                 lvl,
                 state,
@@ -936,7 +929,7 @@ contract DegenerusGamepieces {
             coin.creditFlip(buyer, rebateMint);
         }
 
-        g.enqueueMap(buyer, uint32(mintQuantity));
+        g.enqueueMap(buyer, mintQty32);
 
         uint256 costAmount = payInCoin ? coinCost : expectedWei;
         emit MapPurchase(
@@ -953,7 +946,7 @@ contract DegenerusGamepieces {
         IDegenerusGame g,
         address payer,
         address buyer,
-        uint256 scaledQty,
+        uint32 mintQuantity,
         bytes32 affiliateCode,
         uint24 lvl,
         uint8 gameState,
@@ -984,8 +977,14 @@ contract DegenerusGamepieces {
         }
 
         // Quest progress tracks full-price equivalents (4 map mints = 1 unit).
-        uint32 mintedQuantity = uint32(scaledQty / 100);
-        uint32 mintUnits = mapPurchase ? mintedQuantity : 4;
+        uint32 mintedQuantity = mapPurchase ? (mintQuantity >> 2) : mintQuantity;
+        uint32 mintUnits;
+        if (mapPurchase) {
+            mintUnits = mintQuantity; // 1 MAP = 1 unit
+        } else {
+            if (mintQuantity > type(uint32).max / 4) revert InvalidQuantity();
+            mintUnits = mintQuantity << 2; // 1 NFT = 4 units
+        }
 
         uint256 streakBonus;
         (streakBonus, newClaimableBal) = g.recordMint{value: valueToSend}(payer, lvl, costWei, mintUnits, payKind);

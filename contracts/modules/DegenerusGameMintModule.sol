@@ -25,11 +25,12 @@ import {DegenerusGameStorage} from "../storage/DegenerusGameStorage.sol";
  * ```
  * Bits 0-23:   lastLevel     - Last level with ETH mint
  * Bits 24-47:  levelCount    - Levels minted this century (resets every 100)
- * Bits 48-71:  levelStreak   - Consecutive levels minted
- * Bits 72-103: lastMintDay   - Day index of last mint
- * Bits 228-243: levelUnits   - Units minted this level (1 NFT = 4 units)
- * Bit 244:     bonusPaid     - Whether 400-unit bonus was paid this level
- * ```
+* Bits 48-71:  levelStreak   - Consecutive levels minted
+* Bits 72-103: lastMintDay   - Day index of last mint
+ * Bits 104-127: unitsLevel  - Level index for levelUnits tracking
+* Bits 228-243: levelUnits   - Units minted this level (1 NFT = 4 units)
+* Bit 244:     bonusPaid     - Whether 400-unit bonus was paid this level
+* ```
  *
  * ## BURNIE Reward Structure
  *
@@ -92,6 +93,9 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
     /// @notice Bit shift for last mint day (32 bits at position 72).
     uint256 private constant ETH_DAY_SHIFT = 72;
 
+    /// @notice Bit shift for units-level marker (24 bits at position 104).
+    uint256 private constant ETH_LEVEL_UNITS_LEVEL_SHIFT = 104;
+
     /// @notice Bit shift for level units counter (16 bits at position 228).
     uint256 private constant ETH_LEVEL_UNITS_SHIFT = 228;
 
@@ -153,25 +157,21 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
         uint24 prevLevel = uint24((prevData >> ETH_LAST_LEVEL_SHIFT) & MINT_MASK_24);
         uint24 total = uint24((prevData >> ETH_LEVEL_COUNT_SHIFT) & MINT_MASK_24);
         uint24 streak = uint24((prevData >> ETH_LEVEL_STREAK_SHIFT) & MINT_MASK_24);
+        uint24 unitsLevel = uint24((prevData >> ETH_LEVEL_UNITS_LEVEL_SHIFT) & MINT_MASK_24);
 
         bool sameLevel = prevLevel == lvl;
+        bool sameUnitsLevel = unitsLevel == lvl;
         bool newCentury = (prevLevel / 100) != (lvl / 100);
 
         // ─────────────────────────────────────────────────────────────────────
         // Handle level units and bonus
         // ─────────────────────────────────────────────────────────────────────
 
-        // Get previous level units (reset on level change after counted mint)
-        uint256 levelUnitsBefore = (prevData >> ETH_LEVEL_UNITS_SHIFT) & MINT_MASK_16;
-        if (!sameLevel) {
-            // Reset once we switch levels after a counted mint (≥4 units), or when skipping levels
-            if (prevLevel + 1 != lvl || levelUnitsBefore >= 4) {
-                levelUnitsBefore = 0;
-            }
-        }
+        // Get previous level units (reset on level change)
+        uint256 levelUnitsBefore = sameUnitsLevel ? ((prevData >> ETH_LEVEL_UNITS_SHIFT) & MINT_MASK_16) : 0;
 
         // Check if 400-unit bonus already paid this level
-        bool bonusPaid = sameLevel && (((prevData >> ETH_LEVEL_BONUS_SHIFT) & 1) == 1);
+        bool bonusPaid = sameUnitsLevel && (((prevData >> ETH_LEVEL_BONUS_SHIFT) & 1) == 1);
 
         // Calculate new level units (capped at 16-bit max)
         uint256 levelUnitsAfter = levelUnitsBefore + uint256(mintUnits);
@@ -193,6 +193,7 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
         if (!sameLevel && levelUnitsAfter < 4) {
             // Just update units and bonus flag, don't update level/streak/total
             data = _setPacked(prevData, ETH_LEVEL_UNITS_SHIFT, MINT_MASK_16, levelUnitsAfter);
+            data = _setPacked(data, ETH_LEVEL_UNITS_LEVEL_SHIFT, MINT_MASK_24, lvl);
             data = _setPacked(data, ETH_LEVEL_BONUS_SHIFT, 1, bonusPaid ? 1 : 0);
             if (data != prevData) {
                 mintPacked_[player] = data;
@@ -212,6 +213,7 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
 
         if (sameLevel) {
             data = _setPacked(data, ETH_LEVEL_UNITS_SHIFT, MINT_MASK_16, levelUnitsAfter);
+            data = _setPacked(data, ETH_LEVEL_UNITS_LEVEL_SHIFT, MINT_MASK_24, lvl);
             data = _setPacked(data, ETH_LEVEL_BONUS_SHIFT, 1, bonusPaid ? 1 : 0);
             if (data != prevData) {
                 mintPacked_[player] = data;
@@ -250,6 +252,7 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
         data = _setPacked(data, ETH_LEVEL_COUNT_SHIFT, MINT_MASK_24, total);
         data = _setPacked(data, ETH_LEVEL_STREAK_SHIFT, MINT_MASK_24, streak);
         data = _setPacked(data, ETH_LEVEL_UNITS_SHIFT, MINT_MASK_16, levelUnitsAfter);
+        data = _setPacked(data, ETH_LEVEL_UNITS_LEVEL_SHIFT, MINT_MASK_24, lvl);
         data = _setPacked(data, ETH_LEVEL_BONUS_SHIFT, 1, bonusPaid ? 1 : 0);
 
         // ─────────────────────────────────────────────────────────────────────
