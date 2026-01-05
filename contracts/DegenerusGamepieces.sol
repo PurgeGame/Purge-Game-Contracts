@@ -705,7 +705,7 @@ contract DegenerusGamepieces {
     /// @param payer Address paying for purchase.
     /// @param params Purchase parameters.
     function _routePurchase(address buyer, address payer, PurchaseParams memory params) private {
-        bytes32 affiliateCode = params.payKind == MintPaymentKind.DirectEth ? params.affiliateCode : bytes32(0);
+        bytes32 affiliateCode = params.payInCoin ? bytes32(0) : params.affiliateCode;
         if (params.kind == PurchaseKind.Player) {
             _purchase(buyer, payer, params.quantity, params.payInCoin, affiliateCode, params.payKind);
         } else if (params.kind == PurchaseKind.Map) {
@@ -1213,6 +1213,7 @@ contract DegenerusGamepieces {
     }
 
     function _packedOwnershipOf(uint256 tokenId) private view returns (uint256 packed) {
+        if (tokenId != SPECIAL_TOKEN_ID && !_isLiveState()) revert InvalidToken();
         if (tokenId != SPECIAL_TOKEN_ID && tokenId < _currentBaseTokenId()) revert InvalidToken();
         if (tokenId >= _currentIndex) revert InvalidToken();
 
@@ -1391,6 +1392,10 @@ contract DegenerusGamepieces {
         if (burnCut != 0) burnie.burnCoin(payer, burnCut);
     }
 
+    function _requireMarketplaceToken(uint256 tokenId) private view {
+        if (!_isLiveState() || tokenId == SPECIAL_TOKEN_ID) revert InvalidToken();
+    }
+
     /// @dev Minimal ERC721Receiver check with reason bubbling.
     function _checkContractOnERC721Received(
         address from,
@@ -1553,6 +1558,7 @@ contract DegenerusGamepieces {
     /// @param price Listing price in BURNIE.
     /// @param expiry Expiration timestamp.
     function placeAsk(uint256 tokenId, uint256 price, uint40 expiry) external {
+        _requireMarketplaceToken(tokenId);
         if (price == 0) revert PriceZero();
         if (expiry < block.timestamp) revert Expired();
         address seller = msg.sender;
@@ -1564,6 +1570,7 @@ contract DegenerusGamepieces {
 
     /// @notice Cancel an active ask.
     function cancelAsk(uint256 tokenId) external {
+        _requireMarketplaceToken(tokenId);
         Ask storage ask = asks[tokenId];
         if (ask.seller != msg.sender) revert Unauthorized();
         delete asks[tokenId];
@@ -1572,6 +1579,7 @@ contract DegenerusGamepieces {
 
     /// @notice Buy an active on-chain ask.
     function buy(uint256 tokenId) external {
+        _requireMarketplaceToken(tokenId);
         Ask memory ask = asks[tokenId];
         if (ask.seller == address(0)) revert Unauthorized();
         if (ask.price == 0) revert PriceZero();
@@ -1592,6 +1600,7 @@ contract DegenerusGamepieces {
 
     /// @notice Place an on-chain offer for a tokenId; burns the flat posting fee.
     function placeOffer(uint256 tokenId, uint216 amount, uint40 expiry) external {
+        _requireMarketplaceToken(tokenId);
         if (amount == 0) revert PriceZero();
         if (expiry < block.timestamp) revert Expired();
         if (burnie.balanceOf(msg.sender) < amount) revert InsufficientBalance();
@@ -1608,6 +1617,7 @@ contract DegenerusGamepieces {
 
     /// @notice Cancel an active on-chain offer for a tokenId (no refund).
     function cancelOffer(uint256 tokenId) external {
+        _requireMarketplaceToken(tokenId);
         Offer storage offer = offers[tokenId][msg.sender];
         if (offer.amount == 0) revert Unauthorized();
         delete offers[tokenId][msg.sender];
@@ -1616,6 +1626,7 @@ contract DegenerusGamepieces {
 
     /// @notice Accept a specific offer by supplying the bidder/amount you observed off-chain (e.g., via `bestOffer`).
     function acceptOffer(uint256 tokenId, address bidder, uint216 amount) external {
+        _requireMarketplaceToken(tokenId);
         Offer memory offer = offers[tokenId][bidder];
         if (offer.amount == 0 || offer.amount != amount) revert Unauthorized();
         if (offer.expiry < block.timestamp) revert Expired();
@@ -1635,6 +1646,7 @@ contract DegenerusGamepieces {
 
     /// @notice Return the highest active offer (funded + unexpired) for a token, if any.
     function bestOffer(uint256 tokenId) external view returns (BestOffer memory best) {
+        _requireMarketplaceToken(tokenId);
         address[] memory bidders = offerBidders[tokenId];
         uint256 len = bidders.length;
         for (uint256 i; i < len; i++) {

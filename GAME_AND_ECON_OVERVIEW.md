@@ -17,7 +17,7 @@ Degenerus is a high-variance, on-chain NFT game designed for risk-seeking player
 
 ### Level Cycle
 
-1. **Purchase Phase**: Buy gamepieces with ETH (or BURNIE; BURNIE burns and does not add ETH to pots). Must hit funding target before burn phase opens.
+1. **Purchase Phase**: Buy gamepieces with ETH (or BURNIE; BURNIE burns and does not add ETH to pots). Funding target must be met before burn phase opens. Purchases can still occur outside purchase phase; in burn phase they apply to the next level.
 2. **Burn Phase**: Burn gamepieces to reduce trait counts. First trait to zero (or 1 on L%10=7) = "Exterminated."
 3. **Settlement**: Exterminator wins prize slice + Trophy. Level advances.
 4. **Timeout**: If no extermination after ~10 daily jackpots, level auto-advances.
@@ -26,7 +26,7 @@ Degenerus is a high-variance, on-chain NFT game designed for risk-seeking player
 
 - Each gamepiece has 4 traits (one per quadrant), deterministically generated
 - Burning decrements trait counts, earns BURNIE credits, enters jackpots
-- **MAPs**: Pay 1/4 gamepiece price for 1 trait ticket + level jackpot entry
+- **MAPs**: Pay 1/4 gamepiece price for 1 trait ticket + level jackpot entry (ETH/claimable anytime RNG is unlocked; BURNIE only on last purchase day)
 
 ### Pricing
 
@@ -54,6 +54,8 @@ BURNIE is **not minted on purchase**:
 ### Coinflip
 
 - ~50% win rate, variable payout multiplier
+- Last purchase day adds a +6% bonus to the payout roll
+- Winnings are claimable after the day's flip resolves; unclaimed winnings expire after 30 days
 - Recycling bonus for rolling winnings forward
 - Bounty for setting all-time high stakes
 - Feeds the BAF jackpot (fires every 10 levels)

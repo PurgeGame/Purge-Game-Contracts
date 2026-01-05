@@ -212,13 +212,6 @@ contract DegenerusJackpots is IDegenerusJackpots {
         uint96 score;   // Weighted coinflip stake (whole tokens, capped at uint96.max)
     }
 
-    /// @notice Per-player BAF totals within an active level.
-    /// @dev Resets when player participates in a new level.
-    struct BafEntry {
-        uint256 total; // Total weighted flips this level (raw units, not capped)
-        uint24 level;  // Level number this entry belongs to
-    }
-
     /// @notice Per-player Decimator burn tracking for a specific level.
     /// @dev Packed for gas efficiency: burn (192) + bucket (8) + subBucket (8) + claimed (8) = 216 bits.
     ///      - bucket: Player's chosen denominator (2-10)
@@ -323,9 +316,9 @@ contract DegenerusJackpots is IDegenerusJackpots {
       ║  Per-player BAF totals and top-4 leaderboard per level.              ║
       ╚══════════════════════════════════════════════════════════════════════╝*/
 
-    /// @dev Per-player weighted coinflip totals for current level.
-    ///      Resets when player participates in new level.
-    mapping(address => BafEntry) internal bafTotals;
+    /// @dev Per-bracket weighted coinflip totals.
+    ///      Keyed by BAF bracket level, then player.
+    mapping(uint24 => mapping(address => uint256)) internal bafTotals;
 
     /// @dev Top-4 coinflip bettors for BAF per level (sorted by score descending).
     mapping(uint24 => PlayerScore[4]) internal bafTop;
@@ -464,32 +457,26 @@ contract DegenerusJackpots is IDegenerusJackpots {
 
     /// @notice Record a coinflip stake for BAF leaderboard tracking.
     /// @dev Access: coin contract only. Called on every manual coinflip.
-    ///      - Resets player's total if they're participating in a new level
+    ///      - Accumulates per BAF bracket level
     ///      - Weights the flip amount by player's bonus multiplier (in bps)
     ///      - Updates top-4 leaderboard for the level
     /// @param player Address of the player.
     /// @param lvl Current game level.
     /// @param amount Raw flip amount (before weighting).
     function recordBafFlip(address player, uint24 lvl, uint256 amount) external override onlyCoin {
-        BafEntry storage entry = bafTotals[player];
-
-        // Reset total if player is participating in a new level
-        if (entry.level != lvl) {
-            entry.level = lvl;
-            entry.total = 0;
-        }
-
         // Weight the flip by player's bonus multiplier (10000 bps = 1x)
         uint256 multBps = degenerusGame.playerBonusMultiplier(player);
         uint256 weighted = (amount * multBps) / 10000;
 
         // Accumulate weighted total (unchecked safe: reasonable values won't overflow uint256)
+        uint256 total = bafTotals[lvl][player];
         unchecked {
-            entry.total += weighted;
+            total += weighted;
         }
+        bafTotals[lvl][player] = total;
 
         // Update top-4 leaderboard with new total
-        _updateBafTop(lvl, player, entry.total);
+        _updateBafTop(lvl, player, total);
     }
 
     /// @notice Record a Decimator burn for jackpot eligibility.
@@ -1471,9 +1458,7 @@ contract DegenerusJackpots is IDegenerusJackpots {
     /// @param lvl Level number.
     /// @return Weighted coinflip total (0 if player not in this level).
     function _bafScore(address player, uint24 lvl) private view returns (uint256) {
-        BafEntry storage e = bafTotals[player];
-        if (e.level != lvl) return 0;
-        return e.total;
+        return bafTotals[lvl][player];
     }
 
     /// @dev Convert raw score to capped uint96 (whole tokens only).

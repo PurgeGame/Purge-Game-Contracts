@@ -48,6 +48,7 @@ The loop continues.
 - You do **NOT** get guaranteed BURNIE when you buy gamepieces
 - Buying with ETH gives you coinflip credits
 - Coinflip is about 50/50: win to claim BURNIE, lose and credits are gone
+- Coinflip winnings expire after 30 days if unclaimed
 - Spending BURNIE on gamepieces or MAPs burns it permanently
 
 ---

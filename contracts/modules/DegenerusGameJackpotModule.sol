@@ -172,6 +172,9 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
     /// @dev Portion of reward-pool-funded daily jackpot ETH converted to MAP tickets (50%).
     uint16 private constant DAILY_REWARD_JACKPOT_MAP_BPS = 5000;
 
+    /// @dev Portion of purchase-phase reward-pool jackpots converted to MAP tickets (~2/3).
+    uint16 private constant PURCHASE_REWARD_JACKPOT_MAP_BPS = 6667;
+
     /// @dev Max total MAP winners per MAP jackpot draw.
     ///      250 winners × ~54k gas = ~13.5M gas worst case (under 16M limit).
     uint16 private constant DAILY_MAP_MAX_WINNERS = 250;
@@ -243,7 +246,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
     ///
     ///      EARLY-BURN PATH (isDaily=false):
     ///      - Triggered during purchase phase when early burns occur.
-    ///      - Pays a rewardPool-funded ETH slice every third day (1% of rewardPool).
+    ///      - Pays a rewardPool-funded slice every seventh day (1.5% of rewardPool; ~1% MAP, ~0.5% ETH).
     ///      - Coin jackpots pay on non-ETH days, sized from lastPrizePool.
     ///
     /// @param isDaily True for scheduled daily jackpot, false for early-burn jackpot.
@@ -386,18 +389,18 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
         // Non-daily (early-burn) path.
         winningTraitsPacked = _packWinningTraits(_getRandomTraits(randWord));
 
-        bool isEthDay = (questDay % 3) == 0;
+        bool isEthDay = (questDay % 7) == 0;
         uint256 rewardPoolSlice;
         if (isEthDay) {
-            uint256 poolBps = 100; // 1% of rewardPool every third day
-            rewardPoolSlice = (rewardPool * poolBps * _rewardJackpotScaleBps(lvl)) / 100_000_000;
+            uint256 poolBps = 150; // 1.5% of rewardPool every seventh day
+            rewardPoolSlice = (rewardPool * poolBps) / 10_000;
         }
 
         uint256 ethPool = rewardPoolSlice;
         uint256 mapUnits;
         uint256 mapCost;
         if (ethPool != 0) {
-            (mapUnits, mapCost) = _mapUnitsAndCost(ethPool, DAILY_REWARD_JACKPOT_MAP_BPS);
+            (mapUnits, mapCost) = _mapUnitsAndCost(ethPool, PURCHASE_REWARD_JACKPOT_MAP_BPS);
             if (mapCost != 0 && !_hasTraitTickets(lvl, winningTraitsPacked)) {
                 mapUnits = 0;
                 mapCost = 0;

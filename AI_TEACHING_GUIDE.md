@@ -58,6 +58,7 @@ Quest system is a standalone contract (`DegenerusQuests.sol`) wired once by admi
 | BURNIE decimals | 6 | |
 | PRICE_COIN_UNIT | 1e9 | = 1000 BURNIE |
 | JACKPOT_RESET_TIME | 82620 seconds | Day boundary anchor |
+| COIN_CLAIM_DAYS | 30 | Coinflip claim window (days) |
 
 ### Day Index
 
@@ -112,6 +113,8 @@ See [ETH_BUCKETS_AND_SOLVENCY.md](ETH_BUCKETS_AND_SOLVENCY.md) for full details.
   - `DirectEth`: msg.value
   - `Claimable`: from DegenerusGame balance
   - `Combined`: mix
+**Timing note**:
+- Purchases are allowed whenever RNG is unlocked; in state 3 the purchase is treated as the next level.
 
 **Flow**:
 1. `payInCoin=false`: NFT routes to `DegenerusGame.recordMint(...)` -> funds `nextPrizePool`
@@ -128,6 +131,8 @@ Same `purchase(...)` entry with `PurchaseKind.Map`.
 - ETH cost: `priceWei / 4` per MAP
 - BURNIE cost: `PRICE_COIN_UNIT / 4` per MAP
 - Queued via `enqueueMap(...)`, processed in batches during `advanceGame` state 2
+- ETH/claimable MAP buys are allowed whenever RNG is unlocked (gameState does not gate)
+- BURNIE MAP buys are only allowed on `lastPurchaseDay` (gameState == 2) and are blocked in state 3
 
 ### 3. Burning NFTs
 
@@ -162,6 +167,7 @@ Same `purchase(...)` entry with `PurchaseKind.Map`.
 **ETH**: `DegenerusGame.claimWinnings()` - resets to 1-wei sentinel, pays out
 
 **BURNIE**: Lazy - `depositCoinflip(0)` triggers netting/minting via `addFlip(...)`
+Coinflip claims only cover the most recent 30 resolved days; older stakes expire. Last purchase day adds +6% to the bonus percent.
 
 ---
 

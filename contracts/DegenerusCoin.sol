@@ -34,8 +34,8 @@ pragma solidity ^0.8.26;
 ║  │                                                       │                                          │ ║
 ║  │                                           ┌───────────┼───────────┐                              │ ║
 ║  │                                           ▼           ▼           ▼                              │ ║
-║  │                                      RNG Roll    Win/Loss    flipsClaimableDay++                 │ ║
-║  │                                      (50-150%)   (50/50)                                         │ ║
+║  │                                      RNG Roll    Win/Loss    flipsClaimableDay=day               │ ║
+║  │                                   (bonus 50-150%) (50/50)                                        │ ║
 ║  │                                           │           │                                          │ ║
 ║  │                                           └─────┬─────┘                                          │ ║
 ║  │                                                 ▼                                                │ ║
@@ -79,7 +79,7 @@ pragma solidity ^0.8.26;
 ║  ──────────────                                                                                       ║
 ║  • totalSupply = Σ balanceOf[addr]  (standard ERC20)                                                  ║
 ║  • supplyIncUncirculated = totalSupply + _vaultMintAllowance                                          ║
-║  • coinflipBalance[day][player] is immutable once day < flipsClaimableDay (settled)                   ║
+║  • coinflipBalance[day][player] is immutable once day <= flipsClaimableDay (settled)                  ║
 ║  • Only one bounty recipient can be armed at a time (bountyOwedTo)                                    ║
 ║  • Quest rewards are credited as flip stakes, not direct mint (except link credit)                    ║
 ║                                                                                                       ║
@@ -407,7 +407,7 @@ contract DegenerusCoin {
 
     /// @notice Per-day, per-player coinflip stake amounts.
     /// @dev Key: day index (from JACKPOT_RESET_TIME anchor) => player => stake.
-    ///      Cleared on claim. Cannot be modified once day < flipsClaimableDay.
+    ///      Cleared on claim. Cannot be modified once day <= flipsClaimableDay.
     mapping(uint48 => mapping(address => uint256)) internal coinflipBalance;
 
     /// @notice Resolved outcome for each coinflip day window.
@@ -910,14 +910,22 @@ contract DegenerusCoin {
     }
 
     /// @dev View helper to calculate claimable coinflip winnings for a player.
-    ///      Iterates through up to COIN_CLAIM_DAYS resolved days since last claim.
+    ///      Iterates through up to COIN_CLAIM_DAYS resolved days; older stakes expire.
     /// @param player The player address to check.
     /// @return total The sum of all claimable winnings (principal + reward%).
     function _viewClaimableCoin(address player) internal view returns (uint256 total) {
-        // Pending flip winnings since last claim (up to 30 days); staking removed.
+        // Pending flip winnings within the claim window (up to 30 days); staking removed.
         uint48 latestDay = flipsClaimableDay;
         uint48 startDay = lastCoinflipClaim[player];
         if (startDay >= latestDay) return 0;
+
+        uint48 minClaimableDay;
+        unchecked {
+            minClaimableDay = latestDay > COIN_CLAIM_DAYS ? latestDay - COIN_CLAIM_DAYS : 0;
+        }
+        if (startDay < minClaimableDay) {
+            startDay = minClaimableDay;
+        }
 
         uint8 remaining = COIN_CLAIM_DAYS;
         uint48 cursor = startDay + 1;
@@ -1320,6 +1328,16 @@ contract DegenerusCoin {
         uint48 start = lastCoinflipClaim[player];
         if (start >= latest) return 0;
 
+        // Enforce 30-day expiration: anything older than (latest - 30) is forfeit.
+        // This also initializes new players to start from the recent window.
+        uint48 minClaimableDay;
+        unchecked {
+            minClaimableDay = latest > COIN_CLAIM_DAYS ? latest - COIN_CLAIM_DAYS : 0;
+        }
+        if (start < minClaimableDay) {
+            start = minClaimableDay;
+        }
+
         uint48 cursor;
         unchecked {
             cursor = start + 1;
@@ -1393,14 +1411,14 @@ contract DegenerusCoin {
     ///      2. Arm bounties on the first payout window.
     ///      3. Perform cleanup and reopen betting (flip claims happen lazily per player).
     ///
-    ///      PAYOUT DISTRIBUTION:
-    ///      • 5% chance of 50% payout (roll == 0)
-    ///      • 5% chance of 150% payout (roll == 1)
-    ///      • 90% chance of [78%, 115%] payout
-    ///      • +7% if bonusFlip is true (last day bonus)
+    ///      PAYOUT DISTRIBUTION (bonus on top of principal):
+    ///      • 5% chance of 50% bonus (150% total) (roll == 0)
+    ///      • 5% chance of 150% bonus (250% total) (roll == 1)
+    ///      • 90% chance of [78%, 115%] bonus (178%-215% total)
+    ///      • +6% if bonusFlip is true (last day bonus)
     ///
     /// @param level Current DegenerusGame level (used to gate 1/run and propagate flip stakes).
-    /// @param bonusFlip Adds 7 percentage points to the payout roll for the last flip of the purchase phase.
+    /// @param bonusFlip Adds 6 percentage points to the payout roll for the last flip of the purchase phase.
     /// @param rngWord VRF-sourced random word for determining outcome.
     /// @param epoch The day index being resolved.
     /// @return finished True when all payouts and cleanup are complete (always true).
@@ -1414,22 +1432,22 @@ contract DegenerusCoin {
         uint256 seedWord = rngWord;
         seedWord = uint256(keccak256(abi.encodePacked(rngWord, epoch)));
 
-        // Determine payout multiplier:
-        // ~5% each for extreme outcomes (50% or 150%), rest is [78%, 115%]
+        // Determine payout bonus percent:
+        // ~5% each for extreme bonus outcomes (50% or 150%), rest is [78%, 115%]
         uint256 roll = seedWord % 20;
         uint16 rewardPercent;
         if (roll == 0) {
-            rewardPercent = 50;   // Unlucky: only get 50% of principal
+            rewardPercent = 50;   // Unlucky: 50% bonus (1.5x total)
         } else if (roll == 1) {
-            rewardPercent = 150;  // Lucky: get 150% of principal
+            rewardPercent = 150;  // Lucky: 150% bonus (2.5x total)
         } else {
-            // Normal range: [78%, 115%]
+            // Normal bonus range: [78%, 115%]
             rewardPercent = uint16((seedWord % COINFLIP_EXTRA_RANGE) + COINFLIP_EXTRA_MIN_PERCENT);
         }
-        // Last day bonus: add 7% to payout
+        // Last day bonus: add 6% to the bonus percent
         if (bonusFlip) {
             unchecked {
-                rewardPercent += 7;
+                rewardPercent += 6;
             }
         }
 
@@ -1457,8 +1475,8 @@ contract DegenerusCoin {
             bountyOwedTo = address(0);
         }
 
-        // Move the active window forward; the resolved day becomes claimable.
-        flipsClaimableDay = epoch == 0 ? 0 : epoch - 1;
+        // Move the active window forward; the resolved day becomes claimable immediately.
+        flipsClaimableDay = epoch;
 
         // Accumulate bounty pool for next window
         unchecked {

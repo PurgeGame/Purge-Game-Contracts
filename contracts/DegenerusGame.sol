@@ -1326,7 +1326,7 @@ contract DegenerusGame is DegenerusGameStorage {
         } while (false);
 
         // Emit state change event for indexers
-        emit Advance(_gameState);
+        emit Advance(gameState);
 
         // Credit caller with BURNIE reward for advancing (unless emergency cap mode)
         if (cap == 0) coinContract.creditFlip(caller, PRICE_COIN_UNIT >> 1);
@@ -2166,7 +2166,7 @@ contract DegenerusGame is DegenerusGameStorage {
         if (rngWordByDay[day] == 0) {
             rngWordByDay[day] = currentWord;
             if (lvl != 0) {
-                coin.processCoinflipPayouts(lvl, false, currentWord, day);
+                coin.processCoinflipPayouts(lvl, isMapJackpotDay, currentWord, day);
             }
         }
         return currentWord;
