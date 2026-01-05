@@ -477,6 +477,9 @@ contract DegenerusGamepieces {
     /// @dev Bonus divisor for full-claimable spend (10% bonus = 1/10).
     uint256 private constant CLAIMABLE_FULL_SPEND_BONUS_DIVISOR = 10;
 
+    /// @dev Minimum purchase value (in mint-price units) to earn full-spend bonus.
+    uint256 private constant CLAIMABLE_FULL_SPEND_MIN_TOKENS = 3;
+
     /// @dev BURNIE token unit (6 decimals = 1e6, scaled by 1000 = 1e9).
     uint256 private constant PRICE_COIN_UNIT = 1_000_000_000;
 
@@ -789,7 +792,7 @@ contract DegenerusGamepieces {
                 // Combine base + full-spend bonus if player spent all claimable (sentinel only)
                 uint256 bonusBase = coinCost / CLAIMABLE_BONUS_DIVISOR;
                 bool spentAll = newClaimableBal <= 1;
-                if (spentAll) {
+                if (spentAll && claimableUsed >= priceWei * CLAIMABLE_FULL_SPEND_MIN_TOKENS) {
                     unchecked {
                         bonusBase += coinCost / CLAIMABLE_FULL_SPEND_BONUS_DIVISOR;
                     }
@@ -909,7 +912,7 @@ contract DegenerusGamepieces {
                 // Combine base + full-spend bonus if player spent all claimable (sentinel only)
                 uint256 bonusBase = mapRebate;
                 bool spentAll = newClaimableBal <= 1;
-                if (spentAll) {
+                if (spentAll && claimableUsed >= priceWei * CLAIMABLE_FULL_SPEND_MIN_TOKENS) {
                     unchecked {
                         bonusBase += mapRebate;
                     }
