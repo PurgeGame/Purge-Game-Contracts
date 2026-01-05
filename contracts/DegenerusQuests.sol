@@ -85,6 +85,9 @@ contract DegenerusQuests is IDegenerusQuests {
     /// @dev Number of concurrent quest slots per day.
     uint8 private constant QUEST_SLOT_COUNT = 2;
 
+    /// @dev Base per-slot reward (20% of mint price split across slots = 100 BURNIE).
+    uint256 private constant QUEST_BASE_REWARD = (PRICE_COIN_UNIT / 5) / QUEST_SLOT_COUNT;
+
     /// @dev Quest type: mint NFTs using BURNIE tokens.
     uint8 private constant QUEST_TYPE_MINT_BURNIE = 0;
     /// @dev Quest type: mint NFTs using ETH.
@@ -432,6 +435,7 @@ contract DegenerusQuests is IDegenerusQuests {
     // - questType: The type of quest that was processed
     // - streak: Player's current streak after this action
     // - completed: True if a quest was completed by this action
+    // - completedBoth: True if this action completed both quests (streak credited)
 
     /**
      * @notice Handle mint progress for a player; covers both BURNIE and ETH paid mints.
@@ -445,20 +449,24 @@ contract DegenerusQuests is IDegenerusQuests {
         address player,
         uint32 quantity,
         bool paidWithEth
-    ) external onlyCoin returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) {
+    )
+        external
+        onlyCoin
+        returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed, bool completedBoth)
+    {
         DailyQuest[QUEST_SLOT_COUNT] memory quests = activeQuests;
         uint48 currentDay = _currentQuestDay(quests);
         PlayerQuestState storage state = questPlayerState[player];
         if (currentDay == 0) {
-            return (0, false, quests[0].questType, state.streak, false);
+            return (0, false, quests[0].questType, state.streak, false, false);
         }
 
         _questSyncState(state, currentDay);
         uint8 tier = _questTier(state.baseStreak);
 
-        uint256 priceUnit = PRICE_COIN_UNIT;
         bool matched;
         bool aggregatedCompleted;
+        bool aggregatedCompletedBoth;
         bool aggregatedHardMode;
         uint8 fallbackType = quests[0].questType;
         uint8 aggregatedQuestType = fallbackType;
@@ -480,14 +488,14 @@ contract DegenerusQuests is IDegenerusQuests {
             ) {
                 matched = true;
                 fallbackType = quest.questType;
-                (reward, hardMode, questType, streak, completed) = _questHandleMintSlot(
+                (reward, hardMode, questType, streak, completed, completedBoth) = _questHandleMintSlot(
                     state,
                     quests,
                     quest,
                     slot,
                     quantity,
                     tier,
-                    priceUnit
+                    currentDay
                 );
                 if (completed) {
                     aggregatedReward += reward;
@@ -497,6 +505,9 @@ contract DegenerusQuests is IDegenerusQuests {
                     if (hardMode) {
                         aggregatedHardMode = true;
                     }
+                    if (completedBoth) {
+                        aggregatedCompletedBoth = true;
+                    }
                 }
             }
             unchecked {
@@ -504,9 +515,9 @@ contract DegenerusQuests is IDegenerusQuests {
             }
         }
         if (aggregatedCompleted) {
-            return (aggregatedReward, aggregatedHardMode, aggregatedQuestType, aggregatedStreak, true);
+            return (aggregatedReward, aggregatedHardMode, aggregatedQuestType, aggregatedStreak, true, aggregatedCompletedBoth);
         }
-        return (0, false, matched ? fallbackType : QUEST_TYPE_MINT_BURNIE, state.streak, false);
+        return (0, false, matched ? fallbackType : QUEST_TYPE_MINT_BURNIE, state.streak, false, false);
     }
 
     /**
@@ -518,18 +529,22 @@ contract DegenerusQuests is IDegenerusQuests {
     function handleFlip(
         address player,
         uint256 flipCredit
-    ) external onlyCoin returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) {
+    )
+        external
+        onlyCoin
+        returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed, bool completedBoth)
+    {
         DailyQuest[QUEST_SLOT_COUNT] memory quests = activeQuests;
         uint48 currentDay = _currentQuestDay(quests);
         PlayerQuestState storage state = questPlayerState[player];
         if (player == address(0) || flipCredit == 0 || currentDay == 0) {
-            return (0, false, quests[0].questType, state.streak, false);
+            return (0, false, quests[0].questType, state.streak, false, false);
         }
         _questSyncState(state, currentDay);
 
         (DailyQuest memory quest, uint8 slotIndex) = _currentDayQuestOfType(quests, currentDay, QUEST_TYPE_FLIP);
         if (slotIndex == type(uint8).max) {
-            return (0, false, QUEST_TYPE_FLIP, state.streak, false);
+            return (0, false, QUEST_TYPE_FLIP, state.streak, false, false);
         }
 
         _questSyncProgress(state, slotIndex, currentDay, quest.version);
@@ -538,11 +553,10 @@ contract DegenerusQuests is IDegenerusQuests {
         state.progress[slotIndex] = progressAfter;
         uint256 target = uint256(_questFlipTargetTokens(tier, quest.flags, quest.entropy)) * MILLION;
         if (progressAfter < target) {
-            return (0, false, quest.questType, state.streak, false);
+            return (0, false, quest.questType, state.streak, false, false);
         }
 
-        uint256 priceUnit = PRICE_COIN_UNIT;
-        return _questCompleteWithPair(state, quests, slotIndex, quest, priceUnit, 0);
+        return _questCompleteWithPair(state, quests, slotIndex, quest, currentDay, tier, 0);
     }
 
     /**
@@ -554,28 +568,31 @@ contract DegenerusQuests is IDegenerusQuests {
     function handleDecimator(
         address player,
         uint256 burnAmount
-    ) external onlyCoin returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) {
+    )
+        external
+        onlyCoin
+        returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed, bool completedBoth)
+    {
         DailyQuest[QUEST_SLOT_COUNT] memory quests = activeQuests;
         uint48 currentDay = _currentQuestDay(quests);
         PlayerQuestState storage state = questPlayerState[player];
         if (player == address(0) || burnAmount == 0 || currentDay == 0) {
-            return (0, false, quests[0].questType, state.streak, false);
+            return (0, false, quests[0].questType, state.streak, false, false);
         }
         _questSyncState(state, currentDay);
         uint8 tier = _questTier(state.baseStreak);
-        uint256 priceUnit = PRICE_COIN_UNIT;
 
         (DailyQuest memory quest, uint8 slotIndex) = _currentDayQuestOfType(quests, currentDay, QUEST_TYPE_DECIMATOR);
         if (slotIndex == type(uint8).max) {
-            return (0, false, QUEST_TYPE_DECIMATOR, state.streak, false);
+            return (0, false, QUEST_TYPE_DECIMATOR, state.streak, false, false);
         }
         _questSyncProgress(state, slotIndex, currentDay, quest.version);
         state.progress[slotIndex] = _clampedAdd128(state.progress[slotIndex], burnAmount);
         uint256 target = uint256(_questDecimatorTargetTokens(tier, quest.flags, quest.entropy)) * MILLION;
         if (state.progress[slotIndex] < target) {
-            return (0, false, quest.questType, state.streak, false);
+            return (0, false, quest.questType, state.streak, false, false);
         }
-        return _questCompleteWithPair(state, quests, slotIndex, quest, priceUnit, 0);
+        return _questCompleteWithPair(state, quests, slotIndex, quest, currentDay, tier, 0);
     }
 
     /**
@@ -588,40 +605,43 @@ contract DegenerusQuests is IDegenerusQuests {
     function handleBondPurchase(
         address player,
         uint256 basePerBondWei
-    ) external onlyCoin returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) {
+    )
+        external
+        onlyCoin
+        returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed, bool completedBoth)
+    {
         DailyQuest[QUEST_SLOT_COUNT] memory quests = activeQuests;
         uint48 currentDay = _currentQuestDay(quests);
         PlayerQuestState storage state = questPlayerState[player];
         if (player == address(0) || basePerBondWei == 0 || currentDay == 0) {
-            return (0, false, quests[0].questType, state.streak, false);
+            return (0, false, quests[0].questType, state.streak, false, false);
         }
         _questSyncState(state, currentDay);
 
         // Bond purchases are only valid during specific level windows
         IDegenerusGame game_ = questGame;
         if (!_bondPurchasesOpen(game_.level())) {
-            return (0, false, quests[0].questType, state.streak, false);
+            return (0, false, quests[0].questType, state.streak, false, false);
         }
 
         (DailyQuest memory quest, uint8 slotIndex) = _currentDayQuestOfType(quests, currentDay, QUEST_TYPE_BOND);
         if (slotIndex == type(uint8).max) {
-            return (0, false, QUEST_TYPE_BOND, state.streak, false);
+            return (0, false, QUEST_TYPE_BOND, state.streak, false, false);
         }
 
         _questSyncProgress(state, slotIndex, currentDay, quest.version);
         uint8 tier = _questTier(state.baseStreak);
-        uint256 priceUnit = PRICE_COIN_UNIT;
         uint256 priceWei = game_.mintPrice();
-        if (priceUnit == 0 || priceWei == 0) {
-            return (0, false, quest.questType, state.streak, false);
+        if (priceWei == 0) {
+            return (0, false, quest.questType, state.streak, false, false);
         }
 
         state.progress[slotIndex] = _clampedAdd128(state.progress[slotIndex], basePerBondWei);
         uint256 target = _questBondTargetWei(tier, quest.flags, quest.entropy, priceWei);
         if (state.progress[slotIndex] < target) {
-            return (0, false, quest.questType, state.streak, false);
+            return (0, false, quest.questType, state.streak, false, false);
         }
-        return _questCompleteWithPair(state, quests, slotIndex, quest, priceUnit, priceWei);
+        return _questCompleteWithPair(state, quests, slotIndex, quest, currentDay, tier, priceWei);
     }
 
     /**
@@ -632,28 +652,31 @@ contract DegenerusQuests is IDegenerusQuests {
     function handleAffiliate(
         address player,
         uint256 amount
-    ) external onlyCoin returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) {
+    )
+        external
+        onlyCoin
+        returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed, bool completedBoth)
+    {
         DailyQuest[QUEST_SLOT_COUNT] memory quests = activeQuests;
         uint48 currentDay = _currentQuestDay(quests);
         PlayerQuestState storage state = questPlayerState[player];
         if (player == address(0) || amount == 0 || currentDay == 0) {
-            return (0, false, quests[0].questType, state.streak, false);
+            return (0, false, quests[0].questType, state.streak, false, false);
         }
         _questSyncState(state, currentDay);
         uint8 tier = _questTier(state.baseStreak);
-        uint256 priceUnit = PRICE_COIN_UNIT;
 
         (DailyQuest memory quest, uint8 slotIndex) = _currentDayQuestOfType(quests, currentDay, QUEST_TYPE_AFFILIATE);
         if (slotIndex == type(uint8).max) {
-            return (0, false, QUEST_TYPE_AFFILIATE, state.streak, false);
+            return (0, false, QUEST_TYPE_AFFILIATE, state.streak, false, false);
         }
         _questSyncProgress(state, slotIndex, currentDay, quest.version);
         state.progress[slotIndex] = _clampedAdd128(state.progress[slotIndex], amount);
         uint256 target = uint256(_questAffiliateTargetTokens(tier, quest.flags, quest.entropy)) * MILLION;
         if (state.progress[slotIndex] < target) {
-            return (0, false, quest.questType, state.streak, false);
+            return (0, false, quest.questType, state.streak, false, false);
         }
-        return _questCompleteWithPair(state, quests, slotIndex, quest, priceUnit, 0);
+        return _questCompleteWithPair(state, quests, slotIndex, quest, currentDay, tier, 0);
     }
 
     /**
@@ -666,16 +689,19 @@ contract DegenerusQuests is IDegenerusQuests {
     function handleBurn(
         address player,
         uint32 quantity
-    ) external onlyCoin returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) {
+    )
+        external
+        onlyCoin
+        returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed, bool completedBoth)
+    {
         DailyQuest[QUEST_SLOT_COUNT] memory quests = activeQuests;
         uint48 currentDay = _currentQuestDay(quests);
         PlayerQuestState storage state = questPlayerState[player];
         if (player == address(0) || quantity == 0 || currentDay == 0) {
-            return (0, false, quests[0].questType, state.streak, false);
+            return (0, false, quests[0].questType, state.streak, false, false);
         }
         _questSyncState(state, currentDay);
         uint8 tier = _questTier(state.baseStreak);
-        uint256 priceUnit = PRICE_COIN_UNIT;
 
         bool matched;
         uint8 fallbackType = quests[0].questType;
@@ -693,13 +719,13 @@ contract DegenerusQuests is IDegenerusQuests {
             state.progress[slot] = _clampedAdd128(state.progress[slot], quantity);
             uint32 target = _questMintTarget(tier, quest.flags, quest.entropy);
             if (state.progress[slot] >= target) {
-                return _questCompleteWithPair(state, quests, slot, quest, priceUnit, 0);
+                return _questCompleteWithPair(state, quests, slot, quest, currentDay, tier, 0);
             }
             unchecked {
                 ++slot;
             }
         }
-        return (0, false, matched ? fallbackType : QUEST_TYPE_BURN, state.streak, false);
+        return (0, false, matched ? fallbackType : QUEST_TYPE_BURN, state.streak, false, false);
     }
 
     // =========================================================================
@@ -1056,7 +1082,7 @@ contract DegenerusQuests is IDegenerusQuests {
      * @param slot The slot index (0 or 1).
      * @param quantity Number of NFTs minted.
      * @param tier Player's current tier for target calculation.
-     * @param priceUnit Price unit for reward calculation.
+     * @param currentDay Current quest day (for paired completion checks).
      */
     function _questHandleMintSlot(
         PlayerQuestState storage state,
@@ -1065,15 +1091,15 @@ contract DegenerusQuests is IDegenerusQuests {
         uint8 slot,
         uint32 quantity,
         uint8 tier,
-        uint256 priceUnit
-    ) private returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) {
+        uint48 currentDay
+    ) private returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed, bool completedBoth) {
         _questSyncProgress(state, slot, quest.day, quest.version);
         state.progress[slot] = _clampedAdd128(state.progress[slot], quantity);
         uint32 target = _questMintTarget(tier, quest.flags, quest.entropy);
         if (state.progress[slot] >= target) {
-            return _questCompleteWithPair(state, quests, slot, quest, priceUnit, 0);
+            return _questCompleteWithPair(state, quests, slot, quest, currentDay, tier, 0);
         }
-        return (0, false, quest.questType, state.streak, false);
+        return (0, false, quest.questType, state.streak, false, false);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -1524,7 +1550,6 @@ contract DegenerusQuests is IDegenerusQuests {
      * @param state Storage reference to player's quest state.
      * @param slot The slot index being completed.
      * @param quest The quest being completed.
-     * @param priceUnit Price unit for base reward calculation.
      * @return reward BURNIE tokens earned (in base units).
      * @return hardMode True if quest had high difficulty flag.
      * @return questType The completed quest type.
@@ -1544,15 +1569,17 @@ contract DegenerusQuests is IDegenerusQuests {
     function _questComplete(
         PlayerQuestState storage state,
         uint8 slot,
-        DailyQuest memory quest,
-        uint256 priceUnit
-    ) private returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) {
+        DailyQuest memory quest
+    )
+        private
+        returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed, bool completedBoth)
+    {
         uint8 mask = state.completionMask;
         uint8 slotMask = uint8(1 << slot);
 
         // Already completed this slot today
         if ((mask & slotMask) != 0) {
-            return (0, false, quest.questType, state.streak, false);
+            return (0, false, quest.questType, state.streak, false, false);
         }
 
         // Mark slot as complete
@@ -1581,13 +1608,13 @@ contract DegenerusQuests is IDegenerusQuests {
         bool isHard = (quest.flags & QUEST_FLAG_HIGH_DIFFICULTY) != 0;
         uint32 rewardStreak = streakJustUpdated ? newStreak : state.baseStreak;
         // Base reward: 20% of mint cost split across slots
-        uint256 rewardShare = (priceUnit / 5) / QUEST_SLOT_COUNT;
+        uint256 rewardShare = QUEST_BASE_REWARD;
         uint8 rewardTier = _questTier(rewardStreak);
         rewardShare += _questDifficultyBonus(quest.flags, rewardTier);
         if (streakJustUpdated) {
             rewardShare += _questTierUpgradeBonus(newStreak);
         }
-        return (rewardShare, isHard, quest.questType, newStreak, true);
+        return (rewardShare, isHard, quest.questType, newStreak, true, streakJustUpdated);
     }
 
     /**
@@ -1596,7 +1623,8 @@ contract DegenerusQuests is IDegenerusQuests {
      * @param quests Memory copy of active quests.
      * @param slot The slot being completed.
      * @param quest The quest being completed.
-     * @param priceUnit Price unit for reward calculation.
+     * @param currentDay Current quest day for pair checks.
+     * @param tier Player tier (from baseStreak) for target checks.
      * @param priceWei Price in wei (for bond quest target calculation).
      *
      * This function enables "combo completion" where completing one quest
@@ -1608,12 +1636,16 @@ contract DegenerusQuests is IDegenerusQuests {
         DailyQuest[QUEST_SLOT_COUNT] memory quests,
         uint8 slot,
         DailyQuest memory quest,
-        uint256 priceUnit,
+        uint48 currentDay,
+        uint8 tier,
         uint256 priceWei
-    ) private returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) {
-        (reward, hardMode, questType, streak, completed) = _questComplete(state, slot, quest, priceUnit);
+    )
+        private
+        returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed, bool completedBoth)
+    {
+        (reward, hardMode, questType, streak, completed, completedBoth) = _questComplete(state, slot, quest);
         if (!completed) {
-            return (reward, hardMode, questType, streak, false);
+            return (reward, hardMode, questType, streak, false, completedBoth);
         }
 
         // Check the other slot; if it already meets the target, complete it now
@@ -1623,8 +1655,9 @@ contract DegenerusQuests is IDegenerusQuests {
             bool extraHard,
             uint8 extraType,
             uint32 extraStreak,
-            bool extraCompleted
-        ) = _maybeCompleteOther(state, quests, otherSlot, priceUnit, priceWei);
+            bool extraCompleted,
+            bool extraCompletedBoth
+        ) = _maybeCompleteOther(state, quests, otherSlot, currentDay, tier, priceWei);
 
         // Aggregate rewards from paired completion
         if (extraCompleted) {
@@ -1633,6 +1666,9 @@ contract DegenerusQuests is IDegenerusQuests {
             questType = extraType;
             streak = extraStreak;
         }
+        if (extraCompletedBoth) {
+            completedBoth = true;
+        }
     }
 
     /**
@@ -1640,34 +1676,37 @@ contract DegenerusQuests is IDegenerusQuests {
      * @param state Storage reference to player's quest state.
      * @param quests Memory copy of active quests.
      * @param slot The slot to check for completion.
-     * @param priceUnit Price unit for reward calculation.
+     * @param currentDay Current quest day for validation.
+     * @param tier Player tier (from baseStreak) for target checks.
      * @param priceWei Price in wei (for bond quest target calculation).
      */
     function _maybeCompleteOther(
         PlayerQuestState storage state,
         DailyQuest[QUEST_SLOT_COUNT] memory quests,
         uint8 slot,
-        uint256 priceUnit,
+        uint48 currentDay,
+        uint8 tier,
         uint256 priceWei
-    ) private returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) {
+    )
+        private
+        returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed, bool completedBoth)
+    {
         DailyQuest memory quest = quests[slot];
-        uint48 currentDay = _currentQuestDay(quests);
 
         // Skip if quest is not for today
         if (quest.day == 0 || quest.day != currentDay) {
-            return (0, false, quest.questType, state.streak, false);
+            return (0, false, quest.questType, state.streak, false, false);
         }
         // Skip if already completed
         if ((state.completionMask & uint8(1 << slot)) != 0) {
-            return (0, false, quest.questType, state.streak, false);
+            return (0, false, quest.questType, state.streak, false, false);
         }
 
-        uint8 tier = _questTier(state.baseStreak);
         if (!_questReady(state, quest, slot, tier, priceWei)) {
-            return (0, false, quest.questType, state.streak, false);
+            return (0, false, quest.questType, state.streak, false, false);
         }
 
-        return _questComplete(state, slot, quest, priceUnit);
+        return _questComplete(state, slot, quest);
     }
 
     /**

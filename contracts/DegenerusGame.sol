@@ -1252,9 +1252,16 @@ contract DegenerusGame is DegenerusGameStorage {
                 }
 
                 // --- Process pending NFT mints ---
-                uint32 purchaseCountRaw = nft.purchaseCount();
+                (uint32 purchaseCountPre, uint32 purchaseCountPhase) = nft.purchaseCounts();
+                uint256 purchaseCountTotal = uint256(purchaseCountPre) + uint256(purchaseCountPhase);
+                if (purchaseCountTotal > type(uint32).max) revert E();
+                uint32 purchaseCountRaw = uint32(purchaseCountTotal);
                 if (airdropMultiplier == 0) {
-                    airdropMultiplier = _calculateAirdropMultiplierModule(purchaseCountRaw, lvl);
+                    airdropMultiplier = _calculateAirdropMultiplierModule(
+                        purchaseCountPre,
+                        purchaseCountPhase,
+                        lvl
+                    );
                 }
                 if (!traitCountsSeedQueued) {
                     uint32 multiplier_ = airdropMultiplier;
@@ -1269,24 +1276,23 @@ contract DegenerusGame is DegenerusGameStorage {
 
                 // --- Rebuild trait counts for new level ---
                 if (traitCountsSeedQueued) {
-                    uint32 targetCount = _purchaseTargetCountFromRawModule(purchaseCountRaw);
+                    uint32 targetCount = _purchaseTargetCountFromRawModule(purchaseCountPre, purchaseCountPhase);
                     if (traitRebuildCursor < targetCount) {
                         uint256 baseTokenId = nft.currentBaseTokenId();
                         _rebuildTraitCountsModule(cap, targetCount, baseTokenId);
                         break; // More trait counts to rebuild
                     }
                     _seedTraitCounts(); // Copy traitRemaining to traitStartRemaining
-                    traitCountsSeedQueued = false;
-                }
+                traitCountsSeedQueued = false;
+            }
 
-                // --- Transition to State 3 (DEGENERUS) ---
-                traitRebuildCursor = 0;
-                airdropMultiplier = 0;
-                earlyBurnPercent = 0;
-                levelStartTime = ts;
-                gameState = 3;
-                levelJackpotPaid = false;
-                lastPurchaseDay = false;
+            // --- Transition to State 3 (DEGENERUS) ---
+            traitRebuildCursor = 0;
+            airdropMultiplier = 0;
+            earlyBurnPercent = 0;
+            gameState = 3;
+            levelJackpotPaid = false;
+            lastPurchaseDay = false;
                 if (lvl % 100 == 99) decWindowOpen = true;
                 _unlockRng(day); // Open RNG after level jackpot is finalized
                 break;
@@ -1671,12 +1677,22 @@ contract DegenerusGame is DegenerusGameStorage {
 
     /// @dev Calculate airdrop multiplier via mint module delegatecall.
     ///      Multiplier determines bonus NFTs in airdrops.
-    /// @param purchaseCount Raw purchase count for the level.
+    /// @param prePurchaseCount Raw count before purchase phase (eligible for multiplier).
+    /// @param purchasePhaseCount Raw count during purchase phase (not multiplied).
     /// @param lvl Current level.
     /// @return Multiplier value for airdrop calculations.
-    function _calculateAirdropMultiplierModule(uint32 purchaseCount, uint24 lvl) private returns (uint32) {
+    function _calculateAirdropMultiplierModule(
+        uint32 prePurchaseCount,
+        uint32 purchasePhaseCount,
+        uint24 lvl
+    ) private returns (uint32) {
         (bool ok, bytes memory data) = mintModule.delegatecall(
-            abi.encodeWithSelector(IDegenerusGameMintModule.calculateAirdropMultiplier.selector, purchaseCount, lvl)
+            abi.encodeWithSelector(
+                IDegenerusGameMintModule.calculateAirdropMultiplier.selector,
+                prePurchaseCount,
+                purchasePhaseCount,
+                lvl
+            )
         );
         if (!ok) _revertDelegate(data);
         if (data.length == 0) revert E();
@@ -1684,11 +1700,19 @@ contract DegenerusGame is DegenerusGameStorage {
     }
 
     /// @dev Convert raw purchase count to target count via mint module.
-    /// @param rawCount Raw purchase count from NFT contract.
+    /// @param prePurchaseCount Raw count before purchase phase (eligible for multiplier).
+    /// @param purchasePhaseCount Raw count during purchase phase (not multiplied).
     /// @return Target count for trait rebuild operations.
-    function _purchaseTargetCountFromRawModule(uint32 rawCount) private returns (uint32) {
+    function _purchaseTargetCountFromRawModule(
+        uint32 prePurchaseCount,
+        uint32 purchasePhaseCount
+    ) private returns (uint32) {
         (bool ok, bytes memory data) = mintModule.delegatecall(
-            abi.encodeWithSelector(IDegenerusGameMintModule.purchaseTargetCountFromRaw.selector, rawCount)
+            abi.encodeWithSelector(
+                IDegenerusGameMintModule.purchaseTargetCountFromRaw.selector,
+                prePurchaseCount,
+                purchasePhaseCount
+            )
         );
         if (!ok) _revertDelegate(data);
         if (data.length == 0) revert E();
@@ -1740,6 +1764,7 @@ contract DegenerusGame is DegenerusGameStorage {
         bool done = IDegenerusBonds(bondsAddr).bondMaintenance(rngWord, cap);
         if (done) {
             gameState = 2; // Enter purchase/airdrop state once bond maintenance is fully settled
+            levelStartTime = uint48(block.timestamp);
 
             if (bondMaintenancePending) {
                 bondMaintenancePending = false;

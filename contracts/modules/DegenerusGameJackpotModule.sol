@@ -246,7 +246,8 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
     ///
     ///      EARLY-BURN PATH (isDaily=false):
     ///      - Triggered during purchase phase when early burns occur.
-    ///      - Pays a rewardPool-funded slice every seventh day (1.5% of rewardPool; ~1% MAP, ~0.5% ETH).
+    ///      - Pays a rewardPool-funded slice once per week, starting 7 days after purchase phase begins
+    ///        (1.5% of rewardPool; ~1% MAP, ~0.5% ETH).
     ///      - Coin jackpots pay on non-ETH days, sized from lastPrizePool.
     ///
     /// @param isDaily True for scheduled daily jackpot, false for early-burn jackpot.
@@ -389,7 +390,15 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
         // Non-daily (early-burn) path.
         winningTraitsPacked = _packWinningTraits(_getRandomTraits(randWord));
 
-        bool isEthDay = (questDay % 7) == 0;
+        bool isEthDay = false;
+        uint48 startTime = levelStartTime;
+        if (startTime != type(uint48).max) {
+            uint48 startDay = uint48((uint256(startTime) - JACKPOT_RESET_TIME) / 1 days);
+            if (questDay > startDay) {
+                uint48 daysSince = questDay - startDay;
+                isEthDay = (daysSince % 7) == 0;
+            }
+        }
         uint256 rewardPoolSlice;
         if (isEthDay) {
             uint256 poolBps = 150; // 1.5% of rewardPool every seventh day

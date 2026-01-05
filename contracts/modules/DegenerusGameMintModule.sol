@@ -302,17 +302,19 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
      * @notice Calculate airdrop multiplier for low-participation levels.
      * @dev Pure function - no state changes. Creates a floor for trait distribution.
      *
-     * @param purchaseCount Raw purchase count for the level.
+     * @param prePurchaseCount Raw count before purchase phase (eligible for multiplier).
+     * @param purchasePhaseCount Raw count during purchase phase (not multiplied).
      * @param lvl Current game level.
      * @return Multiplier to apply to purchase count (1 = no bonus).
      *
      * ## Logic
      *
      * - Target: 5,000 tokens (or 10,000 for levels ending in 8)
-     * - If purchases ≥ target: multiplier = 1 (no bonus)
-     * - Otherwise: multiplier = ceiling(target / purchaseCount)
+     * - If total purchases ≥ target: multiplier = 1 (no bonus)
+     * - If prePurchaseCount == 0: multiplier = ceiling(target / purchasePhaseCount)
+     * - Otherwise: multiplier = ceiling((target - purchasePhaseCount) / prePurchaseCount)
      *
-     * ## Examples
+     * ## Examples (purchasePhaseCount = 0)
      *
      * | Purchases | Level %10 | Target | Multiplier |
      * |-----------|-----------|--------|------------|
@@ -321,38 +323,59 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
      * | 1,000 | 8 | 10,000 | 10x |
      * | 5,000+ | any | - | 1x |
      */
-    function calculateAirdropMultiplier(uint32 purchaseCount, uint24 lvl) external pure returns (uint32) {
-        if (purchaseCount == 0) {
-            return 1;
-        }
-
+    function calculateAirdropMultiplier(
+        uint32 prePurchaseCount,
+        uint32 purchasePhaseCount,
+        uint24 lvl
+    ) external pure returns (uint32) {
         // Higher target for levels ending in 8
         uint256 target = (lvl % 10 == 8) ? 10_000 : 5_000;
 
-        // If already at or above target, no multiplier needed
-        if (purchaseCount >= target) {
+        uint256 total = uint256(prePurchaseCount) + uint256(purchasePhaseCount);
+        if (total >= target) {
             return 1;
         }
 
-        // Ceiling division: (target + purchaseCount - 1) / purchaseCount
-        uint256 numerator = target + uint256(purchaseCount) - 1;
-        return uint32(numerator / purchaseCount);
+        if (prePurchaseCount == 0) {
+            if (purchasePhaseCount == 0) {
+                return 1;
+            }
+            // Ceiling division: (target + purchasePhaseCount - 1) / purchasePhaseCount
+            uint256 numerator = target + uint256(purchasePhaseCount) - 1;
+            return uint32(numerator / uint256(purchasePhaseCount));
+        }
+
+        // Remaining needed after purchase-phase purchases
+        uint256 remaining = target - uint256(purchasePhaseCount);
+
+        // Ceiling division: (remaining + prePurchaseCount - 1) / prePurchaseCount
+        uint256 numerator = remaining + uint256(prePurchaseCount) - 1;
+        return uint32(numerator / prePurchaseCount);
     }
 
     /**
      * @notice Scale raw purchase count by stored airdrop multiplier.
      * @dev View function - reads airdropMultiplier from storage.
      *
-     * @param rawCount Raw purchase count from NFT contract.
-     * @return Scaled count (rawCount × airdropMultiplier).
+     * @param prePurchaseCount Raw count before purchase phase (eligible for multiplier).
+     * @param purchasePhaseCount Raw count during purchase phase (not multiplied).
+     * @return Scaled count (pre × airdropMultiplier + purchase phase).
      */
-    function purchaseTargetCountFromRaw(uint32 rawCount) external view returns (uint32) {
-        if (rawCount == 0) {
+    function purchaseTargetCountFromRaw(
+        uint32 prePurchaseCount,
+        uint32 purchasePhaseCount
+    ) external view returns (uint32) {
+        if (prePurchaseCount == 0 && purchasePhaseCount == 0) {
             return 0;
         }
 
         uint32 multiplier = airdropMultiplier;
-        uint256 scaled = uint256(rawCount) * uint256(multiplier);
+        uint256 scaled;
+        if (prePurchaseCount == 0) {
+            scaled = uint256(purchasePhaseCount) * uint256(multiplier);
+        } else {
+            scaled = uint256(prePurchaseCount) * uint256(multiplier) + uint256(purchasePhaseCount);
+        }
 
         // Overflow protection
         if (scaled > type(uint32).max) revert E();

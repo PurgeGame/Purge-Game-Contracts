@@ -129,15 +129,15 @@ abstract contract DegenerusGameStorage {
     // These variables pack into a single 32-byte storage slot for gas efficiency.
     // Order matters: EVM packs from low to high within a slot.
 
-    /// @dev Timestamp when the current level opened for minting.
+    /// @dev Timestamp when the current level opened for purchase phase.
     ///      Initialized to uint48.max as a sentinel indicating "game not started".
-    ///      Used to calculate time-based phase transitions and dailyIdx derivation.
+    ///      Used for inactivity guard timing and purchase-phase weekly jackpots.
     ///
     ///      SECURITY: uint48 holds timestamps until year 8.9 million — safe for any
     ///      realistic game lifetime. Overflow is not a concern.
     uint48 internal levelStartTime = type(uint48).max;
 
-    /// @dev Monotonically increasing "day" counter derived from levelStartTime.
+    /// @dev Monotonically increasing "day" counter derived from block timestamps.
     ///      Incremented during game progression; used to key RNG words and track
     ///      daily jackpot eligibility. NOT tied to calendar days — it's game-relative.
     ///

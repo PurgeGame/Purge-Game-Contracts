@@ -60,7 +60,7 @@ For MAPs: 4 MAP mints = 1 quest unit.
 | Type | Weight | Condition |
 |------|--------|-----------|
 | MINT_ETH | 5 | Always |
-| MINT_BURNIE | 1 | Always |
+| MINT_BURNIE | 10 | Only if `lastPurchaseDay` |
 | BURN | 2 | Only if `gameState == 3` |
 | BOND | 2 | Always |
 | AFFILIATE | 1 | Always |
@@ -71,6 +71,7 @@ For MAPs: 4 MAP mints = 1 quest unit.
 
 - Picks different type than primary
 - Default weight 1 per eligible type
+- MINT_BURNIE: weight 10 when enabled
 - DECIMATOR: weight 4 when enabled
 - BURN: weight 2 when enabled
 
@@ -78,6 +79,7 @@ For MAPs: 4 MAP mints = 1 quest unit.
 
 - **Burn**: Only when `gameState == 3`
 - **Decimator**: When `decWindowOpenFlag` and level meets criteria
+- **Mint Burnie**: Only when `lastPurchaseDay` is true
 - **Bond**: Quest can roll any day; progress only advances when bond purchases are open (level-dependent)
 
 ---
@@ -147,7 +149,7 @@ Rewards are added to coinflip credit:
 - `notifyQuestMint/Bond/Burn`: credited as flip stake
 - `decimatorBurn`: increases base amount for weighting
 
-Event: `QuestCompleted(reward, type, streak, hardMode)`
+Event: `QuestCompleted(player, type, streak, reward, hardMode, completedBoth)`
 
 ---
 

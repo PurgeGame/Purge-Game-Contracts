@@ -4,6 +4,7 @@ pragma solidity ^0.8.26;
 /// @notice Minimal interface for DegenerusGamepieces used by the game contract.
 interface IDegenerusGamepieces {
     function purchaseCount() external view returns (uint32);
+    function purchaseCounts() external view returns (uint32 prePurchase, uint32 purchasePhase);
 
     function processPendingMints(
         uint32 playersToProcess,

@@ -219,7 +219,14 @@ contract DegenerusCoin {
     /// @param streak The player's current completion streak.
     /// @param reward The reward amount credited (as flip stake).
     /// @param hardMode Whether the quest was completed in hard mode.
-    event QuestCompleted(address indexed player, uint8 questType, uint32 streak, uint256 reward, bool hardMode);
+    event QuestCompleted(
+        address indexed player,
+        uint8 questType,
+        uint32 streak,
+        uint256 reward,
+        bool hardMode,
+        bool completedBoth
+    );
 
     /// @notice Emitted when admin credits LINK-funded bonus directly.
     /// @param player The recipient of the credit.
@@ -802,11 +809,18 @@ contract DegenerusCoin {
         // Quests can layer on bonus flip credit when the quest is active/completed.
         IDegenerusQuests module = questModule;
         uint256 questReward;
-        (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleFlip(
+        (
+            uint256 reward,
+            bool hardMode,
+            uint8 questType,
+            uint32 streak,
+            bool completed,
+            bool completedBoth
+        ) = module.handleFlip(
             caller,
             amount
         );
-        questReward = _questApplyReward(caller, reward, hardMode, questType, streak, completed);
+        questReward = _questApplyReward(caller, reward, hardMode, questType, streak, completed, completedBoth);
 
         // Principal + quest bonus become the pending flip stake.
         uint256 creditedFlip = amount + questReward;
@@ -873,9 +887,18 @@ contract DegenerusCoin {
             bool hardMode,
             uint8 questType,
             uint32 questStreak,
-            bool completed
+            bool completed,
+            bool completedBoth
         ) = module.handleDecimator(caller, amount);
-        uint256 questReward = _questApplyReward(caller, reward, hardMode, questType, questStreak, completed);
+        uint256 questReward = _questApplyReward(
+            caller,
+            reward,
+            hardMode,
+            questType,
+            questStreak,
+            completed,
+            completedBoth
+        );
 
         // Scale decimator weight using the shared player bonus multiplier.
         uint256 multBps = game.playerBonusMultiplier(caller);
@@ -1121,11 +1144,15 @@ contract DegenerusCoin {
         if (msg.sender != address(affiliateProgram)) revert OnlyAffiliate();
         IDegenerusQuests module = questModule;
         if (player == address(0) || amount == 0) return 0;
-        (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleAffiliate(
-            player,
-            amount
-        );
-        return _questApplyReward(player, reward, hardMode, questType, streak, completed);
+        (
+            uint256 reward,
+            bool hardMode,
+            uint8 questType,
+            uint32 streak,
+            bool completed,
+            bool completedBoth
+        ) = module.handleAffiliate(player, amount);
+        return _questApplyReward(player, reward, hardMode, questType, streak, completed, completedBoth);
     }
 
     /*╔══════════════════════════════════════════════════════════════════════╗
@@ -1197,12 +1224,15 @@ contract DegenerusCoin {
     function notifyQuestMint(address player, uint32 quantity, bool paidWithEth) external {
         if (msg.sender != address(degenerusGamepieces)) revert OnlyNft();
         IDegenerusQuests module = questModule;
-        (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleMint(
-            player,
-            quantity,
-            paidWithEth
-        );
-        uint256 questReward = _questApplyReward(player, reward, hardMode, questType, streak, completed);
+        (
+            uint256 reward,
+            bool hardMode,
+            uint8 questType,
+            uint32 streak,
+            bool completed,
+            bool completedBoth
+        ) = module.handleMint(player, quantity, paidWithEth);
+        uint256 questReward = _questApplyReward(player, reward, hardMode, questType, streak, completed, completedBoth);
         if (questReward != 0) {
             addFlip(player, questReward, false, false, false);
         }
@@ -1216,11 +1246,15 @@ contract DegenerusCoin {
         if (msg.sender != bonds) revert OnlyBonds();
         IDegenerusQuests module = questModule;
         if (player == address(0) || basePerBondWei == 0) return;
-        (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleBondPurchase(
-            player,
-            basePerBondWei
-        );
-        uint256 questReward = _questApplyReward(player, reward, hardMode, questType, streak, completed);
+        (
+            uint256 reward,
+            bool hardMode,
+            uint8 questType,
+            uint32 streak,
+            bool completed,
+            bool completedBoth
+        ) = module.handleBondPurchase(player, basePerBondWei);
+        uint256 questReward = _questApplyReward(player, reward, hardMode, questType, streak, completed, completedBoth);
         if (questReward != 0) {
             addFlip(player, questReward, false, false, false);
         }
@@ -1233,11 +1267,15 @@ contract DegenerusCoin {
     function notifyQuestBurn(address player, uint32 quantity) external {
         if (msg.sender != address(degenerusGame)) revert OnlyGame();
         IDegenerusQuests module = questModule;
-        (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed) = module.handleBurn(
-            player,
-            quantity
-        );
-        uint256 questReward = _questApplyReward(player, reward, hardMode, questType, streak, completed);
+        (
+            uint256 reward,
+            bool hardMode,
+            uint8 questType,
+            uint32 streak,
+            bool completed,
+            bool completedBoth
+        ) = module.handleBurn(player, quantity);
+        uint256 questReward = _questApplyReward(player, reward, hardMode, questType, streak, completed, completedBoth);
         if (questReward != 0) {
             addFlip(player, questReward, false, false, false);
         }
@@ -1635,6 +1673,7 @@ contract DegenerusCoin {
     /// @param questType The type of quest completed.
     /// @param streak The player's current streak.
     /// @param completed Whether the quest was actually completed.
+    /// @param completedBoth Whether this completion finished both quest slots for the day.
     /// @return The reward amount (0 if not completed).
     function _questApplyReward(
         address player,
@@ -1642,11 +1681,12 @@ contract DegenerusCoin {
         bool hardMode,
         uint8 questType,
         uint32 streak,
-        bool completed
+        bool completed,
+        bool completedBoth
     ) private returns (uint256) {
         if (!completed) return 0;
         // Event captures quest progress for indexers/UI; raw reward is returned to the caller.
-        emit QuestCompleted(player, questType, streak, reward, hardMode);
+        emit QuestCompleted(player, questType, streak, reward, hardMode, completedBoth);
         return reward;
     }
 

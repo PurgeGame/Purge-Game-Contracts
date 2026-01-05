@@ -444,8 +444,14 @@ contract DegenerusGamepieces {
       ║  actually mints after VRF provides randomness.                       ║
       ╚══════════════════════════════════════════════════════════════════════╝*/
 
-    /// @dev Total purchases for current level (reset after processing).
+    /// @dev Total purchases for current level (pre + purchase phase, reset after processing).
     uint32 private _purchaseCount;
+
+    /// @dev Purchases queued before purchase phase (eligible for multiplier).
+    uint32 private _purchaseCountPre;
+
+    /// @dev Purchases queued during purchase phase (not multiplied).
+    uint32 private _purchaseCountPhase;
 
     /// @dev Per-player level-100 bonus usage (packed: [level:24][usedUnits:32]) for x00 levels.
     mapping(address => uint256) private _level100BonusPacked;
@@ -455,6 +461,9 @@ contract DegenerusGamepieces {
 
     /// @dev address => number of tokens owed (pending mint).
     mapping(address => uint32) private _tokensOwed;
+
+    /// @dev address => number of tokens owed from pre-purchase phase (multiplied).
+    mapping(address => uint32) private _tokensOwedPre;
 
     /// @dev Index tracking processing progress in _pendingMintQueue.
     uint256 private _mintQueueIndex;
@@ -736,6 +745,7 @@ contract DegenerusGamepieces {
 
         if ((targetLevel % 20) == 16) revert NotTimeYet();
         if (rngLocked_) revert RngNotReady();
+        if (payInCoin && !lastPurchaseDay) revert NotTimeYet();
 
         uint256 coinCost;
         unchecked {
@@ -811,11 +821,8 @@ contract DegenerusGamepieces {
         if (!payInCoin && state == 3) {
             g.enqueueMap(buyer, mintQty32);
         }
-        unchecked {
-            _purchaseCount += mintQty32;
-        }
-
-        _recordPurchase(buyer, mintQty32);
+        bool isPrePurchase = state != 2;
+        _recordPurchase(buyer, mintQty32, isPrePurchase);
 
         uint256 costAmount = payInCoin ? coinCost : expectedWei;
         emit TokenPurchase(buyer, purchasedQty32, payInCoin, payKind != MintPaymentKind.DirectEth, costAmount, bonus);
@@ -1101,7 +1108,7 @@ contract DegenerusGamepieces {
         coin.burnCoin(payer, amount);
     }
 
-    function _recordPurchase(address buyer, uint32 quantity) private {
+    function _recordPurchase(address buyer, uint32 quantity, bool isPrePurchase) private {
         // Append buyer to the pending mint queue; mints are finalized in processPendingMints after RNG.
         uint32 owed = _tokensOwed[buyer];
         if (owed == 0) {
@@ -1110,16 +1117,21 @@ contract DegenerusGamepieces {
 
         unchecked {
             _tokensOwed[buyer] = owed + quantity;
+            if (isPrePurchase) {
+                _tokensOwedPre[buyer] += quantity;
+                _purchaseCountPre += quantity;
+            } else {
+                _purchaseCountPhase += quantity;
+            }
+            _purchaseCount += quantity;
         }
     }
 
     /// @notice Queue reward mints without applying purchase bonuses.
     function queueRewardMints(address buyer, uint32 quantity) external onlyGame {
         if (quantity == 0) return;
-        _recordPurchase(buyer, quantity);
-        unchecked {
-            _purchaseCount += quantity;
-        }
+        bool isPrePurchase = game.gameState() != 2;
+        _recordPurchase(buyer, quantity, isPrePurchase);
     }
 
     /// @notice Batch-mint queued purchases, respecting an airdrop cap and optional multiplier for reward mints.
@@ -1145,6 +1157,7 @@ contract DegenerusGamepieces {
 
             uint32 minted;
             if (multiplier == 0) multiplier = 1;
+            bool applyMultiplierToPhase = (_purchaseCountPre == 0);
             while (index < end) {
                 uint256 rawIdx = index + offset;
                 if (rawIdx >= total) {
@@ -1164,9 +1177,29 @@ contract DegenerusGamepieces {
                     break;
                 }
 
-                uint256 outstandingTokens = uint256(owed) * uint256(multiplier);
-                uint32 mintAmount = outstandingTokens > room ? room : uint32(outstandingTokens);
-                mintAmount = (mintAmount / multiplier) * multiplier;
+                uint32 preOwed = _tokensOwedPre[player];
+                uint32 phaseOwed = owed > preOwed ? owed - preOwed : 0;
+
+                uint32 multipliedOwed = applyMultiplierToPhase ? phaseOwed : preOwed;
+                uint32 plainOwed = applyMultiplierToPhase ? preOwed : phaseOwed;
+
+                uint32 multipliedUnitsToMint;
+                if (multipliedOwed != 0) {
+                    uint256 maxMultUnits = uint256(room) / uint256(multiplier);
+                    if (maxMultUnits != 0) {
+                        multipliedUnitsToMint =
+                            maxMultUnits > multipliedOwed ? multipliedOwed : uint32(maxMultUnits);
+                    }
+                }
+
+                uint32 mintedFromMult = multipliedUnitsToMint * multiplier;
+                uint32 remainingRoom = room - mintedFromMult;
+                uint32 plainUnitsToMint;
+                if (remainingRoom != 0 && plainOwed != 0) {
+                    plainUnitsToMint = remainingRoom > plainOwed ? plainOwed : remainingRoom;
+                }
+
+                uint32 mintAmount = mintedFromMult + plainUnitsToMint;
                 if (mintAmount == 0) {
                     break;
                 }
@@ -1175,10 +1208,16 @@ contract DegenerusGamepieces {
 
                 minted += mintAmount;
 
-                uint32 completedUnits = mintAmount / multiplier;
-                if (completedUnits > owed) {
-                    completedUnits = owed;
+                if (applyMultiplierToPhase) {
+                    if (plainUnitsToMint != 0) {
+                        _tokensOwedPre[player] = preOwed - plainUnitsToMint;
+                    }
+                } else {
+                    if (multipliedUnitsToMint != 0) {
+                        _tokensOwedPre[player] = preOwed - multipliedUnitsToMint;
+                    }
                 }
+                uint32 completedUnits = multipliedUnitsToMint + plainUnitsToMint;
                 owed -= completedUnits;
                 _tokensOwed[player] = owed;
 
@@ -1199,6 +1238,8 @@ contract DegenerusGamepieces {
             delete _pendingMintQueue;
             _mintQueueIndex = 0;
             _purchaseCount = 0;
+            _purchaseCountPre = 0;
+            _purchaseCountPhase = 0;
         }
     }
 
@@ -1815,6 +1856,10 @@ contract DegenerusGamepieces {
 
     function tokenTraitsPacked(uint256 tokenId) external pure returns (uint32) {
         return DegenerusTraitUtils.packedTraitsForToken(tokenId);
+    }
+
+    function purchaseCounts() external view returns (uint32 prePurchase, uint32 purchasePhase) {
+        return (_purchaseCountPre, _purchaseCountPhase);
     }
 
     function purchaseCount() external view returns (uint32) {

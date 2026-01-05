@@ -33,27 +33,27 @@ interface IDegenerusQuests {
 
     function handleMint(address player, uint32 quantity, bool paidWithEth)
         external
-        returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed);
+        returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed, bool completedBoth);
 
     function handleFlip(address player, uint256 flipCredit)
         external
-        returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed);
+        returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed, bool completedBoth);
 
     function handleDecimator(address player, uint256 burnAmount)
         external
-        returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed);
+        returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed, bool completedBoth);
 
     function handleBondPurchase(address player, uint256 basePerBondWei)
         external
-        returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed);
+        returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed, bool completedBoth);
 
     function handleAffiliate(address player, uint256 amount)
         external
-        returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed);
+        returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed, bool completedBoth);
 
     function handleBurn(address player, uint32 quantity)
         external
-        returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed);
+        returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed, bool completedBoth);
 
     function getActiveQuests() external view returns (QuestInfo[2] memory quests);
 

@@ -76,9 +76,16 @@ interface IDegenerusGameMintModule {
         uint32 mintUnits
     ) external payable returns (uint256 coinReward);
 
-    function calculateAirdropMultiplier(uint32 purchaseCount, uint24 lvl) external pure returns (uint32);
+    function calculateAirdropMultiplier(
+        uint32 prePurchaseCount,
+        uint32 purchasePhaseCount,
+        uint24 lvl
+    ) external pure returns (uint32);
 
-    function purchaseTargetCountFromRaw(uint32 rawCount) external view returns (uint32);
+    function purchaseTargetCountFromRaw(
+        uint32 prePurchaseCount,
+        uint32 purchasePhaseCount
+    ) external view returns (uint32);
 
     function rebuildTraitCounts(
         uint32 tokenBudget,
