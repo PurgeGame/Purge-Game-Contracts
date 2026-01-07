@@ -37,8 +37,7 @@ import {DegenerusGameStorage} from "../storage/DegenerusGameStorage.sol";
  * | Reward Type | Trigger | Amount |
  * |-------------|---------|--------|
  * | 400-unit bonus | First mint ≥400 units in level | 2,500 BURNIE |
- * | Streak reward | Each new level (2nd+) | up to 1,800 BURNIE (capped at 60 levels) |
- * | Milestone | Every 10 levels from 20+ | (total/2) × 1000 × 30% BURNIE |
+ * | Streak bonus | Every 5th consecutive level (5, 10, 15...) | 500-2,000 BURNIE (increases by 250, caps at 2,000) |
  *
  * ## Trait Generation
  *
@@ -119,11 +118,9 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
      * ## Reward Calculation
      *
      * 1. **400-unit bonus**: 2,500 BURNIE when first reaching 400 units in a level
-     * 2. **Streak reward**: Based on total levels minted this century
-     *    - Formula: min(total-1, 60) × (PRICE_COIN_UNIT/10) × 30%
-     *    - Max: 60 × 100 × 0.3 = 1,800 BURNIE per level
-     * 3. **Milestone bonus**: At levels 20, 30, 40... (every 10 from 20+)
-     *    - Formula: (total/2) × PRICE_COIN_UNIT × 30%
+     * 2. **Streak bonus**: Every 5th consecutive level (5, 10, 15...)
+     *    - Formula: min(500 + ((streak/5 - 1) × 250), 2000)
+     *    - Level 5: 500, Level 10: 750, Level 15: 1000, ..., Level 35+: 2000 (capped)
      *
      * ## State Updates
      *
@@ -256,32 +253,19 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
         data = _setPacked(data, ETH_LEVEL_BONUS_SHIFT, 1, bonusPaid ? 1 : 0);
 
         // ─────────────────────────────────────────────────────────────────────
-        // Calculate streak rewards
+        // Streak bonus (every 5th consecutive level)
         // ─────────────────────────────────────────────────────────────────────
 
-        // Streak reward: scales with total levels minted (capped at 60)
-        // Formula: min(total-1, 60) × (PRICE_COIN_UNIT/10) × 30%
-        uint256 rewardUnit = priceCoinLocal / 10; // 100 BURNIE
-        uint256 totalReward;
-        if (total >= 2) {
-            uint256 cappedTotal = total >= 61 ? 60 : uint256(total - 1);
-            totalReward = (cappedTotal * rewardUnit * 30) / 100; // 30% of base
-        }
-
-        if (totalReward != 0) {
-            unchecked {
-                coinReward += totalReward;
+        if (streak >= 5 && (streak % 5 == 0)) {
+            // Formula: min(500 + ((streak/5 - 1) × 250), 2000)
+            uint256 streakTier = uint256(streak) / 5;
+            uint256 streakBonus = 500 + ((streakTier - 1) * 250);
+            if (streakBonus > 2000) {
+                streakBonus = 2000;
             }
-        }
-
-        // ─────────────────────────────────────────────────────────────────────
-        // Milestone bonus (every 10 levels from 20+)
-        // ─────────────────────────────────────────────────────────────────────
-
-        if (total >= 20 && (total % 10 == 0)) {
-            // Formula: (total/2) × PRICE_COIN_UNIT × 30%
-            uint256 totalMilestone = (uint256(total) / 2) * priceCoinLocal;
-            coinReward += (totalMilestone * 30) / 100;
+            unchecked {
+                coinReward += streakBonus;
+            }
         }
 
         // ─────────────────────────────────────────────────────────────────────
