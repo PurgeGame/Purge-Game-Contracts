@@ -90,12 +90,12 @@ pragma solidity ^0.8.26;
 ║     • Safe for off-chain metadata generation                                                          ║
 ║                                                                                                       ║
 ║  2. ACCESS CONTROL                                                                                    ║
-║     • wire() is onlyAdmin for one-time setup                                                          ║
+║     • Constructor wiring via DeployConstants (no admin setters)                                       ║
 ║     • setMyColors() proxies to registry with msg.sender                                               ║
 ║     • setCustomColorsForMany() proxies with ownership verification                                    ║
 ║                                                                                                       ║
 ║  3. EXTERNAL CALLS                                                                                    ║
-║     • All external calls to trusted, immutable addresses                                              ║
+║     • All external calls to trusted, constant addresses                                               ║
 ║     • No value transfers, no callbacks                                                                ║
 ║                                                                                                       ║
 ╠═══════════════════════════════════════════════════════════════════════════════════════════════════════╣
@@ -122,6 +122,7 @@ pragma solidity ^0.8.26;
 
 import "@openzeppelin/contracts/utils/Base64.sol";
 import "@openzeppelin/contracts/utils/Strings.sol";
+import {DeployConstants} from "./DeployConstants.sol";
 import "./interfaces/IDegenerusAffiliate.sol";
 import "./interfaces/IconRendererTypes.sol";
 
@@ -156,28 +157,23 @@ contract IconRendererRegular32 {
     error E();
 
     // ─────────────────────────────────────────────────────────────────────
-    // IMMUTABLES & WIRING
+    // CONSTANTS & WIRING
     // ─────────────────────────────────────────────────────────────────────
 
     /// @dev Affiliate program for referrer color cascade (optional)
-    address private immutable affiliateProgram;
+    address private constant affiliateProgram = DeployConstants.AFFILIATE;
 
     /// @dev Icon path and symbol name data source
-    IIcons32 private immutable icons;
+    IIcons32 private constant icons = IIcons32(DeployConstants.ICONS_32);
 
     /// @dev Color customization registry for per-token/per-address overrides
-    IColorRegistry private immutable registry;
+    IColorRegistry private constant registry = IColorRegistry(DeployConstants.ICON_COLOR_REGISTRY);
 
-    /// @dev Admin contract for wire() authorization
-    address public immutable admin;
+    /// @dev Game contract for initial trait counts
+    IDegenerusGameStartRemaining private constant game = IDegenerusGameStartRemaining(DeployConstants.GAME);
 
-    constructor(address icons_, address registry_, address affiliate_, address admin_) {
-        affiliateProgram = affiliate_;
-        icons = IIcons32(icons_);
-        registry = IColorRegistry(registry_);
-        if (admin_ == address(0)) revert E();
-        admin = admin_;
-    }
+    /// @dev Gamepiece ERC721 contract
+    IERC721Lite private constant nft = IERC721Lite(DeployConstants.GAMEPIECES);
 
     // ---------------- Metadata helpers ----------------
 
@@ -271,15 +267,8 @@ contract IconRendererRegular32 {
         return defColor;
     }
 
-    function _affiliateProgram() private view returns (IDegenerusAffiliate) {
-        address affiliate = affiliateProgram;
-        return affiliate == address(0) ? IDegenerusAffiliate(address(0)) : IDegenerusAffiliate(affiliate);
-    }
-
     function _referrer(address user) private view returns (address) {
-        IDegenerusAffiliate affiliate = _affiliateProgram();
-        if (address(affiliate) == address(0)) return address(0);
-        return affiliate.getReferrer(user);
+        return IDegenerusAffiliate(affiliateProgram).getReferrer(user);
     }
 
     // ---------------------------------------------------------------------
@@ -311,53 +300,8 @@ contract IconRendererRegular32 {
     int16[4] private CX = [int16(-25), int16(25), int16(-25), int16(25)];
     int16[4] private CY = [int16(25), int16(25), int16(-25), int16(-25)];
 
-    // Linked contracts (set once).
-    IDegenerusGameStartRemaining private game; // DegenerusGame contract
-    IERC721Lite private nft; // DegenerusGamepieces ERC721 contract
     // ---------------------------------------------------------------------
-    // Game wiring & trait baselines
-    // ---------------------------------------------------------------------
-
-    modifier onlyAdmin() {
-        if (msg.sender != admin) revert E();
-        _;
-    }
-
-    /// @notice Wire both the game controller and ERC721 contract in a single call.
-    /// @dev Callable only by the admin contract; set-once semantics. Optional extra addresses are registered as allowed
-    ///      token contracts in the color registry (e.g., trophies).
-    function wire(address[] calldata addresses) external onlyAdmin {
-        _setGame(addresses.length > 0 ? addresses[0] : address(0));
-        _setNft(addresses.length > 1 ? addresses[1] : address(0));
-        if (addresses.length > 2 && addresses[2] != address(0)) {
-            registry.addAllowedToken(addresses[2]);
-        }
-        if (addresses.length > 3 && addresses[3] != address(0)) {
-            registry.addAllowedToken(addresses[3]);
-        }
-    }
-
-    function _setGame(address gameAddr) private {
-        if (gameAddr == address(0)) return;
-        if (address(game) == address(0)) {
-            game = IDegenerusGameStartRemaining(gameAddr);
-        } else if (address(game) != gameAddr) {
-            revert E();
-        }
-    }
-
-    function _setNft(address nftAddr) private {
-        if (nftAddr == address(0)) return;
-        address current = address(nft);
-        if (current == address(0)) {
-            nft = IERC721Lite(nftAddr);
-        } else if (current != nftAddr) {
-            revert E();
-        }
-    }
-
-    // ---------------------------------------------------------------------
-    // Owner lookup (robust)
+    // Trait baselines
     // ---------------------------------------------------------------------
 
     // ---------------------------------------------------------------------
@@ -757,7 +701,6 @@ contract IconRendererRegular32 {
 
     /// @dev Read the starting “remaining” supply for the trait bucket.
     function _startFor(uint256 dataQ, uint8 colIdx, uint8 symIdx) private view returns (uint32) {
-        if (address(game) == address(0)) return 0;
         return game.startTraitRemaining(_traitId(uint8(dataQ), colIdx, symIdx));
     }
 

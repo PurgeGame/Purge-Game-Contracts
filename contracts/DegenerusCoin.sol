@@ -160,6 +160,7 @@ import {DegenerusGamepieces} from "./DegenerusGamepieces.sol";
 import {IDegenerusGame} from "./interfaces/IDegenerusGame.sol";
 import {IDegenerusQuests, QuestInfo, PlayerQuestView} from "./interfaces/IDegenerusQuests.sol";
 import {IDegenerusJackpots} from "./interfaces/IDegenerusJackpots.sol";
+import {DeployConstants} from "./DeployConstants.sol";
 
 interface IDegenerusAffiliateCoin {
     function consumePresaleCoin(address player) external returns (uint256 amount);
@@ -267,9 +268,6 @@ contract DegenerusCoin {
     /// @notice Caller is not the authorized affiliate contract.
     error OnlyAffiliate();
 
-    /// @notice Attempted to re-wire an already-wired contract slot.
-    error AlreadyWired();
-
     /// @notice Caller is not the authorized NFT (gamepieces) contract.
     error OnlyNft();
 
@@ -358,36 +356,28 @@ contract DegenerusCoin {
       ╚══════════════════════════════════════════════════════════════════════╝*/
 
     /// @notice The main game contract; provides level, RNG state, and purchase info.
-    /// @dev Set once via wire(). Required for gameplay functions.
-    IDegenerusGame internal degenerusGame;
+    IDegenerusGame internal constant degenerusGame = IDegenerusGame(DeployConstants.GAME);
 
     /// @notice The NFT contract for gamepieces; can credit flips and notify quests.
-    /// @dev Set once via wire().
-    DegenerusGamepieces internal degenerusGamepieces;
+    DegenerusGamepieces internal constant degenerusGamepieces = DegenerusGamepieces(DeployConstants.GAMEPIECES);
 
     /// @notice The quest module handling daily quests and streak tracking.
-    /// @dev Set once via wire(). Provides bonus rewards for gameplay actions.
-    IDegenerusQuests internal questModule;
+    IDegenerusQuests internal constant questModule = IDegenerusQuests(DeployConstants.QUESTS);
 
     /// @notice The affiliate program contract for presale claims and referrals.
-    /// @dev Immutable; set in constructor. Cannot be changed post-deployment.
-    IDegenerusAffiliateCoin private immutable affiliateProgram;
+    IDegenerusAffiliateCoin private constant affiliateProgram = IDegenerusAffiliateCoin(DeployConstants.AFFILIATE);
 
     /// @notice The jackpots module for decimator burns and BAF flip tracking.
-    /// @dev Set once via wire().
-    address private jackpots;
+    address private constant jackpots = DeployConstants.JACKPOTS;
 
     /// @notice The vault contract authorized to mint from the virtual allowance.
-    /// @dev Set via constructor. Can only be set once.
-    address private vault;
+    address private constant vault = DeployConstants.VAULT;
 
     /// @notice The color registry contract authorized to burn for recoloring.
-    /// @dev Set once via wire().
-    address private colorRegistry;
+    address private constant colorRegistry = DeployConstants.ICON_COLOR_REGISTRY;
 
-    /// @notice The admin address authorized to wire contracts and credit LINK rewards.
-    /// @dev Immutable; set in constructor. No post-wire admin capabilities.
-    address private immutable admin;
+    /// @notice The admin address authorized to credit LINK rewards.
+    address private constant admin = DeployConstants.ADMIN;
 
     /*╔══════════════════════════════════════════════════════════════════════╗
       ║                       COINFLIP ACCOUNTING                            ║
@@ -486,12 +476,6 @@ contract DegenerusCoin {
         return totalSupply + _vaultMintAllowance;
     }
 
-    /// @notice Expose the quest module address for cross-module scoring.
-    /// @return The address of the wired IDegenerusQuests contract.
-    function questModuleAddr() external view returns (address) {
-        return address(questModule);
-    }
-
     /// @notice Virtual coin reserved for the vault (not yet circulating).
     /// @dev Exposed for the vault share math and external dashboards.
     /// @return The current vault mint allowance in BURNIE (6 decimals).
@@ -532,8 +516,7 @@ contract DegenerusCoin {
     address internal bountyOwedTo;
 
     /// @notice The bonds contract address for flip credits and quest notifications.
-    /// @dev Immutable; set in constructor.
-    address private immutable bonds;
+    address private constant bonds = DeployConstants.BONDS;
 
     /*╔══════════════════════════════════════════════════════════════════════╗
       ║                       ERC20 DECIMALS                                 ║
@@ -748,28 +731,11 @@ contract DegenerusCoin {
     /*╔══════════════════════════════════════════════════════════════════════╗
       ║                         CONSTRUCTOR                                  ║
       ╠══════════════════════════════════════════════════════════════════════╣
-      ║  Sets immutable references and initial vault address. Additional     ║
-      ║  wiring via wire() is required before gameplay functions work.       ║
+      ║  Validates precomputed references from DeployConstants.              ║
       ╚══════════════════════════════════════════════════════════════════════╝*/
 
-    /// @notice Initialize the BURNIE token with required contract references.
-    /// @dev Sets immutables that cannot be changed post-deployment.
-    ///      Additional wiring (game, NFT, quest, jackpots) via wire() by admin.
-    /// @param bonds_ The DegenerusBonds contract address.
-    /// @param admin_ The admin address for wiring and LINK rewards.
-    /// @param affiliate_ The DegenerusAffiliate contract address.
-    /// @param vault_ The vault address (required).
-    constructor(address bonds_, address admin_, address affiliate_, address vault_) {
-        // Validate required immutables.
-        if (bonds_ == address(0) || admin_ == address(0) || affiliate_ == address(0) || vault_ == address(0)) {
-            revert ZeroAddress();
-        }
-        bonds = bonds_;
-        admin = admin_;
-        affiliateProgram = IDegenerusAffiliateCoin(affiliate_);
-        vault = vault_;
-    }
-
+    /// @notice Initialize the BURNIE token.
+    /// @dev All contract references are precomputed constants.
     /*╔══════════════════════════════════════════════════════════════════════╗
       ║                      PLAYER COINFLIP FUNCTIONS                       ║
       ╠══════════════════════════════════════════════════════════════════════╣
@@ -968,93 +934,6 @@ contract DegenerusCoin {
                 ++cursor;
                 --remaining;
             }
-        }
-    }
-
-    /*╔══════════════════════════════════════════════════════════════════════╗
-      ║                         WIRING FUNCTIONS                             ║
-      ╠══════════════════════════════════════════════════════════════════════╣
-      ║  One-time setup to connect this contract to the game ecosystem.      ║
-      ║  Each slot can only be set once; re-wiring to a different address    ║
-      ║  reverts with AlreadyWired.                                          ║
-      ║                                                                      ║
-      ║  WIRE ORDER: [game, nft, questModule, jackpots, colorRegistry]       ║
-      ╚══════════════════════════════════════════════════════════════════════╝*/
-
-    /// @notice Wire game, NFT, quest module, jackpots, and color registry using an address array.
-    /// @dev Order: [game, nft, quest module, jackpots, colorRegistry]; set-once per slot.
-    ///      SECURITY: Only admin can call. Each slot protected by AlreadyWired.
-    ///      Downstream modules are wired directly by the admin rather than being cascaded here.
-    /// @param addresses Array of addresses to wire: [game, nft, questModule, jackpots, colorRegistry].
-    function wire(address[] calldata addresses) external {
-        address adminAddr = admin;
-        if (msg.sender != adminAddr) revert OnlyAdmin();
-
-        uint256 len = addresses.length;
-        if (len > 0) _setGame(addresses[0]);
-        if (len > 1) _setNft(addresses[1]);
-        if (len > 2) _setQuestModule(addresses[2]);
-        if (len > 3) _setJackpots(addresses[3]);
-        if (len > 4) _setColorRegistry(addresses[4]);
-    }
-
-    /// @dev Wire the main game contract (set-once).
-    /// @param game_ The DegenerusGame contract address.
-    function _setGame(address game_) private {
-        if (game_ == address(0)) return;
-        address current = address(degenerusGame);
-        if (current == address(0)) {
-            degenerusGame = IDegenerusGame(game_);
-        } else if (game_ != current) {
-            revert AlreadyWired();
-        }
-    }
-
-    /// @dev Wire the NFT contract (set-once).
-    /// @param nft_ The DegenerusGamepieces contract address.
-    function _setNft(address nft_) private {
-        if (nft_ == address(0)) return;
-        address current = address(degenerusGamepieces);
-        if (current == address(0)) {
-            degenerusGamepieces = DegenerusGamepieces(nft_);
-        } else if (nft_ != current) {
-            revert AlreadyWired();
-        }
-    }
-
-    /// @dev Wire the quest module (set-once).
-    /// @param questModule_ The IDegenerusQuests contract address.
-    function _setQuestModule(address questModule_) private {
-        if (questModule_ == address(0)) return;
-        address current = address(questModule);
-        if (current == address(0)) {
-            questModule = IDegenerusQuests(questModule_);
-        } else if (questModule_ != current) {
-            revert AlreadyWired();
-        }
-    }
-
-    /// @dev Wire the jackpots module (set-once).
-    /// @param jackpots_ The DegenerusJackpots contract address.
-    function _setJackpots(address jackpots_) private {
-        if (jackpots_ == address(0)) return;
-        address current = jackpots;
-        if (current == address(0)) {
-            jackpots = jackpots_;
-        } else if (jackpots_ != current) {
-            revert AlreadyWired();
-        }
-    }
-
-    /// @dev Wire the color registry contract (set-once).
-    /// @param registry_ The IconColorRegistry contract address.
-    function _setColorRegistry(address registry_) private {
-        if (registry_ == address(0)) return;
-        address current = colorRegistry;
-        if (current == address(0)) {
-            colorRegistry = registry_;
-        } else if (registry_ != current) {
-            revert AlreadyWired();
         }
     }
 

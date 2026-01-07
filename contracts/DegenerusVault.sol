@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+import {DeployConstants} from "./DeployConstants.sol";
+
 /*
 ╔════════════════════════════════════════════════════════════════════════════════════════════════════════╗
 ║                                        DegenerusVault                                                  ║
@@ -66,7 +68,7 @@ pragma solidity ^0.8.26;
 ║  • Only this vault can mint/burn share tokens                                                          ║
 ║  • ETH and stETH are combined for DGVE/DGVA claims (ETH preferred, then stETH)                         ║
 ║  • DGVE claims exclude DGVA's reserved share of the combined pool                                      ║
-║  • All wiring is immutable after construction                                                          ║
+║  • All wiring is constant after construction                                                           ║
 ║                                                                                                        ║
 ╠════════════════════════════════════════════════════════════════════════════════════════════════════════╣
 ║  SECURITY CONSIDERATIONS                                                                               ║
@@ -78,7 +80,7 @@ pragma solidity ^0.8.26;
 ║     • address(this).balance decreases atomically with ETH send (before callback)                       ║
 ║                                                                                                        ║
 ║  2. ACCESS CONTROL                                                                                     ║
-║     • deposits: onlyBonds modifier (immutable bonds address)                                           ║
+║     • deposits: onlyBonds modifier (constant bonds address)                                            ║
 ║     • share mint/burn: onlyVault modifier on DegenerusVaultShare                                       ║
 ║     • no admin functions, no upgrade path                                                              ║
 ║                                                                                                        ║
@@ -147,11 +149,6 @@ interface IVaultCoin {
     function vaultMintTo(address to, uint256 amount) external;
     /// @notice View the vault's remaining mint allowance
     function vaultMintAllowance() external view returns (uint256);
-}
-
-/// @notice Interface to read DGNRS token address from bonds contract
-interface IDegenerusBondsDgnrs {
-    function dgnrsToken() external view returns (address);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -412,16 +409,16 @@ contract DegenerusVault {
     DegenerusVaultShare private immutable allShare;
 
     // ─────────────────────────────────────────────────────────────────────
-    // WIRING (Immutable)
+    // WIRING (Constants)
     // ─────────────────────────────────────────────────────────────────────
     /// @dev BURNIE token address (implements IVaultCoin)
-    address private immutable coin;
+    address private constant coin = DeployConstants.COIN;
     /// @dev DGNRS token address (implements IVaultCoin)
-    address private immutable dgnrs;
+    address private constant dgnrs = DeployConstants.DGNRS;
     /// @dev stETH token address (Lido)
-    IStETH private immutable steth;
+    IStETH private constant steth = IStETH(DeployConstants.STETH_TOKEN);
     /// @dev Bonds contract - sole depositor authority
-    address private immutable bonds;
+    address private constant bonds = DeployConstants.BONDS;
 
     // ─────────────────────────────────────────────────────────────────────
     // RESERVE TRACKING (DGVA SPLIT)
@@ -449,23 +446,9 @@ contract DegenerusVault {
     // ─────────────────────────────────────────────────────────────────────
     // CONSTRUCTOR
     // ─────────────────────────────────────────────────────────────────────
-    /// @notice Deploy the vault with all required addresses
-    /// @dev Deploys four share tokens and reads DGNRS address from bonds contract
-    /// @param coin_ BURNIE token address
-    /// @param stEth_ stETH (Lido) token address
-    /// @param bonds_ DegenerusBonds contract address (sole depositor)
-    constructor(address coin_, address stEth_, address bonds_) {
-        if (coin_ == address(0) || stEth_ == address(0) || bonds_ == address(0)) revert ZeroAddress();
-
-        coin = coin_;
-        steth = IStETH(stEth_);
-        bonds = bonds_;
-
-        // Read DGNRS token address from bonds contract
-        address dgnrsToken = IDegenerusBondsDgnrs(bonds_).dgnrsToken();
-        if (dgnrsToken == address(0)) revert ZeroAddress();
-        dgnrs = dgnrsToken;
-
+    /// @notice Deploy the vault with all required addresses.
+    /// @dev Deploys four share tokens and uses the precomputed DGNRS address from DeployConstants.
+    constructor() {
         // Deploy share class tokens - deployer receives initial 1B supply of each
         coinShare = new DegenerusVaultShare(
             "Degenerus Vault Burnie",
@@ -496,11 +479,11 @@ contract DegenerusVault {
             msg.sender
         );
 
-        uint256 coinAllowance = IVaultCoin(coin_).vaultMintAllowance();
+        uint256 coinAllowance = IVaultCoin(coin).vaultMintAllowance();
         coinTracked = coinAllowance;
         dgvaCoinReserve = coinAllowance / DGVA_SPLIT_DIVISOR;
 
-        uint256 dgnrsAllowance = IVaultCoin(dgnrsToken).vaultMintAllowance();
+        uint256 dgnrsAllowance = IVaultCoin(dgnrs).vaultMintAllowance();
         dgnrsTracked = dgnrsAllowance;
         dgvaDgnrsReserve = dgnrsAllowance / DGVA_SPLIT_DIVISOR;
 

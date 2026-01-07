@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+import {DeployConstants} from "./DeployConstants.sol";
+
 /*
 ╔═══════════════════════════════════════════════════════════════════════════════════════════════════════╗
 ║                                       IconColorRegistry                                               ║
@@ -65,17 +67,11 @@ pragma solidity ^0.8.26;
 ║  ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐ ║
 ║  │                              ACCESS CONTROL                                                      │ ║
 ║  │                                                                                                  │ ║
-║  │   _owner (deployer)                                                                              │ ║
-║  │      │                                                                                           │ ║
-║  │      ├─► setRenderer()      One-time: authorize the renderer contract                           │ ║
-║  │      └─► addAllowedToken()  Add token contracts (gamepieces, trophies)                          │ ║
-║  │                                                                                                  │ ║
-║  │   _renderer (IconRendererRegular32)                                                              │ ║
+║  │   Renderers (regular + trophy, fixed at deploy)                                                  │ ║
 ║  │      │                                                                                           │ ║
 ║  │      ├─► setMyColors()              Proxy for user's address-level defaults                     │ ║
 ║  │      ├─► setCustomColorsForMany()   Proxy for per-token overrides (batch)                       │ ║
-║  │      ├─► setTopAffiliateColor()     Proxy for affiliate trophy special color                    │ ║
-║  │      └─► addAllowedToken()          Register additional token contracts                         │ ║
+║  │      └─► setTopAffiliateColor()     Proxy for affiliate trophy special color                    │ ║
 ║  │                                                                                                  │ ║
 ║  │   Anyone (view functions)                                                                        │ ║
 ║  │      │                                                                                           │ ║
@@ -91,7 +87,7 @@ pragma solidity ^0.8.26;
 ║                                                                                                       ║
 ║  1. ACCESS CONTROL                                                                                    ║
 ║     • onlyRenderer modifier gates all write operations                                                ║
-║     • Renderer is set once via setRenderer() (cannot be changed)                                      ║
+║     • Renderer allowlist is fixed at deployment via DeployConstants                                   ║
 ║     • Ownership verification happens in write functions (ownerOf check)                               ║
 ║                                                                                                       ║
 ║  2. INPUT VALIDATION                                                                                  ║
@@ -111,7 +107,7 @@ pragma solidity ^0.8.26;
 ║                                                                                                       ║
 ║  5. TOKEN BURN SAFETY                                                                                 ║
 ║     • Uses burnCoin (direct burn from user balance, no approval)                                      ║
-║     • BURNIE token is immutable (set at deploy, cannot be changed)                                    ║
+║     • BURNIE token is constant (set at deploy, cannot be changed)                                     ║
 ║     • No token accumulation in contract (burns directly from user)                                    ║
 ║                                                                                                       ║
 ║  6. GAS LIMITS                                                                                        ║
@@ -124,7 +120,7 @@ pragma solidity ^0.8.26;
 ║                                                                                                       ║
 ║  1. Renderer contract is trusted to correctly pass msg.sender as user                                 ║
 ║  2. Allowed token contracts implement ownerOf correctly                                               ║
-║  3. Owner sets renderer to the correct address before any user interaction                            ║
+║  3. Renderers are precomputed and must be correct at deployment                                       ║
 ║  4. BURNIE token implements burnCoin correctly (reverts on insufficient balance)                     ║
 ║                                                                                                       ║
 ╠═══════════════════════════════════════════════════════════════════════════════════════════════════════╣
@@ -155,14 +151,11 @@ contract IconColorRegistry {
     // ERRORS
     // ─────────────────────────────────────────────────────────────────────
 
-    /// @dev Caller is not the owner (for admin functions)
-    error NotOwner();
-
-    /// @dev Renderer address has already been set (one-time only)
-    error RendererSet();
-
     /// @dev Caller is not the authorized renderer contract
     error NotRenderer();
+
+    /// @dev Required address was zero.
+    error ZeroAddress();
 
     /// @dev Trophy outer percentage is outside valid range (5%-100% or special values 0/1)
     error InvalidTrophyOuterPercentage();
@@ -184,17 +177,11 @@ contract IconColorRegistry {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // IMMUTABLES & WIRING
+    // CONSTANTS & WIRING
     // ─────────────────────────────────────────────────────────────────────
 
-    /// @dev Contract owner (deployer), can set renderer and add allowed tokens
-    address private immutable _owner;
-
-    /// @dev Primary NFT contract (DegenerusGamepieces), allowed at construction
-    IERC721Lite private immutable _nft;
-
     /// @dev BURNIE token contract for recoloring fee burns
-    IDegenerusCoinBurn private immutable _burnie;
+    IDegenerusCoinBurn private constant _burnie = IDegenerusCoinBurn(DeployConstants.COIN);
 
     /// @notice Cost in BURNIE per token for recoloring (50 BURNIE)
     uint256 public constant RECOLOR_COST_PER_TOKEN = 50 * 1e6;
@@ -202,8 +189,9 @@ contract IconColorRegistry {
     /// @dev Mapping of allowed token contracts for per-token customization
     mapping(address => bool) private _allowedToken;
 
-    /// @dev Authorized renderer contract (set once via setRenderer)
-    address private _renderer;
+    /// @dev Authorized renderer contracts (regular + trophy)
+    address private constant _rendererRegular = DeployConstants.RENDERER_REGULAR;
+    address private constant _rendererTrophy = DeployConstants.RENDERER_TROPHY;
 
     // ─────────────────────────────────────────────────────────────────────
     // STORAGE
@@ -226,35 +214,10 @@ contract IconColorRegistry {
     // CONSTRUCTOR
     // ─────────────────────────────────────────────────────────────────────
 
-    /// @notice Deploy the color registry for a specific NFT contract
-    /// @param nft_ The primary NFT contract address (auto-allowed)
-    /// @param burnie_ The BURNIE token contract address (used for recolor fee burns)
-    constructor(address nft_, address burnie_) {
-        _owner = msg.sender;
-        _nft = IERC721Lite(nft_);
-        _burnie = IDegenerusCoinBurn(burnie_);
-        _allowedToken[nft_] = true;
-    }
-
-    // ─────────────────────────────────────────────────────────────────────
-    // ADMIN FUNCTIONS
-    // ─────────────────────────────────────────────────────────────────────
-
-    /// @notice Set the authorized renderer contract (one-time only)
-    /// @dev Must be called before users can set colors via renderer
-    /// @param renderer_ The renderer contract address
-    function setRenderer(address renderer_) external {
-        if (msg.sender != _owner) revert NotOwner();
-        if (_renderer != address(0)) revert RendererSet();
-        _renderer = renderer_;
-    }
-
-    /// @notice Add a token contract to the allowlist
-    /// @dev Allows per-token customization for additional contracts (e.g., trophies)
-    /// @param token The token contract address to allow
-    function addAllowedToken(address token) external {
-        if (msg.sender != _owner && msg.sender != _renderer) revert NotOwner();
-        _allowedToken[token] = true;
+    /// @notice Deploy the color registry with precomputed contract addresses.
+    constructor() {
+        _allowedToken[DeployConstants.GAMEPIECES] = true;
+        _allowedToken[DeployConstants.TROPHIES] = true;
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -263,7 +226,7 @@ contract IconColorRegistry {
 
     /// @dev Restricts function to the authorized renderer contract
     modifier onlyRenderer() {
-        if (msg.sender != _renderer) revert NotRenderer();
+        if (msg.sender != _rendererRegular && msg.sender != _rendererTrophy) revert NotRenderer();
         _;
     }
 

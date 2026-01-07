@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+import {DeployConstants} from "./DeployConstants.sol";
+
 /**
  * @title DegenerusAdmin
  * @author Burnie Degenerus
@@ -10,23 +12,21 @@ pragma solidity ^0.8.26;
  * ─────────────────────────────────────────────────────────────────────────────
  * This contract serves as the single point of authority for:
  *   1. VRF subscription ownership and management
- *   2. One-time wiring of all game contracts
- *   3. Emergency recovery during VRF failures
- *   4. LINK token donation handling with reward multipliers
- *   5. Presale administration functions
+ *   2. Emergency recovery during VRF failures
+ *   3. LINK token donation handling with reward multipliers
+ *   4. Presale administration functions
  *
  * DEPLOYMENT ORDER:
- *   1. Deploy DegenerusAdmin (passing LINK token address)
- *   2. Deploy all other game contracts (passing admin address where needed)
- *   3. Call wireAll() to connect everything with VRF subscription creation
+ *   1. Deploy all contracts using the precomputed DeployConstants order
+ *   2. Call wireVrf() to configure VRF and add consumers
  *
  * OWNERSHIP MODEL:
- *   - Single owner (creator) set immutably at construction
+ *   - Single owner (creator) set via DeployConstants
  *   - No ownership transfer capability (intentional simplicity)
  *   - Owner cannot change after deployment
  *
  * VRF SUBSCRIPTION LIFECYCLE:
- *   1. Created during first wireAll() call
+ *   1. Created during first wireVrf() call (if subId not provided)
  *   2. Consumers (game, bonds) added automatically
  *   3. LINK funding via onTokenTransfer (ERC-677)
  *   4. Emergency recovery if stalled 3+ days
@@ -34,11 +34,11 @@ pragma solidity ^0.8.26;
  *
  * SECURITY CONSIDERATIONS
  * ─────────────────────────────────────────────────────────────────────────────
- * 1. IMMUTABLE OWNER: Creator is set once and cannot be changed, eliminating
+ * 1. CONSTANT OWNER: Creator is fixed and cannot be changed, eliminating
  *    ownership transfer attack vectors.
  *
- * 2. ONE-TIME WIRING: Most wiring operations use AlreadyWired guards to prevent
- *    re-pointing contracts to malicious addresses after initial setup.
+ * 2. ONE-TIME VRF WIRING: wireVrf() is idempotent to prevent re-pointing
+ *    contracts to malicious coordinators after initial setup.
  *
  * 3. STALL-GATED RECOVERY: Emergency VRF migration requires 3-day stall proof
  *    from the game contract, preventing premature or malicious migration.
@@ -103,17 +103,13 @@ interface IDegenerusGameVrf {
 }
 
 /// @dev Game contract interface for quest module wiring.
-interface IDegenerusGameQuest {
-    function wireQuestModule(address questModule_) external;
-}
-
 /// @dev Bonds contract admin interface.
 interface IDegenerusBondsAdmin {
-    /// @notice Wire the bonds contract with all dependencies.
-    /// @param addresses Array: [game, vault, coin, coordinator, questModule, trophies, affiliate].
-    /// @param vrfSubId The VRF subscription ID.
-    /// @param vrfKeyHash_ The VRF key hash.
-    function wire(address[] calldata addresses, uint256 vrfSubId, bytes32 vrfKeyHash_) external;
+    /// @notice Wire the bonds contract VRF configuration.
+    /// @param coordinator_ The VRF coordinator address.
+    /// @param subId The VRF subscription ID.
+    /// @param keyHash_ The VRF key hash.
+    function wireVrf(address coordinator_, uint256 subId, bytes32 keyHash_) external;
 
     /// @notice Emergency VRF reconfiguration during recovery.
     function emergencySetVrf(address coordinator_, uint256 vrfSubId, bytes32 vrfKeyHash_) external;
@@ -184,13 +180,6 @@ interface IAffiliatePresaleCredit {
     function addPresaleCoinCredit(address player, uint256 amount) external;
 }
 
-/// @dev Generic wiring interface for game contracts.
-interface IWiring {
-    /// @notice Wire contract dependencies.
-    /// @param addresses Array of dependency addresses (order varies by contract).
-    function wire(address[] calldata addresses) external;
-}
-
 /// @dev Chainlink price feed interface (AggregatorV3).
 interface IAggregatorV3 {
     /// @notice Get latest price data.
@@ -210,20 +199,19 @@ interface IAggregatorV3 {
 
 /**
  * @title DegenerusAdmin
- * @notice Central admin contract: owns the VRF subscription and performs one-time wiring
- *         for bonds/game/coin/affiliate. Deploy this first, pass its address into other
- *         contracts, and route all wiring through it.
+ * @notice Central admin contract: owns the VRF subscription and wires VRF
+ *         configuration for bonds/game. Deployed using precomputed constants.
  *
  * @dev TRUST ASSUMPTIONS
  * ─────────────────────────────────────────────────────────────────────────────
  * - The `creator` is a trusted EOA or multisig that won't act maliciously before all contracts are deployed.
- * - The LINK token address is correct and immutable.
+ * - The LINK token address is correct and constant.
  * - External contracts (game, bonds, coin, etc.) are correctly implemented.
  * - Chainlink VRF coordinator and price feeds are trusted oracles.
  *
  * GAS CONSIDERATIONS
  * ─────────────────────────────────────────────────────────────────────────────
- * - wireAll() is gas-intensive (~500k-1M gas) due to multiple external calls.
+ * - wireVrf() adds consumers and sets VRF config; should only be called once.
  * - Should only be called once during initial setup.
  * - Emergency functions are designed for rare use and prioritize safety over gas.
  */
@@ -241,9 +229,6 @@ contract DegenerusAdmin {
 
     /// @dev A required address parameter was zero.
     error ZeroAddress();
-
-    /// @dev Array length mismatch in batch operations.
-    error LengthMismatch();
 
     /// @dev VRF is not stalled; emergency recovery not allowed.
     error NotStalled();
@@ -269,8 +254,6 @@ contract DegenerusAdmin {
     /// @dev Price feed is healthy; replacement not allowed.
     error FeedHealthy();
 
-    /// @dev Game contract not wired yet.
-    error GameNotWired();
 
     // =========================================================================
     // EVENTS
@@ -307,27 +290,15 @@ contract DegenerusAdmin {
     /// @param sweptAmount LINK amount swept.
     event SubscriptionShutdown(uint256 indexed subId, address indexed to, uint256 sweptAmount);
 
-    /// @notice Emitted when the coin contract is wired.
-    /// @param coin Address of the coin contract.
-    event CoinWired(address indexed coin);
-
     /// @notice Emitted when LINK donation credit is recorded.
     /// @param player Address receiving the credit.
     /// @param amount BURNIE amount credited.
-    /// @param minted True if credited to live coin, false if pending.
+    /// @param minted True if credited to live coin, false if presale-escrowed.
     event LinkCreditRecorded(address indexed player, uint256 amount, bool minted);
 
     /// @notice Emitted when LINK/ETH price feed is updated.
     /// @param feed New feed address (zero disables oracle).
     event LinkEthFeedUpdated(address indexed feed);
-
-    /// @notice Emitted when affiliate contract is wired.
-    /// @param affiliate Address of the affiliate contract.
-    event AffiliateWired(address indexed affiliate);
-
-    /// @notice Emitted when vault address is set.
-    /// @param vault Address of the vault.
-    event VaultSet(address indexed vault);
 
     /// @notice Emitted when presale is shutdown.
     event PresaleShutdown();
@@ -337,42 +308,36 @@ contract DegenerusAdmin {
     event PresaleJackpotRun(bool advanced);
 
     // =========================================================================
-    // IMMUTABLE STATE
+    // OWNER STATE
     // =========================================================================
     // Set once at construction; cannot be changed.
 
-    /// @notice The contract creator/owner. Set immutably at construction.
+    /// @notice The contract creator/owner. Fixed via DeployConstants.
     /// @dev No ownership transfer mechanism exists by design — simplifies security model.
-    address public immutable creator;
+    address private constant creator = DeployConstants.CREATOR;
 
     /// @notice LINK token address (ERC-677 compatible).
-    /// @dev Immutable to prevent token address manipulation attacks.
-    address public immutable linkToken;
+    address private constant linkToken = DeployConstants.LINK_TOKEN;
 
     // =========================================================================
-    // WIRING STATE
+    // CONSTANT REFERENCES
     // =========================================================================
-    // External contract addresses, wired once during setup.
+    // External contract addresses, fixed at deployment.
 
     /// @notice Bonds contract address.
-    /// @dev Wired via wireAll(). One-time set with AlreadyWired guard.
-    address public bonds;
+    address private constant bonds = DeployConstants.BONDS;
 
     /// @notice BURNIE coin contract address.
-    /// @dev Wired via wireAll(). One-time set with AlreadyWired guard.
-    address public coin;
+    address private constant coin = DeployConstants.COIN;
 
     /// @notice Affiliate program contract address.
-    /// @dev Wired via wireAll(). One-time set with AlreadyWired guard.
-    address public affiliate;
+    address private constant affiliate = DeployConstants.AFFILIATE;
 
     /// @notice Main game contract address.
-    /// @dev Wired via wireAll(). One-time set with AlreadyWired guard.
-    address public game;
+    address private constant game = DeployConstants.GAME;
 
     /// @notice Vault contract address for reward routing.
-    /// @dev Wired via wireAll(). One-time set with AlreadyWired guard.
-    address public vault;
+    address private constant vault = DeployConstants.VAULT;
 
     // =========================================================================
     // VRF STATE
@@ -384,7 +349,7 @@ contract DegenerusAdmin {
     address public coordinator;
 
     /// @notice Current VRF subscription ID.
-    /// @dev Created during first wireAll(); can change during emergency recovery.
+    /// @dev Created during first wireVrf(); can change during emergency recovery.
     uint256 public subscriptionId;
 
     /// @notice VRF key hash for the current coordinator.
@@ -394,12 +359,6 @@ contract DegenerusAdmin {
     // =========================================================================
     // LINK REWARD STATE
     // =========================================================================
-    // Tracks LINK donation rewards before coin is wired.
-
-    /// @notice Pending BURNIE credits for LINK donors (before coin wiring).
-    /// @dev Cleared when user calls claimPendingLinkCredit() after coin is wired.
-    ///      SECURITY: Uses pull pattern — users claim their own credits.
-    mapping(address => uint256) public pendingLinkCredit;
 
     /// @notice Chainlink LINK/ETH price feed address.
     /// @dev Zero address disables oracle-based valuation.
@@ -417,18 +376,6 @@ contract DegenerusAdmin {
     uint256 private constant PRICE_COIN_UNIT = 1_000_000_000;
 
     // =========================================================================
-    // CONSTRUCTOR
-    // =========================================================================
-
-    /// @notice Initialize the admin contract.
-    /// @param linkToken_ Address of the LINK token (ERC-677).
-    /// @dev SECURITY: linkToken_ is set immutably — verify correct address before deploy.
-    constructor(address linkToken_) {
-        creator = msg.sender;
-        linkToken = linkToken_;
-    }
-
-    // =========================================================================
     // ACCESS CONTROL
     // =========================================================================
 
@@ -440,274 +387,49 @@ contract DegenerusAdmin {
     }
 
     // =========================================================================
-    // INTERNAL WIRING HELPERS
+    // VRF SETUP
     // =========================================================================
 
-    /// @dev Internal wiring logic: creates VRF subscription if needed, validates parameters.
-    /// @param coordinator_ VRF coordinator address (required on first call).
-    /// @param bondKeyHash VRF key hash (required).
-    ///
-    /// SECURITY NOTES:
-    /// - First call creates subscription and sets coordinator immutably-ish (can only change via emergency).
-    /// - Subsequent calls validate parameters match existing config (AlreadyWired guard).
-    /// - Prevents accidental or malicious re-pointing to different coordinator.
-    function _wire(address coordinator_, bytes32 bondKeyHash) private {
-        if (bonds == address(0)) revert NotWired();
+    /// @notice Initialize VRF configuration and wire consumers.
+    /// @dev If subId is zero, a new subscription is created on the coordinator.
+    ///      Subsequent calls must match existing config.
+    /// @param coordinator_ VRF coordinator address.
+    /// @param subId Existing VRF subscription ID (0 to create).
+    /// @param bondKeyHash_ VRF key hash (gas lane).
+    function wireVrf(address coordinator_, uint256 subId, bytes32 bondKeyHash_) external onlyOwner {
+        if (coordinator_ == address(0) || bondKeyHash_ == bytes32(0)) revert ZeroAddress();
 
-        // Create subscription on first call.
         if (subscriptionId == 0) {
-            if (coordinator_ == address(0) || bondKeyHash == bytes32(0)) revert ZeroAddress();
-            uint256 subId = IVRFCoordinatorV2_5Owner(coordinator_).createSubscription();
+            if (subId == 0) {
+                subId = IVRFCoordinatorV2_5Owner(coordinator_).createSubscription();
+                emit SubscriptionCreated(subId);
+            }
             coordinator = coordinator_;
             subscriptionId = subId;
+            vrfKeyHash = bondKeyHash_;
             emit CoordinatorUpdated(coordinator_, subId);
-            emit SubscriptionCreated(subId);
         } else {
-            // Prevent accidental re-pointing via a different coordinator.
-            if (coordinator_ != address(0) && coordinator_ != coordinator) revert AlreadyWired();
-            if (bondKeyHash == bytes32(0)) revert ZeroAddress();
+            if (coordinator_ != coordinator) revert AlreadyWired();
+            if (subId != 0 && subId != subscriptionId) revert AlreadyWired();
+            if (bondKeyHash_ != vrfKeyHash) revert AlreadyWired();
+            if (subId == 0) {
+                subId = subscriptionId;
+            }
         }
 
-        bytes32 currentKeyHash = vrfKeyHash;
-        if (currentKeyHash == bytes32(0)) {
-            vrfKeyHash = bondKeyHash;
-        } else {
-            if (bondKeyHash != currentKeyHash) revert AlreadyWired();
-        }
-    }
-
-    /// @dev Pack addresses for bonds.wire() call.
-    /// @return arr Array of 7 addresses in bonds-expected order.
-    function _packBondsWire(
-        address game_,
-        address vault_,
-        address coin_,
-        address coord_,
-        address questModule_,
-        address trophies_,
-        address affiliate_
-    ) private pure returns (address[] memory arr) {
-        arr = new address[](7);
-        arr[0] = game_;
-        arr[1] = vault_;
-        arr[2] = coin_;
-        arr[3] = coord_;
-        arr[4] = questModule_;
-        arr[5] = trophies_;
-        arr[6] = affiliate_;
-    }
-
-    // =========================================================================
-    // MAIN WIRING FUNCTION
-    // =========================================================================
-
-    /// @notice Consolidated wiring: creates VRF sub if needed, wires all game contracts.
-    /// @dev This is the primary setup function. Call once with all contract addresses.
-    ///
-    ///      EXECUTION ORDER:
-    ///      1. Set bonds address (one-time)
-    ///      2. Set vault address (one-time)
-    ///      3. Set coin address (one-time)
-    ///      4. Set affiliate address (one-time)
-    ///      5. Create VRF subscription if needed
-    ///      6. Wire game contract with VRF
-    ///      7. Wire quest module to game
-    ///      8. Add bonds as VRF consumer
-    ///      9. Wire bonds with all dependencies
-    ///      10. Wire coin (incl. color registry), questModule, nft, affiliate, jackpots, trophies
-    ///      11. Wire any additional modules from arrays
-    ///
-    ///      SECURITY NOTES:
-    ///      - All address setters use one-time pattern (AlreadyWired guard).
-    ///      - try/catch on addConsumer allows graceful handling if already added.
-    ///      - External calls are to trusted contracts only.
-    ///
-    /// @param bonds_ Bonds contract address (required on first call).
-    /// @param coordinator_ VRF coordinator address (required on first call).
-    /// @param bondKeyHash_ VRF key hash (required on first call).
-    /// @param game_ Game contract address.
-    /// @param coin_ BURNIE coin contract address.
-    /// @param affiliate_ Affiliate program contract address.
-    /// @param jackpots_ Jackpots contract address.
-    /// @param questModule_ Quest module contract address.
-    /// @param trophies_ Trophies contract address.
-    /// @param nft_ NFT contract address.
-    /// @param colorRegistry_ IconColorRegistry contract address (for coin burn authorization).
-    /// @param vault_ Vault contract address.
-    /// @param modules Additional modules to wire.
-    /// @param moduleWires Wiring arrays for additional modules (parallel to modules).
-    function wireAll(
-        address bonds_,
-        address coordinator_,
-        bytes32 bondKeyHash_,
-        address game_,
-        address coin_,
-        address affiliate_,
-        address jackpots_,
-        address questModule_,
-        address trophies_,
-        address nft_,
-        address colorRegistry_,
-        address vault_,
-        address[] calldata modules,
-        address[][] calldata moduleWires
-    ) external onlyOwner {
-        // --- BONDS WIRING (one-time) ---
+        address gameAddr = game;
         address bondsAddr = bonds;
-        if (bondsAddr == address(0)) {
-            if (bonds_ == address(0)) revert ZeroAddress();
-            bonds = bonds_;
-            bondsAddr = bonds_;
-        } else if (bonds_ != address(0) && bonds_ != bondsAddr) {
-            revert AlreadyWired();
-        }
 
-        // --- VAULT WIRING (one-time) ---
-        if (vault_ != address(0)) {
-            address currentVault = vault;
-            if (currentVault == address(0)) {
-                vault = vault_;
-                emit VaultSet(vault_);
-            } else if (currentVault != vault_) {
-                revert AlreadyWired();
-            }
-        }
-
-        // --- COIN WIRING (one-time) ---
-        if (coin_ != address(0)) {
-            address currentCoin = coin;
-            if (currentCoin == address(0)) {
-                coin = coin_;
-                emit CoinWired(coin_);
-            } else if (currentCoin != coin_) {
-                revert AlreadyWired();
-            }
-        }
-
-        // --- AFFILIATE WIRING (one-time) ---
-        if (affiliate_ != address(0)) {
-            address currentAffiliate = affiliate;
-            if (currentAffiliate == address(0)) {
-                affiliate = affiliate_;
-                emit AffiliateWired(affiliate_);
-            } else if (currentAffiliate != affiliate_) {
-                revert AlreadyWired();
-            }
-        }
-
-        // --- VRF SUBSCRIPTION SETUP ---
-        // Ensure VRF subscription exists and validate parameters.
-        if (subscriptionId == 0) {
-            _wire(coordinator_, bondKeyHash_);
-        } else {
-            if (coordinator_ != address(0) && coordinator_ != coordinator) revert AlreadyWired();
-            bytes32 currentKeyHash = vrfKeyHash;
-            if (currentKeyHash == bytes32(0)) {
-                if (bondKeyHash_ == bytes32(0)) revert ZeroAddress();
-                vrfKeyHash = bondKeyHash_;
-            } else {
-                if (bondKeyHash_ != bytes32(0) && bondKeyHash_ != currentKeyHash) revert AlreadyWired();
-            }
-        }
-
-        address coord = coordinator_ == address(0) ? coordinator : coordinator_;
-        bytes32 keyHash = vrfKeyHash;
-
-        // --- GAME WIRING ---
-        if (game_ != address(0)) {
-            address currentGame = game;
-            if (currentGame == address(0)) {
-                game = game_;
-            } else if (currentGame != game_) {
-                revert AlreadyWired();
-            }
-
-            // Add game as VRF consumer. try/catch handles already-added case.
-            try IVRFCoordinatorV2_5Owner(coord).addConsumer(subscriptionId, game_) {
-                emit ConsumerAdded(game_);
-            } catch {}
-
-            if (keyHash == bytes32(0)) revert NotWired();
-            IDegenerusGameVrf(game_).wireVrf(coord, subscriptionId, keyHash);
-        }
-
-        // --- QUEST MODULE → GAME WIRING ---
-        address gameAddr = game_ == address(0) ? game : game_;
-        if (questModule_ != address(0) && gameAddr != address(0)) {
-            IDegenerusGameQuest(gameAddr).wireQuestModule(questModule_);
-        }
-
-        // --- BONDS VRF CONSUMER + WIRING ---
-        // Add bonds as VRF consumer.
-        try IVRFCoordinatorV2_5Owner(coord).addConsumer(subscriptionId, bondsAddr) {
+        // Add consumers; try/catch handles already-added case.
+        try IVRFCoordinatorV2_5Owner(coordinator).addConsumer(subscriptionId, gameAddr) {
+            emit ConsumerAdded(gameAddr);
+        } catch {}
+        try IVRFCoordinatorV2_5Owner(coordinator).addConsumer(subscriptionId, bondsAddr) {
             emit ConsumerAdded(bondsAddr);
         } catch {}
 
-        // Wire bonds with all its dependencies.
-        IDegenerusBondsAdmin(bondsAddr).wire(
-            _packBondsWire(game_, vault_, coin_, coord, questModule_, trophies_, affiliate_),
-            subscriptionId,
-            keyHash
-        );
-
-        // --- DOWNSTREAM CONTRACT WIRING ---
-        // Each contract has its own wire() expectations.
-
-        if (coin_ != address(0)) {
-            address[] memory coinWire = new address[](5);
-            coinWire[0] = game_;
-            coinWire[1] = nft_;
-            coinWire[2] = questModule_;
-            coinWire[3] = jackpots_;
-            coinWire[4] = colorRegistry_;
-            IWiring(coin_).wire(coinWire);
-        }
-
-        if (questModule_ != address(0)) {
-            address[] memory questWire = new address[](1);
-            questWire[0] = game_;
-            IWiring(questModule_).wire(questWire);
-        }
-
-        if (nft_ != address(0)) {
-            address[] memory nftWire = new address[](1);
-            nftWire[0] = game_;
-            IWiring(nft_).wire(nftWire);
-        }
-
-        if (affiliate_ != address(0)) {
-            address[] memory affWire = new address[](3);
-            affWire[0] = coin_;
-            affWire[1] = game_;
-            affWire[2] = nft_;
-            IWiring(affiliate_).wire(affWire);
-        }
-
-        if (jackpots_ != address(0)) {
-            address[] memory jpWire = new address[](3);
-            jpWire[0] = coin_;
-            jpWire[1] = game_;
-            jpWire[2] = affiliate_;
-            IWiring(jackpots_).wire(jpWire);
-        }
-
-        if (trophies_ != address(0)) {
-            address[] memory trophyWire = new address[](1);
-            trophyWire[0] = game_;
-            IWiring(trophies_).wire(trophyWire);
-        }
-
-        // --- ADDITIONAL MODULE WIRING ---
-        uint256 moduleCount = modules.length;
-        if (moduleCount != moduleWires.length) revert LengthMismatch();
-        for (uint256 i; i < moduleCount;) {
-            address module = modules[i];
-            if (module == address(0)) revert ZeroAddress();
-            IWiring(module).wire(moduleWires[i]);
-            unchecked {
-                ++i;
-            }
-        }
+        IDegenerusGameVrf(gameAddr).wireVrf(coordinator, subscriptionId, vrfKeyHash);
+        IDegenerusBondsAdmin(bondsAddr).wireVrf(coordinator, subscriptionId, vrfKeyHash);
     }
 
     // =========================================================================
@@ -777,7 +499,6 @@ contract DegenerusAdmin {
     /// @notice Configure the target stETH share (in bps) for game-held liquidity; 0 disables staking.
     function setRewardStakeTargetBps(uint16 bps) external onlyOwner {
         address bondsAddr = bonds;
-        if (bondsAddr == address(0)) revert NotWired();
         IDegenerusBondsAdmin(bondsAddr).setRewardStakeTargetBps(bps);
     }
 
@@ -796,7 +517,6 @@ contract DegenerusAdmin {
     /// @param amount Amount of ETH to swap.
     function swapGameEthForStEth(uint256 amount) external payable onlyOwner {
         address gameAddr = game;
-        if (gameAddr == address(0)) revert GameNotWired();
         if (amount == 0 || msg.value != amount) revert InvalidAmount();
         IDegenerusGameLiquidityAdmin(gameAddr).adminSwapEthForStEth{value: msg.value}(msg.sender, amount);
     }
@@ -806,7 +526,6 @@ contract DegenerusAdmin {
     /// @param amount Amount of ETH to stake.
     function stakeGameEthToStEth(uint256 amount) external onlyOwner {
         address gameAddr = game;
-        if (gameAddr == address(0)) revert GameNotWired();
         IDegenerusGameLiquidityAdmin(gameAddr).adminStakeEthForStEth(amount);
     }
 
@@ -952,9 +671,7 @@ contract DegenerusAdmin {
         if (subscriptionId == 0) revert NotWired();
 
         // Prevent donations after game-over.
-        if (bonds != address(0)) {
-            if (IDegenerusBondsGameOverFlag(bonds).gameOverStarted()) revert GameOver();
-        }
+        if (IDegenerusBondsGameOverFlag(bonds).gameOverStarted()) revert GameOver();
 
         // Forward LINK to VRF subscription.
         try ILinkTokenLike(linkToken).transferAndCall(address(coordinator), amount, abi.encode(subscriptionId)) returns (
@@ -979,52 +696,22 @@ contract DegenerusAdmin {
         uint256 credit = (baseCredit * mult) / 1e18;
         if (credit == 0) return;
 
-        bool minted;
         bool presaleCredited;
         address affiliateAddr = affiliate;
 
         // Try presale escrow first if available.
-        if (affiliateAddr != address(0)) {
-            try IAffiliatePresaleCredit(affiliateAddr).presaleActive() returns (bool active) {
-                if (active) {
-                    IAffiliatePresaleCredit(affiliateAddr).addPresaleCoinCredit(from, credit);
-                    presaleCredited = true;
-                }
-            } catch {}
-        }
-
-        // If not presale, credit to live coin or pending balance.
-        if (!presaleCredited) {
-            if (coin != address(0)) {
-                IDegenerusCoinPresaleLink(coin).creditLinkReward(from, credit);
-                minted = true;
-            } else {
-                // Store pending credit until coin is wired.
-                pendingLinkCredit[from] += credit;
-                minted = false;
+        try IAffiliatePresaleCredit(affiliateAddr).presaleActive() returns (bool active) {
+            if (active) {
+                IAffiliatePresaleCredit(affiliateAddr).addPresaleCoinCredit(from, credit);
+                presaleCredited = true;
             }
+        } catch {}
+
+        // If not presale, credit to live coin.
+        if (!presaleCredited) {
+            IDegenerusCoinPresaleLink(coin).creditLinkReward(from, credit);
         }
-        emit LinkCreditRecorded(from, credit, minted);
-    }
-
-    /// @notice Claim pending LINK donation credits after coin is wired.
-    /// @dev Pull pattern — users claim their own credits.
-    ///
-    ///      SECURITY NOTES:
-    ///      - Only callable after coin is wired.
-    ///      - Clears pending balance before external call (CEI pattern).
-    ///      - User can only claim their own balance.
-    function claimPendingLinkCredit() external {
-        if (coin == address(0)) revert NotWired();
-        address player = msg.sender;
-        uint256 credit = pendingLinkCredit[player];
-        if (credit == 0) return;
-
-        // Clear balance before external call (CEI pattern).
-        pendingLinkCredit[player] = 0;
-        IDegenerusCoinPresaleLink(coin).creditLinkReward(player, credit);
-        bool minted = true;
-        emit LinkCreditRecorded(player, credit, minted);
+        emit LinkCreditRecorded(from, credit, !presaleCredited);
     }
 
     // =========================================================================

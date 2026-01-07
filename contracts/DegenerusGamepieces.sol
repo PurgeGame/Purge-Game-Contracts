@@ -76,8 +76,7 @@ pragma solidity ^0.8.26;
   ║                                                                              ║
   ║  2. ACCESS CONTROL:                                                          ║
   ║     • onlyGame modifier for game-only functions                              ║
-  ║     • onlyAdmin modifier for admin wiring                                    ║
-  ║     • Game address is set-once (cannot be changed after wiring)              ║
+  ║     • Game address is fixed at deploy (cannot be changed)                    ║
   ║                                                                              ║
   ║  3. RNG MANIPULATION:                                                        ║
   ║     • Purchases blocked when rngLocked (prevents post-VRF manipulation)      ║
@@ -98,12 +97,12 @@ pragma solidity ^0.8.26;
   ║                           TRUST ASSUMPTIONS                                  ║
   ╠══════════════════════════════════════════════════════════════════════════════╣
   ║                                                                              ║
-  ║  TRUSTED CONTRACTS (immutable after construction):                           ║
+  ║  TRUSTED CONTRACTS (constant after construction):                            ║
   ║  • game:            Core game contract (can burn tokens, process mints)      ║
   ║  • coin:            BURNIE token (burn/credit/notify operations)             ║
   ║  • affiliateProgram: Affiliate payouts and bonus calculations                ║
   ║  • regularRenderer: Token metadata generation                                ║
-  ║  • admin:           One-time wiring only                                     ║
+  ║  • admin:           None (addresses fixed at deploy)                         ║
   ║                                                                              ║
   ║  EXTERNAL INTERFACES (called by this contract):                              ║
   ║  • IDegenerusGame:  purchaseInfo, recordMint, enqueueMap, etc.               ║
@@ -117,6 +116,7 @@ import {DegenerusTraitUtils} from "./DegenerusTraitUtils.sol";
 import {IDegenerusGame, MintPaymentKind} from "./interfaces/IDegenerusGame.sol";
 import {IDegenerusCoin} from "./interfaces/IDegenerusCoin.sol";
 import {IDegenerusAffiliate} from "./interfaces/IDegenerusAffiliate.sol";
+import {DeployConstants} from "./DeployConstants.sol";
 
 // ===========================================================================
 // Enums & External Interfaces
@@ -207,9 +207,6 @@ contract DegenerusGamepieces {
 
     /// @notice Caller is not the coin contract.
     error OnlyCoin();
-
-    /// @notice Caller is not the admin.
-    error OnlyAdmin();
 
     /// @notice Token ID is invalid (burned, out of range, or not minted).
     error InvalidToken();
@@ -416,26 +413,23 @@ contract DegenerusGamepieces {
       ║  Trusted contract addresses and game-specific state.                 ║
       ╚══════════════════════════════════════════════════════════════════════╝*/
 
-    /// @dev Core game contract (set via wire(), cannot be changed once set).
-    IDegenerusGame private game;
+    /// @dev Core game contract (constant).
+    IDegenerusGame private constant game = IDegenerusGame(DeployConstants.GAME);
 
-    /// @dev Token metadata renderer (immutable). Use a router for upgradeable visuals.
-    ITokenRenderer private immutable regularRenderer;
+    /// @dev Token metadata renderer (constant). Use a router for upgradeable visuals.
+    ITokenRenderer private constant regularRenderer = ITokenRenderer(DeployConstants.GAMEPIECE_RENDERER_ROUTER);
 
-    /// @dev BURNIE token contract for purchases/marketplace (immutable).
-    IDegenerusCoin private immutable coin;
+    /// @dev BURNIE token contract for purchases/marketplace (constant).
+    IDegenerusCoin private constant coin = IDegenerusCoin(DeployConstants.COIN);
 
-    /// @dev Admin address for one-time wiring (immutable).
-    address private immutable admin;
+    /// @dev BURNIE token interface for marketplace transfers (constant).
+    IBurnieToken private constant burnie = IBurnieToken(DeployConstants.COIN);
 
-    /// @dev BURNIE token interface for marketplace transfers (immutable).
-    IBurnieToken private immutable burnie;
+    /// @dev Vault address receiving eternal token #0 (constant).
+    address private constant vault = DeployConstants.VAULT;
 
-    /// @dev Vault address receiving eternal token #0 (immutable).
-    address private immutable vault;
-
-    /// @dev Affiliate program contract for referral payouts (immutable).
-    address private immutable affiliateProgram;
+    /// @dev Affiliate program contract for referral payouts (constant).
+    address private constant affiliateProgram = DeployConstants.AFFILIATE;
 
     /*╔══════════════════════════════════════════════════════════════════════╗
       ║                    MINT QUEUE STATE                                  ║
@@ -563,25 +557,13 @@ contract DegenerusGamepieces {
     /*╔══════════════════════════════════════════════════════════════════════╗
       ║                           CONSTRUCTOR                                ║
       ╠══════════════════════════════════════════════════════════════════════╣
-      ║  Initialize immutable addresses and mint eternal token #0 to vault.  ║
+      ║  Validate constants and mint eternal token #0 to vault.               ║
       ╚══════════════════════════════════════════════════════════════════════╝*/
 
     /// @notice Initialize the gamepieces contract.
     /// @dev Mints token #0 (eternal trophy) to vault immediately.
-    ///      All immutable addresses must be non-zero except affiliateProgram.
-    /// @param regularRenderer_ Token metadata renderer contract.
-    /// @param coin_ BURNIE token contract address.
-    /// @param affiliateProgram_ Affiliate program contract.
-    /// @param vault_ Vault address receiving eternal token #0.
-    /// @param admin_ Admin address for one-time wiring.
-    constructor(address regularRenderer_, address coin_, address affiliateProgram_, address vault_, address admin_) {
-        regularRenderer = ITokenRenderer(regularRenderer_);
-        coin = IDegenerusCoin(coin_);
-        if (admin_ == address(0)) revert Zero();
-        admin = admin_;
-        burnie = IBurnieToken(coin_);
-        affiliateProgram = affiliateProgram_;
-        vault = vault_;
+    ///      All dependencies are fixed at deploy time.
+    constructor() {
         _mint(vault, 1); // Mint the eternal token #0 to vault
     }
 
@@ -751,8 +733,6 @@ contract DegenerusGamepieces {
         unchecked {
             coinCost = quantity * PRICE_COIN_UNIT;
         }
-        uint256 expectedWei;
-        uint256 priceCostWei;
         uint256 mintQuantity = quantity;
         if (!payInCoin && (targetLevel % 100) == 0) {
             uint256 multBps = g.playerBonusMultiplier(payer);
@@ -760,12 +740,8 @@ contract DegenerusGamepieces {
             if (mintQuantity > type(uint32).max) revert InvalidQuantity();
         }
         uint32 mintQty32 = uint32(mintQuantity);
-        if (!payInCoin) {
-            priceCostWei = priceWei * quantity;
-            expectedWei = priceCostWei + _initiationFee(g, targetLevel, payer, priceWei);
-        }
-
         uint256 bonus;
+        uint256 costAmount;
 
         if (payInCoin) {
             if (msg.value != 0) revert E();
@@ -773,7 +749,10 @@ contract DegenerusGamepieces {
             if (lastPurchaseDay) {
                 coin.notifyQuestMint(payer, uint32(mintQuantity), false);
             }
+            costAmount = coinCost;
         } else {
+            uint256 priceCostWei = priceWei * quantity;
+            uint256 expectedWei = priceCostWei + _initiationFee(g, targetLevel, payer, priceWei);
             uint256 claimableUsed;
             uint256 newClaimableBal;
             (bonus, claimableUsed, newClaimableBal) = _processEthPurchase(
@@ -811,21 +790,27 @@ contract DegenerusGamepieces {
                     }
                 }
             }
+            costAmount = expectedWei;
         }
 
         if (bonus != 0) {
             coin.creditFlip(buyer, bonus);
         }
 
-        uint32 purchasedQty32 = uint32(quantity);
         if (!payInCoin && state == 3) {
             g.enqueueMap(buyer, mintQty32);
         }
         bool isPrePurchase = state != 2;
         _recordPurchase(buyer, mintQty32, isPrePurchase);
 
-        uint256 costAmount = payInCoin ? coinCost : expectedWei;
-        emit TokenPurchase(buyer, purchasedQty32, payInCoin, payKind != MintPaymentKind.DirectEth, costAmount, bonus);
+        emit TokenPurchase(
+            buyer,
+            uint32(quantity),
+            payInCoin,
+            payKind != MintPaymentKind.DirectEth,
+            costAmount,
+            bonus
+        );
     }
 
     function _mintAndBurn(
@@ -857,8 +842,6 @@ contract DegenerusGamepieces {
             mapRebate = (quantity / 4) * (PRICE_COIN_UNIT / 10);
         }
         uint256 mapBonus;
-        uint256 expectedWei;
-        uint256 priceCostWei;
         uint256 mintQuantity = quantity;
         if (!payInCoin && (lvl % 100) == 0) {
             uint256 multBps = g.playerBonusMultiplier(payer);
@@ -866,15 +849,8 @@ contract DegenerusGamepieces {
             if (mintQuantity > type(uint32).max) revert InvalidQuantity();
         }
         uint32 mintQty32 = uint32(mintQuantity);
-        if (!payInCoin) {
-            unchecked {
-                mapBonus = (quantity / 40) * PRICE_COIN_UNIT;
-            }
-            priceCostWei = (priceWei * quantity) / 4;
-            expectedWei = priceCostWei + _initiationFee(g, lvl, payer, priceWei);
-        }
-
         uint256 bonus;
+        uint256 costAmount;
 
         if (payInCoin) {
             if (msg.value != 0) revert E();
@@ -887,7 +863,13 @@ contract DegenerusGamepieces {
             }
             // Affiliate coin-triggered mints should not earn rebates/bonuses.
             bonus = payKind == MintPaymentKind.Claimable ? 0 : mapRebate;
+            costAmount = coinCost;
         } else {
+            unchecked {
+                mapBonus = (quantity / 40) * PRICE_COIN_UNIT;
+            }
+            uint256 priceCostWei = (priceWei * quantity) / 4;
+            uint256 expectedWei = priceCostWei + _initiationFee(g, lvl, payer, priceWei);
             uint256 claimableUsed;
             uint256 newClaimableBal;
             (bonus, claimableUsed, newClaimableBal) = _processEthPurchase(
@@ -924,6 +906,7 @@ contract DegenerusGamepieces {
                     }
                 }
             }
+            costAmount = expectedWei;
         }
 
         uint256 rebateMint = bonus;
@@ -938,7 +921,6 @@ contract DegenerusGamepieces {
 
         g.enqueueMap(buyer, mintQty32);
 
-        uint256 costAmount = payInCoin ? coinCost : expectedWei;
         emit MapPurchase(
             buyer,
             uint32(quantity),
@@ -963,20 +945,18 @@ contract DegenerusGamepieces {
         uint256 costWei
     ) private returns (uint256 bonusMint, uint256 claimableUsed, uint256 newClaimableBal) {
         // ETH purchases optionally bypass payment when in-game credit is used; all flows are forwarded to game logic.
-        uint256 valueToSend;
-        uint256 msgValue = msg.value;
+        uint256 valueToSend = msg.value;
         if (payKind == MintPaymentKind.DirectEth) {
-            if (msgValue != costWei) revert E();
-            valueToSend = costWei;
+            if (valueToSend != costWei) revert E();
         } else if (payKind == MintPaymentKind.Claimable) {
-            if (msgValue != 0) revert E();
+            if (valueToSend != 0) revert E();
             claimableUsed = costWei;
+            valueToSend = 0;
         } else if (payKind == MintPaymentKind.Combined) {
-            if (msgValue > costWei) revert E();
-            valueToSend = msgValue;
-            if (msgValue < costWei) {
+            if (valueToSend > costWei) revert E();
+            if (valueToSend < costWei) {
                 unchecked {
-                    claimableUsed = costWei - msgValue;
+                    claimableUsed = costWei - valueToSend;
                 }
             }
         } else {
@@ -1001,35 +981,8 @@ contract DegenerusGamepieces {
         }
 
         // Flat affiliate payout baseline with claimable-specific rate.
-        uint256 affiliateAmount;
-        if (payKind == MintPaymentKind.Claimable) {
-            affiliateAmount = AFFILIATE_CLAIMABLE_REWARD;
-        } else {
-            uint256 standardAffiliateAmount;
-            if (lvl > 40) {
-                uint256 pct = gameState != 3 ? 30 : 5;
-                standardAffiliateAmount = (PRICE_COIN_UNIT * pct) / 100;
-            } else {
-                standardAffiliateAmount = PRICE_COIN_UNIT / 10; // 0.1 priceCoin
-                bool affiliateBonus = lvl <= 3 || gameState != 3; // first 3 levels or any purchase phase
-                if (affiliateBonus) {
-                    standardAffiliateAmount = (standardAffiliateAmount * 250) / 100; // +150% => 0.25 priceCoin
-                }
-            }
-
-            if (payKind == MintPaymentKind.Combined && claimableUsed != 0 && costWei != 0) {
-                uint256 ethUsed = costWei - claimableUsed;
-                affiliateAmount =
-                    _proRate(standardAffiliateAmount, ethUsed, costWei) +
-                    _proRate(AFFILIATE_CLAIMABLE_REWARD, claimableUsed, costWei);
-            } else {
-                affiliateAmount = standardAffiliateAmount;
-            }
-        }
-
-        address affiliateAddr = affiliateProgram;
-        uint256 rakebackMint = IDegenerusAffiliate(affiliateAddr).payAffiliate(
-            affiliateAmount,
+        uint256 rakebackMint = IDegenerusAffiliate(affiliateProgram).payAffiliate(
+            _affiliateAmount(lvl, gameState, payKind, claimableUsed, costWei),
             affiliateCode,
             buyer,
             lvl,
@@ -1038,6 +991,34 @@ contract DegenerusGamepieces {
         );
         unchecked {
             bonusMint = rakebackMint + streakBonus;
+        }
+    }
+
+    function _affiliateAmount(
+        uint24 lvl,
+        uint8 gameState,
+        MintPaymentKind payKind,
+        uint256 claimableUsed,
+        uint256 costWei
+    ) private pure returns (uint256 amount) {
+        if (payKind == MintPaymentKind.Claimable) {
+            return AFFILIATE_CLAIMABLE_REWARD;
+        }
+        if (lvl > 40) {
+            uint256 pct = gameState != 3 ? 30 : 5;
+            amount = (PRICE_COIN_UNIT * pct) / 100;
+        } else {
+            amount = PRICE_COIN_UNIT / 10; // 0.1 priceCoin
+            if (lvl <= 3 || gameState != 3) {
+                amount = (amount * 250) / 100; // +150% => 0.25 priceCoin
+            }
+        }
+
+        if (payKind == MintPaymentKind.Combined && claimableUsed != 0 && costWei != 0) {
+            uint256 ethUsed = costWei - claimableUsed;
+            amount =
+                _proRate(amount, ethUsed, costWei) +
+                _proRate(AFFILIATE_CLAIMABLE_REWARD, claimableUsed, costWei);
         }
     }
 
@@ -1528,7 +1509,7 @@ contract DegenerusGamepieces {
       ║                                                                      ║
       ║  SECURITY:                                                           ║
       ║  • Game address can only be set once (set-once pattern)              ║
-      ║  • Admin is immutable from construction                              ║
+      ║  • No admin (addresses fixed at deploy)                               ║
       ║  • Game contract has elevated privileges (burn, mint, advanceBase)   ║
       ╚══════════════════════════════════════════════════════════════════════╝*/
 
@@ -1536,32 +1517,6 @@ contract DegenerusGamepieces {
     modifier onlyGame() {
         if (msg.sender != address(game)) revert E();
         _;
-    }
-
-    /// @dev Restricts function to admin only.
-    modifier onlyAdmin() {
-        if (msg.sender != admin) revert OnlyAdmin();
-        _;
-    }
-
-    /// @notice Wire the game contract address (one-time setup).
-    /// @dev Access: admin only. Can only be set once.
-    ///      SECURITY: Game address is set-once to prevent malicious replacement.
-    /// @param addresses Array containing game address at index 0.
-    function wire(address[] calldata addresses) external onlyAdmin {
-        _setGame(addresses.length > 0 ? addresses[0] : address(0));
-    }
-
-    /// @dev Internal set-once game address setter.
-    ///      Reverts if attempting to change after initial set.
-    function _setGame(address gameAddr) private {
-        if (gameAddr == address(0)) return;
-        address current = address(game);
-        if (current == address(0)) {
-            game = IDegenerusGame(gameAddr);
-        } else if (gameAddr != current) {
-            revert E();
-        }
     }
 
     /*╔══════════════════════════════════════════════════════════════════════╗

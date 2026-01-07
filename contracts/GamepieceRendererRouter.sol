@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+import {DeployConstants} from "./DeployConstants.sol";
+
 /// @notice Token metadata renderer interface (gamepieces).
 interface ITokenRenderer {
     function tokenURI(
@@ -14,35 +16,20 @@ interface ITokenRenderer {
 /// @dev Uses staticcall and a fallback renderer to prevent tokenURI reverts.
 contract GamepieceRendererRouter is ITokenRenderer {
     error NotAdmin();
-    error InvalidRenderer();
 
     uint256 private constant PRIMARY_GAS = 1_000_000;
     uint256 private constant MIN_FALLBACK_GAS = 200_000;
 
-    address public immutable admin;
-    address public immutable fallbackRenderer;
+    address private constant admin = DeployConstants.ADMIN;
+    address public constant fallbackRenderer = DeployConstants.RENDERER_REGULAR;
     address public primary;
     event PrimaryRendererUpdated(address indexed previous, address indexed next);
-
-    constructor(address admin_, address fallbackRenderer_, address primary_) {
-        if (admin_ == address(0) || fallbackRenderer_ == address(0)) revert InvalidRenderer();
-        admin = admin_;
-        fallbackRenderer = fallbackRenderer_;
-        primary = primary_;
-    }
 
     function setPrimary(address newRenderer) public {
         if (msg.sender != admin) revert NotAdmin();
         address prev = primary;
         primary = newRenderer;
         emit PrimaryRendererUpdated(prev, newRenderer);
-    }
-
-    /// @notice Wire or update the active renderer.
-    /// @dev Expects addresses[0] = primary renderer.
-    function wire(address[] calldata addresses) external {
-        if (addresses.length == 0 || addresses[0] == address(0)) revert InvalidRenderer();
-        setPrimary(addresses[0]);
     }
 
     function tokenURI(

@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {IDegenerusGame} from "./interfaces/IDegenerusGame.sol";
+import {DeployConstants} from "./DeployConstants.sol";
 
 // ═══════════════════════════════════════════════════════════════════════════════════════════════════
 // @title DegenerusAffiliate
@@ -59,17 +60,15 @@ import {IDegenerusGame} from "./interfaces/IDegenerusGame.sol";
 // │     • consumePresaleCoin(): coin only                                                           │
 // │     • addPresaleCoinCredit(): coin, bonds, or bondsAdmin                                        │
 // │     • shutdownPresale(): bonds only                                                             │
-// │     • wire(): bondsAdmin only                                                                   │
 // │                                                                                                 │
-// │  2. ONE-TIME WIRING                                                                             │
-// │     • Each external contract address can only be set once                                       │
+// │  2. FIXED ADDRESSES                                                                            │
+// │     • External contract addresses are fixed at deploy time                                      │
 // │     • Prevents malicious re-pointing after deployment                                           │
-// │     • AlreadyConfigured guard on all setters                                                    │
 // │                                                                                                 │
 // │  3. REFERRAL LOCKING                                                                            │
 // │     • Invalid referral attempts (self-referral, unknown code) lock the slot                     │
-// │     • Locked slots use REF_CODE_LOCKED sentinel (bytes32(1))                                    │                        │
-// │     • Locking only active after game is wired (referralLocksActive)                             │
+// │     • Locked slots use REF_CODE_LOCKED sentinel (bytes32(1))                                    │
+// │     • Locking active only after presale shutdown                                                 │
 // │                                                                                                 │
 // │  4. CEI PATTERN                                                                                 │
 // │     • consumePresaleCoin(): zeros balance before returning amount                               │
@@ -90,7 +89,7 @@ import {IDegenerusGame} from "./interfaces/IDegenerusGame.sol";
 // ├─────────────────────────────────────────────────────────────────────────────────────────────────┤
 // │                                                                                                 │
 // │  • bonds: Trusted to call payAffiliate with correct amounts/parameters                          │
-// │  • bondsAdmin: Trusted to wire dependencies and apply admin credits                             │
+// │  • bondsAdmin: Trusted to apply admin credits                                                   │
 // │  • coin: Trusted to correctly process creditFlip and affiliateQuestReward                       │
 // │  • gamepieces: Trusted to call payAffiliate with valid purchase data                            │
 // │  • degenerusGame: Trusted to return accurate level() for join tracking                          │
@@ -161,14 +160,8 @@ contract DegenerusAffiliate {
     /// @notice Thrown when a function restricted to bonds is called by another address.
     error OnlyBonds();
 
-    /// @notice Thrown when a function restricted to admin is called by another address.
-    error OnlyAdmin();
-
     /// @notice Thrown when caller is not in the authorized set (coin, bonds, bondsAdmin, gamepieces).
     error OnlyAuthorized();
-
-    /// @notice Thrown when attempting to re-wire an already-configured contract address.
-    error AlreadyConfigured();
 
     /// @notice Thrown when attempting to create an affiliate code with zero or reserved value.
     error Zero();
@@ -240,32 +233,26 @@ contract DegenerusAffiliate {
     bytes32 private constant REF_CODE_LOCKED = bytes32(uint256(1));
 
     // =====================================================================
-    //                      IMMUTABLE / WIRING
+    //                           CONSTANTS
     // =====================================================================
 
-    /// @notice DegenerusBonds contract address (set at construction, immutable).
+    /// @notice DegenerusBonds contract address (constant).
     /// @dev Primary caller for payAffiliate() during bond purchases.
     ///      Also authorized for shutdownPresale() and addPresaleCoinCredit().
-    address public immutable bonds;
+    address private constant bonds = DeployConstants.BONDS;
 
-    /// @notice DegenerusAdmin address (set at construction, immutable).
-    /// @dev Authorized for wire() and addPresaleCoinCredit() as fallback admin.
-    address public immutable bondsAdmin;
+    /// @notice DegenerusAdmin address (constant).
+    /// @dev Authorized for addPresaleCoinCredit() as fallback admin.
+    address private constant bondsAdmin = DeployConstants.ADMIN;
 
-    /// @notice DegenerusCoin contract for FLIP token operations.
-    /// @dev Set once via wire(). Used for creditFlip/creditFlipBatch/affiliateQuestReward.
-    ///      SECURITY: One-time wiring prevents malicious re-pointing.
-    IDegenerusCoinAffiliate private coin;
+    /// @notice DegenerusCoin contract for FLIP token operations (constant).
+    IDegenerusCoinAffiliate private constant coin = IDegenerusCoinAffiliate(DeployConstants.COIN);
 
-    /// @notice DegenerusGame contract for level queries.
-    /// @dev Set once via wire(). Used to record referralJoinLevel and enable referral locking.
-    ///      SECURITY: One-time wiring prevents malicious re-pointing.
-    IDegenerusGame private degenerusGame;
+    /// @notice DegenerusGame contract for level queries (constant).
+    IDegenerusGame private constant degenerusGame = IDegenerusGame(DeployConstants.GAME);
 
-    /// @notice DegenerusGamepieces contract address for affiliate payout access control.
-    /// @dev Set once via wire(). Used to authorize payAffiliate() callers.
-    ///      SECURITY: One-time wiring prevents malicious re-pointing.
-    address private degenerusGamepieces;
+    /// @notice DegenerusGamepieces contract address for affiliate payout access control (constant).
+    address private constant degenerusGamepieces = DeployConstants.GAMEPIECES;
 
     // =====================================================================
     //                        AFFILIATE STATE
@@ -288,7 +275,7 @@ contract DegenerusAffiliate {
 
     /// @notice Records the game level when a player's referral was established.
     /// @dev Used by _referralRewardScaleBps() to calculate reward decay.
-    ///      Level 0 = presale/unwired join; decay starts after 50 levels.
+    ///      Level 0 = presale/early join; decay starts after 50 levels.
     mapping(address => uint24) public referralJoinLevel;
 
     /// @notice Presale-era affiliate earnings awaiting claim.
@@ -313,122 +300,14 @@ contract DegenerusAffiliate {
     ///      - Cannot be unset (one-way state transition)
     bool private presaleShutdown;
 
-    /// @notice Flag enabling referral slot locking on invalid attempts.
-    /// @dev Activated when degenerusGame is wired (game has started).
-    ///      When true, invalid referral attempts lock the slot permanently.
-    ///      Prevents gaming by repeatedly trying codes until finding valid one.
-    bool private referralLocksActive;
-
     // =====================================================================
     //                           CONSTRUCTOR
     // =====================================================================
 
     /**
      * @notice Initialize affiliate contract with trusted contract addresses.
-     * @dev Both addresses are immutable after deployment.
-     *
-     * DEPLOYMENT ORDER:
-     * 1. Deploy DegenerusBonds
-     * 2. Deploy DegenerusAffiliate(bonds, bondsAdmin)
-     * 3. Call wire() to connect coin, game, gamepieces
-     *
-     * @param bonds_ Address of DegenerusBonds contract (primary caller).
-     * @param bondsAdmin_ Address of DegenerusAdmin (admin fallback).
+     * @dev All dependencies are fixed at deploy time via DeployConstants.
      */
-    constructor(address bonds_, address bondsAdmin_) {
-        // SECURITY: Prevent zero addresses which would brick access control.
-        if (bonds_ == address(0) || bondsAdmin_ == address(0)) revert ZeroAddress();
-        bonds = bonds_;
-        bondsAdmin = bondsAdmin_;
-    }
-
-    // =====================================================================
-    //                            WIRING
-    // =====================================================================
-
-    /**
-     * @notice Wire external contract dependencies via an address array.
-     * @dev Called by bondsAdmin during ecosystem setup.
-     *
-     * ARRAY FORMAT: [coin, game, gamepieces]
-     * - Index 0: DegenerusCoin address
-     * - Index 1: DegenerusGame address
-     * - Index 2: DegenerusGamepieces address
-     *
-     * SECURITY:
-     * - Each address can only be set once (AlreadyConfigured guard)
-     * - Passing existing address is allowed (idempotent)
-     * - Passing address(0) skips that slot (except coin which requires valid addr)
-     *
-     * @param addresses Array of contract addresses to wire.
-     */
-    function wire(address[] calldata addresses) external {
-        // SECURITY: Only bondsAdmin can wire contracts.
-        address admin = bondsAdmin;
-        if (msg.sender != admin) revert OnlyAdmin();
-        _setCoin(addresses.length > 0 ? addresses[0] : address(0));
-        _setGame(addresses.length > 1 ? addresses[1] : address(0));
-        _setGamepieces(addresses.length > 2 ? addresses[2] : address(0));
-    }
-
-    /**
-     * @notice Internal setter for coin contract address.
-     * @dev Requires non-zero address if coin not yet set.
-     *      SECURITY: One-time wiring pattern prevents malicious re-pointing.
-     * @param coinAddr Address of DegenerusCoin contract.
-     */
-    function _setCoin(address coinAddr) private {
-        if (coinAddr == address(0)) {
-            // Zero passed but coin already set = no-op; zero with no coin = error.
-            if (address(coin) == address(0)) revert ZeroAddress();
-            return;
-        }
-        address current = address(coin);
-        if (current == address(0)) {
-            coin = IDegenerusCoinAffiliate(coinAddr);
-        } else if (coinAddr != current) {
-            // SECURITY: Prevent re-pointing to different address.
-            revert AlreadyConfigured();
-        }
-        // Same address = idempotent, no error.
-    }
-
-    /**
-     * @notice Internal setter for game contract address.
-     * @dev Activates referralLocksActive when first set.
-     *      SECURITY: One-time wiring pattern prevents malicious re-pointing.
-     * @param gameAddr Address of DegenerusGame contract.
-     */
-    function _setGame(address gameAddr) private {
-        if (gameAddr == address(0)) return; // Skip if not provided.
-        address current = address(degenerusGame);
-        if (current == address(0)) {
-            degenerusGame = IDegenerusGame(gameAddr);
-            // IMPORTANT: Enable referral locking once game is live.
-            // This prevents players from repeatedly trying codes until finding a valid one.
-            referralLocksActive = true;
-        } else if (gameAddr != current) {
-            // SECURITY: Prevent re-pointing to different address.
-            revert AlreadyConfigured();
-        }
-    }
-
-    /**
-     * @notice Internal setter for gamepieces contract address.
-     * @dev SECURITY: One-time wiring pattern prevents malicious re-pointing.
-     * @param gamepiecesAddr Address of DegenerusGamepieces contract.
-     */
-    function _setGamepieces(address gamepiecesAddr) private {
-        if (gamepiecesAddr == address(0)) return; // Skip if not provided.
-        address current = degenerusGamepieces;
-        if (current == address(0)) {
-            degenerusGamepieces = gamepiecesAddr;
-        } else if (gamepiecesAddr != current) {
-            // SECURITY: Prevent re-pointing to different address.
-            revert AlreadyConfigured();
-        }
-    }
-
     // =====================================================================
     //                    EXTERNAL PLAYER ENTRYPOINTS
     // =====================================================================
@@ -487,7 +366,7 @@ contract DegenerusAffiliate {
         if (gameAddr != address(0)) {
             _recordReferralJoinLevel(msg.sender, degenerusGame.level());
         } else {
-            // Presale/unwired: record join at level 0 for decay tracking.
+            // Presale/early: record join at level 0 for decay tracking.
             _recordReferralJoinLevel(msg.sender, 0);
         }
         emit Affiliate(0, code_, msg.sender); // 0 = player referred
@@ -589,9 +468,6 @@ contract DegenerusAffiliate {
             // During presale, only bond purchases accrue rewards.
             // This keeps presale distribution anchored to bond purchases.
             if (caller != bonds) return 0;
-        } else {
-            // Post-presale requires coin to be wired for distribution.
-            if (coinAddr == address(0)) return 0;
         }
 
         // ─────────────────────────────────────────────────────────────────
@@ -608,9 +484,9 @@ contract DegenerusAffiliate {
             // No stored code - try to use the provided code.
             AffiliateCodeInfo storage candidate = affiliateCode[code];
             if (candidate.owner == address(0) || candidate.owner == sender) {
-                // Invalid code or self-referral: lock slot if game is active.
+                // Invalid code or self-referral: lock slot after presale.
                 // SECURITY: Prevents gaming by trying codes until one works.
-                if (referralLocksActive) {
+                if (!presaleOpen) {
                     playerReferralCode[sender] = REF_CODE_LOCKED;
                 }
                 return 0;
@@ -626,7 +502,7 @@ contract DegenerusAffiliate {
             if (info.owner == address(0)) {
                 // Edge case: stored code became invalid (shouldn't happen).
                 // Lock or clear the slot.
-                playerReferralCode[sender] = referralLocksActive ? REF_CODE_LOCKED : bytes32(0);
+                playerReferralCode[sender] = presaleOpen ? bytes32(0) : REF_CODE_LOCKED;
                 return 0;
             }
         }
@@ -637,7 +513,7 @@ contract DegenerusAffiliate {
         address affiliateAddr = info.owner;
         // SECURITY: Double-check no self-referral (belt-and-suspenders).
         if (affiliateAddr == address(0) || affiliateAddr == sender) {
-            playerReferralCode[sender] = referralLocksActive ? REF_CODE_LOCKED : bytes32(0);
+            playerReferralCode[sender] = presaleOpen ? bytes32(0) : REF_CODE_LOCKED;
             return 0;
         }
         uint8 rakebackPct = info.rakeback;

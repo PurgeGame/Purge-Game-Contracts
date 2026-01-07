@@ -24,6 +24,29 @@ npm run compile
 npm test
 ```
 
+## Deploy Constants
+
+This repo uses precomputed addresses in `contracts/DeployConstants.sol`. Generate it with:
+
+```bash
+node scripts/deploy/precompute-addresses.js --config scripts/deploy/deploy-config.sepolia.json
+node scripts/deploy/precompute-addresses.js --config scripts/deploy/deploy-config.mainnet.json
+```
+
+Update `deployer` and `startNonce` in the config before generating. VRF settings are still wired post-deploy.
+
+CLI alternative (no config file edit):
+
+```bash
+node scripts/deploy/build-constants.js --deployer 0xYOUR_DEPLOYER --startNonce 0 --network sepolia
+```
+
+All-in-one (generate constants, compile, deploy in order, verify addresses):
+
+```bash
+node scripts/deploy/deploy-and-verify.js --deployer 0xYOUR_DEPLOYER --startNonce 0 --network sepolia
+```
+
 ## Documentation
 
 - [Game & Economy Overview](GAME_AND_ECON_OVERVIEW.md) - Player-facing design

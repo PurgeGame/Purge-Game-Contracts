@@ -80,12 +80,12 @@ pragma solidity ^0.8.26;
 ║     • Safe to call externally for off-chain metadata generation                                       ║
 ║                                                                                                       ║
 ║  2. EXTERNAL CALL SAFETY                                                                              ║
-║     • All external calls are to trusted, immutable addresses                                          ║
+║     • All external calls are to trusted, constant addresses                                           ║
 ║     • ownerOf call wrapped in try/catch to handle burned tokens                                       ║
 ║     • No value transfers, no callbacks                                                                ║
 ║                                                                                                       ║
 ║  3. ACCESS CONTROL                                                                                    ║
-║     • wire() is onlyAdmin (one-time setup)                                                            ║
+║     • Constructor wiring via DeployConstants (no admin setters)                                       ║
 ║     • All other functions are view-only                                                               ║
 ║                                                                                                       ║
 ║  4. INPUT HANDLING                                                                                    ║
@@ -100,7 +100,7 @@ pragma solidity ^0.8.26;
 ║  2. TrophySvgAssets provides safe SVG animation markup                                                ║
 ║  3. IconColorRegistry returns validated hex color strings                                             ║
 ║  4. DegenerusAffiliate correctly reports referrer relationships                                       ║
-║  5. Admin wires correct NFT address during setup                                                      ║
+║  5. DeployConstants provides correct NFT address at deployment                                        ║
 ║                                                                                                       ║
 ╠═══════════════════════════════════════════════════════════════════════════════════════════════════════╣
 ║  GAS OPTIMIZATIONS                                                                                    ║
@@ -115,6 +115,7 @@ pragma solidity ^0.8.26;
 ╚═══════════════════════════════════════════════════════════════════════════════════════════════════════╝*/
 
 import "@openzeppelin/contracts/utils/Strings.sol";
+import {DeployConstants} from "./DeployConstants.sol";
 import "./interfaces/IDegenerusAffiliate.sol";
 import "./interfaces/IconRendererTypes.sol";
 import {ITrophySvgAssets} from "./TrophySvgAssets.sol";
@@ -141,10 +142,6 @@ interface IIconRendererTrophy32Svg {
     /// @param params Trophy parameters (tokenId, type, level, etc.)
     /// @return The complete SVG markup string
     function trophySvg(SvgParams calldata params) external view returns (string memory);
-
-    /// @notice Wire the NFT contract address (one-time admin setup)
-    /// @param addresses Array where addresses[0] is the trophy NFT contract
-    function wire(address[] calldata addresses) external;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -165,26 +162,23 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg {
     error E();
 
     // ─────────────────────────────────────────────────────────────────────
-    // IMMUTABLES & WIRING
+    // CONSTANTS & WIRING
     // ─────────────────────────────────────────────────────────────────────
 
     /// @dev Affiliate program for referrer color cascade (optional)
-    address private immutable affiliateProgram;
+    address private constant affiliateProgram = DeployConstants.AFFILIATE;
 
     /// @dev Icon path data source
-    IIcons32 private immutable icons;
+    IIcons32 private constant icons = IIcons32(DeployConstants.ICONS_32);
 
     /// @dev Color customization registry
-    IColorRegistry private immutable registry;
+    IColorRegistry private constant registry = IColorRegistry(DeployConstants.ICON_COLOR_REGISTRY);
 
     /// @dev Trophy SVG assets (BAF animation)
-    ITrophySvgAssets private immutable assets;
+    ITrophySvgAssets private constant assets = ITrophySvgAssets(DeployConstants.TROPHY_SVG_ASSETS);
 
-    /// @dev Admin contract for wire() authorization
-    address public immutable admin;
-
-    /// @dev Trophy NFT contract (set once via wire())
-    IERC721Lite private nft;
+    /// @dev Trophy NFT contract
+    IERC721Lite private constant nft = IERC721Lite(DeployConstants.TROPHIES);
 
     // ─────────────────────────────────────────────────────────────────────
     // CONSTANTS
@@ -213,35 +207,6 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg {
     int256 private constant VIEWBOX_HEIGHT_1E6 = 120 * 1_000_000;
     int256 private constant TOP_AFFILIATE_SHIFT_DOWN_1E6 = 3_200_000;
     int256 private constant TOP_AFFILIATE_UPWARD_1E6 = (VIEWBOX_HEIGHT_1E6 * 4) / 100; // 4% of total height
-
-    constructor(address icons_, address registry_, address assets_, address affiliate_, address admin_) {
-        affiliateProgram = affiliate_;
-        icons = IIcons32(icons_);
-        registry = IColorRegistry(registry_);
-        if (assets_ == address(0)) revert E();
-        assets = ITrophySvgAssets(assets_);
-        if (admin_ == address(0)) revert E();
-        admin = admin_;
-    }
-
-    modifier onlyAdmin() {
-        if (msg.sender != admin) revert E();
-        _;
-    }
-
-    function wire(address[] calldata addresses) external override onlyAdmin {
-        _setNft(addresses.length > 0 ? addresses[0] : address(0));
-    }
-
-    function _setNft(address nft_) private {
-        if (nft_ == address(0)) return;
-        address current = address(nft);
-        if (current == address(0)) {
-            nft = IERC721Lite(nft_);
-        } else if (current != nft_) {
-            revert E();
-        }
-    }
 
     function trophySvg(SvgParams calldata params) external view override returns (string memory) {
         uint256 tokenId = params.tokenId;
@@ -398,15 +363,8 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg {
         return defColor;
     }
 
-    function _affiliateProgram() private view returns (IDegenerusAffiliate) {
-        address affiliate = affiliateProgram;
-        return affiliate == address(0) ? IDegenerusAffiliate(address(0)) : IDegenerusAffiliate(affiliate);
-    }
-
     function _referrer(address user) private view returns (address) {
-        IDegenerusAffiliate affiliate = _affiliateProgram();
-        if (address(affiliate) == address(0)) return address(0);
-        return affiliate.getReferrer(user);
+        return IDegenerusAffiliate(affiliateProgram).getReferrer(user);
     }
 
     function _svgHeader(string memory borderColor, string memory squareFill) private pure returns (string memory) {

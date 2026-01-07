@@ -17,7 +17,7 @@ pragma solidity ^0.8.26;
 ║  │                                                                                                  │ ║
 ║  │   ┌─────────────┐     6 second loop     ┌─────────────┐                                         │ ║
 ║  │   │   Face A    │ ◄──────────────────── │   Face B    │                                         │ ║
-║  │   │  (PURGE)    │ ──────────────────► │  (Ethereum) │                                         │ ║
+║  │   │  (XRP)    │ ──────────────────► │  (Ethereum) │                                         │ ║
 ║  │   │   Red/111   │    Y-axis flip        │  Green/111  │                                         │ ║
 ║  │   └─────────────┘                       └─────────────┘                                         │ ║
 ║  │                                                                                                  │ ║
@@ -95,7 +95,6 @@ interface ITrophySvgAssets {
 /// @notice On-chain storage for complex trophy SVG animations
 /// @dev Stateless contract providing pure SVG string returns
 contract TrophySvgAssets is ITrophySvgAssets {
-
     /// @notice Get the BAF (Burn and Flip) trophy animated coin SVG
     /// @dev Returns a complete SVG group (<g>) containing:
     ///      - Two coin face symbols (faceA = Purge/Red, faceB = Ethereum/Green)

@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import "./interfaces/IDegenerusQuests.sol";
 import "./interfaces/IDegenerusGame.sol";
+import {DeployConstants} from "./DeployConstants.sol";
 
 /**
  * @title DegenerusQuests
@@ -21,7 +22,7 @@ import "./interfaces/IDegenerusGame.sol";
  * ─────────────────────────────────────────────────────────────────────────────
  * • All player-action handlers are coin-gated via `onlyCoin` modifier
  * • Quest normalization allows coin OR game to trigger via `onlyCoinOrGame`
- * • Admin-only `wire()` for one-time game address binding
+ * • Game address fixed at deploy time
  * • No external calls to untrusted contracts — only reads trusted `questGame`
  * • No ETH handling or callbacks — reentrancy is not a concern
  *
@@ -53,10 +54,6 @@ contract DegenerusQuests is IDegenerusQuests {
 
     /// @dev Thrown when caller is not the authorized coin contract.
     error OnlyCoin();
-    /// @dev Thrown when caller is not the admin address.
-    error OnlyAdmin();
-    /// @dev Thrown when attempting to re-wire the game address.
-    error AlreadyWired();
     /// @dev Thrown when quest day is invalid (unused in current impl but reserved).
     error InvalidQuestDay();
     /// @dev Thrown when entropy value is invalid (unused in current impl but reserved).
@@ -143,19 +140,15 @@ contract DegenerusQuests is IDegenerusQuests {
     // =========================================================================
 
     /// @notice The coin contract authorized to drive quest logic.
-    /// @dev Set at construction; all handle* functions require msg.sender == coin.
-    address public immutable coin;
-
-    /// @notice The admin address authorized for one-time wiring.
-    address public immutable admin;
+    /// @dev Constant; all handle* functions require msg.sender == coin.
+    address private constant coin = DeployConstants.COIN;
 
     // =========================================================================
     //                              STATE VARIABLES
     // =========================================================================
 
     /// @dev Reference to the Degenerus game contract for state queries.
-    ///      Set via `wire()` and cannot be changed after initial binding.
-    IDegenerusGame private questGame;
+    IDegenerusGame private constant questGame = IDegenerusGame(DeployConstants.GAME);
 
     // =========================================================================
     //                                 STRUCTS
@@ -257,18 +250,9 @@ contract DegenerusQuests is IDegenerusQuests {
     // =========================================================================
 
     /**
-     * @notice Deploys the quest contract with immutable coin and admin references.
-     * @param coin_ Coin contract authorized to drive quest logic (all handle* calls).
-     * @param admin_ Admin address authorized to wire the game contract.
-     * @dev Both addresses are immutable after deployment. The game contract must
-     *      be wired separately via `wire()` to complete initialization.
+     * @notice Deploys the quest contract with fixed coin and game references.
+     * @dev All dependencies are provided via DeployConstants.
      */
-    constructor(address coin_, address admin_) {
-        if (coin_ == address(0) || admin_ == address(0)) revert ZeroAddress();
-        coin = coin_;
-        admin = admin_;
-    }
-
     // =========================================================================
     //                              MODIFIERS
     // =========================================================================
@@ -284,37 +268,6 @@ contract DegenerusQuests is IDegenerusQuests {
         address sender = msg.sender;
         if (sender != coin && sender != address(questGame)) revert OnlyCoin();
         _;
-    }
-
-    /// @dev Restricts access to the admin address only.
-    modifier onlyAdmin() {
-        if (msg.sender != admin) revert OnlyAdmin();
-        _;
-    }
-
-    // =========================================================================
-    //                           ADMIN FUNCTIONS
-    // =========================================================================
-
-    /**
-     * @notice Wire the Degenerus game contract reference.
-     * @param addresses Array where addresses[0] is the game contract.
-     * @dev Set-once pattern: reverts with AlreadyWired if called again with a
-     *      different address. Safe to call multiple times with the same address.
-     */
-    function wire(address[] calldata addresses) external onlyAdmin {
-        _setGame(addresses.length > 0 ? addresses[0] : address(0));
-    }
-
-    /// @dev Internal setter for game address with set-once protection.
-    function _setGame(address gameAddr) private {
-        if (gameAddr == address(0)) return;
-        address current = address(questGame);
-        if (current == address(0)) {
-            questGame = IDegenerusGame(gameAddr);
-        } else if (gameAddr != current) {
-            revert AlreadyWired();
-        }
     }
 
     // =========================================================================

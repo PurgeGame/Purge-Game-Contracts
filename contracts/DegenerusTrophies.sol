@@ -44,7 +44,7 @@ pragma solidity ^0.8.26;
 ║  │        │                                   │                                                     │ ║
 ║  │        └─────────────────────────► mintAffiliate() ─────────► _mint() ────► Transfer event      │ ║
 ║  │                                                                                                  │ ║
-║  │   Note: All mints are gated by onlyGame modifier. Game address is set once via wire().          │ ║
+║  │   Note: All mints are gated by onlyGame modifier. Game address is fixed at deploy.             │ ║
 ║  └──────────────────────────────────────────────────────────────────────────────────────────────────┘ ║
 ║                                                                                                       ║
 ║  KEY INVARIANTS                                                                                       ║
@@ -66,9 +66,9 @@ pragma solidity ^0.8.26;
 ║     • No internal _transfer function exists                                                           ║
 ║                                                                                                       ║
 ║  2. ACCESS CONTROL                                                                                    ║
-║     • admin: immutable, set at construction, can only call wire()                                     ║
-║     • game: one-time set via wire(), cannot be changed after                                          ║
-║     • renderer: immutable, set at construction (use a router for upgradeable visuals)                ║
+║     • admin: none (addresses fixed at deploy)                                                        ║
+║     • game: constant, set at construction                                                            ║
+║     • renderer: constant, set at construction (use a router for upgradeable visuals)                 ║
 ║                                                                                                       ║
 ║  3. REENTRANCY                                                                                        ║
 ║     • No ETH handling (no payable functions, no withdrawals)                                          ║
@@ -84,7 +84,7 @@ pragma solidity ^0.8.26;
 ║  TRUST ASSUMPTIONS                                                                                    ║
 ║  ─────────────────                                                                                    ║
 ║                                                                                                       ║
-║  1. Admin is trusted to wire the correct game address                                                 ║
+║  1. Deployer is trusted to set the correct game address                                                ║
 ║  2. Game contract is trusted to mint trophies fairly and correctly                                    ║
 ║  3. Renderer contract is trusted to return valid tokenURI data                                        ║
 ║  4. Renderer will not revert maliciously (would block tokenURI for all tokens)                        ║
@@ -103,6 +103,7 @@ pragma solidity ^0.8.26;
 */
 
 import "./interfaces/IDegenerusTrophies.sol";
+import {DeployConstants} from "./DeployConstants.sol";
 
 /// @title DegenerusTrophies
 /// @notice Soulbound ERC721 trophies for Degenerus game achievements
@@ -119,10 +120,6 @@ contract DegenerusTrophies is IDegenerusTrophies {
     error InvalidRenderer();
     /// @dev Address parameter is zero when non-zero required
     error ZeroAddress();
-    /// @dev Caller is not the admin
-    error OnlyAdmin();
-    /// @dev Game address has already been set (one-time wiring)
-    error GameAlreadySet();
     /// @dev All transfer operations are permanently disabled (soulbound)
     error TransfersDisabled();
 
@@ -178,14 +175,12 @@ contract DegenerusTrophies is IDegenerusTrophies {
     uint256 private constant LOW_96_MASK = (uint256(1) << 96) - 1;
 
     // ─────────────────────────────────────────────────────────────────────
-    // IMMUTABLES & WIRING
+    // CONSTANTS & WIRING
     // ─────────────────────────────────────────────────────────────────────
-    /// @notice The game contract authorized to mint trophies (set once via wire())
-    address public game;
-    /// @notice The renderer contract for generating tokenURI metadata
-    address public immutable renderer;
-    /// @dev Admin address authorized to call wire() (set at construction)
-    address private immutable admin;
+    /// @notice The game contract authorized to mint trophies (constant).
+    address private constant game = DeployConstants.GAME;
+    /// @notice The renderer contract for generating tokenURI metadata (constant).
+    address private constant renderer = DeployConstants.TROPHY_RENDERER_ROUTER;
 
     // ─────────────────────────────────────────────────────────────────────
     // STORAGE
@@ -202,16 +197,7 @@ contract DegenerusTrophies is IDegenerusTrophies {
     // ─────────────────────────────────────────────────────────────────────
     // CONSTRUCTOR
     // ─────────────────────────────────────────────────────────────────────
-    /// @notice Deploy the trophy contract with renderer and admin addresses
-    /// @param renderer_ Address of the trophy renderer contract (immutable)
-    /// @param admin_ Address authorized to wire the game contract (immutable)
-    constructor(address renderer_, address admin_) {
-        if (renderer_ == address(0)) revert InvalidRenderer();
-        if (admin_ == address(0)) revert ZeroAddress();
-        admin = admin_;
-        renderer = renderer_;
-    }
-
+    /// @notice Deploy the trophy contract with fixed renderer and game addresses.
     // ─────────────────────────────────────────────────────────────────────
     // MODIFIERS
     // ─────────────────────────────────────────────────────────────────────
@@ -220,25 +206,6 @@ contract DegenerusTrophies is IDegenerusTrophies {
         address g = game;
         if (msg.sender != g) revert NotGame();
         _;
-    }
-
-    /// @dev Restricts function to the admin address
-    modifier onlyAdmin() {
-        if (msg.sender != admin) revert OnlyAdmin();
-        _;
-    }
-
-    // ─────────────────────────────────────────────────────────────────────
-    // ADMIN FUNCTIONS
-    // ─────────────────────────────────────────────────────────────────────
-    /// @notice Wire the game contract address (one-time operation)
-    /// @dev Can only be called once. Silently returns if addresses array is empty.
-    /// @param addresses Array where addresses[0] is the game contract address
-    function wire(address[] calldata addresses) external onlyAdmin {
-        address game_ = addresses.length > 0 ? addresses[0] : address(0);
-        if (game_ == address(0)) return;
-        if (game != address(0)) revert GameAlreadySet();
-        game = game_;
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -358,7 +325,7 @@ contract DegenerusTrophies is IDegenerusTrophies {
     }
 
     /// @notice Get the metadata URI for a token
-    /// @dev Delegates to the immutable renderer contract
+    /// @dev Delegates to the constant renderer contract
     /// @param tokenId The token ID to query
     /// @return The metadata URI string
     function tokenURI(uint256 tokenId) external view returns (string memory) {

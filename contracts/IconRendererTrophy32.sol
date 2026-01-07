@@ -73,7 +73,7 @@ pragma solidity ^0.8.26;
 ║     • Safe to call externally for metadata generation                                                 ║
 ║                                                                                                       ║
 ║  2. ACCESS CONTROL                                                                                    ║
-║     • wire() is onlyAdmin for one-time setup                                                          ║
+║     • Constructor wiring via DeployConstants (no admin setters)                                       ║
 ║     • Color customization proxied to registry with msg.sender verification                            ║
 ║                                                                                                       ║
 ║  3. INPUT VALIDATION                                                                                  ║
@@ -93,6 +93,7 @@ pragma solidity ^0.8.26;
 
 import "@openzeppelin/contracts/utils/Base64.sol";
 import "@openzeppelin/contracts/utils/Strings.sol";
+import {DeployConstants} from "./DeployConstants.sol";
 import "./interfaces/IconRendererTypes.sol";
 import {IIconRendererTrophy32Svg} from "./IconRendererTrophy32Svg.sol";
 
@@ -119,23 +120,21 @@ contract IconRendererTrophy32 {
     uint16 private constant BAF_TRAIT_SENTINEL = 0xFFFA;
 
     // ─────────────────────────────────────────────────────────────────────
-    // IMMUTABLES & WIRING
+    // CONSTANTS & WIRING
     // ─────────────────────────────────────────────────────────────────────
 
     /// @dev Icon data source for symbol names
-    IIcons32 private immutable icons;
+    IIcons32 private constant icons = IIcons32(DeployConstants.ICONS_32);
 
     /// @dev Color customization registry
-    IColorRegistry private immutable registry;
-
-    /// @dev Admin contract for wire() authorization
-    address public immutable admin;
+    IColorRegistry private constant registry = IColorRegistry(DeployConstants.ICON_COLOR_REGISTRY);
 
     /// @dev SVG generation engine
-    IIconRendererTrophy32Svg private immutable svgRenderer;
+    IIconRendererTrophy32Svg private constant svgRenderer =
+        IIconRendererTrophy32Svg(DeployConstants.RENDERER_TROPHY_SVG);
 
-    /// @dev Trophy NFT contract (set once via wire())
-    IERC721Lite private nft;
+    /// @dev Trophy NFT contract
+    IERC721Lite private constant nft = IERC721Lite(DeployConstants.TROPHIES);
 
     // ─────────────────────────────────────────────────────────────────────
     // ERRORS
@@ -143,15 +142,6 @@ contract IconRendererTrophy32 {
 
     /// @dev Generic error for unauthorized access or invalid state
     error E();
-
-    constructor(address icons_, address registry_, address svgRenderer_, address admin_) {
-        icons = IIcons32(icons_);
-        registry = IColorRegistry(registry_);
-        if (svgRenderer_ == address(0)) revert E();
-        svgRenderer = IIconRendererTrophy32Svg(svgRenderer_);
-        if (admin_ == address(0)) revert E();
-        admin = admin_;
-    }
 
     function setMyColors(
         string calldata outlineHex,
@@ -195,26 +185,6 @@ contract IconRendererTrophy32 {
         string calldata trophyHex
     ) external returns (bool) {
         return registry.setTopAffiliateColor(msg.sender, address(nft), tokenId, trophyHex);
-    }
-
-    modifier onlyAdmin() {
-        if (msg.sender != admin) revert E();
-        _;
-    }
-
-    /// @notice Wire NFT contract in a single call; callable only by the coin admin, set-once.
-    function wire(address[] calldata addresses) external onlyAdmin {
-        _setNft(addresses.length > 0 ? addresses[0] : address(0));
-    }
-
-    function _setNft(address nftAddr) private {
-        if (nftAddr == address(0)) return;
-        address current = address(nft);
-        if (current == address(0)) {
-            nft = IERC721Lite(nftAddr);
-        } else if (current != nftAddr) {
-            revert E();
-        }
     }
 
     function tokenURI(

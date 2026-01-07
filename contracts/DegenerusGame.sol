@@ -134,7 +134,7 @@ pragma solidity ^0.8.26;
 ║  6. DELEGATECALL SAFETY                                                                               ║
 ║     • Modules inherit DegenerusGameStorage for slot alignment                                         ║
 ║     • _revertDelegate bubbles up errors from module calls                                             ║
-║     • Modules are immutable addresses set in constructor                                              ║
+║     • Modules are constant addresses baked from DeployConstants                                       ║
 ║                                                                                                       ║
 ╠═══════════════════════════════════════════════════════════════════════════════════════════════════════╣
 ║  TRUST ASSUMPTIONS                                                                                    ║
@@ -186,6 +186,7 @@ import {
 } from "./interfaces/IDegenerusGameModules.sol";
 import {MintPaymentKind} from "./interfaces/IDegenerusGame.sol";
 import {DegenerusGameStorage} from "./storage/DegenerusGameStorage.sol";
+import {DeployConstants} from "./DeployConstants.sol";
 
 /*╔══════════════════════════════════════════════════════════════════════════════╗
   ║                     EXTERNAL INTERFACE DEFINITIONS                          ║
@@ -334,46 +335,46 @@ contract DegenerusGame is DegenerusGameStorage {
     event VrfCoordinatorUpdated(address indexed previous, address indexed current);
 
     /*╔══════════════════════════════════════════════════════════════════════╗
-      ║                      IMMUTABLE ADDRESSES                             ║
+      ║                   PRECOMPUTED ADDRESSES (CONSTANT)                   ║
       ╠══════════════════════════════════════════════════════════════════════╣
-      ║  Core contract references set at construction. Immutables provide    ║
-      ║  gas savings and security (cannot be changed post-deploy).           ║
+      ║  Core contract references are read from DeployConstants and baked   ║
+      ║  into bytecode. They cannot change after deployment.                ║
       ╚══════════════════════════════════════════════════════════════════════╝*/
 
     /// @notice The BURNIE ERC20 token contract.
     /// @dev Trusted for creditFlip, burnCoin, processCoinflipPayouts, etc.
-    IDegenerusCoin private immutable coin;
+    IDegenerusCoin private constant coin = IDegenerusCoin(DeployConstants.COIN);
 
     /// @notice The gamepieces NFT contract (ERC721).
     /// @dev Trusted for mint/burn/metadata operations.
-    IDegenerusGamepieces private immutable nft;
+    IDegenerusGamepieces private constant nft = IDegenerusGamepieces(DeployConstants.GAMEPIECES);
 
     /// @notice Lido stETH token contract.
     /// @dev Used for staking ETH and managing yield.
-    IStETH private immutable steth;
+    IStETH private constant steth = IStETH(DeployConstants.STETH_TOKEN);
 
     /// @notice DegenerusJackpots contract for decimator/BAF jackpots.
-    address private immutable jackpots;
+    address private constant jackpots = DeployConstants.JACKPOTS;
 
     /// @notice Delegate module for endgame settlement logic.
     /// @dev Called via delegatecall; shares storage layout.
-    address private immutable endgameModule;
+    address private constant endgameModule = DeployConstants.GAME_ENDGAME_MODULE;
 
     /// @notice Delegate module for jackpot distribution logic.
     /// @dev Called via delegatecall; shares storage layout.
-    address private immutable jackpotModule;
+    address private constant jackpotModule = DeployConstants.GAME_JACKPOT_MODULE;
 
     /// @notice Delegate module for mint packing and trait rebuild.
     /// @dev Called via delegatecall; shares storage layout.
-    address private immutable mintModule;
+    address private constant mintModule = DeployConstants.GAME_MINT_MODULE;
 
     /// @notice Delegate module for bond upkeep and staking.
     /// @dev Called via delegatecall; shares storage layout.
-    address private immutable bondModule;
+    address private constant bondModule = DeployConstants.GAME_BOND_MODULE;
 
     /// @notice Admin contract authorized for VRF config and quest module wiring.
     /// @dev Limited permissions: VRF rotation, quest wiring, ETH/stETH swaps.
-    address private immutable admin;
+    address private constant admin = DeployConstants.ADMIN;
 
     /*╔══════════════════════════════════════════════════════════════════════╗
       ║                        VRF CONFIGURATION                             ║
@@ -474,69 +475,25 @@ contract DegenerusGame is DegenerusGameStorage {
     /*╔══════════════════════════════════════════════════════════════════════╗
       ║                          CONSTRUCTOR                                 ║
       ╠══════════════════════════════════════════════════════════════════════╣
-      ║  Initialize all immutable references and set up initial approvals.  ║
+      ║  Initialize storage wiring and set up initial approvals.             ║
       ║  The constructor wires together the entire game ecosystem.          ║
       ╚══════════════════════════════════════════════════════════════════════╝*/
 
     /**
-     * @notice Initialize the game with all required contract references.
-     * @dev Sets immutable addresses and grants stETH approval to bonds.
-     *      SECURITY: All addresses should be validated before deployment.
-     *      Infinite approval to bonds is safe as bonds is a trusted contract.
-     *
-     * @param degenerusCoinContract Trusted BURNIE ERC20 / game coordinator address
-     * @param nftContract       ERC721 game contract
-     * @param endgameModule_    Delegate module handling endgame settlement
-     * @param jackpotModule_    Delegate module handling jackpot distribution
-     * @param mintModule_       Delegate module handling mint packing and trait rebuild helpers
-     * @param bondModule_       Delegate module handling bond upkeep, staking, and shutdown gameOvers
-     * @param stEthToken_       stETH token address (Lido)
-     * @param jackpots_         DegenerusJackpots contract address (wires Decimator/BAF jackpots)
-     * @param bonds_            Bonds contract address
-     * @param trophies_         Standalone trophy ERC721 contract (cosmetic only)
-     * @param affiliateProgram_ Affiliate program contract address (for payouts/trophies)
-     * @param vault_            Creator vault contract address
-     * @param admin_            VRF owner/admin contract authorized to rotate the coordinator/subscription on stalls
+     * @notice Initialize the game with precomputed contract references.
+     * @dev Addresses are read from DeployConstants. VRF config is wired later by the admin.
+     *      Infinite stETH approval to bonds is safe as bonds is a trusted contract.
      */
-    constructor(
-        address degenerusCoinContract,
-        address nftContract,
-        address endgameModule_,
-        address jackpotModule_,
-        address mintModule_,
-        address bondModule_,
-        address stEthToken_,
-        address jackpots_,
-        address bonds_,
-        address trophies_,
-        address affiliateProgram_,
-        address vault_,
-        address admin_
-    ) {
-        // Core contracts
-        coin = IDegenerusCoin(degenerusCoinContract);
-        nft = IDegenerusGamepieces(nftContract);
-
-        // Delegate modules (must inherit DegenerusGameStorage for slot alignment)
-        endgameModule = endgameModule_;
-        jackpotModule = jackpotModule_;
-        mintModule = mintModule_;
-        bondModule = bondModule_;
-
-        // Admin and external protocols
-        admin = admin_;
-        steth = IStETH(stEthToken_);
-        jackpots = jackpots_;
-
+    constructor() {
         // Storage-based addresses (from DegenerusGameStorage)
-        bonds = bonds_;
-        trophies = trophies_;
-        affiliateProgramAddr = affiliateProgram_;
-        vault = vault_;
+        bonds = DeployConstants.BONDS;
+        trophies = DeployConstants.TROPHIES;
+        affiliateProgramAddr = DeployConstants.AFFILIATE;
+        vault = DeployConstants.VAULT;
+        questModule = DeployConstants.QUESTS;
 
         // Grant infinite stETH approval to bonds for staking operations.
-        // SECURITY: bonds is a trusted immutable address.
-        if (!steth.approve(bonds_, type(uint256).max)) revert E();
+        if (!steth.approve(bonds, type(uint256).max)) revert E();
 
         // Record deployment time for liveness checks
         deployTimestamp = uint48(block.timestamp);
@@ -714,10 +671,9 @@ contract DegenerusGame is DegenerusGameStorage {
     }
 
     /*╔══════════════════════════════════════════════════════════════════════╗
-      ║                    ADMIN WIRING FUNCTIONS                            ║
+      ║                    ADMIN VRF FUNCTIONS                               ║
       ╠══════════════════════════════════════════════════════════════════════╣
-      ║  One-time setup functions called by admin during deployment phase.   ║
-      ║  These wire together the game ecosystem after contracts are deployed.║
+      ║  One-time VRF setup function called by admin during deployment phase.║
       ╚══════════════════════════════════════════════════════════════════════╝*/
 
     /// @notice One-time wiring of VRF config from the VRF admin contract.
@@ -743,21 +699,6 @@ contract DegenerusGame is DegenerusGameStorage {
         vrfSubscriptionId = subId;
         vrfKeyHash = keyHash_;
         emit VrfCoordinatorUpdated(current, coordinator_);
-    }
-
-    /// @notice One-time wiring of the quest module address.
-    /// @dev Access: admin only. Idempotent after first wire.
-    ///      SECURITY: Quest module cannot be changed once set.
-    /// @param questModule_ The quest module contract address.
-    function wireQuestModule(address questModule_) external {
-        if (msg.sender != admin) revert E();
-        if (questModule_ == address(0)) return;
-        address current = questModule;
-        if (current == address(0)) {
-            questModule = questModule_;
-        } else if (questModule_ != current) {
-            revert E();
-        }
     }
 
     /*╔══════════════════════════════════════════════════════════════════════╗
@@ -1627,7 +1568,7 @@ contract DegenerusGame is DegenerusGameStorage {
       ║  • jackpotModule  - Jackpot calculations and payouts                 ║
       ║                                                                      ║
       ║  SECURITY: delegatecall executes module code in this contract's      ║
-      ║  context, with access to all storage. Modules are immutable.         ║
+      ║  context, with access to all storage. Modules are constant.          ║
       ╚══════════════════════════════════════════════════════════════════════╝*/
 
     /// @dev Delegatecall into the endgame module to resolve settlement paths.
@@ -1974,9 +1915,7 @@ contract DegenerusGame is DegenerusGameStorage {
 
         uint256 pool = decimatorHundredPool;
 
-        address jackpotsAddr = jackpots;
-        if (jackpotsAddr == address(0)) revert E();
-        uint256 returnWei = IDegenerusJackpots(jackpotsAddr).runDecimatorJackpot(pool, lvl, rngWord);
+        uint256 returnWei = IDegenerusJackpots(jackpots).runDecimatorJackpot(pool, lvl, rngWord);
         uint256 netSpend = pool - returnWei;
         if (netSpend != 0) {
             // Reserve the full decimator pool in `claimablePool` immediately; player credits occur on claim.

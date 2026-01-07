@@ -137,11 +137,6 @@ interface IColorRegistry {
         string calldata trophyHex
     ) external returns (bool);
 
-    /// @notice Register an additional token contract for color customization
-    /// @dev Called by owner or renderer during wiring to enable trophy contracts
-    /// @param tokenContract The ERC721 contract address to allow
-    function addAllowedToken(address tokenContract) external;
-
     /// @notice Read a per-token color override
     /// @param tokenContract The ERC721 contract address
     /// @param tokenId The token ID

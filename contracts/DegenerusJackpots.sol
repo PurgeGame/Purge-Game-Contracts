@@ -84,7 +84,7 @@ pragma solidity ^0.8.26;
   ║  1. ACCESS CONTROL:                                                          ║
   ║     • onlyCoin: recordBafFlip, recordDecBurn (hooks from coin contract)      ║
   ║     • onlyGame: runBafJackpot, runDecimatorJackpot, consumeDecClaim          ║
-  ║     • bondsAdmin: one-time wire() function                                   ║
+  ║     • addresses fixed at deploy (no wiring)                                  ║
   ║                                                                              ║
   ║  2. SET-ONCE WIRING:                                                         ║
   ║     • coin, game, affiliate addresses locked after first set                 ║
@@ -121,14 +121,15 @@ pragma solidity ^0.8.26;
   ║  • coin:          DegenerusCoin (calls recordBafFlip, recordDecBurn)         ║
   ║  • degenerusGame: Core game (calls runBafJackpot, runDecimatorJackpot)       ║
   ║  • affiliate:     Affiliate program (queries for top referrers)              ║
-  ║  • bonds:         Bonds contract (immutable from constructor)                ║
-  ║  • bondsAdmin:    Admin for one-time wiring (immutable)                      ║
+  ║  • bonds:         Bonds contract (constant from constructor)                 ║
+  ║  • bondsAdmin:    none (addresses fixed at deploy)                           ║
   ║                                                                              ║
   ╚══════════════════════════════════════════════════════════════════════════════╝*/
 
 import {IDegenerusGame} from "./interfaces/IDegenerusGame.sol";
 import {IDegenerusAffiliate} from "./interfaces/IDegenerusAffiliate.sol";
 import {IDegenerusJackpots} from "./interfaces/IDegenerusJackpots.sol";
+import {DeployConstants} from "./DeployConstants.sol";
 
 // ===========================================================================
 // External Interfaces
@@ -184,14 +185,8 @@ contract DegenerusJackpots is IDegenerusJackpots {
     /// @notice Player's subbucket did not win the Decimator draw.
     error DecNotWinner();
 
-    /// @notice Attempted to change an already-set address in wire().
-    error AlreadyWired();
-
     /// @notice Caller is not the bonds contract.
     error OnlyBonds();
-
-    /// @notice Caller is not the bondsAdmin.
-    error OnlyAdmin();
 
     /// @notice Caller is not the coin contract.
     error OnlyCoin();
@@ -255,31 +250,22 @@ contract DegenerusJackpots is IDegenerusJackpots {
     }
 
     /*╔══════════════════════════════════════════════════════════════════════╗
-      ║                       IMMUTABLE & WIRED STATE                        ║
+      ║                            CONSTANT STATE                           ║
       ╠══════════════════════════════════════════════════════════════════════╣
-      ║  Trusted contract addresses. bonds/bondsAdmin are immutable from     ║
-      ║  construction; coin/game/affiliate are set-once via wire().          ║
+      ║  Trusted contract addresses fixed at deployment.                     ║
       ╚══════════════════════════════════════════════════════════════════════╝*/
 
-    /// @notice Coin contract for coinflip stats queries.
-    /// @dev Set once via wire(). Used for eligibility checks and leaderboards.
-    IDegenerusCoinJackpotView public coin;
+    /// @notice Coin contract for coinflip stats queries (constant).
+    IDegenerusCoinJackpotView private constant coin = IDegenerusCoinJackpotView(DeployConstants.COIN);
 
-    /// @notice Core game contract for jackpot resolution and player queries.
-    /// @dev Set once via wire(). Trusted caller for runBafJackpot/runDecimatorJackpot.
-    IDegenerusGame public degenerusGame;
+    /// @notice Core game contract for jackpot resolution and player queries (constant).
+    IDegenerusGame private constant degenerusGame = IDegenerusGame(DeployConstants.GAME);
 
-    /// @notice Affiliate program contract for referrer queries.
-    /// @dev Set once via wire(). Used for affiliate draw in BAF.
-    address private affiliate;
+    /// @notice Affiliate program contract for referrer queries (constant).
+    address private constant affiliate = DeployConstants.AFFILIATE;
 
-    /// @notice Admin address for one-time wire() function.
-    /// @dev Immutable from construction. Cannot be changed.
-    address public immutable bondsAdmin;
-
-    /// @notice Bonds contract address.
-    /// @dev Immutable from construction. Not currently used but reserved.
-    address public immutable bonds;
+    /// @notice Bonds contract address (constant).
+    address private constant bonds = DeployConstants.BONDS;
 
     /*╔══════════════════════════════════════════════════════════════════════╗
       ║                            CONSTANTS                                 ║
@@ -379,75 +365,10 @@ contract DegenerusJackpots is IDegenerusJackpots {
     /*╔══════════════════════════════════════════════════════════════════════╗
       ║                           CONSTRUCTOR                                ║
       ╠══════════════════════════════════════════════════════════════════════╣
-      ║  Initialize immutable bonds/admin addresses.                         ║
+      ║  Validate constant addresses from DeployConstants.                   ║
       ╚══════════════════════════════════════════════════════════════════════╝*/
 
-    /// @notice Initialize the jackpots contract with bonds and admin addresses.
-    /// @dev Both addresses must be non-zero. These are immutable after construction.
-    /// @param bonds_ Bonds contract address.
-    /// @param bondsAdmin_ Admin address for one-time wire() call.
-    constructor(address bonds_, address bondsAdmin_) {
-        if (bonds_ == address(0) || bondsAdmin_ == address(0)) revert OnlyBonds();
-        bonds = bonds_;
-        bondsAdmin = bondsAdmin_;
-    }
-
-    /*╔══════════════════════════════════════════════════════════════════════╗
-      ║                         WIRING FUNCTIONS                             ║
-      ╠══════════════════════════════════════════════════════════════════════╣
-      ║  One-time setup for coin/game/affiliate addresses.                   ║
-      ║  Uses set-once pattern: addresses cannot be changed after first set. ║
-      ╚══════════════════════════════════════════════════════════════════════╝*/
-
-    /// @notice Wire trusted contract addresses (one-time setup).
-    /// @dev Access: bondsAdmin only. Uses set-once pattern for each address.
-    ///      SECURITY: Prevents malicious contract replacement after initial wiring.
-    /// @param addresses Array of addresses: [coin, game, affiliate].
-    function wire(address[] calldata addresses) external {
-        address admin = bondsAdmin;
-        if (msg.sender != admin) revert OnlyAdmin();
-
-        _setCoin(addresses.length > 0 ? addresses[0] : address(0));
-        _setGame(addresses.length > 1 ? addresses[1] : address(0));
-        _setAffiliate(addresses.length > 2 ? addresses[2] : address(0));
-    }
-
-    /// @dev Internal set-once setter for coin address.
-    ///      Reverts if attempting to change after initial set.
-    function _setCoin(address coinAddr) private {
-        if (coinAddr == address(0)) return;
-        address current = address(coin);
-        if (current == address(0)) {
-            coin = IDegenerusCoinJackpotView(coinAddr);
-        } else if (coinAddr != current) {
-            revert AlreadyWired();
-        }
-    }
-
-    /// @dev Internal set-once setter for game address.
-    ///      Reverts if attempting to change after initial set.
-    function _setGame(address gameAddr) private {
-        if (gameAddr == address(0)) return;
-        address current = address(degenerusGame);
-        if (current == address(0)) {
-            degenerusGame = IDegenerusGame(gameAddr);
-        } else if (gameAddr != current) {
-            revert AlreadyWired();
-        }
-    }
-
-    /// @dev Internal set-once setter for affiliate address.
-    ///      Reverts if attempting to change after initial set.
-    function _setAffiliate(address affiliateAddr) private {
-        if (affiliateAddr == address(0)) return;
-        address current = affiliate;
-        if (current == address(0)) {
-            affiliate = affiliateAddr;
-        } else if (affiliateAddr != current) {
-            revert AlreadyWired();
-        }
-    }
-
+    /// @notice Initialize the jackpots contract with precomputed addresses.
     /*╔══════════════════════════════════════════════════════════════════════╗
       ║                      COIN CONTRACT HOOKS                             ║
       ╠══════════════════════════════════════════════════════════════════════╣
