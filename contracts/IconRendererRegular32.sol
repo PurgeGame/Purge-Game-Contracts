@@ -125,6 +125,8 @@ import "@openzeppelin/contracts/utils/Strings.sol";
 import {DeployConstants} from "./DeployConstants.sol";
 import "./interfaces/IDegenerusAffiliate.sol";
 import "./interfaces/IconRendererTypes.sol";
+import {RendererLibrary} from "./libraries/RendererLibrary.sol";
+import {ColorResolver} from "./libraries/ColorResolver.sol";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // EXTERNAL INTERFACE
@@ -146,7 +148,7 @@ interface IDegenerusGameStartRemaining {
 /// @title IconRendererRegular32
 /// @notice ERC721 metadata and SVG renderer for Degenerus gamepiece tokens
 /// @dev Generates dynamic SVG images based on game state, scarcity, and color preferences
-contract IconRendererRegular32 {
+contract IconRendererRegular32 is ColorResolver {
     using Strings for uint256;
 
     // ─────────────────────────────────────────────────────────────────────
@@ -160,35 +162,14 @@ contract IconRendererRegular32 {
     // CONSTANTS & WIRING
     // ─────────────────────────────────────────────────────────────────────
 
-    /// @dev Affiliate program for referrer color cascade (optional)
-    address private constant affiliateProgram = DeployConstants.AFFILIATE;
-
     /// @dev Icon path and symbol name data source
     IIcons32 private constant icons = IIcons32(DeployConstants.ICONS_32);
-
-    /// @dev Color customization registry for per-token/per-address overrides
-    IColorRegistry private constant registry = IColorRegistry(DeployConstants.ICON_COLOR_REGISTRY);
 
     /// @dev Game contract for initial trait counts
     IDegenerusGameStartRemaining private constant game = IDegenerusGameStartRemaining(DeployConstants.GAME);
 
     /// @dev Gamepiece ERC721 contract
     IERC721Lite private constant nft = IERC721Lite(DeployConstants.GAMEPIECES);
-
-    // ---------------- Metadata helpers ----------------
-
-    /// @notice Human‑readable color family titles for palette indices 0..7.
-    /// @dev Falls back to "Gold" for out‑of‑range values.
-    function _colorTitle(uint8 idx) private pure returns (string memory) {
-        if (idx == 0) return "Pink";
-        if (idx == 1) return "Purple";
-        if (idx == 2) return "Green";
-        if (idx == 3) return "Red";
-        if (idx == 4) return "Blue";
-        if (idx == 5) return "Orange";
-        if (idx == 6) return "Silver";
-        return "Gold";
-    }
 
     // ---------------- Validation ----------------
 
@@ -237,64 +218,12 @@ contract IconRendererRegular32 {
     }
 
     // ---------------------------------------------------------------------
-    // Color resolution: token → per‑token override → owner default → referrer/upline default → fallback
-    // ---------------------------------------------------------------------
-
-    /// @notice Resolve a channel color for `tokenId`, falling back across owner, referrer, upline, or `defColor`.
-    /// @param tokenId  Token to render.
-    /// @param k        Channel index: 0=outline, 1=flame, 2=diamond, 3=square.
-    /// @param defColor Final fallback color (e.g., theme default).
-    function _resolve(uint256 tokenId, uint8 k, string memory defColor) private view returns (string memory) {
-        // Assumes the NFT exists; `ownerOf` is allowed to revert here because renderer
-        // is only called after the game has minted.
-        string memory s = registry.tokenColor(address(nft), tokenId, k);
-        if (bytes(s).length != 0) return s;
-
-        address owner_ = nft.ownerOf(tokenId);
-        s = registry.addressColor(owner_, k);
-        if (bytes(s).length != 0) return s;
-
-        address ref = _referrer(owner_);
-        if (ref != address(0)) {
-            s = registry.addressColor(ref, k);
-            if (bytes(s).length != 0) return s;
-            address up = _referrer(ref);
-            if (up != address(0)) {
-                s = registry.addressColor(up, k);
-                if (bytes(s).length != 0) return s;
-            }
-        }
-        return defColor;
-    }
-
-    function _referrer(address user) private view returns (address) {
-        return IDegenerusAffiliate(affiliateProgram).getReferrer(user);
-    }
-
-    // ---------------------------------------------------------------------
     // Palette & geometry
     // ---------------------------------------------------------------------
 
-    // Canonical palette (indexed 0..7). Stored intentionally (non‑zero) for direct lookup.
-    uint24[8] private BASE_COLOR = [0xf409cd, 0x7c2bff, 0x30d100, 0xed0e11, 0x1317f7, 0xf7931a, 0x5e5e5e, 0xab8d3f];
-
-    int16[8] private BASE_VARIANT_BIAS = [
-        int16(-14),
-        int16(-6),
-        int16(12),
-        int16(-10),
-        int16(14),
-        int16(6),
-        int16(-8),
-        int16(10)
-    ];
-
     // Layout tuning (1e6 fixed‑point).
-    uint32 private constant RATIO_MID_1e6 = 780_000;
-    uint32 private constant RATIO_IN_1e6 = 620_000;
     uint32 private constant SYM_FIT_BASE_1e6 = 750_000;
     uint32 private constant GLOBAL_BADGE_BOOST_1e6 = 1_010_000;
-    uint16 private constant ICON_VB = 512; // normalized icon viewBox (square)
 
     // Quadrant offsets.
     int16[4] private CX = [int16(-25), int16(25), int16(-25), int16(25)];
@@ -336,19 +265,19 @@ contract IconRendererRegular32 {
         string memory attrs = string(
             abi.encodePacked(
                 '[{"trait_type":"',
-                _quadrantTitle(0),
+                RendererLibrary.quadrantTitle(0),
                 '","value":"',
                 _label(0, col[0], sym[0]),
                 '"},{"trait_type":"',
-                _quadrantTitle(1),
+                RendererLibrary.quadrantTitle(1),
                 '","value":"',
                 _label(1, col[1], sym[1]),
                 '"},{"trait_type":"',
-                _quadrantTitle(2),
+                RendererLibrary.quadrantTitle(2),
                 '","value":"',
                 _label(2, col[2], sym[2]),
                 '"},{"trait_type":"',
-                _quadrantTitle(3),
+                RendererLibrary.quadrantTitle(3),
                 '","value":"',
                 _label(3, col[3], sym[3]),
                 '"},{"trait_type":"Level","value":"',
@@ -413,15 +342,15 @@ contract IconRendererRegular32 {
         uint16 lastEx,
         uint24 level
     ) private view returns (string memory out) {
-        // Resolve palette (owner/custom overrides cascade inside `_resolve`)
+        // Resolve palette (owner/custom overrides cascade inside `_resolveColor`)
         string memory borderColor0 = _borderColor(tokenId, traitsPacked, col, level);
-        string memory borderColor = _resolve(tokenId, 0, borderColor0);
-        string memory diamondFill = _resolve(tokenId, 2, "#fff");
-        string memory flameFill = _resolve(tokenId, 1, "#111");
-        string memory squareFill = _resolve(tokenId, 3, "#d9d9d9");
+        string memory borderColor = _resolveColor(address(nft), tokenId, 0, borderColor0);
+        string memory diamondFill = _resolveColor(address(nft), tokenId, 2, "#fff");
+        string memory flameFill = _resolveColor(address(nft), tokenId, 1, "#111");
+        string memory squareFill = _resolveColor(address(nft), tokenId, 3, "#d9d9d9");
 
         // Frame + guides
-        out = _svgHeader(borderColor, squareFill);
+        out = RendererLibrary.svgHeader(borderColor, squareFill);
         string memory diamondPath = icons.diamond();
         out = string.concat(out, _guides(borderColor, diamondFill, flameFill, diamondPath));
 
@@ -431,7 +360,7 @@ contract IconRendererRegular32 {
         out = string.concat(out, _svgQuad(2, 0, col[0], sym[0], remaining[0], lastEx, level)); // TL
         out = string.concat(out, _svgQuad(3, 1, col[1], sym[1], remaining[1], lastEx, level)); // TR
 
-        out = string.concat(out, _svgFooter());
+        out = string.concat(out, RendererLibrary.svgFooter());
     }
 
     /// @notice Render a single quadrant (rings + symbol), with optional per‑quadrant invert when it
@@ -471,32 +400,32 @@ contract IconRendererRegular32 {
 
         uint32 rOuter = uint32((uint256(rMax) * scarcity1e6) / 1_000_000);
         rOuter = uint32((uint256(rOuter) * GLOBAL_BADGE_BOOST_1e6) / 1_000_000);
-        uint32 rMiddle = uint32((uint256(rOuter) * RATIO_MID_1e6) / 1_000_000);
-        uint32 rInner = uint32((uint256(rOuter) * RATIO_IN_1e6) / 1_000_000);
+        uint32 rMiddle = uint32((uint256(rOuter) * RendererLibrary.RATIO_MID_1e6) / 1_000_000);
+        uint32 rInner = uint32((uint256(rOuter) * RendererLibrary.RATIO_IN_1e6) / 1_000_000);
 
         // Concentric rings
         string memory colorHex = _paletteColor(colorIndex, level);
-        string memory ringsSvg = _rings(colorHex, "#111", "#fff", rOuter, rMiddle, rInner, CX[quadPos], CY[quadPos]);
+        string memory ringsSvg = RendererLibrary.rings(colorHex, "#111", "#fff", rOuter, rMiddle, rInner, CX[quadPos], CY[quadPos]);
 
         // Symbol path selection (32 icons total: quadId*8 + symbolIndex)
         uint256 iconIndex = quadId * 8 + symbolIndex;
         string memory iconPath = icons.data(iconIndex);
-        // Fit symbol into inner ring, scaled in 1e6 “micro‑units”
+        // Fit symbol into inner ring, scaled in 1e6 "micro‑units"
         uint32 fit1e6 = _symbolFit1e6(quadId, symbolIndex);
-        uint32 scale1e6 = uint32((uint256(2) * rInner * fit1e6) / ICON_VB);
+        uint32 scale1e6 = uint32((uint256(2) * rInner * fit1e6) / RendererLibrary.ICON_VB);
 
         // Place symbol centered at quadrant origin in micro‑space
         int256 cxMicro = int256(int32(CX[quadPos])) * 1_000_000;
         int256 cyMicro = int256(int32(CY[quadPos])) * 1_000_000;
-        int256 txMicro = cxMicro - (int256(uint256(ICON_VB)) * int256(uint256(scale1e6))) / 2;
-        int256 tyMicro = cyMicro - (int256(uint256(ICON_VB)) * int256(uint256(scale1e6))) / 2;
+        int256 txMicro = cxMicro - (int256(uint256(RendererLibrary.ICON_VB)) * int256(uint256(scale1e6))) / 2;
+        int256 tyMicro = cyMicro - (int256(uint256(RendererLibrary.ICON_VB)) * int256(uint256(scale1e6))) / 2;
 
         // Color the symbol: Q0 uses source path colors; others use the quadrant color
         string memory symbolSvg = (quadId == 0)
             ? string(
                 abi.encodePacked(
                     '<g transform="',
-                    _mat6(scale1e6, txMicro, tyMicro),
+                    RendererLibrary.mat6(scale1e6, txMicro, tyMicro),
                     '"><g style="vector-effect:non-scaling-stroke">',
                     iconPath,
                     "</g></g>"
@@ -505,7 +434,7 @@ contract IconRendererRegular32 {
             : string(
                 abi.encodePacked(
                     '<g transform="',
-                    _mat6(scale1e6, txMicro, tyMicro),
+                    RendererLibrary.mat6(scale1e6, txMicro, tyMicro),
                     '"><g fill="',
                     colorHex,
                     '" stroke="',
@@ -537,18 +466,12 @@ contract IconRendererRegular32 {
         return (uint256(symbolIndex) + 1).toString();
     }
 
-    /// @notice Color + symbol label (e.g., “Blue Diamond”).
+    /// @notice Color + symbol label (e.g., "Blue Diamond").
     function _label(uint256 quadId, uint8 colorIndex, uint8 symbolIndex) private view returns (string memory) {
         string memory symTitle = _symTitle(quadId, symbolIndex);
-        return string(abi.encodePacked(_colorTitle(colorIndex), " ", symTitle));
+        return string(abi.encodePacked(RendererLibrary.colorTitle(colorIndex), " ", symTitle));
     }
 
-    function _quadrantTitle(uint256 idx) private pure returns (string memory) {
-        if (idx == 0) return "Crypto";
-        if (idx == 1) return "Zodiac";
-        if (idx == 2) return "Cards";
-        return "Dice";
-    }
 
     /// @notice Build a 4‑line description showing remaining counts per quadrant.
     function _descFromRem(
@@ -579,35 +502,6 @@ contract IconRendererRegular32 {
             );
     }
 
-    // ---------------- SVG helpers -----------------------------------------------------------
-    /**
-     * @dev SVG root header. Defines the inversion filter (#inv), then draws the outer rounded square.
-     * @param borderColor Stroke color for the outer square (resolved border).
-     * @param squareFill  Fill color for the outer square (resolved square background).
-     */
-    function _svgHeader(string memory borderColor, string memory squareFill) private pure returns (string memory) {
-        // Note: stroke-width is 2; inner usable side = 100 - 2 = 98.
-        return
-            string(
-                abi.encodePacked(
-                    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="-60 -60 120 120">',
-                    // Define a reusable inversion filter for quadrant “negative” effect (used ONLY in _svgQuad).
-                    '<defs><filter id="inv" color-interpolation-filters="sRGB">',
-                    '<feColorMatrix type="matrix" values="',
-                    "-1 0 0 0 1 ",
-                    "0 -1 0 0 1 ",
-                    "0 0 -1 0 1 ",
-                    "0 0 0  1 0",
-                    '"/>',
-                    "</filter></defs>",
-                    '<rect x="-50" y="-50" width="100" height="100" rx="12" fill="',
-                    squareFill,
-                    '" stroke="',
-                    borderColor,
-                    '" stroke-width="2"/>'
-                )
-            );
-    }
 
     /**
      * @dev Draw guides + central diamond/flame motif (shared by regular and genesis SVGs).
@@ -656,13 +550,6 @@ contract IconRendererRegular32 {
             );
     }
 
-    /**
-     * @dev Footer closes the SVG root. No conditional groups here—quadrant inversion is handled
-     *      locally in `_svgQuad` with a `<g filter="url(#inv)">...</g>` wrapper.
-     */
-    function _svgFooter() private pure returns (string memory) {
-        return "</svg>";
-    }
 
     // ---------------- JSON pack ----------------------------------------------------------------------
 
@@ -713,59 +600,6 @@ contract IconRendererRegular32 {
         return uint32(500_000 + add);
     }
 
-    /// @dev Unified ring painter: draws three concentric circles centered at (cx,cy).
-    function _rings(
-        string memory outer,
-        string memory mid,
-        string memory inner,
-        uint32 rOut,
-        uint32 rMid,
-        uint32 rIn,
-        int16 cx,
-        int16 cy
-    ) private pure returns (string memory) {
-        string memory cxs = _i(cx);
-        string memory cys = _i(cy);
-        return
-            string(
-                abi.encodePacked(
-                    '<circle cx="',
-                    cxs,
-                    '" cy="',
-                    cys,
-                    '" r="',
-                    uint256(rOut).toString(),
-                    '" fill="',
-                    outer,
-                    '"/>',
-                    '<circle cx="',
-                    cxs,
-                    '" cy="',
-                    cys,
-                    '" r="',
-                    uint256(rMid).toString(),
-                    '" fill="',
-                    mid,
-                    '"/>',
-                    '<circle cx="',
-                    cxs,
-                    '" cy="',
-                    cys,
-                    '" r="',
-                    uint256(rIn).toString(),
-                    '" fill="',
-                    inner,
-                    '"/>'
-                )
-            );
-    }
-
-    /// @dev Signed small‑int to string (for SVG positions). Safe for int16 domain.
-    function _i(int16 v) private pure returns (string memory) {
-        int256 x = v;
-        if (x >= 0) return uint256(x).toString();
-        return string.concat("-", uint256(-x).toString());
-    }
 
     // ---------------- Geometry / layout helpers ------------------------------------------------------
 
@@ -814,42 +648,6 @@ contract IconRendererRegular32 {
         return f;
     }
 
-    /**
-     * @dev SVG transform matrix for uniform scale with 6‑dec fixed‑point arguments.
-     *      Builds: matrix(s 0 0 s tx ty)
-     */
-    function _mat6(uint32 s1e6, int256 tx1e6, int256 ty1e6) private pure returns (string memory) {
-        string memory s = _dec6(uint256(s1e6));
-        string memory txn = _dec6s(tx1e6);
-        string memory tyn = _dec6s(ty1e6);
-        return string(abi.encodePacked("matrix(", s, " 0 0 ", s, " ", txn, " ", tyn, ")"));
-    }
-
-    /// @dev Format an unsigned 1e6 fixed‑point value as "I.FFFFFF".
-    function _dec6(uint256 x) private pure returns (string memory) {
-        uint256 i = x / 1_000_000;
-        uint256 f = x % 1_000_000;
-        return string(abi.encodePacked(i.toString(), ".", _pad6(uint32(f))));
-    }
-
-    /// @dev Signed version of `_dec6`.
-    function _dec6s(int256 x) private pure returns (string memory) {
-        if (x < 0) {
-            uint256 y = uint256(-x);
-            return string(abi.encodePacked("-", _dec6(y)));
-        }
-        return _dec6(uint256(x));
-    }
-
-    /// @dev Zero‑pad a 6‑digit fractional part.
-    function _pad6(uint32 f) private pure returns (string memory) {
-        bytes memory b = new bytes(6);
-        for (uint256 k; k < 6; ++k) {
-            b[5 - k] = bytes1(uint8(48 + (f % 10)));
-            f /= 10;
-        }
-        return string(b);
-    }
 
     // ---------------- Palette / trait helpers --------------------------------------------------------
 
@@ -890,19 +688,19 @@ contract IconRendererRegular32 {
         return _paletteColor(0, level);
     }
 
-    function _paletteColor(uint8 idx, uint24 level) private view returns (string memory) {
+    function _paletteColor(uint8 idx, uint24 level) private pure returns (string memory) {
         uint24 rgb = _paletteColorRGB(idx, level);
-        return _rgbToHex(rgb);
+        return RendererLibrary.rgbToHex(rgb);
     }
 
-    function _paletteColorRGB(uint8 idx, uint24 level) private view returns (uint24) {
+    function _paletteColorRGB(uint8 idx, uint24 level) private pure returns (uint24) {
         uint24 cycle = level % 10;
-        uint24 base = BASE_COLOR[idx];
+        uint24 base = RendererLibrary.paletteColorRGB(idx);
         uint8 r = uint8(base >> 16);
         uint8 g = uint8(base >> 8);
         uint8 b = uint8(base);
 
-        int16 bias = BASE_VARIANT_BIAS[idx];
+        int16 bias = RendererLibrary.variantBias(idx);
         uint256 seed = uint256(keccak256(abi.encodePacked(cycle, idx)));
         int16 jitter = int16(int8(uint8(seed & 0x1F))) - 16; // -16 .. +15
         int16 delta = bias + jitter;
@@ -923,26 +721,6 @@ contract IconRendererRegular32 {
         }
         uint16 spanDown = value;
         return value - uint8((spanDown * uint16(uint16(-delta))) / 32);
-    }
-
-    function _rgbToHex(uint24 rgb) private pure returns (string memory) {
-        uint8 r = uint8(rgb >> 16);
-        uint8 g = uint8(rgb >> 8);
-        uint8 b = uint8(rgb);
-        bytes memory buf = new bytes(7);
-        buf[0] = "#";
-        buf[1] = _hexChar(r >> 4);
-        buf[2] = _hexChar(r & 0x0F);
-        buf[3] = _hexChar(g >> 4);
-        buf[4] = _hexChar(g & 0x0F);
-        buf[5] = _hexChar(b >> 4);
-        buf[6] = _hexChar(b & 0x0F);
-        return string(buf);
-    }
-
-    function _hexChar(uint8 nibble) private pure returns (bytes1) {
-        uint8 v = nibble & 0x0F;
-        return bytes1(v + (v < 10 ? 48 : 87));
     }
 
     /**

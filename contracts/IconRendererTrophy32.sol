@@ -96,6 +96,7 @@ import "@openzeppelin/contracts/utils/Strings.sol";
 import {DeployConstants} from "./DeployConstants.sol";
 import "./interfaces/IconRendererTypes.sol";
 import {IIconRendererTrophy32Svg} from "./IconRendererTrophy32Svg.sol";
+import {RendererLibrary} from "./libraries/RendererLibrary.sol";
 
 /// @title IconRendererTrophy32
 /// @notice ERC721 metadata renderer for Degenerus trophy tokens
@@ -245,7 +246,7 @@ contract IconRendererTrophy32 {
             uint8 raw = uint8(exTr & 0x3F);
             uint8 colorIdx = raw >> 3;
             uint8 symIdx = raw & 0x07;
-            traitType = _quadrantTitle(quadrant);
+            traitType = RendererLibrary.quadrantTitle(quadrant);
             traitValue = _traitLabel(quadrant, colorIdx, symIdx);
             includeTraitAttr = true;
         }
@@ -286,23 +287,6 @@ contract IconRendererTrophy32 {
     }
 
 
-    function _colorTitle(uint8 idx) private pure returns (string memory) {
-        if (idx == 0) return "Pink";
-        if (idx == 1) return "Purple";
-        if (idx == 2) return "Green";
-        if (idx == 3) return "Red";
-        if (idx == 4) return "Blue";
-        if (idx == 5) return "Orange";
-        if (idx == 6) return "Silver";
-        return "Gold";
-    }
-
-    function _quadrantTitle(uint8 idx) private pure returns (string memory) {
-        if (idx == 0) return "Crypto";
-        if (idx == 1) return "Zodiac";
-        if (idx == 2) return "Cards";
-        return "Dice";
-    }
 
     function _symbolTitle(
         uint8 quadrant,
@@ -327,7 +311,7 @@ contract IconRendererTrophy32 {
     ) private view returns (string memory) {
         return
             string.concat(
-                _colorTitle(colorIdx),
+                RendererLibrary.colorTitle(colorIdx),
                 " ",
                 _symbolTitle(quadrant, symbolIdx)
             );
