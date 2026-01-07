@@ -483,8 +483,8 @@ contract DegenerusGamepieces {
     /// @dev Minimum purchase value (in mint-price units) to earn full-spend bonus.
     uint256 private constant CLAIMABLE_FULL_SPEND_MIN_TOKENS = 3;
 
-    /// @dev BURNIE token unit (6 decimals = 1e6, scaled by 1000 = 1e9).
-    uint256 private constant PRICE_COIN_UNIT = 1_000_000_000;
+    /// @dev BURNIE token unit (18 decimals = 1e18, scaled by 1000 = 1e21).
+    uint256 private constant PRICE_COIN_UNIT = 1000 ether;
 
     /// @dev Flat affiliate reward for claimable ETH purchases (5% of price unit).
     uint256 private constant AFFILIATE_CLAIMABLE_REWARD = PRICE_COIN_UNIT / 20;
@@ -498,10 +498,10 @@ contract DegenerusGamepieces {
     uint32 private constant DORMANT_EMIT_BATCH = 3500;
 
     /// @dev Fee to place an offer (10 BURNIE, burned).
-    uint256 private constant OFFER_FEE = 10 * 1e6;
+    uint256 private constant OFFER_FEE = 10 ether;
 
     /// @dev Fee to place an ask/listing (10 BURNIE, burned).
-    uint256 private constant ASK_FEE = 10 * 1e6;
+    uint256 private constant ASK_FEE = 10 ether;
 
     /// @dev Burn percentage on marketplace sales (2% = 200 bps).
     uint256 private constant BURN_BPS = 200;

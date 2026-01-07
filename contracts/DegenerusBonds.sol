@@ -272,13 +272,13 @@ contract BondToken {
     // =====================================================================
 
     /// @notice Token name ("Degenerus Bond DGNRS").
-    string public name;
+    string public constant name = "Degenerus Bond";
     /// @notice Token symbol ("DGNRS").
-    string public symbol;
+    string public constant symbol = "DGNRS";
     /// @notice Token decimals (18, standard ERC20).
     uint8 public constant decimals = 18;
     /// @notice The only address allowed to mint tokens (DegenerusBonds contract).
-    address private immutable minter;
+    address private constant minter = DeployConstants.BONDS;
 
     // =====================================================================
     //                            STORAGE
@@ -297,23 +297,6 @@ contract BondToken {
     /// @notice Pre-allocated mint allowance for vault liquidity provision.
     /// @dev Starts at 50 ETH equivalent; vault can mint up to this without new allocation.
     uint256 private _vaultMintAllowance = 50 ether;
-
-    // =====================================================================
-    //                           CONSTRUCTOR
-    // =====================================================================
-
-    /**
-     * @notice Create a new bond token.
-     * @dev Deployed ahead of time with minter set to the precomputed bonds address.
-     * @param name_ Token name.
-     * @param symbol_ Token symbol.
-     * @param minter_ Address with mint/burn privileges (DegenerusBonds).
-     */
-    constructor(string memory name_, string memory symbol_, address minter_) {
-        name = name_;
-        symbol = symbol_;
-        minter = minter_;
-    }
 
     // =====================================================================
     //                           ERC20 CORE
@@ -1108,7 +1091,6 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
 
         // Attempt to close presale on the affiliate contract.
         try IAffiliatePresaleShutdown(affiliate).shutdownPresale() {} catch {}
-
         PresaleSeries storage p = presale;
         uint256 raised = p.raised;
         if (raised == 0) revert NotReady();
@@ -2318,7 +2300,6 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
 }
 
 contract DegenerusBonds is DegenerusBondsModule {
-
     // =====================================================================
     //                           CONSTRUCTOR
     // =====================================================================
@@ -2730,4 +2711,3 @@ contract DegenerusBonds is DegenerusBondsModule {
         vrfPendingWord = randomWords[0];
     }
 }
-

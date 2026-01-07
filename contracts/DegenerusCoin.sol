@@ -317,7 +317,7 @@ contract DegenerusCoin {
 
     /// @notice Leaderboard entry for tracking top flip bettors.
     /// @dev Packed into single slot: address (20 bytes) + uint96 (12 bytes) = 32 bytes.
-    ///      Score is stored in whole BURNIE tokens (divided by MILLION) to fit uint96.
+    ///      Score is stored in whole BURNIE tokens (divided by 1 ether) to fit uint96.
     struct PlayerScore {
         address player;  // 20 bytes - the leading player's address
         uint96 score;    // 12 bytes - score in whole tokens (max ~79 billion)
@@ -432,7 +432,7 @@ contract DegenerusCoin {
     /// @dev Seeded to 2,000,000 BURNIE. Increases via vaultEscrow(), decreases via vaultMintTo().
     ///      supplyIncUncirculated = totalSupply + _vaultMintAllowance.
     /// @custom:security Only vault/bonds/game can increase; only vault can mint from it.
-    uint256 private _vaultMintAllowance = 2_000_000 * 1e6;
+    uint256 private _vaultMintAllowance = 2_000_000 ether;
 
     /*╔══════════════════════════════════════════════════════════════════════╗
       ║                       LEADERBOARD STATE                              ║
@@ -523,8 +523,8 @@ contract DegenerusCoin {
       ╚══════════════════════════════════════════════════════════════════════╝*/
 
     /// @notice Number of decimal places for BURNIE token.
-    /// @dev 6 decimals (like USDC). 1 BURNIE = 1_000_000 base units.
-    uint8 public constant decimals = 6;
+    /// @dev 18 decimals (standard ERC20). 1 BURNIE = 1e18 base units.
+    uint8 public constant decimals = 18;
 
     /*╔══════════════════════════════════════════════════════════════════════╗
       ║                       ERC20 FUNCTIONS                                ║
@@ -624,7 +624,7 @@ contract DegenerusCoin {
       ║  economic boundaries of the coinflip and decimator systems.          ║
       ║                                                                      ║
       ║  VALUE SUMMARY:                                                      ║
-      ║  • MILLION (1e6)           - Base unit for 6-decimal token           ║
+      ║  • ether (1e18)            - Standard 18-decimal token unit          ║
       ║  • PRICE_COIN_UNIT (1000)  - Bounty increment per window             ║
       ║  • MIN (100 BURNIE)        - Minimum deposit/burn threshold          ║
       ║  • COINFLIP_EXTRA [78-115] - Payout multiplier range for normal      ║
@@ -634,15 +634,12 @@ contract DegenerusCoin {
       ║  • COIN_CLAIM_DAYS (30)    - Max days to claim past winnings         ║
       ╚══════════════════════════════════════════════════════════════════════╝*/
 
-    /// @dev Token has 6 decimals; 1 BURNIE = 1,000,000 base units.
-    uint256 private constant MILLION = 1e6;
-
     /// @dev 1000 BURNIE - used for bounty accumulation and top-flip rewards.
-    uint256 private constant PRICE_COIN_UNIT = 1000 * MILLION;
+    uint256 private constant PRICE_COIN_UNIT = 1000 ether;
 
     /// @dev Minimum amount for coinflip deposits and decimator burns (100 BURNIE).
     ///      Prevents dust attacks and meaningless micro-stakes.
-    uint256 private constant MIN = 100 * MILLION;
+    uint256 private constant MIN = 100 ether;
 
     /// @dev Base percentage for normal coinflip payouts (non-extreme outcomes).
     ///      Range: [78, 78+37] = [78%, 115%] when added to principal.
@@ -1487,7 +1484,7 @@ contract DegenerusCoin {
                 // Recycling: small bonus (1%) for rolling winnings forward, capped at 500 BURNIE.
                 uint256 recycled = coinflipDeposit - totalClaimed;
                 uint256 bonus = recycled / 100;
-                uint256 bonusCap = 500 * MILLION;
+                uint256 bonusCap = 500 ether;
                 if (bonus > bonusCap) bonus = bonusCap;
                 coinflipDeposit += bonus;
             } else if (totalClaimed > coinflipDeposit) {
@@ -1571,10 +1568,10 @@ contract DegenerusCoin {
 
     /// @dev Convert a raw stake amount to a uint96 score (whole tokens only).
     ///      Caps at type(uint96).max to prevent truncation issues.
-    /// @param s The raw stake amount (6 decimals).
-    /// @return The score in whole tokens (divided by MILLION).
+    /// @param s The raw stake amount (18 decimals).
+    /// @return The score in whole tokens (divided by 1 ether).
     function _score96(uint256 s) private pure returns (uint96) {
-        uint256 wholeTokens = s / MILLION;
+        uint256 wholeTokens = s / 1 ether;
         if (wholeTokens > type(uint96).max) {
             wholeTokens = type(uint96).max;
         }

@@ -69,11 +69,8 @@ contract DegenerusQuests is IDegenerusQuests {
     // Unit Conversions
     // ─────────────────────────────────────────────────────────────────────────
 
-    /// @dev 1 million base units — BURNIE has 6 decimals, so 1e6 = 1 BURNIE.
-    uint256 private constant MILLION = 1e6;
-
-    /// @dev Price unit for reward calculations (1000 BURNIE in base units).
-    uint256 private constant PRICE_COIN_UNIT = 1_000_000_000;
+    /// @dev Price unit for reward calculations (1000 BURNIE).
+    uint256 private constant PRICE_COIN_UNIT = 1000 ether;
 
     // ─────────────────────────────────────────────────────────────────────────
     // Quest Type Constants
@@ -509,7 +506,7 @@ contract DegenerusQuests is IDegenerusQuests {
         uint8 tier = _questTier(state.baseStreak);
         uint128 progressAfter = _clampedAdd128(state.progress[slotIndex], flipCredit);
         state.progress[slotIndex] = progressAfter;
-        uint256 target = uint256(_questFlipTargetTokens(tier, quest.flags, quest.entropy)) * MILLION;
+        uint256 target = uint256(_questFlipTargetTokens(tier, quest.flags, quest.entropy)) * 1 ether;
         if (progressAfter < target) {
             return (0, false, quest.questType, state.streak, false, false);
         }
@@ -546,7 +543,7 @@ contract DegenerusQuests is IDegenerusQuests {
         }
         _questSyncProgress(state, slotIndex, currentDay, quest.version);
         state.progress[slotIndex] = _clampedAdd128(state.progress[slotIndex], burnAmount);
-        uint256 target = uint256(_questDecimatorTargetTokens(tier, quest.flags, quest.entropy)) * MILLION;
+        uint256 target = uint256(_questDecimatorTargetTokens(tier, quest.flags, quest.entropy)) * 1 ether;
         if (state.progress[slotIndex] < target) {
             return (0, false, quest.questType, state.streak, false, false);
         }
@@ -630,7 +627,7 @@ contract DegenerusQuests is IDegenerusQuests {
         }
         _questSyncProgress(state, slotIndex, currentDay, quest.version);
         state.progress[slotIndex] = _clampedAdd128(state.progress[slotIndex], amount);
-        uint256 target = uint256(_questAffiliateTargetTokens(tier, quest.flags, quest.entropy)) * MILLION;
+        uint256 target = uint256(_questAffiliateTargetTokens(tier, quest.flags, quest.entropy)) * 1 ether;
         if (state.progress[slotIndex] < target) {
             return (0, false, quest.questType, state.streak, false, false);
         }
@@ -873,11 +870,11 @@ contract DegenerusQuests is IDegenerusQuests {
         } else if (qType == QUEST_TYPE_BURN) {
             req.mints = _questMintTarget(tier, quest.flags, quest.entropy);
         } else if (qType == QUEST_TYPE_FLIP) {
-            req.tokenAmount = uint256(_questFlipTargetTokens(tier, quest.flags, quest.entropy)) * MILLION;
+            req.tokenAmount = uint256(_questFlipTargetTokens(tier, quest.flags, quest.entropy)) * 1 ether;
         } else if (qType == QUEST_TYPE_DECIMATOR) {
-            req.tokenAmount = uint256(_questDecimatorTargetTokens(tier, quest.flags, quest.entropy)) * MILLION;
+            req.tokenAmount = uint256(_questDecimatorTargetTokens(tier, quest.flags, quest.entropy)) * 1 ether;
         } else if (qType == QUEST_TYPE_AFFILIATE) {
-            req.tokenAmount = uint256(_questAffiliateTargetTokens(tier, quest.flags, quest.entropy)) * MILLION;
+            req.tokenAmount = uint256(_questAffiliateTargetTokens(tier, quest.flags, quest.entropy)) * 1 ether;
         } else if (qType == QUEST_TYPE_BOND) {
             uint256 priceWei = questGame.mintPrice();
             req.tokenAmount = _questBondTargetWei(tier, quest.flags, quest.entropy, priceWei);
@@ -1249,7 +1246,7 @@ contract DegenerusQuests is IDegenerusQuests {
      * @param tier Player's tier.
      * @param flags Quest difficulty flags.
      * @param entropy Quest entropy.
-     * @return Target in BURNIE tokens (multiply by MILLION for base units).
+     * @return Target in BURNIE tokens (multiply by 1 ether for base units).
      */
     function _questFlipTargetTokens(uint8 tier, uint8 flags, uint256 entropy) private pure returns (uint32) {
         uint16 maxVal = _questPackedValue(QUEST_FLIP_PACKED, tier);
@@ -1696,13 +1693,13 @@ contract DegenerusQuests is IDegenerusQuests {
             return progress >= _questMintTarget(tier, quest.flags, quest.entropy);
         }
         if (quest.questType == QUEST_TYPE_FLIP) {
-            return progress >= uint256(_questFlipTargetTokens(tier, quest.flags, quest.entropy)) * MILLION;
+            return progress >= uint256(_questFlipTargetTokens(tier, quest.flags, quest.entropy)) * 1 ether;
         }
         if (quest.questType == QUEST_TYPE_DECIMATOR) {
-            return progress >= uint256(_questDecimatorTargetTokens(tier, quest.flags, quest.entropy)) * MILLION;
+            return progress >= uint256(_questDecimatorTargetTokens(tier, quest.flags, quest.entropy)) * 1 ether;
         }
         if (quest.questType == QUEST_TYPE_AFFILIATE) {
-            return progress >= uint256(_questAffiliateTargetTokens(tier, quest.flags, quest.entropy)) * MILLION;
+            return progress >= uint256(_questAffiliateTargetTokens(tier, quest.flags, quest.entropy)) * 1 ether;
         }
         if (quest.questType == QUEST_TYPE_BOND) {
             uint256 weiPrice = priceWei != 0 ? priceWei : questGame.mintPrice();
@@ -1728,10 +1725,10 @@ contract DegenerusQuests is IDegenerusQuests {
      */
     function _questDifficultyBonus(uint8 questFlags, uint8 tier) private pure returns (uint256 bonusReward) {
         if ((questFlags & QUEST_FLAG_VERY_HIGH_DIFFICULTY) != 0 && tier >= QUEST_TIER_MAX_INDEX) {
-            return 100 * MILLION;
+            return 100 * 1 ether;
         }
         if ((questFlags & QUEST_FLAG_HIGH_DIFFICULTY) != 0 && tier > 0) {
-            return 50 * MILLION;
+            return 50 * 1 ether;
         }
         return 0;
     }
@@ -1750,7 +1747,7 @@ contract DegenerusQuests is IDegenerusQuests {
         if (streak == 0 || (streak % QUEST_TIER_STREAK_SPAN) != 0) return 0;
         uint32 step = streak / QUEST_TIER_STREAK_SPAN;
         if (step > 3) step = 3; // Cap at 3x multiplier
-        return uint256(step) * 500 * MILLION;
+        return uint256(step) * 500 * 1 ether;
     }
 
     // ─────────────────────────────────────────────────────────────────────────

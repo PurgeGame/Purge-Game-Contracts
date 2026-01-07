@@ -436,7 +436,7 @@ contract DegenerusGame is DegenerusGameStorage {
 
     /// @dev Base BURNIE cost for reverseFlip() nudge (100 BURNIE).
     ///      Compounds +50% per queued nudge.
-    uint256 private constant RNG_NUDGE_BASE_COST = 100 * 1e6;
+    uint256 private constant RNG_NUDGE_BASE_COST = 100 ether;
 
     /*╔══════════════════════════════════════════════════════════════════════╗
       ║                    MINT PACKED BIT LAYOUT                            ║

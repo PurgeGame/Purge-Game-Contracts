@@ -273,11 +273,8 @@ contract DegenerusJackpots is IDegenerusJackpots {
       ║  Fixed values for prize calculations and bucket configuration.       ║
       ╚══════════════════════════════════════════════════════════════════════╝*/
 
-    /// @dev BURNIE token base unit (6 decimals = 1e6).
-    uint256 private constant MILLION = 1e6;
-
     /// @dev BURNIE unit per ETH mint (1000 BURNIE).
-    uint256 private constant PRICE_COIN_UNIT = 1000 * MILLION;
+    uint256 private constant PRICE_COIN_UNIT = 1000 ether;
 
     /// @dev Basis points denominator (10000 = 100%).
     uint16 private constant BPS_DENOMINATOR = 10_000;
@@ -1221,7 +1218,7 @@ contract DegenerusJackpots is IDegenerusJackpots {
     /// @param player Address to check.
     /// @return True if player is eligible for BAF prizes.
     function _eligible(address player) internal view returns (bool) {
-        if (coin.coinflipAmountLastDay(player) < 5_000 * MILLION) return false;
+        if (coin.coinflipAmountLastDay(player) < 5_000 * 1 ether) return false;
         return degenerusGame.ethMintStreakCount(player) >= 3;
     }
 
@@ -1386,7 +1383,7 @@ contract DegenerusJackpots is IDegenerusJackpots {
     /// @param s Raw score in base units.
     /// @return Capped score in whole tokens.
     function _score96(uint256 s) private pure returns (uint96) {
-        uint256 wholeTokens = s / MILLION;
+        uint256 wholeTokens = s / 1 ether;
         if (wholeTokens > type(uint96).max) {
             wholeTokens = type(uint96).max;
         }

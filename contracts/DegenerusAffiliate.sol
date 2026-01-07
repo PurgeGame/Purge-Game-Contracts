@@ -191,7 +191,7 @@ contract DegenerusAffiliate {
      */
     struct PlayerScore {
         address player; // 20 bytes - address of top affiliate
-        uint96 score;   // 12 bytes - whole tokens (truncated from 6-decimal amounts)
+        uint96 score; // 12 bytes - whole tokens (truncated from 6-decimal amounts)
     }
 
     /**
@@ -206,17 +206,17 @@ contract DegenerusAffiliate {
      * └────────────────────────────────────────────────────┘
      */
     struct AffiliateCodeInfo {
-        address owner;    // 20 bytes - receives affiliate rewards
-        uint8 rakeback;   // 1 byte - percentage returned to referred player (0-25)
+        address owner; // 20 bytes - receives affiliate rewards
+        uint8 rakeback; // 1 byte - percentage returned to referred player (0-25)
     }
 
     // =====================================================================
     //                            CONSTANTS
     // =====================================================================
 
-    /// @notice Token decimal multiplier (FLIP has 6 decimals).
-    /// @dev Used to convert between raw amounts and whole token counts for scoring.
-    uint256 private constant MILLION = 1e6;
+    /// @notice Token decimal multiplier (BURNIE has 18 decimals).
+    /// @dev 1 ether = 1e18, standard Solidity unit for 18-decimal tokens.
+    // No constant needed - use `1 ether` directly throughout code
 
     /// @notice Maximum bonus points an affiliate can earn from leaderboard position.
     /// @dev Applied to mint trait rolls; top 20% of leaderboard earns this max.
@@ -265,7 +265,7 @@ contract DegenerusAffiliate {
 
     /// @notice Per-level earnings tracking: level → affiliate → raw token amount.
     /// @dev Used for leaderboard calculations and bonus point determination.
-    ///      Amounts include 6 decimal places; divide by MILLION for whole tokens.
+    ///      Amounts include 18 decimal places; divide by 1 ether for whole tokens.
     mapping(uint24 => mapping(address => uint256)) public affiliateCoinEarned;
 
     /// @notice Player's chosen referral code (or REF_CODE_LOCKED if locked).
@@ -299,10 +299,6 @@ contract DegenerusAffiliate {
     ///      - consumePresaleCoin() becomes functional
     ///      - Cannot be unset (one-way state transition)
     bool private presaleShutdown;
-
-    // =====================================================================
-    //                           CONSTRUCTOR
-    // =====================================================================
 
     /**
      * @notice Initialize affiliate contract with trusted contract addresses.
@@ -724,7 +720,7 @@ contract DegenerusAffiliate {
      *      Used for bonus point calculations in mint trait rolls.
      * @param lvl The game level to query.
      * @return player Address of the top affiliate.
-     * @return score Their score in whole tokens (6-decimal amount / MILLION).
+     * @return score Their score in whole tokens (6-decimal amount / 1 ether).
      */
     function affiliateTop(uint24 lvl) public view returns (address player, uint96 score) {
         PlayerScore memory stored = affiliateTopByLevel[lvl];
@@ -740,12 +736,15 @@ contract DegenerusAffiliate {
      * @return topScore The highest score for this level.
      * @return playerScore The queried player's score (whole tokens).
      */
-    function affiliateBonusInfo(uint24 lvl, address player) external view returns (uint96 topScore, uint256 playerScore) {
+    function affiliateBonusInfo(
+        uint24 lvl,
+        address player
+    ) external view returns (uint96 topScore, uint256 playerScore) {
         topScore = affiliateTopByLevel[lvl].score;
         if (topScore == 0 || player == address(0)) return (topScore, 0);
         uint256 earned = affiliateCoinEarned[lvl][player];
         if (earned == 0) return (topScore, 0);
-        playerScore = earned / MILLION;
+        playerScore = earned / 1 ether;
     }
 
     /**
@@ -878,7 +877,7 @@ contract DegenerusAffiliate {
      * @return Whole token count as uint96.
      */
     function _score96(uint256 s) private pure returns (uint96) {
-        uint256 wholeTokens = s / MILLION;
+        uint256 wholeTokens = s / 1 ether;
         // SECURITY: Cap at max to prevent truncation errors.
         if (wholeTokens > type(uint96).max) {
             wholeTokens = type(uint96).max;
@@ -902,7 +901,7 @@ contract DegenerusAffiliate {
         if (topScore == 0) return 0;
         uint256 earned = affiliateCoinEarned[lvl][player];
         if (earned == 0) return 0;
-        uint256 playerScore = earned / MILLION;
+        uint256 playerScore = earned / 1 ether;
         if (playerScore == 0) return 0;
         unchecked {
             // Scale: playerScore * 125 / topScore, capped at 25.
