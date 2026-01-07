@@ -1,0 +1,99 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.26;
+
+/// @notice Token metadata renderer interface (gamepieces).
+interface ITokenRenderer {
+    function tokenURI(
+        uint256 tokenId,
+        uint256 data,
+        uint32[4] calldata remaining
+    ) external view returns (string memory);
+}
+
+/// @notice Safe upgrade router for gamepiece tokenURI rendering.
+/// @dev Uses staticcall and a fallback renderer to prevent tokenURI reverts.
+contract GamepieceRendererRouter is ITokenRenderer {
+    error NotAdmin();
+    error InvalidRenderer();
+
+    uint256 private constant PRIMARY_GAS = 1_000_000;
+    uint256 private constant MIN_FALLBACK_GAS = 200_000;
+
+    address public immutable admin;
+    address public immutable fallbackRenderer;
+    address public primary;
+    event PrimaryRendererUpdated(address indexed previous, address indexed next);
+
+    constructor(address admin_, address fallbackRenderer_, address primary_) {
+        if (admin_ == address(0) || fallbackRenderer_ == address(0)) revert InvalidRenderer();
+        admin = admin_;
+        fallbackRenderer = fallbackRenderer_;
+        primary = primary_;
+    }
+
+    function setPrimary(address newRenderer) public {
+        if (msg.sender != admin) revert NotAdmin();
+        address prev = primary;
+        primary = newRenderer;
+        emit PrimaryRendererUpdated(prev, newRenderer);
+    }
+
+    /// @notice Wire or update the active renderer.
+    /// @dev Expects addresses[0] = primary renderer.
+    function wire(address[] calldata addresses) external {
+        if (addresses.length == 0 || addresses[0] == address(0)) revert InvalidRenderer();
+        setPrimary(addresses[0]);
+    }
+
+    function tokenURI(
+        uint256 tokenId,
+        uint256 data,
+        uint32[4] calldata remaining
+    ) external view returns (string memory) {
+        (bool ok, string memory uri) = _callPrimary(tokenId, data, remaining);
+        if (ok) return uri;
+        (ok, uri) = _callRenderer(fallbackRenderer, tokenId, data, remaining, gasleft());
+        if (ok) return uri;
+        return "";
+    }
+
+    function _callPrimary(
+        uint256 tokenId,
+        uint256 data,
+        uint32[4] calldata remaining
+    ) private view returns (bool ok, string memory uri) {
+        address target = primary;
+        if (target == address(0)) return (false, "");
+        if (PRIMARY_GAS + MIN_FALLBACK_GAS > gasleft()) return (false, "");
+        return _callRenderer(target, tokenId, data, remaining, PRIMARY_GAS);
+    }
+
+    function _callRenderer(
+        address target,
+        uint256 tokenId,
+        uint256 data,
+        uint32[4] calldata remaining,
+        uint256 gasLimit
+    ) private view returns (bool ok, string memory uri) {
+        if (gasLimit == 0) return (false, "");
+        bytes memory payload = abi.encodeWithSelector(
+            ITokenRenderer.tokenURI.selector,
+            tokenId,
+            data,
+            remaining
+        );
+        (bool success, bytes memory ret) = target.staticcall{gas: gasLimit}(payload);
+        if (!success || ret.length < 64) return (false, "");
+        uint256 offset;
+        uint256 len;
+        assembly {
+            offset := mload(add(ret, 0x20))
+            len := mload(add(ret, 0x40))
+        }
+        if (offset != 0x20) return (false, "");
+        if (ret.length < 0x40 + len) return (false, "");
+        uri = abi.decode(ret, (string));
+        if (bytes(uri).length == 0) return (false, "");
+        return (true, uri);
+    }
+}

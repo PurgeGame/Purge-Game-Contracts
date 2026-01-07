@@ -341,16 +341,16 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
                 return 1;
             }
             // Ceiling division: (target + purchasePhaseCount - 1) / purchasePhaseCount
-            uint256 numerator = target + uint256(purchasePhaseCount) - 1;
-            return uint32(numerator / uint256(purchasePhaseCount));
+            uint256 purchaseNumerator = target + uint256(purchasePhaseCount) - 1;
+            return uint32(purchaseNumerator / uint256(purchasePhaseCount));
         }
 
         // Remaining needed after purchase-phase purchases
         uint256 remaining = target - uint256(purchasePhaseCount);
 
         // Ceiling division: (remaining + prePurchaseCount - 1) / prePurchaseCount
-        uint256 numerator = remaining + uint256(prePurchaseCount) - 1;
-        return uint32(numerator / prePurchaseCount);
+        uint256 remainingNumerator = remaining + uint256(prePurchaseCount) - 1;
+        return uint32(remainingNumerator / prePurchaseCount);
     }
 
     /**

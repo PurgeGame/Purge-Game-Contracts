@@ -706,7 +706,7 @@ contract DegenerusVault {
         uint256 bal = share.balanceOf(msg.sender);
         if (amount == 0 || amount > bal) revert Insufficient();
 
-        (uint256 ethBal, uint256 stBal, uint256 combined) = _syncEthReserves();
+        (uint256 ethBal, uint256 stBal, ) = _syncEthReserves();
         _syncCoinReserves();
         _syncDgnrsReserves();
 

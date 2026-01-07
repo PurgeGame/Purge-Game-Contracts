@@ -59,7 +59,7 @@ interface IIcons32 {
     ///          Index layout: quadrant * 8 + symbolIndex
     ///          Q0 (Crypto):   0-7
     ///          Q1 (Zodiac):   8-15
-    ///          Q2 (Gambling): 16-23
+    ///          Q2 (Cards): 16-23
     ///          Q3 (Dice):     24-31
     ///          Affiliate:     32
     /// @return The SVG path "d" attribute string
@@ -71,9 +71,9 @@ interface IIcons32 {
     function diamond() external view returns (string memory);
 
     /// @notice Get the human-readable name for a symbol
-    /// @param quadrant Quadrant index (0=Crypto, 1=Zodiac, 2=Gambling, 3=Dice)
+    /// @param quadrant Quadrant index (0=Crypto, 1=Zodiac, 2=Cards, 3=Dice)
     /// @param idx Symbol index within the quadrant (0-7)
-    /// @return The symbol name (e.g., "Bitcoin", "Aries", "Dice 5")
+    /// @return The symbol name (e.g., "Bitcoin", "Aries", "5")
     function symbol(uint256 quadrant, uint8 idx) external view returns (string memory);
 }
 

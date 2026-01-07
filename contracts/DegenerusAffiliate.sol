@@ -48,11 +48,6 @@ import {IDegenerusGame} from "./interfaces/IDegenerusGame.sol";
 // │     • Used to calculate bonus points for mint trait rolls                                       │
 // │     • Score = whole tokens earned (6 decimal precision truncated)                               │
 // │                                                                                                 │
-// │  6. MAP AUTO-PURCHASE (post-presale)                                                            │
-// │     • If affiliate reward ≥ 2× map cost, half is used for map purchases                         │
-// │     • Only when gameState != 3 (not in burn phase) and RNG not locked                           │
-// │     • Provides passive gamepiece accumulation for active affiliates                             │
-// │                                                                                                 │
 // └─────────────────────────────────────────────────────────────────────────────────────────────────┘
 //
 // ┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
@@ -135,15 +130,6 @@ interface IDegenerusCoinAffiliate {
     /// @param amount The base affiliate amount (before quest bonus).
     /// @return Additional quest reward amount to add to the payout.
     function affiliateQuestReward(address player, uint256 amount) external returns (uint256);
-}
-
-/// @notice Interface for purchasing maps on behalf of affiliates.
-/// @dev Used for auto-purchase feature when affiliate rewards are large enough.
-interface IDegenerusGamepiecesAffiliate {
-    /// @notice Purchase maps for an affiliate using their earned rewards.
-    /// @param buyer The affiliate who will receive the maps.
-    /// @param quantity Number of maps to purchase.
-    function purchaseMapForAffiliate(address buyer, uint256 quantity) external;
 }
 
 /**
@@ -248,10 +234,6 @@ contract DegenerusAffiliate {
     ///      125 = 25 * 5, meaning you need 20% of top score to hit max.
     uint256 private constant AFFILIATE_BONUS_SCALE = AFFILIATE_BONUS_MAX * 5;
 
-    /// @notice Base unit for coin pricing calculations.
-    /// @dev 1 billion = 1e9, represents the ETH-to-coin conversion base.
-    uint256 private constant PRICE_COIN_UNIT = 1_000_000_000;
-
     /// @notice Sentinel value indicating a player's referral slot is permanently locked.
     /// @dev Set when a player makes an invalid referral attempt (self-referral, unknown code)
     ///      after the game has started. Prevents gaming by trying multiple codes.
@@ -280,10 +262,10 @@ contract DegenerusAffiliate {
     ///      SECURITY: One-time wiring prevents malicious re-pointing.
     IDegenerusGame private degenerusGame;
 
-    /// @notice DegenerusGamepieces contract for map purchases.
-    /// @dev Set once via wire(). Used for auto-purchasing maps for affiliates.
+    /// @notice DegenerusGamepieces contract address for affiliate payout access control.
+    /// @dev Set once via wire(). Used to authorize payAffiliate() callers.
     ///      SECURITY: One-time wiring prevents malicious re-pointing.
-    IDegenerusGamepiecesAffiliate private degenerusGamepieces;
+    address private degenerusGamepieces;
 
     // =====================================================================
     //                        AFFILIATE STATE
@@ -438,9 +420,9 @@ contract DegenerusAffiliate {
      */
     function _setGamepieces(address gamepiecesAddr) private {
         if (gamepiecesAddr == address(0)) return; // Skip if not provided.
-        address current = address(degenerusGamepieces);
+        address current = degenerusGamepieces;
         if (current == address(0)) {
-            degenerusGamepieces = IDegenerusGamepiecesAffiliate(gamepiecesAddr);
+            degenerusGamepieces = gamepiecesAddr;
         } else if (gamepiecesAddr != current) {
             // SECURITY: Prevent re-pointing to different address.
             revert AlreadyConfigured();
@@ -566,7 +548,6 @@ contract DegenerusAffiliate {
      * │ 5. Pay upline1 (20% of scaled amount)                              │
      * │ 6. Pay upline2 (20% of upline1 share = 4%)                         │
      * │ 7. Quest rewards added on top (post-presale only)                  │
-     * │ 8. Map auto-purchase if conditions met (post-presale only)         │
      * └────────────────────────────────────────────────────────────────────┘
      *
      * PRESALE vs POST-PRESALE:
@@ -577,8 +558,8 @@ contract DegenerusAffiliate {
      * @param code Affiliate code provided with the transaction (may be bytes32(0)).
      * @param sender The player making the purchase.
      * @param lvl Current game level (for join tracking and leaderboard).
-     * @param gameState Current game FSM state (3 = burn phase, blocks map purchase).
-     * @param rngLocked Whether VRF is pending (blocks map purchase).
+     * @param gameState Current game FSM state (unused; retained for interface compatibility).
+     * @param rngLocked Whether VRF is pending (unused; retained for interface compatibility).
      * @return playerRakeback Amount of rakeback credited to the player.
      */
     function payAffiliate(
@@ -592,9 +573,11 @@ contract DegenerusAffiliate {
         // ─────────────────────────────────────────────────────────────────
         // ACCESS CONTROL
         // ─────────────────────────────────────────────────────────────────
+        gameState;
+        rngLocked;
         address caller = msg.sender;
         address coinAddr = address(coin);
-        address gamepiecesAddr = address(degenerusGamepieces);
+        address gamepiecesAddr = degenerusGamepieces;
         // SECURITY: Only trusted contracts can distribute affiliate rewards.
         if (caller != coinAddr && caller != bonds && caller != gamepiecesAddr) revert OnlyAuthorized();
 
@@ -692,27 +675,6 @@ contract DegenerusAffiliate {
             uint256 questReward = coin.affiliateQuestReward(affiliateAddr, affiliateShareBase);
             uint256 totalFlipAward = affiliateShareBase + questReward;
 
-            // ─────────────────────────────────────────────────────────────
-            // MAP AUTO-PURCHASE
-            // ─────────────────────────────────────────────────────────────
-            // If reward is large enough and game conditions allow, auto-purchase maps.
-            // Conditions: not in burn phase (gameState != 3) and VRF not pending.
-            if (gameState != 3 && !rngLocked) {
-                IDegenerusGamepiecesAffiliate gp = degenerusGamepieces;
-                if (address(gp) != address(0)) {
-                    uint256 mapCost = PRICE_COIN_UNIT / 4; // 0.25 FLIP per map
-                    // Only auto-purchase if reward covers at least 2 maps (use half for maps).
-                    if (totalFlipAward >= mapCost * 2) {
-                        uint256 mapBudget = totalFlipAward / 2;
-                        uint256 potentialMaps = mapBudget / mapCost;
-                        uint32 mapQty = uint32(potentialMaps);
-                        uint256 mapSpend = mapCost * uint256(mapQty);
-                        totalFlipAward -= mapSpend;
-                        gp.purchaseMapForAffiliate(affiliateAddr, mapQty);
-                    }
-                }
-            }
-
             players[cursor] = affiliateAddr;
             amounts[cursor] = totalFlipAward;
             unchecked {
@@ -766,7 +728,7 @@ contract DegenerusAffiliate {
             // DISTRIBUTION (PRESALE)
             // ─────────────────────────────────────────────────────────────
             // Defer all rewards to presaleCoinEarned mapping.
-            // No quest rewards or map purchases during presale.
+            // No quest rewards during presale.
             uint256 presaleTotalIncrease = affiliateShareBase;
             presaleCoinEarned[affiliateAddr] += affiliateShareBase;
 

@@ -18,7 +18,7 @@ contract MockBondsJackpot {
         return 0;
     }
 
-    function depositFromGame(address, uint256) external returns (uint256) {
+    function depositFromGame(address, uint256) external pure returns (uint256) {
         return 0;
     }
 

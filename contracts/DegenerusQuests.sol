@@ -215,6 +215,16 @@ contract DegenerusQuests is IDegenerusQuests {
         uint8 completionMask;                       // Bits 0-1: slot completion; bit 7: streak credited
     }
 
+    struct MintAggregate {
+        bool completed;
+        bool completedBoth;
+        bool hardMode;
+        uint8 fallbackType;
+        uint8 questType;
+        uint32 streak;
+        uint256 reward;
+    }
+
     // =========================================================================
     //                              QUEST STORAGE
     // =========================================================================
@@ -464,14 +474,10 @@ contract DegenerusQuests is IDegenerusQuests {
         _questSyncState(state, currentDay);
         uint8 tier = _questTier(state.baseStreak);
 
-        bool matched;
-        bool aggregatedCompleted;
-        bool aggregatedCompletedBoth;
-        bool aggregatedHardMode;
-        uint8 fallbackType = quests[0].questType;
-        uint8 aggregatedQuestType = fallbackType;
-        uint32 aggregatedStreak = state.streak;
-        uint256 aggregatedReward;
+        MintAggregate memory agg;
+        agg.fallbackType = QUEST_TYPE_MINT_BURNIE;
+        agg.questType = agg.fallbackType;
+        agg.streak = state.streak;
 
         // Check both slots for matching mint quest type
         for (uint8 slot; slot < QUEST_SLOT_COUNT; ) {
@@ -486,8 +492,7 @@ contract DegenerusQuests is IDegenerusQuests {
                 (!paidWithEth && quest.questType == QUEST_TYPE_MINT_BURNIE) ||
                 (paidWithEth && quest.questType == QUEST_TYPE_MINT_ETH)
             ) {
-                matched = true;
-                fallbackType = quest.questType;
+                agg.fallbackType = quest.questType;
                 (reward, hardMode, questType, streak, completed, completedBoth) = _questHandleMintSlot(
                     state,
                     quests,
@@ -498,15 +503,15 @@ contract DegenerusQuests is IDegenerusQuests {
                     currentDay
                 );
                 if (completed) {
-                    aggregatedReward += reward;
-                    aggregatedQuestType = questType;
-                    aggregatedStreak = streak;
-                    aggregatedCompleted = true;
+                    agg.reward += reward;
+                    agg.questType = questType;
+                    agg.streak = streak;
+                    agg.completed = true;
                     if (hardMode) {
-                        aggregatedHardMode = true;
+                        agg.hardMode = true;
                     }
                     if (completedBoth) {
-                        aggregatedCompletedBoth = true;
+                        agg.completedBoth = true;
                     }
                 }
             }
@@ -514,10 +519,10 @@ contract DegenerusQuests is IDegenerusQuests {
                 ++slot;
             }
         }
-        if (aggregatedCompleted) {
-            return (aggregatedReward, aggregatedHardMode, aggregatedQuestType, aggregatedStreak, true, aggregatedCompletedBoth);
+        if (agg.completed) {
+            return (agg.reward, agg.hardMode, agg.questType, agg.streak, true, agg.completedBoth);
         }
-        return (0, false, matched ? fallbackType : QUEST_TYPE_MINT_BURNIE, state.streak, false, false);
+        return (0, false, agg.fallbackType, state.streak, false, false);
     }
 
     /**

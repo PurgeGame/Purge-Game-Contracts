@@ -18,56 +18,56 @@ pragma solidity ^0.8.26;
 ║  │   DegenerusTrophies.tokenURI()                                                                   │ ║
 ║  │          │                                                                                       │ ║
 ║  │          ▼                                                                                       │ ║
-║  │   IconRendererTrophy32.tokenURI() ─── Generates JSON metadata                                   │ ║
+║  │   IconRendererTrophy32.tokenURI() ─── Generates JSON metadata                                   │  ║
 ║  │          │                                                                                       │ ║
 ║  │          ▼                                                                                       │ ║
-║  │   IconRendererTrophy32Svg.trophySvg() ─── THIS CONTRACT ─── Returns raw SVG                     │ ║
+║  │   IconRendererTrophy32Svg.trophySvg() ─── THIS CONTRACT ─── Returns raw SVG                     │  ║
 ║  │          │                                                                                       │ ║
-║  │          ├─► Icons32Data.data() ─── Retrieves symbol path data                                  │ ║
-║  │          ├─► IconColorRegistry ─── Resolves color overrides                                     │ ║
-║  │          ├─► TrophySvgAssets ─── BAF animation (if applicable)                                  │ ║
-║  │          └─► DegenerusAffiliate ─── Referrer lookup for color cascade                           │ ║
+║  │          ├─► Icons32Data.data() ─── Retrieves symbol path data                                  │  ║
+║  │          ├─► IconColorRegistry ─── Resolves color overrides                                     │  ║
+║  │          ├─► TrophySvgAssets ─── BAF animation (if applicable)                                  │  ║
+║  │          └─► DegenerusAffiliate ─── Referrer lookup for color cascade                           │  ║
 ║  └──────────────────────────────────────────────────────────────────────────────────────────────────┘ ║
 ║                                                                                                       ║
 ║  ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐ ║
 ║  │                              TROPHY TYPES & RENDERING                                            │ ║
 ║  │                                                                                                  │ ║
 ║  │   EXTERMINATOR TROPHY                                                                            │ ║
-║  │   ├─ Shows the eliminated trait symbol in center ring                                           │ ║
-║  │   ├─ Ring color matches the trait's palette color                                               │ ║
-║  │   ├─ May be inverted (negative filter) based on game state                                      │ ║
-║  │   └─ Corner glyphs indicate trophy type                                                         │ ║
+║  │   ├─ Shows the eliminated trait symbol in center ring                                           │  ║
+║  │   ├─ Ring color matches the trait's palette color                                               │  ║
+║  │   ├─ May be inverted (negative filter) based on game state                                      │  ║
+║  │   └─ Corner glyphs indicate trophy type                                                         │  ║
 ║  │                                                                                                  │ ║
 ║  │   AFFILIATE TROPHY                                                                               │ ║
-║  │   ├─ Shows affiliate badge icon in center                                                       │ ║
-║  │   ├─ Default blue ring (palette index 4)                                                        │ ║
-║  │   ├─ Custom ring color via setTopAffiliateColor()                                               │ ║
-║  │   └─ No corner glyphs (affiliate-specific styling)                                              │ ║
+║  │   ├─ Shows affiliate badge icon in center                                                       │  ║
+║  │   ├─ Default blue ring (palette index 4)                                                        │  ║
+║  │   ├─ Custom ring color via setTopAffiliateColor()                                               │  ║
+║  │   └─ No corner glyphs (affiliate-specific styling)                                              │  ║
 ║  │                                                                                                  │ ║
 ║  │   BAF TROPHY                                                                                     │ ║
-║  │   ├─ Shows animated coin flip (from TrophySvgAssets)                                            │ ║
-║  │   ├─ Gold ring color (palette index 7)                                                          │ ║
-║  │   └─ 6-second SMIL animation loop                                                               │ ║
+║  │   ├─ Shows animated coin flip (from TrophySvgAssets)                                            │  ║
+║  │   ├─ Gold ring color (palette index 7)                                                          │  ║
+║  │   └─ 6-second SMIL animation loop                                                               │  ║
 ║  │                                                                                                  │ ║
 ║  └──────────────────────────────────────────────────────────────────────────────────────────────────┘ ║
 ║                                                                                                       ║
 ║  ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐ ║
 ║  │                              SVG STRUCTURE (120x120 viewBox centered at 0,0)                     │ ║
 ║  │                                                                                                  │ ║
-║  │   <svg viewBox="-60 -60 120 120">                                                               │ ║
+║  │   <svg viewBox="-60 -60 120 120">                                                               │  ║
 ║  │     <defs>                                                                                       │ ║
-║  │       <filter id="inv"> ─── Color inversion filter for highlighting                             │ ║
+║  │       <filter id="inv"> ─── Color inversion filter for highlighting                             │  ║
 ║  │     </defs>                                                                                      │ ║
-║  │     <rect> ─── Outer rounded square (100x100, customizable fill/stroke)                         │ ║
-║  │     <g> ─── Ring group (outer/middle/inner circles)                                             │ ║
-║  │       <circle fill="ringColor"> ─── Outer colored ring                                          │ ║
-║  │       <circle fill="bandColor"> ─── Middle dark band                                            │ ║
-║  │       <circle fill="coreColor"> ─── Inner white core                                            │ ║
+║  │     <rect> ─── Outer rounded square (100x100, customizable fill/stroke)                         │  ║
+║  │     <g> ─── Ring group (outer/middle/inner circles)                                             │  ║
+║  │       <circle fill="ringColor"> ─── Outer colored ring                                          │  ║
+║  │       <circle fill="bandColor"> ─── Middle dark band                                            │  ║
+║  │       <circle fill="coreColor"> ─── Inner white core                                            │  ║
 ║  │     </g>                                                                                         │ ║
-║  │     <g clip-path="..."> ─── Symbol clipped to inner circle                                      │ ║
-║  │       <path> ─── The actual icon/symbol                                                         │ ║
+║  │     <g clip-path="..."> ─── Symbol clipped to inner circle                                      │  ║
+║  │       <path> ─── The actual icon/symbol                                                         │  ║
 ║  │     </g>                                                                                         │ ║
-║  │     <g> ─── Corner glyphs (exterminator only)                                                   │ ║
+║  │     <g> ─── Corner glyphs (exterminator only)                                                   │  ║
 ║  │   </svg>                                                                                         │ ║
 ║  └──────────────────────────────────────────────────────────────────────────────────────────────────┘ ║
 ║                                                                                                       ║
@@ -76,44 +76,43 @@ pragma solidity ^0.8.26;
 ║  ───────────────────────                                                                              ║
 ║                                                                                                       ║
 ║  1. VIEW-ONLY                                                                                         ║
-║     • trophySvg() is a view function - no state changes                                              ║
-║     • Safe to call externally for off-chain metadata generation                                      ║
+║     • trophySvg() is a view function - no state changes                                               ║
+║     • Safe to call externally for off-chain metadata generation                                       ║
 ║                                                                                                       ║
 ║  2. EXTERNAL CALL SAFETY                                                                              ║
-║     • All external calls are to trusted, immutable addresses                                         ║
-║     • ownerOf call wrapped in try/catch to handle burned tokens                                      ║
-║     • No value transfers, no callbacks                                                               ║
+║     • All external calls are to trusted, immutable addresses                                          ║
+║     • ownerOf call wrapped in try/catch to handle burned tokens                                       ║
+║     • No value transfers, no callbacks                                                                ║
 ║                                                                                                       ║
 ║  3. ACCESS CONTROL                                                                                    ║
-║     • wire() is onlyAdmin (one-time setup)                                                           ║
-║     • All other functions are view-only                                                              ║
+║     • wire() is onlyAdmin (one-time setup)                                                            ║
+║     • All other functions are view-only                                                               ║
 ║                                                                                                       ║
 ║  4. INPUT HANDLING                                                                                    ║
-║     • SvgParams validated by caller (IconRendererTrophy32)                                           ║
-║     • Sentinel values (0xFFFE, 0xFFFA) handled explicitly                                            ║
+║     • SvgParams validated by caller (IconRendererTrophy32)                                            ║
+║     • Sentinel values (0xFFFE, 0xFFFA) handled explicitly                                             ║
 ║                                                                                                       ║
 ╠═══════════════════════════════════════════════════════════════════════════════════════════════════════╣
 ║  TRUST ASSUMPTIONS                                                                                    ║
 ║  ─────────────────                                                                                    ║
 ║                                                                                                       ║
-║  1. Icons32Data provides valid, safe SVG path data                                                   ║
-║  2. TrophySvgAssets provides safe SVG animation markup                                               ║
-║  3. IconColorRegistry returns validated hex color strings                                            ║
-║  4. DegenerusAffiliate correctly reports referrer relationships                                      ║
-║  5. Admin wires correct NFT address during setup                                                     ║
+║  1. Icons32Data provides valid, safe SVG path data                                                    ║
+║  2. TrophySvgAssets provides safe SVG animation markup                                                ║
+║  3. IconColorRegistry returns validated hex color strings                                             ║
+║  4. DegenerusAffiliate correctly reports referrer relationships                                       ║
+║  5. Admin wires correct NFT address during setup                                                      ║
 ║                                                                                                       ║
 ╠═══════════════════════════════════════════════════════════════════════════════════════════════════════╣
 ║  GAS OPTIMIZATIONS                                                                                    ║
 ║  ─────────────────                                                                                    ║
 ║                                                                                                       ║
-║  1. All rendering is view-only (free for off-chain calls)                                            ║
-║  2. Immutable addresses for dependencies (no SLOAD)                                                  ║
-║  3. String concatenation via abi.encodePacked                                                        ║
-║  4. Fixed-point math (1e6 scale) avoids floating point                                               ║
-║  5. try/catch only where necessary (ownerOf for burned tokens)                                       ║
+║  1. All rendering is view-only (free for off-chain calls)                                             ║
+║  2. Immutable addresses for dependencies (no SLOAD)                                                   ║
+║  3. String concatenation via abi.encodePacked                                                         ║
+║  4. Fixed-point math (1e6 scale) avoids floating point                                                ║
+║  5. try/catch only where necessary (ownerOf for burned tokens)                                        ║
 ║                                                                                                       ║
-╚═══════════════════════════════════════════════════════════════════════════════════════════════════════╝
-*/
+╚═══════════════════════════════════════════════════════════════════════════════════════════════════════╝*/
 
 import "@openzeppelin/contracts/utils/Strings.sol";
 import "./interfaces/IDegenerusAffiliate.sol";

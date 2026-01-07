@@ -419,7 +419,7 @@ contract DegenerusGamepieces {
     /// @dev Core game contract (set via wire(), cannot be changed once set).
     IDegenerusGame private game;
 
-    /// @dev Token metadata renderer (immutable).
+    /// @dev Token metadata renderer (immutable). Use a router for upgradeable visuals.
     ITokenRenderer private immutable regularRenderer;
 
     /// @dev BURNIE token contract for purchases/marketplace (immutable).

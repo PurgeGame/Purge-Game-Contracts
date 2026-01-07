@@ -3,11 +3,20 @@ import path from "node:path";
 import crypto from "node:crypto";
 import hre from "hardhat";
 
-const COUNT = 50;
-const STARTING_COUNT = 10;
-const START_REMAINING = 1000;
-const LEVEL = 1;
-const LAST_EX = 420;
+function parseEnvInt(name, fallback) {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const val = Number.parseInt(raw, 10);
+  return Number.isFinite(val) ? val : fallback;
+}
+
+const COUNT = parseEnvInt("COUNT", 50);
+const STARTING_COUNT = parseEnvInt("STARTING_COUNT", 10);
+const START_REMAINING = parseEnvInt("START_REMAINING", 1000);
+const LEVEL = parseEnvInt("LEVEL", 1);
+const LAST_EX = parseEnvInt("LAST_EX", 420);
+const REMAINING_MIN = parseEnvInt("REMAINING_MIN", 1);
+const REMAINING_MAX = parseEnvInt("REMAINING_MAX", START_REMAINING);
 const TOKEN_ID_MAX = 1_000_000;
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 
@@ -59,7 +68,9 @@ function randomTokenId(used) {
 }
 
 function randomRemaining() {
-  return crypto.randomInt(1, START_REMAINING + 1);
+  const min = Math.max(1, REMAINING_MIN);
+  const max = Math.max(min, REMAINING_MAX);
+  return crypto.randomInt(min, max + 1);
 }
 
 function decodeTokenURI(uri) {
@@ -86,7 +97,10 @@ function ensureOutputDir() {
     .replace(/\..+/, "")
     .replace(/[-:]/g, "")
     .replace("T", "_");
-  const outDir = path.join(baseDir, stamp);
+  const label = (process.env.OUTPUT_LABEL || "").trim();
+  const safeLabel = label.replace(/[^A-Za-z0-9_-]+/g, "");
+  const dirName = safeLabel ? `${stamp}_${safeLabel}` : stamp;
+  const outDir = path.join(baseDir, dirName);
   fs.mkdirSync(outDir);
   return outDir;
 }
@@ -103,15 +117,15 @@ async function main() {
   if (iconsData.symQ2?.length !== 8) throw new Error("icons32Data.json symQ2 length mismatch");
   if (iconsData.symQ3?.length !== 8) throw new Error("icons32Data.json symQ3 length mismatch");
 
-  const NftFactory = await ethers.getContractFactory("MockNftOwner");
+  const NftFactory = await ethers.getContractFactory("contracts/test/MockNftOwner.sol:MockNftOwner");
   const nft = await NftFactory.deploy(deployer.address);
   await nft.waitForDeployment();
 
-  const RegistryFactory = await ethers.getContractFactory("IconColorRegistry");
-  const registry = await RegistryFactory.deploy(await nft.getAddress());
+  const RegistryFactory = await ethers.getContractFactory("contracts/IconColorRegistry.sol:IconColorRegistry");
+  const registry = await RegistryFactory.deploy(await nft.getAddress(), ZERO_ADDRESS);
   await registry.waitForDeployment();
 
-  const IconsFactory = await ethers.getContractFactory("Icons32Data");
+  const IconsFactory = await ethers.getContractFactory("contracts/Icons32Data.sol:Icons32Data");
   const icons = await IconsFactory.deploy(
     iconsData.paths,
     iconsData.diamond,
@@ -121,11 +135,11 @@ async function main() {
   );
   await icons.waitForDeployment();
 
-  const GameFactory = await ethers.getContractFactory("MockGameStartTraits");
+  const GameFactory = await ethers.getContractFactory("contracts/test/MockGameStartTraits.sol:MockGameStartTraits");
   const game = await GameFactory.deploy(START_REMAINING);
   await game.waitForDeployment();
 
-  const RendererFactory = await ethers.getContractFactory("IconRendererRegular32");
+  const RendererFactory = await ethers.getContractFactory("contracts/IconRendererRegular32.sol:IconRendererRegular32");
   const renderer = await RendererFactory.deploy(
     await icons.getAddress(),
     await registry.getAddress(),

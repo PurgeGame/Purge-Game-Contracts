@@ -10,50 +10,50 @@ pragma solidity ^0.8.26;
 ║  ARCHITECTURE OVERVIEW                                                                                ║
 ║  ─────────────────────                                                                                ║
 ║  IconRendererRegular32 is the primary renderer for Degenerus gamepiece tokens. It generates           ║
-║  complete ERC721 metadata including dynamically-rendered SVG images that reflect current game state. ║
+║  complete ERC721 metadata including dynamically-rendered SVG images that reflect current game state.  ║
 ║                                                                                                       ║
 ║  ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐ ║
 ║  │                              GAMEPIECE SVG LAYOUT                                                │ ║
 ║  │                                                                                                  │ ║
-║  │   ┌─────────────────────────────────────────────────────────────────────┐                       │ ║
-║  │   │                        Outer Square Frame                           │                       │ ║
-║  │   │                     (customizable border color)                     │                       │ ║
-║  │   │                                                                     │                       │ ║
-║  │   │   ┌───────────────────┬───────────────────┐                        │                       │ ║
-║  │   │   │                   │                   │                        │                       │ ║
-║  │   │   │   Q2 (Gambling)   │   Q3 (Dice)      │                        │                       │ ║
-║  │   │   │   ◉ Ring+Symbol   │   ◉ Ring+Symbol  │                        │                       │ ║
-║  │   │   │                   │                   │                        │                       │ ║
-║  │   │   ├───────────┬◆◆◆◆◆◆┼───────────────────┤                        │                       │ ║
-║  │   │   │           │ FLAME│                   │                        │                       │ ║
-║  │   │   │   Q0      │ ◆◆◆  │   Q1 (Zodiac)    │                        │                       │ ║
-║  │   │   │  (Crypto) │      │   ◉ Ring+Symbol  │                        │                       │ ║
-║  │   │   │ ◉ Ring    │      │                   │                        │                       │ ║
-║  │   │   └───────────────────┴───────────────────┘                        │                       │ ║
-║  │   │                                                                     │                       │ ║
-║  │   └─────────────────────────────────────────────────────────────────────┘                       │ ║
+║  │   ┌─────────────────────────────────────────────────────────────────────┐                       │  ║
+║  │   │                        Outer Square Frame                           │                       │  ║
+║  │   │                     (customizable border color)                     │                       │  ║
+║  │   │                                                                     │                       │  ║
+║  │   │   ┌───────────────────┬───────────────────┐                        │                       │   ║
+║  │   │   │                   │                   │                        │                       │   ║
+║  │   │   │   Q2 (Cards)      │   Q3 (Dice)      │                        │                       │    ║
+║  │   │   │   ◉ Ring+Symbol   │   ◉ Ring+Symbol  │                        │                       │    ║
+║  │   │   │                   │                   │                        │                       │   ║
+║  │   │   ├───────────┬◆◆◆◆◆◆┼───────────────────┤                        │                       │    ║
+║  │   │   │           │ FLAME│                   │                        │                       │    ║
+║  │   │   │   Q0      │ ◆◆◆  │   Q1 (Zodiac)    │                        │                       │     ║
+║  │   │   │  (Crypto) │      │   ◉ Ring+Symbol  │                        │                       │     ║
+║  │   │   │ ◉ Ring    │      │                   │                        │                       │    ║
+║  │   │   └───────────────────┴───────────────────┘                        │                       │   ║
+║  │   │                                                                     │                       │  ║
+║  │   └─────────────────────────────────────────────────────────────────────┘                       │  ║
 ║  │                                                                                                  │ ║
 ║  │   Each quadrant contains:                                                                        │ ║
-║  │   • Outer ring: Quadrant's palette color (scarcity-scaled radius)                               │ ║
-║  │   • Middle ring: Dark (#111) contrast band                                                      │ ║
-║  │   • Inner ring: White (#fff) background for symbol                                              │ ║
-║  │   • Symbol: Quadrant-specific icon (Crypto/Zodiac/Gambling/Dice)                                │ ║
+║  │   • Outer ring: Quadrant's palette color (scarcity-scaled radius)                               │  ║
+║  │   • Middle ring: Dark (#111) contrast band                                                      │  ║
+║  │   • Inner ring: White (#fff) background for symbol                                              │  ║
+║  │   • Symbol: Quadrant-specific icon (Crypto/Zodiac/Cards/Dice)                                   │  ║
 ║  └──────────────────────────────────────────────────────────────────────────────────────────────────┘ ║
 ║                                                                                                       ║
 ║  ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐ ║
-║  │                              GAMEPIECE DATA LAYOUT (24-bit packed traits)                       │ ║
+║  │                              GAMEPIECE DATA LAYOUT (24-bit packed traits)                       │  ║
 ║  │                                                                                                  │ ║
-║  │   data parameter from DegenerusGamepieces:                                                      │ ║
-║  │   bits [0-5]:   Q0 trait (color*8 + symbol)                                                     │ ║
-║  │   bits [6-7]:   Q0 quadrant tag (0)                                                             │ ║
-║  │   bits [8-13]:  Q1 trait (color*8 + symbol)                                                     │ ║
-║  │   bits [14-15]: Q1 quadrant tag (1)                                                             │ ║
-║  │   bits [16-21]: Q2 trait (color*8 + symbol)                                                     │ ║
-║  │   bits [22-23]: Q2 quadrant tag (2)                                                             │ ║
-║  │   bits [24-29]: Q3 trait (color*8 + symbol)                                                     │ ║
-║  │   bits [30-31]: Q3 quadrant tag (3)                                                             │ ║
-║  │   bits [32-55]: Level (uint24)                                                                  │ ║
-║  │   bits [56-71]: Last exterminated trait (0..255 valid, 420 = none)                              │ ║
+║  │   data parameter from DegenerusGamepieces:                                                      │  ║
+║  │   bits [0-5]:   Q0 trait (color*8 + symbol)                                                     │  ║
+║  │   bits [6-7]:   Q0 quadrant tag (0)                                                             │  ║
+║  │   bits [8-13]:  Q1 trait (color*8 + symbol)                                                     │  ║
+║  │   bits [14-15]: Q1 quadrant tag (1)                                                             │  ║
+║  │   bits [16-21]: Q2 trait (color*8 + symbol)                                                     │  ║
+║  │   bits [22-23]: Q2 quadrant tag (2)                                                             │  ║
+║  │   bits [24-29]: Q3 trait (color*8 + symbol)                                                     │  ║
+║  │   bits [30-31]: Q3 quadrant tag (3)                                                             │  ║
+║  │   bits [32-55]: Level (uint24)                                                                  │  ║
+║  │   bits [56-71]: Last exterminated trait (0..255 valid, 420 = none)                              │  ║
 ║  └──────────────────────────────────────────────────────────────────────────────────────────────────┘ ║
 ║                                                                                                       ║
 ║  ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐ ║
@@ -61,24 +61,24 @@ pragma solidity ^0.8.26;
 ║  │                                                                                                  │ ║
 ║  │   SCARCITY-BASED RING SIZE                                                                       │ ║
 ║  │   • Ring radius scales with trait scarcity                                                       │ ║
-║  │   • More rare = larger ring (50% base → 100% when only 1 remains)                               │ ║
-║  │   • Calculated from startTraitRemaining() vs current remaining                                  │ ║
+║  │   • More rare = larger ring (50% base → 100% when only 1 remains)                               │  ║
+║  │   • Calculated from startTraitRemaining() vs current remaining                                  │  ║
 ║  │                                                                                                  │ ║
 ║  │   COLOR CUSTOMIZATION CASCADE                                                                    │ ║
-║  │   • Per-token override (from registry)                                                          │ ║
-║  │   • → Owner default (from registry)                                                             │ ║
-║  │   • → Referrer default (from affiliate program + registry)                                      │ ║
-║  │   • → Upline default (referrer's referrer)                                                      │ ║
-║  │   • → Theme default (hardcoded in renderer)                                                     │ ║
+║  │   • Per-token override (from registry)                                                          │  ║
+║  │   • → Owner default (from registry)                                                             │  ║
+║  │   • → Referrer default (from affiliate program + registry)                                      │  ║
+║  │   • → Upline default (referrer's referrer)                                                      │  ║
+║  │   • → Theme default (hardcoded in renderer)                                                     │  ║
 ║  │                                                                                                  │ ║
 ║  │   EXTERMINATION HIGHLIGHTING                                                                     │ ║
-║  │   • When a trait was just exterminated, that quadrant is inverted                               │ ║
-║  │   • Level 90 special case: all traits EXCEPT the exterminated one are inverted                  │ ║
-║  │   • Uses SVG filter for color inversion effect                                                  │ ║
+║  │   • When a trait was just exterminated, that quadrant is inverted                               │  ║
+║  │   • Level 90 special case: all traits EXCEPT the exterminated one are inverted                  │  ║
+║  │   • Uses SVG filter for color inversion effect                                                  │  ║
 ║  │                                                                                                  │ ║
 ║  │   LEVEL-BASED COLOR VARIATION                                                                    │ ║
-║  │   • Base palette colors shift slightly based on level cycle (0-9)                               │ ║
-║  │   • Creates visual variety across levels while maintaining recognizability                      │ ║
+║  │   • Base palette colors shift slightly based on level cycle (0-9)                               │  ║
+║  │   • Creates visual variety across levels while maintaining recognizability                      │  ║
 ║  └──────────────────────────────────────────────────────────────────────────────────────────────────┘ ║
 ║                                                                                                       ║
 ╠═══════════════════════════════════════════════════════════════════════════════════════════════════════╣
@@ -86,40 +86,39 @@ pragma solidity ^0.8.26;
 ║  ───────────────────────                                                                              ║
 ║                                                                                                       ║
 ║  1. VIEW-ONLY RENDERING                                                                               ║
-║     • tokenURI() is a view function - no state changes                                               ║
-║     • Safe for off-chain metadata generation                                                         ║
+║     • tokenURI() is a view function - no state changes                                                ║
+║     • Safe for off-chain metadata generation                                                          ║
 ║                                                                                                       ║
 ║  2. ACCESS CONTROL                                                                                    ║
-║     • wire() is onlyAdmin for one-time setup                                                         ║
-║     • setMyColors() proxies to registry with msg.sender                                              ║
-║     • setCustomColorsForMany() proxies with ownership verification                                   ║
+║     • wire() is onlyAdmin for one-time setup                                                          ║
+║     • setMyColors() proxies to registry with msg.sender                                               ║
+║     • setCustomColorsForMany() proxies with ownership verification                                    ║
 ║                                                                                                       ║
 ║  3. EXTERNAL CALLS                                                                                    ║
-║     • All external calls to trusted, immutable addresses                                             ║
-║     • No value transfers, no callbacks                                                               ║
+║     • All external calls to trusted, immutable addresses                                              ║
+║     • No value transfers, no callbacks                                                                ║
 ║                                                                                                       ║
 ╠═══════════════════════════════════════════════════════════════════════════════════════════════════════╣
 ║  TRUST ASSUMPTIONS                                                                                    ║
 ║  ─────────────────                                                                                    ║
 ║                                                                                                       ║
-║  1. DegenerusGame provides accurate startTraitRemaining values                                       ║
-║  2. DegenerusGamepieces provides valid packed trait data                                             ║
-║  3. Icons32Data provides safe SVG path data                                                          ║
-║  4. IconColorRegistry returns validated hex colors                                                   ║
-║  5. DegenerusAffiliate correctly reports referrer relationships                                      ║
+║  1. DegenerusGame provides accurate startTraitRemaining values                                        ║
+║  2. DegenerusGamepieces provides valid packed trait data                                              ║
+║  3. Icons32Data provides safe SVG path data                                                           ║
+║  4. IconColorRegistry returns validated hex colors                                                    ║
+║  5. DegenerusAffiliate correctly reports referrer relationships                                       ║
 ║                                                                                                       ║
 ╠═══════════════════════════════════════════════════════════════════════════════════════════════════════╣
 ║  GAS OPTIMIZATIONS                                                                                    ║
 ║  ─────────────────                                                                                    ║
 ║                                                                                                       ║
-║  1. All rendering is view-only (free for off-chain calls)                                            ║
-║  2. Immutable addresses for dependencies (no SLOAD for contracts)                                    ║
-║  3. 1e6 fixed-point math avoids floating point overhead                                              ║
-║  4. String concatenation via abi.encodePacked                                                        ║
-║  5. unchecked blocks for safe arithmetic in loops                                                    ║
+║  1. All rendering is view-only (free for off-chain calls)                                             ║
+║  2. Immutable addresses for dependencies (no SLOAD for contracts)                                     ║
+║  3. 1e6 fixed-point math avoids floating point overhead                                               ║
+║  4. String concatenation via abi.encodePacked                                                         ║
+║  5. unchecked blocks for safe arithmetic in loops                                                     ║
 ║                                                                                                       ║
-╚═══════════════════════════════════════════════════════════════════════════════════════════════════════╝
-*/
+╚═══════════════════════════════════════════════════════════════════════════════════════════════════════╝*/
 
 import "@openzeppelin/contracts/utils/Base64.sol";
 import "@openzeppelin/contracts/utils/Strings.sol";
@@ -591,7 +590,7 @@ contract IconRendererRegular32 {
             return string.concat("Symbol ", (uint256(symbolIndex) + 1).toString());
         }
 
-        return string.concat("Dice ", (uint256(symbolIndex) + 1).toString());
+        return (uint256(symbolIndex) + 1).toString();
     }
 
     /// @notice Color + symbol label (e.g., “Blue Diamond”).
@@ -603,7 +602,7 @@ contract IconRendererRegular32 {
     function _quadrantTitle(uint256 idx) private pure returns (string memory) {
         if (idx == 0) return "Crypto";
         if (idx == 1) return "Zodiac";
-        if (idx == 2) return "Gambling";
+        if (idx == 2) return "Cards";
         return "Dice";
     }
 
@@ -853,8 +852,8 @@ contract IconRendererRegular32 {
         if (dataQ == 1 && symIdx == 6) {
             // TR / Sagittarius
             f = uint32((uint256(f) * 722_500) / 1_000_000);
-        } else if (dataQ == 2 && symIdx == 1) {
-            // BL / Mushroom
+        } else if (dataQ == 2 && symIdx == 7) {
+            // BL / Ace
             f = uint32((uint256(f) * 130_000) / 100_000);
         } else if (dataQ == 3 && (symIdx == 6 || symIdx == 7)) {
             // BR / dice 7/8
@@ -862,7 +861,7 @@ contract IconRendererRegular32 {
         } else if (dataQ == 0 && symIdx == 6) {
             // TL / Ethereum
             f = uint32((uint256(f) * 110_000) / 100_000);
-        } else if (dataQ == 2 && symIdx == 6) {
+        } else if (dataQ == 2 && symIdx == 5) {
             // BL / Heart
             f = uint32((uint256(f) * 95_000) / 100_000);
         } else if (dataQ == 0 && (symIdx == 3 || symIdx == 7)) {

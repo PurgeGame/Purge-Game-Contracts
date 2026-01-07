@@ -68,7 +68,7 @@ pragma solidity ^0.8.26;
 ║  2. ACCESS CONTROL                                                                                    ║
 ║     • admin: immutable, set at construction, can only call wire()                                     ║
 ║     • game: one-time set via wire(), cannot be changed after                                          ║
-║     • renderer: immutable, set at construction, trusted for tokenURI                                  ║
+║     • renderer: immutable, set at construction (use a router for upgradeable visuals)                ║
 ║                                                                                                       ║
 ║  3. REENTRANCY                                                                                        ║
 ║     • No ETH handling (no payable functions, no withdrawals)                                          ║
