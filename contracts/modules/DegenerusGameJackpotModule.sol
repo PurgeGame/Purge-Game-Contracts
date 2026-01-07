@@ -316,7 +316,23 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
                 futureEthPool = rewardSlice + leftoverPool;
                 carryoverMapBps = _weightedDailyMapBps(rewardSlice, leftoverPool);
             } else {
-                uint256 futurePoolBps = jackpotCounter == 0 ? 300 : 100; // 3% on first burn, else 1%
+                uint256 futurePoolBps;
+                if (jackpotCounter == 0) {
+                    uint256 targetPool = lastPrizePool;
+                    uint256 fundedBps = 0;
+                    if (targetPool != 0) {
+                        fundedBps = (nextPrizePool * 10_000) / targetPool;
+                    }
+                    if (fundedBps >= 3500) {
+                        futurePoolBps = 400;
+                    } else if (fundedBps >= 2500) {
+                        futurePoolBps = 300;
+                    } else {
+                        futurePoolBps = 200;
+                    }
+                } else {
+                    futurePoolBps = 100;
+                }
                 if (jackpotCounter == 1) {
                     futurePoolBps += 100; // +1% boost on the second daily jackpot
                 }
