@@ -30,5 +30,5 @@
     "STETH_TOKEN": "0x3e3FE7dBc6B4C189E7128855dD526361c49b40Af",
     "LINK_TOKEN": "0x779877A7B0D9E8603169DdbD7836e478b4624789"
   },
-  "output": "contracts/DeployConstants.sol"
+  "output": "contracts/ContractAddresses.sol"
 }

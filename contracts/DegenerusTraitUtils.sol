@@ -1,85 +1,85 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-/*╔══════════════════════════════════════════════════════════════════════════════╗
-  ║                                                                              ║
-  ║                      DEGENERUS TRAIT UTILS LIBRARY                           ║
-  ║                                                                              ║
-  ║  Pure utility library for deterministic trait generation from random seeds.  ║
-  ║  Used by DegenerusGamepieces to assign visual traits to NFTs.                ║
-  ║                                                                              ║
-  ╠══════════════════════════════════════════════════════════════════════════════╣
-  ║                           TRAIT SYSTEM OVERVIEW                              ║
-  ╠══════════════════════════════════════════════════════════════════════════════╣
-  ║                                                                              ║
-  ║  TRAIT ID STRUCTURE (8 bits per trait):                                      ║
-  ║  ┌────────────────────────────────────────────────────────────────────────┐  ║
-  ║  │  Bits 7-6: Quadrant identifier (0-3)                                   │  ║
-  ║  │  Bits 5-3: Category bucket (0-7)                                       │  ║
-  ║  │  Bits 2-0: Sub-bucket (0-7)                                            │  ║
-  ║  │                                                                        │  ║
-  ║  │  Format: [QQ][CCC][SSS] = 8 bits                                       │  ║
-  ║  │                                                                        │  ║
-  ║  │  • Quadrant: Which of 4 trait slots (A=0, B=1, C=2, D=3)               │  ║
-  ║  │  • Category: Main trait category (8 options, weighted distribution)    │  ║
-  ║  │  • Sub-bucket: Variant within category (8 options, weighted)           │  ║
-  ║  └────────────────────────────────────────────────────────────────────────┘  ║
-  ║                                                                              ║
-  ║  PACKED TRAITS (32 bits total):                                              ║
-  ║  ┌────────────────────────────────────────────────────────────────────────┐  ║
-  ║  │  Bits 31-24: Trait D (quadrant 3)                                      │  ║
-  ║  │  Bits 23-16: Trait C (quadrant 2)                                      │  ║
-  ║  │  Bits 15-8:  Trait B (quadrant 1)                                      │  ║
-  ║  │  Bits 7-0:   Trait A (quadrant 0)                                      │  ║
-  ║  │                                                                        │  ║
-  ║  │  [DDDDDDDD][CCCCCCCC][BBBBBBBB][AAAAAAAA] = 32 bits                    │  ║
-  ║  └────────────────────────────────────────────────────────────────────────┘  ║
-  ║                                                                              ║
-  ║  WEIGHTED DISTRIBUTION:                                                      ║
-  ║  ┌────────────────────────────────────────────────────────────────────────┐  ║
-  ║  │  Bucket │ Range    │ Width │ Probability                               │  ║
-  ║  │  ───────┼──────────┼───────┼────────────                               │  ║
-  ║  │    0    │  0-9     │  10   │  13.3%                                    │  ║
-  ║  │    1    │ 10-19    │  10   │  13.3%                                    │  ║
-  ║  │    2    │ 20-29    │  10   │  13.3%                                    │  ║
-  ║  │    3    │ 30-39    │  10   │  13.3%                                    │  ║
-  ║  │    4    │ 40-48    │   9   │  12.0%                                    │  ║
-  ║  │    5    │ 49-57    │   9   │  12.0%                                    │  ║
-  ║  │    6    │ 58-66    │   9   │  12.0%                                    │  ║
-  ║  │    7    │ 67-74    │   8   │  10.7%                                    │  ║
-  ║  │  ───────┴──────────┴───────┴────────────                               │  ║
-  ║  │  Total: 75 (scaled from uint32 range)                                  │  ║
-  ║  └────────────────────────────────────────────────────────────────────────┘  ║
-  ║                                                                              ║
-  ║  RANDOM SEED USAGE:                                                          ║
-  ║  ┌────────────────────────────────────────────────────────────────────────┐  ║
-  ║  │  256-bit seed divided into 4 × 64-bit words:                           │  ║
-  ║  │                                                                        │  ║
-  ║  │  [bits 255-192] → Trait D (category from low 32, sub from high 32)     │  ║
-  ║  │  [bits 191-128] → Trait C (category from low 32, sub from high 32)     │  ║
-  ║  │  [bits 127-64]  → Trait B (category from low 32, sub from high 32)     │  ║
-  ║  │  [bits 63-0]    → Trait A (category from low 32, sub from high 32)     │  ║
-  ║  └────────────────────────────────────────────────────────────────────────┘  ║
-  ║                                                                              ║
-  ╠══════════════════════════════════════════════════════════════════════════════╣
-  ║                         SECURITY CONSIDERATIONS                              ║
-  ╠══════════════════════════════════════════════════════════════════════════════╣
-  ║                                                                              ║
-  ║  1. PURE FUNCTIONS:                                                          ║
-  ║     • No state reads/writes - purely computational                           ║
-  ║     • No external calls - no reentrancy risk                                 ║
-  ║     • Deterministic outputs from inputs                                      ║
-  ║                                                                              ║
-  ║  2. ARITHMETIC SAFETY:                                                       ║
-  ║     • Uses unchecked blocks for gas efficiency                               ║
-  ║     • All operations within safe bounds (no overflow possible)               ║
-  ║     • Scaling uses uint64 intermediate to prevent truncation                 ║
-  ║                                                                              ║
-  ║  3. DETERMINISM:                                                             ║
-  ║     • Same tokenId always produces same traits (via keccak256)               ║
-  ║     • Critical for on-chain trait verification                               ║
-  ║                                                                              ║
-  ╚══════════════════════════════════════════════════════════════════════════════╝*/
+/*+==============================================================================+
+  |                                                                              |
+  |                      DEGENERUS TRAIT UTILS LIBRARY                           |
+  |                                                                              |
+  |  Pure utility library for deterministic trait generation from random seeds.  |
+  |  Used by DegenerusGamepieces to assign visual traits to NFTs.                |
+  |                                                                              |
+  +==============================================================================+
+  |                           TRAIT SYSTEM OVERVIEW                              |
+  +==============================================================================+
+  |                                                                              |
+  |  TRAIT ID STRUCTURE (8 bits per trait):                                      |
+  |  +------------------------------------------------------------------------+  |
+  |  |  Bits 7-6: Quadrant identifier (0-3)                                   |  |
+  |  |  Bits 5-3: Category bucket (0-7)                                       |  |
+  |  |  Bits 2-0: Sub-bucket (0-7)                                            |  |
+  |  |                                                                        |  |
+  |  |  Format: [QQ][CCC][SSS] = 8 bits                                       |  |
+  |  |                                                                        |  |
+  |  |  • Quadrant: Which of 4 trait slots (A=0, B=1, C=2, D=3)               |  |
+  |  |  • Category: Main trait category (8 options, weighted distribution)    |  |
+  |  |  • Sub-bucket: Variant within category (8 options, weighted)           |  |
+  |  +------------------------------------------------------------------------+  |
+  |                                                                              |
+  |  PACKED TRAITS (32 bits total):                                              |
+  |  +------------------------------------------------------------------------+  |
+  |  |  Bits 31-24: Trait D (quadrant 3)                                      |  |
+  |  |  Bits 23-16: Trait C (quadrant 2)                                      |  |
+  |  |  Bits 15-8:  Trait B (quadrant 1)                                      |  |
+  |  |  Bits 7-0:   Trait A (quadrant 0)                                      |  |
+  |  |                                                                        |  |
+  |  |  [DDDDDDDD][CCCCCCCC][BBBBBBBB][AAAAAAAA] = 32 bits                    |  |
+  |  +------------------------------------------------------------------------+  |
+  |                                                                              |
+  |  WEIGHTED DISTRIBUTION:                                                      |
+  |  +------------------------------------------------------------------------+  |
+  |  |  Bucket | Range    | Width | Probability                               |  |
+  |  |  -------+----------+-------+------------                               |  |
+  |  |    0    |  0-9     |  10   |  13.3%                                    |  |
+  |  |    1    | 10-19    |  10   |  13.3%                                    |  |
+  |  |    2    | 20-29    |  10   |  13.3%                                    |  |
+  |  |    3    | 30-39    |  10   |  13.3%                                    |  |
+  |  |    4    | 40-48    |   9   |  12.0%                                    |  |
+  |  |    5    | 49-57    |   9   |  12.0%                                    |  |
+  |  |    6    | 58-66    |   9   |  12.0%                                    |  |
+  |  |    7    | 67-74    |   8   |  10.7%                                    |  |
+  |  |  -------+----------+-------+------------                               |  |
+  |  |  Total: 75 (scaled from uint32 range)                                  |  |
+  |  +------------------------------------------------------------------------+  |
+  |                                                                              |
+  |  RANDOM SEED USAGE:                                                          |
+  |  +------------------------------------------------------------------------+  |
+  |  |  256-bit seed divided into 4 × 64-bit words:                           |  |
+  |  |                                                                        |  |
+  |  |  [bits 255-192] → Trait D (category from low 32, sub from high 32)     |  |
+  |  |  [bits 191-128] → Trait C (category from low 32, sub from high 32)     |  |
+  |  |  [bits 127-64]  → Trait B (category from low 32, sub from high 32)     |  |
+  |  |  [bits 63-0]    → Trait A (category from low 32, sub from high 32)     |  |
+  |  +------------------------------------------------------------------------+  |
+  |                                                                              |
+  +==============================================================================+
+  |                         SECURITY CONSIDERATIONS                              |
+  +==============================================================================+
+  |                                                                              |
+  |  1. PURE FUNCTIONS:                                                          |
+  |     • No state reads/writes - purely computational                           |
+  |     • No external calls - no reentrancy risk                                 |
+  |     • Deterministic outputs from inputs                                      |
+  |                                                                              |
+  |  2. ARITHMETIC SAFETY:                                                       |
+  |     • Uses unchecked blocks for gas efficiency                               |
+  |     • All operations within safe bounds (no overflow possible)               |
+  |     • Scaling uses uint64 intermediate to prevent truncation                 |
+  |                                                                              |
+  |  3. DETERMINISM:                                                             |
+  |     • Same tokenId always produces same traits (via keccak256)               |
+  |     • Critical for on-chain trait verification                               |
+  |                                                                              |
+  +==============================================================================+*/
 
 /// @title DegenerusTraitUtils
 /// @author Burnie Degenerus
@@ -88,12 +88,12 @@ pragma solidity ^0.8.26;
 ///      All functions are internal pure - no state, no external calls.
 /// @custom:security-contact burnie@degener.us
 library DegenerusTraitUtils {
-    /*╔══════════════════════════════════════════════════════════════════════╗
-      ║                      BUCKET DISTRIBUTION                             ║
-      ╠══════════════════════════════════════════════════════════════════════╣
-      ║  Maps random values to 0-7 with weighted probability distribution.   ║
-      ║  Lower buckets (0-3) have ~13.3% each, higher buckets less common.   ║
-      ╚══════════════════════════════════════════════════════════════════════╝*/
+    /*+======================================================================+
+      |                      BUCKET DISTRIBUTION                             |
+      +======================================================================+
+      |  Maps random values to 0-7 with weighted probability distribution.   |
+      |  Lower buckets (0-3) have ~13.3% each, higher buckets less common.   |
+      +======================================================================+*/
 
     /// @dev Map a 32-bit random input to a 0-7 bucket with fixed piecewise distribution.
     ///
@@ -135,12 +135,12 @@ library DegenerusTraitUtils {
         }
     }
 
-    /*╔══════════════════════════════════════════════════════════════════════╗
-      ║                      TRAIT GENERATION                                ║
-      ╠══════════════════════════════════════════════════════════════════════╣
-      ║  Derives 6-bit trait from 64-bit random word.                        ║
-      ║  Combines category (3 bits) and sub-bucket (3 bits).                 ║
-      ╚══════════════════════════════════════════════════════════════════════╝*/
+    /*+======================================================================+
+      |                      TRAIT GENERATION                                |
+      +======================================================================+
+      |  Derives 6-bit trait from 64-bit random word.                        |
+      |  Combines category (3 bits) and sub-bucket (3 bits).                 |
+      +======================================================================+*/
 
     /// @dev Produce a 6-bit trait ID from a 64-bit random value.
     ///
@@ -166,11 +166,11 @@ library DegenerusTraitUtils {
         return (category << 3) | sub;
     }
 
-    /*╔══════════════════════════════════════════════════════════════════════╗
-      ║                      TRAIT PACKING                                   ║
-      ╠══════════════════════════════════════════════════════════════════════╣
-      ║  Packs 4 traits into 32-bit value for efficient storage.             ║
-      ╚══════════════════════════════════════════════════════════════════════╝*/
+    /*+======================================================================+
+      |                      TRAIT PACKING                                   |
+      +======================================================================+
+      |  Packs 4 traits into 32-bit value for efficient storage.             |
+      +======================================================================+*/
 
     /// @dev Pack the 4 quadrant traits derived from a 256-bit random seed.
     ///
@@ -207,12 +207,12 @@ library DegenerusTraitUtils {
         return uint32(traitA) | (uint32(traitB) << 8) | (uint32(traitC) << 16) | (uint32(traitD) << 24);
     }
 
-    /*╔══════════════════════════════════════════════════════════════════════╗
-      ║                      TOKEN TRAIT DERIVATION                          ║
-      ╠══════════════════════════════════════════════════════════════════════╣
-      ║  Deterministically derives traits from token ID.                     ║
-      ║  Same tokenId always produces same traits (critical for on-chain).   ║
-      ╚══════════════════════════════════════════════════════════════════════╝*/
+    /*+======================================================================+
+      |                      TOKEN TRAIT DERIVATION                          |
+      +======================================================================+
+      |  Deterministically derives traits from token ID.                     |
+      |  Same tokenId always produces same traits (critical for on-chain).   |
+      +======================================================================+*/
 
     /// @dev Deterministically derive packed traits for a token ID.
     ///

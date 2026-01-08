@@ -3,124 +3,124 @@ pragma solidity ^0.8.26;
 
 import {IDegenerusCoin} from "./interfaces/IDegenerusCoin.sol";
 import {IStETH} from "./interfaces/IStETH.sol";
-import {DeployConstants} from "./DeployConstants.sol";
+import {ContractAddresses} from "./ContractAddresses.sol";
 
-// ═══════════════════════════════════════════════════════════════════════════════════════════════════
+// ===================================================================================================
 // @title DegenerusBonds
 // @author Burnie Degenerus
 // @notice Bond system with 10-level maturity cycles, DGNRS token jackpots, and two-lane resolution.
 //
-// ┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
-// │ ARCHITECTURE OVERVIEW                                                                           │
-// ├─────────────────────────────────────────────────────────────────────────────────────────────────┤
-// │                                                                                                 │
-// │  1. BOND SERIES LIFECYCLE                                                                       │
-// │     ┌─────────────────────────────────────────────────────────────────────────────────────────┐ │
-// │     │ Level:    [1-5]    [6-9]   [10-14]  [15-19]  [20-24]  [25-29]  [30] ...                 │ │
-// │     │ Series:   Mat=10   ---     Mat=20   ---      Mat=30   ---      Resolve                  │ │
-// │     │ Phase:    SALE     WAIT    SALE     WAIT     SALE     WAIT     PAYOUT                   │ │
-// │     └─────────────────────────────────────────────────────────────────────────────────────────┘ │
-// │     • Maturities occur every 10 levels (10, 20, 30, ...)                                        │
-// │     • Sale windows: 5 levels each (1-5, 10-14, 20-24, ...)                                      │
-// │     • Resolution: At maturity level, if bondPool is funded                                      │
-// │                                                                                                 │
-// │  2. TOKEN FLOW                                                                                  │
-// │     Deposit ETH → Score recorded → DGNRS minted via jackpots → Burn DGNRS → Enter lane →        │
-// │     → At maturity: Winning lane splits pool (50% pro-rata, 50% draw prizes)                     │
-// │                                                                                                 │
-// │  3. DGNRS TOKEN MECHANICS                                                                       │
-// │     • Single shared token across all series (not per-maturity)                                  │
-// │     • Jackpot emissions: 10%+10%+10%+10%+60% of raised over 5 runs (before maturity-5)          │
-// │     • Final emission uses growth multiplier based on raise vs previous series                   │
-// │     • Burning enters a two-lane system; lane determined by hash(maturity, player)               │
-// │                                                                                                 │
-// │  4. TWO-LANE RESOLUTION                                                                         │
-// │     ┌────────────────────────────────────────────────────────────────────────────┐              │
-// │     │ Lane 0 (burns)     Lane 1 (burns)                                          │              │
-// │     │      ↓                  ↓                                                  │              │
-// │     │ [RNG picks winning lane at maturity]                                       │              │
-// │     │      ↓                                                                     │              │
-// │     │ Winning Lane:                                                              │              │
-// │     │   50% → Decimator (pro-rata to burned amount, pull pattern)                │              │
-// │     │   50% → Draw prizes (20%, 10%, 5%, 5%, 1%×10)                              │              │
-// │     └────────────────────────────────────────────────────────────────────────────┘              │
-// │                                                                                                 │
-// │  5. PRESALE PHASE                                                                               │
-// │     • Before game wiring, bonds sold go to maturity=0 (presale series)                          │
-// │     • ETH split: 30% vault, 50% reward pool, 20% yield pool                                     │
-// │     • 5 manual jackpot runs via admin; final run applies growth multiplier                      │
-// │     • Coin rewards distributed: 5% run1, 10% runs2-4, 65% shutdown                              │
-// │                                                                                                 │
-// │  6. ETH ROUTING (normal deposits)                                                               │
-// │     • External: 40% vault (stETH preferred), 20% bondPool, 10% reward, 30% yield                │
-// │     • From game: Already split in-game; score recorded only                                     │
-// │                                                                                                 │
-// │  7. GROWTH MULTIPLIER                                                                           │
-// │     Piecewise linear based on (raised / prevRaise):                                             │
-// │     ┌─────────────────────────────────────────────────────────────────────────────┐             │
-// │     │ Ratio       │ Multiplier │ Effect                                           │             │
-// │     ├─────────────────────────────────────────────────────────────────────────────┤             │
-// │     │ ≤0.5x       │ 3.0x       │ Declining participation → generous payout        │             │
-// │     │ 0.5x-1.0x   │ 3.0→2.0x   │ Linear interpolation                             │             │
-// │     │ 1.0x-2.0x   │ 2.0→1.0x   │ Linear interpolation                             │             │
-// │     │ ≥2.0x       │ 1.0x       │ Strong growth → standard payout                  │             │
-// │     └─────────────────────────────────────────────────────────────────────────────┘             │
-// │                                                                                                 │
-// └─────────────────────────────────────────────────────────────────────────────────────────────────┘
+// +-------------------------------------------------------------------------------------------------+
+// | ARCHITECTURE OVERVIEW                                                                           |
+// +-------------------------------------------------------------------------------------------------+
+// |                                                                                                 |
+// |  1. BOND SERIES LIFECYCLE                                                                       |
+// |     +-----------------------------------------------------------------------------------------+ |
+// |     | Level:    [1-5]    [6-9]   [10-14]  [15-19]  [20-24]  [25-29]  [30] ...                 | |
+// |     | Series:   Mat=10   ---     Mat=20   ---      Mat=30   ---      Resolve                  | |
+// |     | Phase:    SALE     WAIT    SALE     WAIT     SALE     WAIT     PAYOUT                   | |
+// |     +-----------------------------------------------------------------------------------------+ |
+// |     • Maturities occur every 10 levels (10, 20, 30, ...)                                        |
+// |     • Sale windows: 5 levels each (1-5, 10-14, 20-24, ...)                                      |
+// |     • Resolution: At maturity level, if bondPool is funded                                      |
+// |                                                                                                 |
+// |  2. TOKEN FLOW                                                                                  |
+// |     Deposit ETH → Score recorded → DGNRS minted via jackpots → Burn DGNRS → Enter lane →        |
+// |     → At maturity: Winning lane splits pool (50% pro-rata, 50% draw prizes)                     |
+// |                                                                                                 |
+// |  3. DGNRS TOKEN MECHANICS                                                                       |
+// |     • Single shared token across all series (not per-maturity)                                  |
+// |     • Jackpot emissions: 10%+10%+10%+10%+60% of raised over 5 runs (before maturity-5)          |
+// |     • Final emission uses growth multiplier based on raise vs previous series                   |
+// |     • Burning enters a two-lane system; lane determined by hash(maturity, player)               |
+// |                                                                                                 |
+// |  4. TWO-LANE RESOLUTION                                                                         |
+// |     +----------------------------------------------------------------------------+              |
+// |     | Lane 0 (burns)     Lane 1 (burns)                                          |              |
+// |     |      ↓                  ↓                                                  |              |
+// |     | [RNG picks winning lane at maturity]                                       |              |
+// |     |      ↓                                                                     |              |
+// |     | Winning Lane:                                                              |              |
+// |     |   50% → Decimator (pro-rata to burned amount, pull pattern)                |              |
+// |     |   50% → Draw prizes (20%, 10%, 5%, 5%, 1%×10)                              |              |
+// |     +----------------------------------------------------------------------------+              |
+// |                                                                                                 |
+// |  5. PRESALE PHASE                                                                               |
+// |     • Before game wiring, bonds sold go to maturity=0 (presale series)                          |
+// |     • ETH split: 30% vault, 50% reward pool, 20% yield pool                                     |
+// |     • 5 manual jackpot runs via admin; final run applies growth multiplier                      |
+// |     • Coin rewards distributed: 5% run1, 10% runs2-4, 65% shutdown                              |
+// |                                                                                                 |
+// |  6. ETH ROUTING (normal deposits)                                                               |
+// |     • External: 40% vault (stETH preferred), 20% bondPool, 10% reward, 30% yield                |
+// |     • From game: Already split in-game; score recorded only                                     |
+// |                                                                                                 |
+// |  7. GROWTH MULTIPLIER                                                                           |
+// |     Piecewise linear based on (raised / prevRaise):                                             |
+// |     +-----------------------------------------------------------------------------+             |
+// |     | Ratio       | Multiplier | Effect                                           |             |
+// |     +-----------------------------------------------------------------------------+             |
+// |     | ≤0.5x       | 3.0x       | Declining participation → generous payout        |             |
+// |     | 0.5x-1.0x   | 3.0→2.0x   | Linear interpolation                             |             |
+// |     | 1.0x-2.0x   | 2.0→1.0x   | Linear interpolation                             |             |
+// |     | ≥2.0x       | 1.0x       | Strong growth → standard payout                  |             |
+// |     +-----------------------------------------------------------------------------+             |
+// |                                                                                                 |
+// +-------------------------------------------------------------------------------------------------+
 //
-// ┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
-// │ SECURITY CONSIDERATIONS                                                                         │
-// ├─────────────────────────────────────────────────────────────────────────────────────────────────┤
-// │                                                                                                 │
-// │  1. ACCESS CONTROL                                                                              │
-// │     • onlyAdmin: wireVrf(), emergencySetVrf(), setRewardStakeTargetBps(), runPresaleJackpot(),  │
-// │                  shutdownPresale()                                                              │
-// │     • onlyGame: setRngLock(), depositFromGame(), mintJackpotDgnrs(), payBonds(),                │
-// │                 bondMaintenance(), notifyGameOver(), gameOver()                                 │
-// │     • Public: depositCurrentFor(), presaleDeposit(), burnDGNRS(), claim(),                      │
-// │               sweepExpiredPools(), setAutoBurnDgnrs()                                           │
-// │                                                                                                 │
-// │  2. ONE-TIME WIRING                                                                             │
-// │     • Game, vault, coin, affiliate, questModule, trophies: AlreadySet guard                     │
-// │     • VRF: Initial wireVrf only; rewire via emergencySetVrf() (admin-gated)                     │
-// │                                                                                                 │
-// │  3. VRF SECURITY                                                                                │
-// │     • fulfillRandomWords(): Validates msg.sender == vrfCoordinator                              │
-// │     • Request ID matching prevents stale/duplicate responses                                    │
-// │     • Emergency rewire clears pending state to allow fresh requests                             │
-// │                                                                                                 │
-// │  4. RNG LOCK                                                                                    │
-// │     • Game can lock RNG during jackpot windows to prevent manipulation                          │
-// │     • Blocks deposits and burns while locked                                                    │
-// │                                                                                                 │
-// │  5. PULL PATTERN FOR CLAIMS                                                                     │
-// │     • Decimator payouts use claim() (pull) instead of push                                      │
-// │     • Prevents DoS via revert in recipient                                                      │
-// │     • unclaimedBudget tracked per series for accounting                                         │
-// │                                                                                                 │
-// │  6. GAME OVER HANDLING                                                                          │
-// │     • Resolves series in order (oldest first)                                                   │
-// │     • Partial payouts if funds insufficient                                                     │
-// │     • 1-year expiry for unclaimed funds → vault sweep                                           │
-// │                                                                                                 │
-// │  7. REENTRANCY PROTECTION                                                                       │
-// │     • No callback-based reentrancy vectors (ETH transfers use call with failure handling)       │
-// │     • State updates before external calls where applicable                                      │
-// │                                                                                                 │
-// └─────────────────────────────────────────────────────────────────────────────────────────────────┘
+// +-------------------------------------------------------------------------------------------------+
+// | SECURITY CONSIDERATIONS                                                                         |
+// +-------------------------------------------------------------------------------------------------+
+// |                                                                                                 |
+// |  1. ACCESS CONTROL                                                                              |
+// |     • onlyAdmin: wireVrf(), emergencySetVrf(), setRewardStakeTargetBps(), shutdownPresale()     |
+// |     • onlyGame: runPresaleDailyFromGame(), runTicketJackpotFromGame(), recordTicketFromGame(),  |
+// |                 setRngLock(), depositFromGame(), mintJackpotDgnrs(), payBonds(),                |
+// |                 bondMaintenance(), notifyGameOver(), gameOver(), gameOverWithEntropy()          |
+// |     • Public: depositCurrentFor(), presaleDeposit(), burnDGNRS(), claim(),                      |
+// |               sweepExpiredPools(), setAutoBurnDgnrs()                                           |
+// |                                                                                                 |
+// |  2. ONE-TIME WIRING                                                                             |
+// |     • Game, vault, coin, affiliate, questModule, trophies: AlreadySet guard                     |
+// |     • VRF: Initial wireVrf only; rewire via emergencySetVrf() (admin-gated)                     |
+// |                                                                                                 |
+// |  3. VRF SECURITY                                                                                |
+// |     • fulfillRandomWords(): Validates msg.sender == vrfCoordinator                              |
+// |     • Request ID matching prevents stale/duplicate responses                                    |
+// |     • Emergency rewire clears pending state to allow fresh requests                             |
+// |                                                                                                 |
+// |  4. RNG LOCK                                                                                    |
+// |     • Game can lock RNG during jackpot windows to prevent manipulation                          |
+// |     • Blocks deposits and burns while locked                                                    |
+// |                                                                                                 |
+// |  5. PULL PATTERN FOR CLAIMS                                                                     |
+// |     • Decimator payouts use claim() (pull) instead of push                                      |
+// |     • Prevents DoS via revert in recipient                                                      |
+// |     • unclaimedBudget tracked per series for accounting                                         |
+// |                                                                                                 |
+// |  6. GAME OVER HANDLING                                                                          |
+// |     • Resolves series in order (oldest first)                                                   |
+// |     • Partial payouts if funds insufficient                                                     |
+// |     • 1-year expiry for unclaimed funds → vault sweep                                           |
+// |                                                                                                 |
+// |  7. REENTRANCY PROTECTION                                                                       |
+// |     • No callback-based reentrancy vectors (ETH transfers use call with failure handling)       |
+// |     • State updates before external calls where applicable                                      |
+// |                                                                                                 |
+// +-------------------------------------------------------------------------------------------------+
 //
-// ┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
-// │ TRUST ASSUMPTIONS                                                                               │
-// ├─────────────────────────────────────────────────────────────────────────────────────────────────┤
-// │                                                                                                 │
-// │  • admin (DegenerusAdmin): Trusted for wiring, VRF config, presale operations                   │
-// │  • game: Trusted for RNG locking, bondMaintenance calls, ETH deposits                           │
-// │  • vrfCoordinator: Chainlink VRF - trusted external dependency                                  │
-// │  • vault: Trusted to receive and manage ETH/stETH deposits                                      │
-// │  • steth: Lido stETH token - trusted external dependency                                        │
-// │                                                                                                 │
-// └─────────────────────────────────────────────────────────────────────────────────────────────────┘
-// ═══════════════════════════════════════════════════════════════════════════════════════════════════
+// +-------------------------------------------------------------------------------------------------+
+// | TRUST ASSUMPTIONS                                                                               |
+// +-------------------------------------------------------------------------------------------------+
+// |                                                                                                 |
+// |  • admin (DegenerusAdmin): Trusted for wiring, VRF config, presale operations                   |
+// |  • game: Trusted for RNG locking, bondMaintenance calls, ETH deposits                           |
+// |  • vrfCoordinator: Chainlink VRF - trusted external dependency                                  |
+// |  • vault: Trusted to receive and manage ETH/stETH deposits                                      |
+// |  • steth: Lido stETH token - trusted external dependency                                        |
+// |                                                                                                 |
+// +-------------------------------------------------------------------------------------------------+
+// ===================================================================================================
 
 // =====================================================================
 //                      EXTERNAL INTERFACES
@@ -133,6 +133,16 @@ interface IDegenerusGameLevel {
     function level() external view returns (uint24);
     /// @notice Get a player's bonus multiplier (bps, 10000 = 1x).
     function playerBonusMultiplier(address player) external view returns (uint256);
+    /// @notice Get the prize pool target for the current cycle.
+    function prizePoolTargetView() external view returns (uint256);
+    /// @notice Get the prize pool accumulated for the next level.
+    function nextPrizePoolView() external view returns (uint256);
+}
+
+/// @notice Minimal game interface for RNG access.
+interface IDegenerusGameRng {
+    function lastRngWord() external view returns (uint256);
+    function rngLocked() external view returns (bool);
 }
 
 /// @notice Extended game interface for bond banking operations.
@@ -151,25 +161,6 @@ interface IDegenerusGameBondBank is IDegenerusGameLevel {
     function bondAvailable() external view returns (uint256);
     /// @notice Get current mint price per map.
     function mintPrice() external view returns (uint256);
-}
-
-/// @notice Minimal VRF coordinator surface for V2+ random word requests.
-/// @dev Chainlink VRF V2 compatible interface.
-interface IVRFCoordinatorV2Like {
-    /// @notice Request random words from VRF.
-    /// @param keyHash The gas lane key hash.
-    /// @param subId VRF subscription ID.
-    /// @param requestConfirmations Number of block confirmations required.
-    /// @param callbackGasLimit Gas limit for the callback.
-    /// @param numWords Number of random words requested.
-    /// @return requestId The VRF request ID.
-    function requestRandomWords(
-        bytes32 keyHash,
-        uint256 subId,
-        uint16 requestConfirmations,
-        uint32 callbackGasLimit,
-        uint32 numWords
-    ) external returns (uint256 requestId);
 }
 
 /// @notice Vault interface for depositing ETH and stETH.
@@ -216,19 +207,14 @@ interface IAffiliatePresaleStatus {
     function presaleActive() external view returns (bool);
 }
 
-/// @notice Affiliate interface for crediting presale coin rewards.
-interface IAffiliatePresaleCredit {
-    function addPresaleCoinCredit(address player, uint256 amount) external;
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════════════════════════
+// ===================================================================================================
 //                                     BOND TOKEN (ERC20)
-// ═══════════════════════════════════════════════════════════════════════════════════════════════════
+// ===================================================================================================
 
 /**
  * @title BondToken
  * @notice Minimal mintable/burnable ERC20 representing liquid bonds (DGNRS).
- * @dev Shared across all bond series. Predeployed with the bonds contract as minter.
+ * @dev Shared across all bond series. Predeployed with the bonds contract as ContractAddresses.BONDS.
  *
  * FEATURES:
  * - Standard ERC20 (transfer, transferFrom, approve)
@@ -237,8 +223,8 @@ interface IAffiliatePresaleCredit {
  * - Nuke function to permanently disable all operations
  *
  * SECURITY:
- * - Only minter (DegenerusBonds) can mint tokens
- * - Only minter can burn without approval
+ * - Only ContractAddresses.BONDS (DegenerusBonds) can mint tokens
+ * - Only ContractAddresses.BONDS can burn without approval
  * - Vault mint allowance provides capped liquidity provision
  * - Disabled flag prevents all operations after game shutdown
  */
@@ -278,7 +264,6 @@ contract BondToken {
     /// @notice Token decimals (18, standard ERC20).
     uint8 public constant decimals = 18;
     /// @notice The only address allowed to mint tokens (DegenerusBonds contract).
-    address private constant minter = DeployConstants.BONDS;
 
     // =====================================================================
     //                            STORAGE
@@ -292,8 +277,6 @@ contract BondToken {
     mapping(address => mapping(address => uint256)) public allowance;
     /// @notice When true, all operations are permanently disabled.
     bool private disabled;
-    /// @notice Vault contract address (set once via setVault).
-    address private vault;
     /// @notice Pre-allocated mint allowance for vault liquidity provision.
     /// @dev Starts at 50 ETH equivalent; vault can mint up to this without new allocation.
     uint256 private _vaultMintAllowance = 50 ether;
@@ -360,15 +343,15 @@ contract BondToken {
 
     /**
      * @notice Mint new tokens to an address.
-     * @dev Only callable by minter (DegenerusBonds). Reverts if disabled.
+     * @dev Only callable by ContractAddresses.BONDS (DegenerusBonds). Reverts if disabled.
      *      Used for jackpot emissions.
      * @param to Recipient address.
      * @param amount Amount to mint.
      */
     function mint(address to, uint256 amount) external {
         _requireActive();
-        // SECURITY: Only minter can create new tokens.
-        if (msg.sender != minter) revert Unauthorized();
+        // SECURITY: Only ContractAddresses.BONDS can create new tokens.
+        if (msg.sender != ContractAddresses.BONDS) revert Unauthorized();
         unchecked {
             totalSupply += amount;
             balanceOf[to] += amount;
@@ -387,7 +370,7 @@ contract BondToken {
         _requireActive();
         // SECURITY: Minter can burn without allowance (for bond redemption).
         // Others need to be the owner or have sufficient allowance.
-        if (msg.sender != minter && from != msg.sender) {
+        if (msg.sender != ContractAddresses.BONDS && from != msg.sender) {
             uint256 allowed = allowance[from][msg.sender];
             if (allowed < amount) revert Unauthorized();
             if (allowed != type(uint256).max) {
@@ -406,19 +389,16 @@ contract BondToken {
     // =====================================================================
 
     /**
-     * @notice Set the vault address (one-time).
-     * @dev Only callable by minter. Used to authorize vault for minting.
-     * @param vault_ Address of the vault contract.
+     * @notice Validate vault address matches expected constant (idempotent check).
+     * @dev Called by ContractAddresses.BONDS during initialization. No-op for verification only.
+     * @param vault_ Address of the vault contract (must match ContractAddresses.VAULT).
      */
     function setVault(address vault_) external {
         _requireActive();
-        // SECURITY: Only minter can set vault.
-        if (msg.sender != minter) revert Unauthorized();
-        address current = vault;
-        if (current == vault_) return; // Idempotent.
-        // SECURITY: One-time setting only.
-        if (current != address(0)) revert AlreadySet();
-        vault = vault_;
+        // SECURITY: Only ContractAddresses.BONDS can call this.
+        if (msg.sender != ContractAddresses.BONDS) revert Unauthorized();
+        // SECURITY: Verify vault address matches the precomputed constant.
+        if (vault_ != ContractAddresses.VAULT) revert Unauthorized();
     }
 
     /**
@@ -440,15 +420,15 @@ contract BondToken {
 
     /**
      * @notice Add to the vault's mint allowance (escrow more tokens).
-     * @dev Only callable by minter or vault. Used when new series needs liquidity.
+     * @dev Only callable by ContractAddresses.BONDS or vault. Used when new series needs liquidity.
      * @param amount Amount to add to vault allowance.
      */
     function vaultEscrow(uint256 amount) external {
         _requireActive();
         if (amount == 0) return;
         address sender = msg.sender;
-        // SECURITY: Only minter or vault can increase allowance.
-        if (sender != minter && sender != vault) revert Unauthorized();
+        // SECURITY: Only ContractAddresses.BONDS or vault can increase allowance.
+        if (sender != ContractAddresses.BONDS && sender != ContractAddresses.VAULT) revert Unauthorized();
         _vaultMintAllowance += amount;
     }
 
@@ -461,7 +441,7 @@ contract BondToken {
     function vaultMintTo(address to, uint256 amount) external {
         _requireActive();
         // SECURITY: Only vault can use its allowance.
-        if (msg.sender != vault) revert Unauthorized();
+        if (msg.sender != ContractAddresses.VAULT) revert Unauthorized();
         if (amount == 0) return;
         uint256 allowanceVault = _vaultMintAllowance;
         // SECURITY: Cannot exceed pre-allocated allowance.
@@ -521,19 +501,19 @@ contract BondToken {
 
     /**
      * @notice Permanently disable all token operations.
-     * @dev Only callable by minter. Used during game shutdown.
+     * @dev Only callable by ContractAddresses.BONDS. Used during game shutdown.
      *      IRREVERSIBLE - once nuked, token cannot be reactivated.
      */
     function nuke() external {
-        // SECURITY: Only minter can nuke.
-        if (msg.sender != minter) revert Unauthorized();
+        // SECURITY: Only ContractAddresses.BONDS can nuke.
+        if (msg.sender != ContractAddresses.BONDS) revert Unauthorized();
         disabled = true;
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════════════════════════
+// ===================================================================================================
 //                                    DEGENERUS BONDS (MAIN)
-// ═══════════════════════════════════════════════════════════════════════════════════════════════════
+// ===================================================================================================
 
 /**
  * @title DegenerusBonds
@@ -573,8 +553,6 @@ abstract contract DegenerusBondsStorage {
     error PresaleClosed();
     /// @notice Thrown when sweep attempted before 1-year expiry.
     error NotExpired();
-    /// @notice Thrown when VRF rewire attempted after initial config.
-    error VrfLocked();
     /// @notice Thrown when operation requires wiring not yet complete.
     error NotReady();
     /// @notice Thrown when bps value exceeds 10000.
@@ -654,15 +632,45 @@ abstract contract DegenerusBondsStorage {
     /// @param scoreAwarded Score for presale jackpots.
     event PresaleBondDeposit(address indexed buyer, uint256 amount, uint256 scoreAwarded);
 
+    /// @notice Emitted when presale shutdown is queued.
+    /// @param queuedDay Day index when queued.
+    /// @param stopDay Day index when presale will end.
+    event PresaleStopQueued(uint48 indexed queuedDay, uint48 indexed stopDay);
+
+    /// @notice Emitted when presale daily payouts run.
+    /// @param day Day index processed.
+    /// @param buyerCoin BURNIE paid to buyer lane.
+    /// @param burnCoin BURNIE paid to burn lanes.
+    /// @param ticketCoin BURNIE paid to mint tickets.
+    /// @param dgnrsMinted DGNRS minted for the day.
+    /// @param rngWord Entropy used.
+    /// @param finalDay True if presale finalized this day.
+    event PresaleDailyPayout(
+        uint48 indexed day,
+        uint256 buyerCoin,
+        uint256 burnCoin,
+        uint256 ticketCoin,
+        uint256 dgnrsMinted,
+        uint256 rngWord,
+        bool finalDay
+    );
+
+    /// @notice Emitted when BURNIE is awarded to a presale buyer lane.
+    /// @param player Winner address.
+    /// @param amount BURNIE amount credited.
+    /// @param lane Buyer lane index.
+    event PresaleBuyerCoinJackpot(address indexed player, uint256 amount, uint8 lane);
+
+    /// @notice Emitted when BURNIE is awarded to mint tickets.
+    /// @param player Winner address.
+    /// @param amount BURNIE amount credited.
+    /// @param day Day index paid (previous day tickets).
+
     /// @notice Emitted when presale jackpot runs.
     /// @param round Which presale run (0-4).
     /// @param mintedTotal DGNRS minted.
     /// @param rngWord Entropy used.
     event PresaleJackpot(uint8 indexed round, uint256 mintedTotal, uint256 rngWord);
-
-    /// @notice Emitted when VRF is requested for presale jackpot.
-    /// @param requestId The Chainlink VRF request ID.
-    event PresaleJackpotVrfRequested(uint256 indexed requestId);
 
     // =====================================================================
     //                            CONSTANTS
@@ -684,6 +692,37 @@ abstract contract DegenerusBondsStorage {
     /// @notice Minimum bond deposit (0.01 ETH).
     uint256 internal constant MIN_DEPOSIT = 0.01 ether;
 
+    /// @notice Day index anchor (matches game/coin).
+    uint48 internal constant JACKPOT_RESET_TIME = 82620;
+
+    /// @notice Presale ETH threshold to auto-schedule shutdown (100 ETH).
+    uint256 internal constant PRESALE_AUTO_STOP_THRESHOLD = 100 ether;
+
+    /// @notice Presale ETH cap for DGNRS budget (200 ETH).
+    uint256 internal constant PRESALE_DGNRS_CAP = 200 ether;
+
+    /// @notice Total presale DGNRS budget multiplier (1.2x = 12000 bps).
+    uint16 internal constant PRESALE_DGNRS_BPS = 12_000;
+
+    /// @notice Force presale shutdown after this many days if threshold not reached.
+    uint48 internal constant PRESALE_FORCE_STOP_DAYS = 49;
+
+    /// @notice Daily DGNRS payout from previous-day ETH input (60%).
+    uint16 internal constant PRESALE_DAILY_DGNRS_BPS = 6000;
+
+    /// @notice Daily BURNIE payout to presale buyer lane (20k).
+    uint256 internal constant PRESALE_DAILY_BURNIE_BUYER = 20 * PRICE_COIN_UNIT;
+
+    /// @notice Daily BURNIE payout to presale burn lane (20k).
+    uint256 internal constant PRESALE_DAILY_BURNIE_BURN = 20 * PRICE_COIN_UNIT;
+
+    /// @notice Lane selector seed for presale buyer assignments.
+    bytes32 internal constant PRESALE_LANE_SEED = keccak256("PRESALE_LANE");
+
+    /// @notice Presale buyer lane indices.
+    uint8 internal constant PRESALE_BUYER_BURNIE_LANE = 0;
+    uint8 internal constant PRESALE_BUYER_DGNRS_LANE = 1;
+
     /// @notice Maximum presale jackpot runs.
     uint8 internal constant PRESALE_MAX_RUNS = 5;
 
@@ -702,12 +741,6 @@ abstract contract DegenerusBondsStorage {
     /// @notice Fixed "previous raise" for presale growth multiplier calculation.
     /// @dev Presale uses 50 ETH as anchor since there's no actual previous series.
     uint256 internal constant PRESALE_PREV_RAISE = 50 ether;
-
-    /// @notice Gas limit for VRF callback.
-    uint32 internal constant VRF_CALLBACK_GAS_LIMIT = 200_000;
-
-    /// @notice Block confirmations required for VRF.
-    uint16 internal constant VRF_REQUEST_CONFIRMATIONS = 10;
 
     /// @notice Auto-burn preference: not yet set (uses default; enabled).
     uint8 internal constant AUTO_BURN_UNSET = 0;
@@ -738,22 +771,6 @@ abstract contract DegenerusBondsStorage {
         LaneEntry[] entries; // All burn entries (for draw prizes)
         uint256[] cumulative; // Cumulative totals for O(log N) weighted picks
         mapping(address => uint256) burnedAmount; // Per-player burned amount (for Decimator claims)
-    }
-
-    /**
-     * @notice Configuration struct for internal wiring.
-     * @dev Groups addresses to avoid stack-too-deep in constructor setup.
-     */
-    struct WireConfig {
-        address game; // DegenerusGame contract
-        address vault; // DegenerusVault contract
-        address coin; // DegenerusCoin contract
-        address vrfCoordinator; // Chainlink VRF coordinator
-        uint256 vrfSubId; // VRF subscription ID
-        bytes32 vrfKeyHash; // VRF key hash (gas lane)
-        address questModule; // Quest module contract
-        address trophies; // Trophies contract
-        address affiliate; // DegenerusAffiliate contract
     }
 
     /**
@@ -789,17 +806,17 @@ abstract contract DegenerusBondsStorage {
 
     /**
      * @notice Presale-specific series data.
-     * @dev Similar to BondSeries but for presale phase (maturity = 0).
-     *      No sale window tracking since presale is always open until shutdown.
+     * @dev Tracks daily presale jackpots and buyer lanes (maturity = 0).
      */
     struct PresaleSeries {
         uint256 payoutBudget; // Target DGNRS to mint
         uint256 mintedBudget; // DGNRS already minted
         uint256 raised; // Total ETH deposited
-        uint8 jackpotsRun; // Number of jackpot runs (0-5)
-        uint256 totalScore; // Sum of weighted scores
-        address[] jackpotParticipants; // Eligible participants
-        uint256[] jackpotCumulative; // Cumulative for weighted picks
+        uint48 lastPaidDay; // Last day index processed for presale jackpots
+        uint48 stopDay; // Day index when presale should end (after jackpot)
+        uint256 coinPaid; // Total presale BURNIE paid out
+        Lane[2] buyerLanes; // Two-lane presale buyer tracking
+        uint48 startDayPlusOne; // Presale start day index + 1 (0 = unset)
     }
 
     // =====================================================================
@@ -820,9 +837,6 @@ abstract contract DegenerusBondsStorage {
     /// @dev Used for reserve calculations to ensure funds cover all claims.
     uint256 internal resolvedUnclaimedTotal;
 
-    /// @notice DegenerusGame contract reference.
-    IDegenerusGameLevel internal game;
-
     /// @notice Running total of FLIP coin owed for bond jackpots.
     /// @dev Accumulated via payBonds(), paid out in _runCoinJackpot().
     uint256 internal coinOwed;
@@ -834,36 +848,12 @@ abstract contract DegenerusBondsStorage {
     /// @dev Used to handle burn routing at maturity boundaries.
     uint24 internal lastBondMaintenanceLevel;
 
-    // ─────────────────────────────────────────────────────────────────────
-    // VRF State
-    // ─────────────────────────────────────────────────────────────────────
-
-    /// @notice Chainlink VRF coordinator address.
-    address internal vrfCoordinator;
-    /// @notice VRF key hash (gas lane selector).
-    bytes32 internal vrfKeyHash;
-    /// @notice VRF subscription ID.
-    uint256 internal vrfSubscriptionId;
-    /// @notice Current VRF request ID (for game-triggered requests).
-    uint256 internal vrfRequestId;
-    /// @notice Pending random word from VRF (consumed on use).
-    uint256 internal vrfPendingWord;
-    /// @notice Whether a game VRF request is pending.
-    bool internal vrfRequestPending;
-
-    /// @notice Presale VRF request ID (separate from game requests).
-    uint256 internal presaleVrfRequestId;
-    /// @notice Pending random word for presale (consumed on use).
-    uint256 internal presaleVrfPendingWord;
-    /// @notice Whether a presale VRF request is pending.
-    bool internal presaleVrfRequestPending;
-
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
     // State Flags
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
 
-    /// @notice True once presale budget is finalized.
-    bool internal firstSeriesBudgetFinalized;
+    /// @notice True once presale shutdown has finalized.
+    bool internal presaleFinalized;
 
     /// @notice True after game signals shutdown; disables deposits and bank pushes.
     bool public gameOverStarted;
@@ -874,16 +864,12 @@ abstract contract DegenerusBondsStorage {
     /// @notice True after gameOver() attempts to fetch entropy.
     bool public gameOverEntropyAttempted;
 
-    /// @notice True while game has locked RNG usage (pauses deposits/burns).
-    /// @dev Set by game during jackpot windows to prevent manipulation.
-    bool internal rngLock;
-
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
     // Configuration
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
 
     /// @notice Target share of stETH (in bps) for game-held reward liquidity.
-    uint16 public rewardStakeTargetBps;
+    uint16 public rewardStakeTargetBps = 10_000; // Default: 100% stETH preference
 
     /// @notice Affiliate reward for normal bond purchases (3% = 300 bps).
     uint16 internal constant AFFILIATE_BOND_BPS = 300;
@@ -894,40 +880,34 @@ abstract contract DegenerusBondsStorage {
     /// @notice Default price per mint for affiliate calculations.
     uint256 internal constant PRICE_WEI = 0.025 ether;
 
-    /// @notice Coin unit (6 decimals).
-    uint256 internal constant PRICE_COIN_UNIT = 1_000_000_000;
+    /// @notice Coin unit (18 decimals).
+    uint256 internal constant PRICE_COIN_UNIT = 1000 ether;
 
     /// @notice Total FLIP allocated for presale coin jackpots (2M tokens).
     uint256 internal constant PRESALE_COIN_ALLOCATION = 2_000 * PRICE_COIN_UNIT;
 
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
     // Wired Contracts
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
 
-    /// @notice DegenerusVault contract.
-    address internal vault;
-    /// @notice DegenerusCoin contract.
-    address internal coin;
-    /// @notice DegenerusAffiliate contract.
-    address internal affiliate;
-    /// @notice Quest module contract.
-    address internal questModule;
-    /// @notice Trophies contract.
-    address internal trophies;
     /// @notice DGNRS bond token (shared across all series).
-    BondToken internal tokenDGNRS;
+    /// @dev Constant wrapper saves ~100 gas per read vs storage variable.
+    BondToken internal constant tokenDGNRS = BondToken(ContractAddresses.DGNRS);
 
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
     // Per-Player State
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
 
     /// @notice Player preference for auto-burning jackpot DGNRS.
     /// @dev 0 = unset (use default), 1 = enabled, 2 = disabled.
     mapping(address => uint8) internal autoBurnDgnrsPref;
 
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
     // Presale State
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
+
+    /// @notice ETH raised per presale day (by day index).
+    mapping(uint48 => uint256) internal presaleDailyRaised;
 
     /// @notice ETH pending transfer to game reward pool (before game wired).
     uint256 internal presalePendingRewardEth;
@@ -938,32 +918,31 @@ abstract contract DegenerusBondsStorage {
 }
 
 abstract contract DegenerusBondsModule is DegenerusBondsStorage {
-    address internal constant admin = DeployConstants.ADMIN;
-    address internal constant steth = DeployConstants.STETH_TOKEN;
-
     modifier onlyGame() {
-        if (msg.sender != address(game)) revert Unauthorized();
+        if (msg.sender != ContractAddresses.GAME) revert Unauthorized();
         _;
     }
 
     modifier onlyAdmin() {
-        if (msg.sender != admin) revert Unauthorized();
+        if (msg.sender != ContractAddresses.ADMIN) revert Unauthorized();
         _;
     }
 
     function presaleDeposit(address beneficiary) external payable returns (uint256 scoreAwarded) {
         if (gameOverStarted) revert SaleClosed();
+        if (presaleFinalized) revert PresaleClosed();
         uint256 amount = msg.value;
         if (amount < MIN_DEPOSIT) revert MinimumDeposit();
-        if (rngLock) revert PurchasesDisabled();
+        if (_gameRngLocked()) revert PurchasesDisabled();
 
-        address aff = affiliate;
+        address aff = ContractAddresses.AFFILIATE;
         if (!IAffiliatePresaleStatus(aff).presaleActive()) revert PresaleClosed();
 
+        uint48 day = _currentDayIndex();
         _getOrCreateSeries(0);
 
-        address vaultAddr = vault;
-        address gameAddr = address(game);
+        address vaultAddr = ContractAddresses.VAULT;
+        address gameAddr = ContractAddresses.GAME;
 
         uint256 vaultShare = (amount * 30) / 100;
         uint256 rewardShare = (amount * 50) / 100;
@@ -980,128 +959,124 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
         scoreAwarded = amount;
 
         PresaleSeries storage p = presale;
-        p.totalScore = _recordScore(p.jackpotParticipants, p.jackpotCumulative, p.totalScore, ben, scoreAwarded);
         p.raised += amount;
-        if (p.payoutBudget < p.raised) {
-            p.payoutBudget = p.raised;
+        presaleDailyRaised[day] += amount;
+        if (p.startDayPlusOne == 0) {
+            unchecked {
+                p.startDayPlusOne = day + 1;
+            }
         }
+        if (p.raised >= PRESALE_AUTO_STOP_THRESHOLD) {
+            _queuePresaleStop(day);
+        }
+
+        uint8 lane = uint8(uint256(keccak256(abi.encodePacked(PRESALE_LANE_SEED, ben))) & 1);
+        Lane storage buyerLane = p.buyerLanes[lane];
+        buyerLane.entries.push(LaneEntry({player: ben, amount: amount}));
+        buyerLane.total += amount;
+        buyerLane.cumulative.push(buyerLane.total);
 
         emit PresaleBondDeposit(ben, amount, scoreAwarded);
     }
 
-    /// @notice Run one presale jackpot round (0-4); mints DGNRS to weighted winners.
-    /// @dev Manual trigger; callable only by the admin contract. Final round applies a growth multiplier
-    ///      anchored to a fixed previous raise of 50 ETH.
-    function runPresaleJackpot() external onlyAdmin returns (bool advanced) {
-        (uint256 rngWord, bool requested) = _prepareEntropy(0, true);
-        if (rngWord == 0) {
-            if (requested) return false;
-            revert NotReady();
-        }
-
-        PresaleSeries storage p = presale;
-        uint8 run = p.jackpotsRun;
-        if (run >= PRESALE_MAX_RUNS) revert AlreadyResolved();
-        uint24 currLevel = _presaleActive() ? 0 : _currentLevelOrZero();
-
-        if (p.payoutBudget < p.raised) {
-            p.payoutBudget = p.raised;
-        }
-        bool isFinalRun = (run + 1 == PRESALE_MAX_RUNS);
-
-        if (run != 0) {
-            uint256 coinPayout;
-            if (run == 1) {
-                coinPayout = PRESALE_COIN_ALLOCATION / 20; // 5%
-            } else {
-                coinPayout = PRESALE_COIN_ALLOCATION / 10; // 10% for runs 2-4
-            }
-            if (coinPayout != 0) _payCoinJackpot(coinPayout, rngWord, true);
-        }
-
-        if (isFinalRun) {
-            uint256 finalBudget = _targetBudget(p.raised, PRESALE_PREV_RAISE);
-            if (finalBudget == 0) return false;
-            p.payoutBudget = finalBudget;
-            if (p.mintedBudget >= finalBudget) return false;
-
-            uint256 toMint = finalBudget - p.mintedBudget;
-            if (toMint != 0 && p.totalScore != 0) {
-                _runMintJackpotToken(
-                    tokenDGNRS,
-                    p.jackpotParticipants,
-                    p.jackpotCumulative,
-                    p.totalScore,
-                    rngWord,
-                    toMint,
-                    PRESALE_JACKPOT_SPOTS,
-                    currLevel
-                );
-                p.mintedBudget = finalBudget;
-                uint256 vaultMint = finalBudget / 10;
-                if (vaultMint != 0) {
-                    tokenDGNRS.vaultEscrow(vaultMint);
-                }
-                emit PresaleJackpot(run, toMint, rngWord);
-            }
-        } else {
-            if (p.payoutBudget == 0 || p.mintedBudget >= p.payoutBudget) return false;
-
-            uint256 pct = _emissionPct(0, run, true);
-            if (pct == 0) return false;
-
-            uint256 toMint = (p.raised * pct) / 100;
-            uint256 available = p.payoutBudget - p.mintedBudget;
-            if (toMint > available) toMint = available;
-
-            if (toMint != 0 && p.totalScore != 0) {
-                _runMintJackpotToken(
-                    tokenDGNRS,
-                    p.jackpotParticipants,
-                    p.jackpotCumulative,
-                    p.totalScore,
-                    rngWord,
-                    toMint,
-                    PRESALE_JACKPOT_SPOTS,
-                    currLevel
-                );
-                p.mintedBudget += toMint;
-                emit PresaleJackpot(run, toMint, rngWord);
-            }
-        }
-
-        p.jackpotsRun = run + 1;
-        return true;
+    /// @notice Queue presale shutdown after the next jackpot time.
+    /// @dev Manual flag; does not end presale until the next daily run.
+    function shutdownPresale() external onlyAdmin {
+        _queuePresaleStop(_currentDayIndex());
     }
 
-    /// @notice Close presale and lock the presale payout budget to presale raise * growth factor.
-    /// @dev Calls affiliate.shutdownPresale() (best effort) and finalizes once; reverts if no presale raise.
-    function shutdownPresale() external onlyAdmin {
-        if (firstSeriesBudgetFinalized) revert AlreadySet();
+    /// @notice Run daily presale payouts using game-supplied entropy.
+    /// @dev Access: game only. Pays buyer lane BURNIE, burn-lane BURNIE, and DGNRS lane.
+    function runPresaleDailyFromGame(uint256 rngWord, uint48 day) external onlyGame returns (bool advanced) {
+        if (rngWord == 0) return false;
+        if (presaleFinalized) return false;
 
-        (uint256 rngWord, bool requested) = _prepareEntropy(0, true);
-        if (rngWord == 0) {
-            if (requested) return;
-            revert NotReady();
-        }
-        uint256 coinPayout = (PRESALE_COIN_ALLOCATION * 13) / 20; // 65%
-        if (coinPayout != 0) {
-            _payCoinJackpot(coinPayout, rngWord, true);
-        }
-
-        // Attempt to close presale on the affiliate contract.
-        try IAffiliatePresaleShutdown(affiliate).shutdownPresale() {} catch {}
         PresaleSeries storage p = presale;
-        uint256 raised = p.raised;
-        if (raised == 0) revert NotReady();
+        if (day <= p.lastPaidDay) return false;
+        p.lastPaidDay = day;
 
-        uint256 target = _targetBudget(raised, PRESALE_PREV_RAISE);
-        if (target > p.payoutBudget) {
-            p.payoutBudget = target;
+        if (p.startDayPlusOne == 0) {
+            unchecked {
+                p.startDayPlusOne = day + 1;
+            }
+        }
+        _maybeQueuePresaleStop(day, p);
+
+        bool finalDay = p.stopDay != 0 && day >= p.stopDay;
+        uint256 prevRaised;
+        if (day != 0) {
+            prevRaised = presaleDailyRaised[day - 1];
         }
 
-        _flushPresaleProceedsToGame(address(game));
-        firstSeriesBudgetFinalized = true;
+        uint256 targetBudget = _presaleTargetBudget(p.raised);
+        p.payoutBudget = targetBudget;
+
+        uint256 remainingDgnrs = targetBudget > p.mintedBudget ? targetBudget - p.mintedBudget : 0;
+        uint256 dailyDgnrs = (prevRaised * PRESALE_DAILY_DGNRS_BPS) / 10_000;
+        uint256 dgnrsToMint = dailyDgnrs > remainingDgnrs ? remainingDgnrs : dailyDgnrs;
+        if (finalDay && remainingDgnrs > dgnrsToMint) {
+            dgnrsToMint = remainingDgnrs;
+        }
+
+        uint256 entropy = rngWord;
+        uint256 minted;
+        if (dgnrsToMint != 0) {
+            minted = _runPresaleDgnrsLaneJackpot(
+                p.buyerLanes[PRESALE_BUYER_DGNRS_LANE],
+                dgnrsToMint,
+                _nextEntropy(entropy, 1),
+                0
+            );
+            if (minted != 0) {
+                p.mintedBudget += minted;
+            }
+        }
+
+        uint256 remainingCoin = PRESALE_COIN_ALLOCATION > p.coinPaid ? PRESALE_COIN_ALLOCATION - p.coinPaid : 0;
+        uint256 buyerAmount;
+        uint256 burnAmount;
+        uint256 baseTotal = PRESALE_DAILY_BURNIE_BUYER + PRESALE_DAILY_BURNIE_BURN;
+        if (remainingCoin != 0 && baseTotal != 0) {
+            if (remainingCoin < baseTotal) {
+                buyerAmount = (PRESALE_DAILY_BURNIE_BUYER * remainingCoin) / baseTotal;
+                burnAmount = remainingCoin - buyerAmount;
+            } else {
+                buyerAmount = PRESALE_DAILY_BURNIE_BUYER;
+                burnAmount = PRESALE_DAILY_BURNIE_BURN;
+                if (finalDay && remainingCoin > baseTotal) {
+                    uint256 extra = remainingCoin - baseTotal;
+                    uint256 half = extra / 2;
+                    buyerAmount += half;
+                    burnAmount += extra - half;
+                }
+            }
+        }
+
+        uint256 buyerPaid;
+        uint256 burnPaid;
+        if (buyerAmount != 0) {
+            bool paid = _payPresaleBuyerCoinJackpot(buyerAmount, _nextEntropy(entropy, 2), PRESALE_BUYER_BURNIE_LANE);
+            if (paid) {
+                p.coinPaid += buyerAmount;
+                buyerPaid = buyerAmount;
+            }
+        }
+        if (burnAmount != 0) {
+            bool paid = _payCoinJackpot(burnAmount, _nextEntropy(entropy, 3), true);
+            if (paid) {
+                p.coinPaid += burnAmount;
+                burnPaid = burnAmount;
+            }
+        }
+
+        emit PresaleDailyPayout(day, buyerPaid, burnPaid, 0, minted, rngWord, finalDay);
+
+        if (finalDay) {
+            presaleFinalized = true;
+            try IAffiliatePresaleShutdown(ContractAddresses.AFFILIATE).shutdownPresale() {} catch {}
+            _flushPresaleProceedsToGame(ContractAddresses.GAME);
+        }
+        return true;
     }
 
     /// @notice Unified deposit: external callers route ETH into the current maturity.
@@ -1109,7 +1084,7 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
         uint256 pulledStEth;
         if (stEthAmount != 0) {
             uint256 beforeBal = _stEthBalance();
-            try IStETH(steth).transferFrom(msg.sender, address(this), stEthAmount) {} catch {}
+            try IStETH(ContractAddresses.STETH_TOKEN).transferFrom(msg.sender, address(this), stEthAmount) {} catch {}
             uint256 afterBal = _stEthBalance();
             if (afterBal > beforeBal) {
                 pulledStEth = afterBal - beforeBal;
@@ -1121,7 +1096,7 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
         _runCoinJackpot(rngWord);
         if (gameOverStarted) return;
         if (msg.value != 0 || pulledStEth != 0) {
-            IVaultLike(vault).deposit{value: msg.value}(0, pulledStEth);
+            IVaultLike(ContractAddresses.VAULT).deposit{value: msg.value}(0, pulledStEth);
         }
     }
 
@@ -1157,11 +1132,6 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
         (uint8 lane, bool ok) = _pickNonEmptyLane(target.lanes, rngWord);
         if (!ok) return false;
 
-        address affiliateAddr;
-        if (isPresale) {
-            affiliateAddr = affiliate;
-        }
-
         uint256 top = (amount * COIN_JACKPOT_TOP_BPS) / 10_000;
         uint256 mid = (amount * COIN_JACKPOT_MID_BPS) / 10_000;
         uint256 low = (amount * COIN_JACKPOT_LOW_BPS) / 10_000;
@@ -1181,14 +1151,14 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
         address winner = _weightedLanePick(chosen, entropy);
         if (winner == address(0)) return false;
 
-        _creditCoinJackpot(winner, top, targetMat, lane, isPresale, affiliateAddr);
+        _creditCoinJackpot(winner, top, targetMat, lane);
 
         uint256 salt = 1;
         if (mid != 0) {
             for (uint256 i; i < COIN_JACKPOT_MID_COUNT; ) {
                 entropy = _nextEntropy(entropy, salt);
                 winner = _weightedLanePick(chosen, entropy);
-                _creditCoinJackpot(winner, mid, targetMat, lane, isPresale, affiliateAddr);
+                _creditCoinJackpot(winner, mid, targetMat, lane);
                 unchecked {
                     ++i;
                     ++salt;
@@ -1199,7 +1169,7 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
             for (uint256 i; i < COIN_JACKPOT_LOW_COUNT; ) {
                 entropy = _nextEntropy(entropy, salt);
                 winner = _weightedLanePick(chosen, entropy);
-                _creditCoinJackpot(winner, low, targetMat, lane, isPresale, affiliateAddr);
+                _creditCoinJackpot(winner, low, targetMat, lane);
                 unchecked {
                     ++i;
                     ++salt;
@@ -1210,7 +1180,7 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
             for (uint256 i; i < COIN_JACKPOT_TINY_COUNT; ) {
                 entropy = _nextEntropy(entropy, salt);
                 winner = _weightedLanePick(chosen, entropy);
-                _creditCoinJackpot(winner, tiny, targetMat, lane, isPresale, affiliateAddr);
+                _creditCoinJackpot(winner, tiny, targetMat, lane);
                 unchecked {
                     ++i;
                     ++salt;
@@ -1220,21 +1190,79 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
         return true;
     }
 
-    function _creditCoinJackpot(
-        address winner,
-        uint256 amount,
-        uint24 maturityLevel,
-        uint8 lane,
-        bool isPresale,
-        address affiliateAddr
-    ) private {
-        if (winner == address(0) || amount == 0) return;
-        if (isPresale) {
-            IAffiliatePresaleCredit(affiliateAddr).addPresaleCoinCredit(winner, amount);
-        } else {
-            IDegenerusCoin(coin).creditFlip(winner, amount);
+    function _payPresaleBuyerCoinJackpot(uint256 amount, uint256 rngWord, uint8 lane) private returns (bool paid) {
+        if (amount == 0 || rngWord == 0) return false;
+        PresaleSeries storage p = presale;
+        Lane storage chosen = p.buyerLanes[lane];
+        if (chosen.total == 0) return false;
+
+        uint256 top = (amount * COIN_JACKPOT_TOP_BPS) / 10_000;
+        uint256 mid = (amount * COIN_JACKPOT_MID_BPS) / 10_000;
+        uint256 low = (amount * COIN_JACKPOT_LOW_BPS) / 10_000;
+        uint256 tiny = (amount * COIN_JACKPOT_TINY_BPS) / 10_000;
+        uint256 distributed = top +
+            (mid * COIN_JACKPOT_MID_COUNT) +
+            (low * COIN_JACKPOT_LOW_COUNT) +
+            (tiny * COIN_JACKPOT_TINY_COUNT);
+        if (distributed < amount) {
+            unchecked {
+                top += amount - distributed;
+            }
         }
+
+        uint256 entropy = rngWord;
+        address winner = _weightedLanePick(chosen, entropy);
+        if (winner == address(0)) return false;
+
+        _creditPresaleBuyerCoinJackpot(winner, top, lane);
+
+        uint256 salt = 1;
+        if (mid != 0) {
+            for (uint256 i; i < COIN_JACKPOT_MID_COUNT; ) {
+                entropy = _nextEntropy(entropy, salt);
+                winner = _weightedLanePick(chosen, entropy);
+                _creditPresaleBuyerCoinJackpot(winner, mid, lane);
+                unchecked {
+                    ++i;
+                    ++salt;
+                }
+            }
+        }
+        if (low != 0) {
+            for (uint256 i; i < COIN_JACKPOT_LOW_COUNT; ) {
+                entropy = _nextEntropy(entropy, salt);
+                winner = _weightedLanePick(chosen, entropy);
+                _creditPresaleBuyerCoinJackpot(winner, low, lane);
+                unchecked {
+                    ++i;
+                    ++salt;
+                }
+            }
+        }
+        if (tiny != 0) {
+            for (uint256 i; i < COIN_JACKPOT_TINY_COUNT; ) {
+                entropy = _nextEntropy(entropy, salt);
+                winner = _weightedLanePick(chosen, entropy);
+                _creditPresaleBuyerCoinJackpot(winner, tiny, lane);
+                unchecked {
+                    ++i;
+                    ++salt;
+                }
+            }
+        }
+        return true;
+    }
+
+    function _creditCoinJackpot(address winner, uint256 amount, uint24 maturityLevel, uint8 lane) private {
+        if (winner == address(0) || amount == 0) return;
+        IDegenerusCoin(ContractAddresses.COIN).creditFlip(winner, amount);
         emit BondCoinJackpot(winner, amount, maturityLevel, lane);
+    }
+
+    function _creditPresaleBuyerCoinJackpot(address winner, uint256 amount, uint8 lane) private {
+        if (winner == address(0) || amount == 0) return;
+        IDegenerusCoin(ContractAddresses.COIN).creditFlip(winner, amount);
+        emit PresaleBuyerCoinJackpot(winner, amount, lane);
     }
 
     function _selectActiveSeries(uint24 currLevel) private view returns (BondSeries storage s, uint24 maturityLevel) {
@@ -1340,20 +1368,30 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
             _sweepExcessToVault();
         }
 
-        // Note: rngLock is controlled by the game to prevent post-RNG manipulation windows.
+        // Note: RNG lock is enforced by reading IDegenerusGameLevel(ContractAddresses.GAME).rngLocked().
         done = !hitCap;
         return done;
     }
 
     /// @notice Burn DGNRS to enter the active jackpot.
     function gameOver() external payable {
-        if (msg.sender != address(game) && !gameOverStarted) revert Unauthorized();
+        uint256 entropy = _prepareEntropy(0);
+        _runGameOver(entropy);
+    }
+
+    /// @notice Resolve game-over using game-supplied entropy.
+    /// @dev Access: game only. Used by advanceGame to centralize RNG.
+    function gameOverWithEntropy(uint256 entropy) external payable onlyGame {
+        _runGameOver(entropy);
+    }
+
+    function _runGameOver(uint256 entropy) private {
+        if (msg.sender != ContractAddresses.GAME && !gameOverStarted) revert Unauthorized();
         if (!gameOverStarted) {
             gameOverStarted = true;
             gameOverTimestamp = uint48(block.timestamp);
         }
 
-        (uint256 entropy, ) = _prepareEntropy(0, false);
         gameOverEntropyAttempted = true;
         if (entropy == 0) return;
 
@@ -1427,7 +1465,7 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
                 uint256 stSend = remainingStEth < surplus ? remainingStEth : surplus;
                 uint256 ethSend = surplus - stSend;
                 if (stSend != 0 || ethSend != 0) {
-                    IVaultLike(vault).deposit{value: ethSend}(0, stSend);
+                    IVaultLike(ContractAddresses.VAULT).deposit{value: ethSend}(0, stSend);
                 }
             }
         }
@@ -1441,7 +1479,7 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
         if (gameOverTimestamp == 0) revert Unauthorized();
         if (block.timestamp <= gameOverTimestamp + 365 days) revert NotExpired();
 
-        address v = vault;
+        address v = ContractAddresses.VAULT;
 
         uint256 ethBal = address(this).balance;
         uint256 stBal = _stEthBalance();
@@ -1571,13 +1609,7 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
         s.lanes[lane].cumulative.push(s.lanes[lane].total);
 
         // While DGNRS is still being minted for this series, count burns toward mint jackpot score as well.
-        if (currLevel == 0) {
-            if (_presaleActive()) {
-                PresaleSeries storage p = presale;
-                p.totalScore = _recordScore(p.jackpotParticipants, p.jackpotCumulative, p.totalScore, player, amount);
-                boosted = true;
-            }
-        } else if (currLevel < s.maturityLevel && s.jackpotsRun < 5 && s.mintedBudget < s.payoutBudget) {
+        if (currLevel != 0 && currLevel < s.maturityLevel && s.jackpotsRun < 5 && s.mintedBudget < s.payoutBudget) {
             uint256 boostedScore = _scoreWithMultiplier(player, amount);
             s.totalScore = _recordScore(s.jackpotParticipants, s.jackpotCumulative, s.totalScore, player, boostedScore);
             boosted = true;
@@ -1585,15 +1617,57 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
     }
 
     function _currentLevel() internal view returns (uint24) {
-        return game.level();
+        return IDegenerusGameLevel(ContractAddresses.GAME).level();
     }
 
     function _currentLevelOrZero() internal view returns (uint24) {
-        return game.level();
+        return IDegenerusGameLevel(ContractAddresses.GAME).level();
+    }
+
+    function _currentDayIndex() private view returns (uint48 day) {
+        return uint48((uint48(block.timestamp) - JACKPOT_RESET_TIME) / 1 days);
+    }
+
+    function _maybeQueuePresaleStop(uint48 day, PresaleSeries storage p) private {
+        if (p.raised < PRESALE_AUTO_STOP_THRESHOLD) {
+            uint48 startDayPlusOne = p.startDayPlusOne;
+            if (startDayPlusOne != 0) {
+                uint48 startDay = startDayPlusOne - 1;
+                uint48 deadline;
+                unchecked {
+                    deadline = startDay + PRESALE_FORCE_STOP_DAYS;
+                }
+                if (day >= deadline) {
+                    _queuePresaleStop(day);
+                }
+            }
+        }
+
+        uint256 targetPool = IDegenerusGameLevel(ContractAddresses.GAME).prizePoolTargetView();
+        if (targetPool != 0) {
+            uint256 nextPool = IDegenerusGameLevel(ContractAddresses.GAME).nextPrizePoolView();
+            if (nextPool >= targetPool) {
+                _queuePresaleStop(day);
+            }
+        }
+    }
+
+    function _queuePresaleStop(uint48 day) private {
+        if (presaleFinalized) return;
+        PresaleSeries storage p = presale;
+        uint48 stopDay;
+        unchecked {
+            stopDay = day + 1;
+        }
+        uint48 existing = p.stopDay;
+        if (existing == 0 || stopDay < existing) {
+            p.stopDay = stopDay;
+            emit PresaleStopQueued(day, stopDay);
+        }
     }
 
     function _presaleActive() internal view returns (bool active) {
-        try IAffiliatePresaleStatus(affiliate).presaleActive() returns (bool ok) {
+        try IAffiliatePresaleStatus(ContractAddresses.AFFILIATE).presaleActive() returns (bool ok) {
             return ok;
         } catch {
             return false;
@@ -1601,54 +1675,22 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
     }
 
     function _scoreWithMultiplier(address player, uint256 baseScore) internal view returns (uint256) {
-        uint256 multBps = game.playerBonusMultiplier(player);
+        uint256 multBps = IDegenerusGameLevel(ContractAddresses.GAME).playerBonusMultiplier(player);
         return (baseScore * multBps) / 10000;
     }
 
-    function _prepareEntropy(uint256 provided, bool isPresale) private returns (uint256 entropy, bool requested) {
-        if (provided != 0) return (provided, false);
+    function _presaleTargetBudget(uint256 raised) private pure returns (uint256 target) {
+        uint256 capped = raised > PRESALE_DGNRS_CAP ? PRESALE_DGNRS_CAP : raised;
+        target = (capped * PRESALE_DGNRS_BPS) / 10_000;
+    }
 
-        if (isPresale) {
-            entropy = presaleVrfPendingWord;
-            if (entropy != 0) {
-                presaleVrfPendingWord = 0;
-                rngLock = false;
-                return (entropy, false);
-            }
-            if (presaleVrfRequestPending) return (0, true);
-        } else {
-            entropy = vrfPendingWord;
-            if (entropy != 0) {
-                vrfPendingWord = 0;
-                return (entropy, false);
-            }
-            if (vrfRequestPending) return (0, true);
-        }
+    function _prepareEntropy(uint256 provided) private view returns (uint256 entropy) {
+        if (provided != 0) return provided;
+        return IDegenerusGameRng(ContractAddresses.GAME).lastRngWord();
+    }
 
-        if (vrfCoordinator == address(0) || vrfSubscriptionId == 0 || vrfKeyHash == bytes32(0)) return (0, false);
-
-        try
-            IVRFCoordinatorV2Like(vrfCoordinator).requestRandomWords(
-                vrfKeyHash,
-                vrfSubscriptionId,
-                VRF_REQUEST_CONFIRMATIONS,
-                VRF_CALLBACK_GAS_LIMIT,
-                1
-            )
-        returns (uint256 reqId) {
-            if (isPresale) {
-                presaleVrfRequestPending = true;
-                presaleVrfRequestId = reqId;
-                rngLock = true;
-                emit PresaleJackpotVrfRequested(reqId);
-            } else {
-                vrfRequestPending = true;
-                vrfRequestId = reqId;
-            }
-            return (0, true);
-        } catch {
-            return (0, false);
-        }
+    function _gameRngLocked() internal view returns (bool locked) {
+        return IDegenerusGameRng(ContractAddresses.GAME).rngLocked();
     }
 
     function _isFunded(BondSeries storage s) private view returns (bool) {
@@ -1698,13 +1740,13 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
 
     function _availableBank() private view returns (uint256 available) {
         if (!gameOverStarted) {
-            return IDegenerusGameBondBank(address(game)).bondAvailable();
+            return IDegenerusGameBondBank(ContractAddresses.GAME).bondAvailable();
         }
         return address(this).balance + _stEthBalance();
     }
 
     function _stEthBalance() private view returns (uint256 bal) {
-        try IStETH(steth).balanceOf(address(this)) returns (uint256 b) {
+        try IStETH(ContractAddresses.STETH_TOKEN).balanceOf(address(this)) returns (uint256 b) {
             return b;
         } catch {
             return 0;
@@ -1718,7 +1760,7 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
     }
 
     function _sweepExcessToVault() private returns (bool swept) {
-        address v = vault;
+        address v = ContractAddresses.VAULT;
         if (!gameOverStarted) return false;
 
         uint256 required = resolvedUnclaimedTotal;
@@ -1992,6 +2034,63 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
         }
     }
 
+    function _runPresaleDgnrsLaneJackpot(
+        Lane storage lane,
+        uint256 toMint,
+        uint256 rngWord,
+        uint24 currLevel
+    ) private returns (uint256 minted) {
+        if (toMint == 0 || rngWord == 0) return 0;
+        if (lane.total == 0) return 0;
+        if (lane.cumulative.length == 0) return 0;
+
+        uint256[6] memory payouts = _jackpotPayouts(toMint, PRESALE_JACKPOT_SPOTS);
+        uint256 entropy = rngWord;
+        bool presaleActive = _presaleActive();
+        bool canAutoBurn = currLevel != 0 || presaleActive;
+
+        for (uint256 i; i < 4; ) {
+            uint256 amount = payouts[i];
+            if (amount != 0) {
+                address winner = _weightedLanePick(lane, entropy);
+                if (winner != address(0)) {
+                    if (canAutoBurn && _autoBurnEnabled(winner)) {
+                        _burnDgnrsFor(winner, amount, currLevel, false);
+                    } else {
+                        tokenDGNRS.mint(winner, amount);
+                    }
+                    minted += amount;
+                }
+            }
+            unchecked {
+                ++i;
+            }
+            if (i < 4) {
+                entropy = _nextEntropy(entropy, i);
+            }
+        }
+
+        uint256 totalSpots = uint256(PRESALE_JACKPOT_SPOTS);
+        for (uint256 i = 4; i < totalSpots; ) {
+            entropy = _nextEntropy(entropy, i);
+            uint256 amount = (i == totalSpots - 1) ? payouts[5] : payouts[4];
+            if (amount != 0) {
+                address winner = _weightedLanePick(lane, entropy);
+                if (winner != address(0)) {
+                    if (canAutoBurn && _autoBurnEnabled(winner)) {
+                        _burnDgnrsFor(winner, amount, currLevel, false);
+                    } else {
+                        tokenDGNRS.mint(winner, amount);
+                    }
+                    minted += amount;
+                }
+            }
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
     function _pickNonEmptyLane(Lane[2] storage lanes, uint256 rngWord) private view returns (uint8 lane, bool ok) {
         lane = uint8(rngWord & 1);
         if (lanes[lane].total == 0) {
@@ -2034,7 +2133,7 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
         if (liveGame) {
             payoutWinners = new address[](14);
             payoutAmounts = new uint256[](14);
-            mapPrice = IDegenerusGameBondBank(address(game)).mintPrice() / 4;
+            mapPrice = IDegenerusGameBondBank(ContractAddresses.GAME).mintPrice() / 4;
             mapParity = uint8(rngWord & 1);
         }
 
@@ -2058,7 +2157,7 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
                     uint256 qty = prize / mapPrice;
                     if (qty != 0) {
                         if (qty > type(uint32).max) qty = type(uint32).max;
-                        IDegenerusGameBondBank(address(game)).bondSpendToMaps(winner, prize, uint32(qty));
+                        IDegenerusGameBondBank(ContractAddresses.GAME).bondSpendToMaps(winner, prize, uint32(qty));
                         paid += prize;
                         continue;
                     }
@@ -2198,7 +2297,7 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
     function _creditPayout(address player, uint256 amount) private returns (bool) {
         if (amount == 0) return true;
         if (!gameOverStarted) {
-            IDegenerusGameBondBank(address(game)).bondCreditToClaimable(player, amount);
+            IDegenerusGameBondBank(ContractAddresses.GAME).bondCreditToClaimable(player, amount);
             return true;
         }
         uint256 remaining = amount;
@@ -2211,7 +2310,7 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
             }
         }
         if (remaining != 0) {
-            try IStETH(steth).transfer(player, remaining) returns (bool ok) {
+            try IStETH(ContractAddresses.STETH_TOKEN).transfer(player, remaining) returns (bool ok) {
                 if (!ok) return false;
             } catch {
                 return false;
@@ -2226,7 +2325,7 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
             mstore(winners, count)
             mstore(amounts, count)
         }
-        IDegenerusGameBondBank(address(game)).bondCreditToClaimableBatch(winners, amounts);
+        IDegenerusGameBondBank(ContractAddresses.GAME).bondCreditToClaimableBatch(winners, amounts);
     }
 
     function _upperBound(uint256[] storage arr, uint256 target) private view returns (uint256 idx) {
@@ -2269,13 +2368,21 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
 
     function _payAffiliateReward(address buyer, uint256 ethAmount, uint16 bps) internal {
         if (bps == 0 || ethAmount == 0) return;
-        (uint24 level, uint8 gameState, , bool rngLocked, uint256 priceWei) = IDegenerusGamePricing(address(game))
-            .purchaseInfo();
+        (uint24 level, uint8 gameState, , bool rngLocked, uint256 priceWei) = IDegenerusGamePricing(
+            ContractAddresses.GAME
+        ).purchaseInfo();
 
         uint256 coinEquivalent = (ethAmount * PRICE_COIN_UNIT) / priceWei;
         uint256 reward = (coinEquivalent * uint256(bps)) / 10_000;
 
-        IAffiliatePayer(affiliate).payAffiliate(reward, bytes32(0), buyer, level, gameState, rngLocked);
+        IAffiliatePayer(ContractAddresses.AFFILIATE).payAffiliate(
+            reward,
+            bytes32(0),
+            buyer,
+            level,
+            gameState,
+            rngLocked
+        );
     }
 
     function _activeMaturityAt(uint24 currLevel) internal view returns (uint24 maturityLevel) {
@@ -2283,7 +2390,7 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
             return 0; // presale burns route into the level-0 maturity
         }
         if (currLevel < 10) {
-            return 10; // pregame levels route into the first maturity (level 10)
+            return 10; // setup levels route into the first maturity (level 10)
         }
         // Single-token bond cycle is 10 levels wide: maturities are levels ending in 0.
         maturityLevel = ((currLevel / 10) + 1) * 10;
@@ -2306,78 +2413,30 @@ contract DegenerusBonds is DegenerusBondsModule {
 
     /**
      * @notice Initialize the bond system with precomputed dependencies.
-     * @dev Wires the predeployed DGNRS token and fixed addresses from DeployConstants.
+     * @dev Wires the predeployed DGNRS token and fixed addresses from ContractAddresses.
      *
      * DEPLOYMENT ORDER:
-     * 1. Deploy BondToken (DGNRS) with minter set to the precomputed bonds address
+     * 1. Deploy BondToken (DGNRS) with ContractAddresses.BONDS set to the precomputed bonds address
      * 2. Deploy DegenerusBonds
      *
-     * VRF configuration is set later via wireVrf() / emergencySetVrf().
+     * RNG is sourced from the game; bonds no longer request VRF directly.
      */
     constructor() {
-        rewardStakeTargetBps = 10_000; // Default: 100% stETH preference
-        // Shared bond token (DGNRS) is predeployed and wired via DeployConstants.
-        tokenDGNRS = BondToken(DeployConstants.DGNRS);
-
-        _wire(
-            WireConfig({
-                game: DeployConstants.GAME,
-                vault: DeployConstants.VAULT,
-                coin: DeployConstants.COIN,
-                vrfCoordinator: address(0),
-                vrfSubId: 0,
-                vrfKeyHash: bytes32(0),
-                questModule: DeployConstants.QUESTS,
-                trophies: DeployConstants.TROPHIES,
-                affiliate: DeployConstants.AFFILIATE
-            })
-        );
+        // Approve vault to spend stETH for yield management
+        if (!IStETH(ContractAddresses.STETH_TOKEN).approve(ContractAddresses.VAULT, type(uint256).max)) {
+            revert BankCallFailed();
+        }
     }
 
     // =====================================================================
     //                       EXTERNAL WRITE API
     // =====================================================================
 
-    /// @notice One-time VRF wiring (initial setup); address wiring is handled at construction.
-    /// @param coordinator_ Chainlink VRF coordinator address
-    /// @param subId Chainlink VRF subscription ID
-    /// @param keyHash_ Chainlink VRF key hash for the gas lane
-    function wireVrf(address coordinator_, uint256 subId, bytes32 keyHash_) external onlyAdmin {
-        _setVrf(coordinator_, subId, keyHash_);
-    }
-
-    /// @notice Emergency VRF rewire; callable only by the admin contract.
-    /// @dev Intended to be called from the admin's emergencyRecover flow once the game has been declared stalled.
-    /// @param coordinator_ New VRF coordinator address
-    /// @param subId New VRF subscription ID
-    /// @param keyHash_ New VRF key hash
-    function emergencySetVrf(address coordinator_, uint256 subId, bytes32 keyHash_) external onlyAdmin {
-        if (coordinator_ == address(0) || keyHash_ == bytes32(0) || subId == 0) revert Unauthorized();
-
-        vrfCoordinator = coordinator_;
-        vrfSubscriptionId = subId;
-        vrfKeyHash = keyHash_;
-
-        // Clear any pending request from a dead coordinator so a fresh request can be issued.
-        vrfRequestPending = false;
-        vrfRequestId = 0;
-        vrfPendingWord = 0;
-        presaleVrfRequestPending = false;
-        presaleVrfRequestId = 0;
-        presaleVrfPendingWord = 0;
-    }
-
     /// @notice Configure the target stETH share (in bps) for game-held liquidity; 0 disables staking.
     /// @param bps Basis points (0-10000, where 10000 = 100% stETH preference)
     function setRewardStakeTargetBps(uint16 bps) external onlyAdmin {
         if (bps > 10_000) revert InvalidBps();
         rewardStakeTargetBps = bps;
-    }
-
-    /// @notice Game hook to pause/resume bond purchases and burns while RNG is locked for jackpots.
-    /// @param locked True to lock (pause purchases/burns), false to unlock
-    function setRngLock(bool locked) external onlyGame {
-        rngLock = locked;
     }
 
     /// @notice Player toggle to auto-burn any DGNRS minted from bond jackpots.
@@ -2391,7 +2450,7 @@ contract DegenerusBonds is DegenerusBondsModule {
     /// @param beneficiary Address to credit with bond score (uses msg.sender if zero address)
     /// @return scoreAwarded Amount of score awarded based on deposit and player multiplier
     function depositCurrentFor(address beneficiary) external payable returns (uint256 scoreAwarded) {
-        if (msg.sender == address(game)) revert Unauthorized(); // game should use depositFromGame; split handled in-game
+        if (msg.sender == ContractAddresses.GAME) revert Unauthorized(); // game should use depositFromGame; split handled in-game
         address ben = beneficiary == address(0) ? msg.sender : beneficiary;
         uint256 amount = msg.value;
         scoreAwarded = _processDeposit(ben, amount, false);
@@ -2402,7 +2461,7 @@ contract DegenerusBonds is DegenerusBondsModule {
     /// @param amount Amount of ETH (in wei) to credit as score
     /// @return scoreAwarded Amount of score awarded based on amount and player multiplier
     function depositFromGame(address beneficiary, uint256 amount) external returns (uint256 scoreAwarded) {
-        if (msg.sender != address(game)) revert Unauthorized();
+        if (msg.sender != ContractAddresses.GAME) revert Unauthorized();
         scoreAwarded = _processDeposit(beneficiary, amount, true);
     }
 
@@ -2427,7 +2486,7 @@ contract DegenerusBonds is DegenerusBondsModule {
     /// @notice Called by game to signal game over and start the shutdown process.
     /// @dev Sets gameOverStarted flag and records timestamp for expiry calculations.
     function notifyGameOver() external {
-        if (msg.sender != address(game)) revert Unauthorized();
+        if (msg.sender != ContractAddresses.GAME) revert Unauthorized();
         if (!gameOverStarted) {
             gameOverStarted = true;
             gameOverTimestamp = uint48(block.timestamp);
@@ -2451,9 +2510,9 @@ contract DegenerusBonds is DegenerusBondsModule {
         if (amount == 0) revert SaleClosed();
         if (!fromGame && amount < MIN_DEPOSIT) revert MinimumDeposit();
         if (gameOverStarted) revert SaleClosed();
-        if (!fromGame && rngLock) revert PurchasesDisabled();
+        if (!fromGame && _gameRngLocked()) revert PurchasesDisabled();
 
-        uint24 currLevel = game.level();
+        uint24 currLevel = IDegenerusGameLevel(ContractAddresses.GAME).level();
         if (!_bondPurchasesOpen(currLevel)) revert PurchasesDisabled();
         uint24 maturityLevel = _activeMaturityAt(currLevel);
         BondSeries storage s = _getOrCreateSeries(maturityLevel);
@@ -2466,19 +2525,21 @@ contract DegenerusBonds is DegenerusBondsModule {
             uint256 rewardShare = (amount * 10) / 100;
             uint256 yieldShare = amount - bondShare - rewardShare - vaultShare;
 
-            address vaultAddr = vault;
-            address gameAddr = address(game);
+            address vaultAddr = ContractAddresses.VAULT;
+            address gameAddr = ContractAddresses.GAME;
 
             uint256 stUsed;
             if (vaultShare != 0) {
                 uint256 stBal;
-                try IStETH(steth).balanceOf(gameAddr) returns (uint256 b) {
+                try IStETH(ContractAddresses.STETH_TOKEN).balanceOf(gameAddr) returns (uint256 b) {
                     stBal = b;
                 } catch {}
                 if (stBal != 0) {
                     uint256 stPull = stBal < vaultShare ? stBal : vaultShare;
                     bool pulled;
-                    try IStETH(steth).transferFrom(gameAddr, address(this), stPull) returns (bool ok) {
+                    try IStETH(ContractAddresses.STETH_TOKEN).transferFrom(gameAddr, address(this), stPull) returns (
+                        bool ok
+                    ) {
                         pulled = ok;
                     } catch {}
                     if (pulled) {
@@ -2512,7 +2573,7 @@ contract DegenerusBonds is DegenerusBondsModule {
         scoreAwarded = _scoreWithMultiplier(beneficiary, amount);
         if (!fromGame) {
             _payAffiliateReward(beneficiary, amount, AFFILIATE_BOND_BPS);
-            IDegenerusCoin(coin).notifyQuestBond(beneficiary, amount);
+            IDegenerusCoin(ContractAddresses.COIN).notifyQuestBond(beneficiary, amount);
         }
 
         // Append new weight slice for jackpot selection (append-only cumulative for O(log N) sampling).
@@ -2539,14 +2600,14 @@ contract DegenerusBonds is DegenerusBondsModule {
     function burnDGNRS(uint256 amount) external {
         if (amount == 0) revert InsufficientScore();
         if (gameOverStarted) revert SaleClosed();
-        if (rngLock) revert PurchasesDisabled();
+        if (_gameRngLocked()) revert PurchasesDisabled();
 
         bool presaleActive = _presaleActive();
         uint24 currLevel;
         if (presaleActive) {
             currLevel = 0;
         } else {
-            currLevel = game.level();
+            currLevel = IDegenerusGameLevel(ContractAddresses.GAME).level();
         }
         _burnDgnrsFor(msg.sender, amount, currLevel, true);
     }
@@ -2630,84 +2691,5 @@ contract DegenerusBonds is DegenerusBondsModule {
 
     function _capStopAt(uint256 stopAt) private pure returns (uint256 capped) {
         return stopAt == type(uint256).max ? stopAt : stopAt + 1;
-    }
-
-    function _wire(WireConfig memory cfg) private {
-        _setGame(cfg.game);
-        _setVault(cfg.vault);
-        _setCoin(cfg.coin);
-        _setAffiliate(cfg.affiliate);
-        _setQuestModule(cfg.questModule);
-        _setTrophies(cfg.trophies);
-        _setVrf(cfg.vrfCoordinator, cfg.vrfSubId, cfg.vrfKeyHash);
-    }
-
-    function _setGame(address game_) private {
-        game = IDegenerusGameLevel(game_);
-    }
-
-    function _setVault(address vault_) private {
-        vault = vault_;
-        tokenDGNRS.setVault(vault_);
-        if (!IStETH(steth).approve(vault_, type(uint256).max)) revert BankCallFailed();
-    }
-
-    function _setCoin(address coin_) private {
-        coin = coin_;
-    }
-
-    function _setAffiliate(address affiliate_) private {
-        affiliate = affiliate_;
-    }
-
-    function _setQuestModule(address questModule_) private {
-        questModule = questModule_;
-    }
-
-    function _setTrophies(address trophies_) private {
-        trophies = trophies_;
-    }
-
-    function _setVrf(address coordinator_, uint256 subId, bytes32 keyHash_) private {
-        if (coordinator_ == address(0) && keyHash_ == bytes32(0) && subId == 0) return;
-        if (coordinator_ == address(0) || keyHash_ == bytes32(0) || subId == 0) revert Unauthorized();
-
-        address currentCoord = vrfCoordinator;
-        bytes32 currentKey = vrfKeyHash;
-        uint256 currentSub = vrfSubscriptionId;
-
-        // Initial wiring when unset.
-        if (currentCoord == address(0)) {
-            vrfCoordinator = coordinator_;
-            vrfSubscriptionId = subId;
-            vrfKeyHash = keyHash_;
-            return;
-        }
-
-        // No-op if unchanged.
-        if (coordinator_ == currentCoord && keyHash_ == currentKey && subId == currentSub) {
-            return;
-        }
-
-        revert VrfLocked(); // Rewiring after initial set is disallowed; use the admin emergency path.
-    }
-
-    /// @notice VRF callback entrypoint.
-    /// @dev Called by Chainlink VRF coordinator to deliver random words. Validates sender and request ID.
-    /// @param requestId The VRF request ID being fulfilled
-    /// @param randomWords Array of random words (only first word is used)
-    function fulfillRandomWords(uint256 requestId, uint256[] calldata randomWords) external {
-        if (msg.sender != vrfCoordinator) revert Unauthorized();
-        if (randomWords.length == 0) return;
-
-        if (presaleVrfRequestPending && requestId == presaleVrfRequestId) {
-            presaleVrfRequestPending = false;
-            presaleVrfPendingWord = randomWords[0];
-            return;
-        }
-
-        if (!vrfRequestPending || requestId != vrfRequestId) return;
-        vrfRequestPending = false;
-        vrfPendingWord = randomWords[0];
     }
 }

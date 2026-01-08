@@ -2,84 +2,84 @@
 pragma solidity ^0.8.26;
 
 /*
-╔═══════════════════════════════════════════════════════════════════════════════════════════════════════╗
-║                                         Icons32Data                                                   ║
-║                           On-Chain SVG Icon Path Storage for Degenerus                                ║
-╠═══════════════════════════════════════════════════════════════════════════════════════════════════════╣
-║                                                                                                       ║
-║  ARCHITECTURE OVERVIEW                                                                                ║
-║  ─────────────────────                                                                                ║
-║  Icons32Data is an immutable on-chain storage contract for SVG path data. It holds 33 icon           ║
-║  paths representing the symbols used in Degenerus gamepieces and trophies.                            ║
-║                                                                                                       ║
-║  ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐ ║
-║  │                              ICON INDEX LAYOUT                                                   │ ║
-║  │                                                                                                  │ ║
-║  │   _paths[0-7]   ─► Quadrant 0 (Crypto):   Bitcoin, Ethereum, Litecoin, etc.                     │ ║
-║  │   _paths[8-15]  ─► Quadrant 1 (Zodiac):   Aries, Taurus, Gemini, etc.                           │ ║
-║  │   _paths[16-23] ─► Quadrant 2 (Cards):    Horseshoe, King, Cashsack, Club, Diamond, Heart │ ║
-║  │                                      Spade, Ace                                           │ ║
-║  │   _paths[24-31] ─► Quadrant 3 (Dice):     1-8                                             │ ║
-║  │   _paths[32]    ─► Affiliate Badge:       Special icon for affiliate trophies                   │ ║
-║  │                                                                                                  │ ║
-║  │   _diamond      ─► Flame icon:            Center glyph for all token renders                    │ ║
-║  │                                                                                                  │ ║
-║  │   _symQ1[0-7]   ─► Crypto symbol names:   "Bitcoin", "Ethereum", etc.                           │ ║
-║  │   _symQ2[0-7]   ─► Zodiac symbol names:   "Aries", "Taurus", etc.                               │ ║
-║  │   _symQ3[0-7]   ─► Cards symbol names:    "Horseshoe", "King", "Cashsack", "Club",               │ ║
-║  │                                      "Diamond", "Heart", "Spade", "Ace"                         │ ║
-║  │   (Q4 Dice names are generated dynamically: "1", "2", etc.)                                     │ ║
-║  └──────────────────────────────────────────────────────────────────────────────────────────────────┘ ║
-║                                                                                                       ║
-║  DESIGN RATIONALE                                                                                     ║
-║  ────────────────                                                                                     ║
-║  1. On-chain storage ensures token metadata remains available even if IPFS/centralized              ║
-║     servers become unavailable.                                                                       ║
-║  2. Constructor-based initialization makes the data immutable after deployment.                      ║
-║  3. View functions allow efficient reading by renderers without state changes.                       ║
-║  4. SVG paths are stored as raw strings (not base64) to allow renderer flexibility.                  ║
-║                                                                                                       ║
-╠═══════════════════════════════════════════════════════════════════════════════════════════════════════╣
-║  SECURITY CONSIDERATIONS                                                                              ║
-║  ───────────────────────                                                                              ║
-║                                                                                                       ║
-║  1. IMMUTABILITY                                                                                      ║
-║     • All data is set at construction time and cannot be modified                                     ║
-║     • No admin functions, no upgrade path                                                             ║
-║     • Once deployed, icon data is permanent                                                           ║
-║                                                                                                       ║
-║  2. BOUNDS CHECKING                                                                                   ║
-║     • data(i) will revert if i >= 33 (array bounds)                                                   ║
-║     • symbol(q, idx) returns "" for invalid quadrant or out-of-range index                            ║
-║     • Renderers handle empty strings gracefully                                                       ║
-║                                                                                                       ║
-║  3. NO EXTERNAL CALLS                                                                                 ║
-║     • Pure data storage, no dependencies on other contracts                                           ║
-║     • Cannot be manipulated by external state changes                                                 ║
-║                                                                                                       ║
-║  4. GAS OPTIMIZATION                                                                                  ║
-║     • Uses storage arrays (not memory) for large path data                                            ║
-║     • View functions are free for off-chain calls                                                     ║
-║     • String data stored once, read many times                                                        ║
-║                                                                                                       ║
-╠═══════════════════════════════════════════════════════════════════════════════════════════════════════╣
-║  TRUST ASSUMPTIONS                                                                                    ║
-║  ─────────────────                                                                                    ║
-║                                                                                                       ║
-║  1. Deployer provides valid SVG path data at construction                                             ║
-║  2. Path data does not contain malicious SVG (script injection, etc.)                                 ║
-║  3. Symbol names are appropriate and accurate                                                         ║
-║                                                                                                       ║
-╚═══════════════════════════════════════════════════════════════════════════════════════════════════════╝
++=======================================================================================================+
+|                                         Icons32Data                                                   |
+|                           On-Chain SVG Icon Path Storage for Degenerus                                |
++=======================================================================================================+
+|                                                                                                       |
+|  ARCHITECTURE OVERVIEW                                                                                |
+|  ---------------------                                                                                |
+|  Icons32Data is an immutable on-chain storage contract for SVG path data. It holds 33 icon           |
+|  paths representing the symbols used in Degenerus gamepieces and trophies.                            |
+|                                                                                                       |
+|  +--------------------------------------------------------------------------------------------------+ |
+|  |                              ICON INDEX LAYOUT                                                   | |
+|  |                                                                                                  | |
+|  |   _paths[0-7]   -► Quadrant 0 (Crypto):   Bitcoin, Ethereum, Litecoin, etc.                     | |
+|  |   _paths[8-15]  -► Quadrant 1 (Zodiac):   Aries, Taurus, Gemini, etc.                           | |
+|  |   _paths[16-23] -► Quadrant 2 (Cards):    Horseshoe, King, Cashsack, Club, Diamond, Heart | |
+|  |                                      Spade, Ace                                           | |
+|  |   _paths[24-31] -► Quadrant 3 (Dice):     1-8                                             | |
+|  |   _paths[32]    -► Affiliate Badge:       Special icon for affiliate trophies                   | |
+|  |                                                                                                  | |
+|  |   _diamond      -► Flame icon:            Center glyph for all token renders                    | |
+|  |                                                                                                  | |
+|  |   _symQ1[0-7]   -► Crypto symbol names:   "Bitcoin", "Ethereum", etc.                           | |
+|  |   _symQ2[0-7]   -► Zodiac symbol names:   "Aries", "Taurus", etc.                               | |
+|  |   _symQ3[0-7]   -► Cards symbol names:    "Horseshoe", "King", "Cashsack", "Club",               | |
+|  |                                      "Diamond", "Heart", "Spade", "Ace"                         | |
+|  |   (Q4 Dice names are generated dynamically: "1", "2", etc.)                                     | |
+|  +--------------------------------------------------------------------------------------------------+ |
+|                                                                                                       |
+|  DESIGN RATIONALE                                                                                     |
+|  ----------------                                                                                     |
+|  1. On-chain storage ensures token metadata remains available even if IPFS/centralized              |
+|     servers become unavailable.                                                                       |
+|  2. Constructor-based initialization makes the data immutable after deployment.                      |
+|  3. View functions allow efficient reading by renderers without state changes.                       |
+|  4. SVG paths are stored as raw strings (not base64) to allow renderer flexibility.                  |
+|                                                                                                       |
++=======================================================================================================+
+|  SECURITY CONSIDERATIONS                                                                              |
+|  -----------------------                                                                              |
+|                                                                                                       |
+|  1. IMMUTABILITY                                                                                      |
+|     • All data is set at construction time and cannot be modified                                     |
+|     • No admin functions, no upgrade path                                                             |
+|     • Once deployed, icon data is permanent                                                           |
+|                                                                                                       |
+|  2. BOUNDS CHECKING                                                                                   |
+|     • data(i) will revert if i >= 33 (array bounds)                                                   |
+|     • symbol(q, idx) returns "" for invalid quadrant or out-of-range index                            |
+|     • Renderers handle empty strings gracefully                                                       |
+|                                                                                                       |
+|  3. NO EXTERNAL CALLS                                                                                 |
+|     • Pure data storage, no dependencies on other contracts                                           |
+|     • Cannot be manipulated by external state changes                                                 |
+|                                                                                                       |
+|  4. GAS OPTIMIZATION                                                                                  |
+|     • Uses storage arrays (not memory) for large path data                                            |
+|     • View functions are free for off-chain calls                                                     |
+|     • String data stored once, read many times                                                        |
+|                                                                                                       |
++=======================================================================================================+
+|  TRUST ASSUMPTIONS                                                                                    |
+|  -----------------                                                                                    |
+|                                                                                                       |
+|  1. Deployer provides valid SVG path data at construction                                             |
+|  2. Path data does not contain malicious SVG (script injection, etc.)                                 |
+|  3. Symbol names are appropriate and accurate                                                         |
+|                                                                                                       |
++=======================================================================================================+
 */
 
 /// @title Icons32Data
 /// @notice On-chain storage for Degenerus SVG icon paths and symbol names
 /// @dev Immutable after construction; implements IIcons32 interface
 contract Icons32Data {
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
     // STORAGE
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
 
     /// @dev SVG path data for 33 icons (32 quadrant symbols + 1 affiliate badge)
     ///      Each path is the "d" attribute content for an SVG <path> element
@@ -104,9 +104,9 @@ contract Icons32Data {
 
     // Note: Quadrant 3 (Dice) names are generated dynamically as "1" through "8"
 
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
     // CONSTRUCTOR
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
 
     /// @notice Deploy with all icon data (immutable after construction)
     /// @dev All arrays must be fully populated. Data cannot be changed post-deployment.
@@ -138,9 +138,9 @@ contract Icons32Data {
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
     // VIEW FUNCTIONS
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
 
     /// @notice Get the SVG path data for an icon by index
     /// @dev Reverts if index >= 33 (array bounds check)

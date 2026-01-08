@@ -3,7 +3,7 @@ pragma solidity ^0.8.26;
 
 struct QuestRequirements {
     uint32 mints; // Number of mints/burns required (whole NFTs)
-    uint256 tokenAmount; // BURNIE base units (6 decimals) for token-denominated quests; wei for bond size quests
+    uint256 tokenAmount; // BURNIE base units (18 decimals) for token-denominated quests; wei for bond size quests
 }
 
 struct QuestInfo {

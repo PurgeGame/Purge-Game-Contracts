@@ -2,117 +2,117 @@
 pragma solidity ^0.8.26;
 
 /*
-╔═══════════════════════════════════════════════════════════════════════════════════════════════════════╗
-║                                       DegenerusTrophies                                               ║
-║                          Soulbound ERC721 Trophies — Non-Transferable Achievements                    ║
-╠═══════════════════════════════════════════════════════════════════════════════════════════════════════╣
-║                                                                                                       ║
-║  ARCHITECTURE OVERVIEW                                                                                ║
-║  ─────────────────────                                                                                ║
-║  DegenerusTrophies is a minimal, gas-optimized soulbound NFT contract for game achievements.          ║
-║  Implements the ERC721 interface surface but permanently disables all transfer/approval flows.        ║
-║                                                                                                       ║
-║  TROPHY TYPES                                                                                         ║
-║  ────────────                                                                                         ║
-║  1. Exterminator  - Awarded for eliminating the final trait at level end                              ║
-║  2. BAF           - "Burn and Flip" trophy for strategic coinflip wins                                ║
-║  3. Affiliate     - Awarded to top affiliate performers per level                                     ║
-║                                                                                                       ║
-║  ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐ ║
-║  │                              TROPHY DATA BIT LAYOUT (uint256)                                   │ ║
-║  │                                                                                                  │ ║
-║  │   ┌─────────────────────────────────────────────────────────────────────────────────────────┐   │ ║
-║  │   │  Bit 229        │ TROPHY_FLAG_INVERT    │ Visual inversion flag for renderer            │   │ ║
-║  │   │  Bit 203        │ BAF_TROPHY_FLAG       │ Identifies BAF trophy type                    │   │ ║
-║  │   │  Bit 201        │ AFFILIATE_TROPHY_FLAG │ Identifies Affiliate trophy type              │   │ ║
-║  │   │  Bits 152-167   │ trait (uint16)        │ Exterminator trait (low 8) or sentinel value  │   │ ║
-║  │   │  Bits 128-151   │ level (uint24)        │ Game level when trophy was earned             │   │ ║
-║  │   │  Bits 0-95      │ score (uint96)        │ Affiliate score or exterminator winnings      │   │ ║
-║  │   └─────────────────────────────────────────────────────────────────────────────────────────┘   │ ║
-║  │                                                                                                  │ ║
-║  │   Sentinel Values:                                                                               │ ║
-║  │   • AFFILIATE_TRAIT_SENTINEL (0xFFFE) - Indicates Affiliate trophy in trait field               │ ║
-║  │   • BAF_TRAIT_SENTINEL (0xFFFA)       - Indicates BAF trophy in trait field                     │ ║
-║  └──────────────────────────────────────────────────────────────────────────────────────────────────┘ ║
-║                                                                                                       ║
-║  ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐ ║
-║  │                              MINTING FLOW                                                        │ ║
-║  │                                                                                                  │ ║
-║  │   DegenerusGame ────► onlyGame ────► mintExterminator() ────► _mint() ────► Transfer event      │ ║
-║  │        │                                   │                                                     │ ║
-║  │        ├─────────────────────────► mintBaf() ───────────────► _mint() ────► Transfer event      │ ║
-║  │        │                                   │                                                     │ ║
-║  │        └─────────────────────────► mintAffiliate() ─────────► _mint() ────► Transfer event      │ ║
-║  │                                                                                                  │ ║
-║  │   Note: All mints are gated by onlyGame modifier. Game address is fixed at deploy.             │ ║
-║  └──────────────────────────────────────────────────────────────────────────────────────────────────┘ ║
-║                                                                                                       ║
-║  KEY INVARIANTS                                                                                       ║
-║  ──────────────                                                                                       ║
-║  • Tokens are permanently non-transferable (soulbound)                                                ║
-║  • All transfer and approval setters revert (getters return zero/false)                               ║
-║  • Once minted, a trophy cannot be burned or moved                                                    ║
-║  • Token IDs are sequential starting from 1                                                           ║
-║  • Only the game contract can mint trophies                                                           ║
-║  • Game address can only be set once (one-time wiring pattern)                                        ║
-║                                                                                                       ║
-╠═══════════════════════════════════════════════════════════════════════════════════════════════════════╣
-║  SECURITY CONSIDERATIONS                                                                              ║
-║  ───────────────────────                                                                              ║
-║                                                                                                       ║
-║  1. SOULBOUND ENFORCEMENT                                                                             ║
-║     • All 5 transfer vectors blocked: transferFrom, safeTransferFrom (x2), approve, setApprovalForAll ║
-║     • getApproved returns address(0), isApprovedForAll returns false                                  ║
-║     • No internal _transfer function exists                                                           ║
-║                                                                                                       ║
-║  2. ACCESS CONTROL                                                                                    ║
-║     • admin: none (addresses fixed at deploy)                                                        ║
-║     • game: constant, set at construction                                                            ║
-║     • renderer: constant, set at construction (use a router for upgradeable visuals)                 ║
-║                                                                                                       ║
-║  3. REENTRANCY                                                                                        ║
-║     • No ETH handling (no payable functions, no withdrawals)                                          ║
-║     • External call to renderer is view-only in tokenURI()                                            ║
-║     • _mint follows checks-effects-interactions pattern                                               ║
-║                                                                                                       ║
-║  4. OVERFLOW SAFETY                                                                                   ║
-║     • Token ID increment uses unchecked (safe: requires 2^256 mints to overflow)                      ║
-║     • Balance increment uses unchecked (safe: same reasoning)                                         ║
-║     • All bit operations are within uint256 bounds                                                    ║
-║                                                                                                       ║
-╠═══════════════════════════════════════════════════════════════════════════════════════════════════════╣
-║  TRUST ASSUMPTIONS                                                                                    ║
-║  ─────────────────                                                                                    ║
-║                                                                                                       ║
-║  1. Deployer is trusted to set the correct game address                                                ║
-║  2. Game contract is trusted to mint trophies fairly and correctly                                    ║
-║  3. Renderer contract is trusted to return valid tokenURI data                                        ║
-║  4. Renderer will not revert maliciously (would block tokenURI for all tokens)                        ║
-║                                                                                                       ║
-╠═══════════════════════════════════════════════════════════════════════════════════════════════════════╣
-║  GAS OPTIMIZATIONS                                                                                    ║
-║  ─────────────────                                                                                    ║
-║                                                                                                       ║
-║  1. Affiliate score / exterminator winnings packed into bits 0-95 (saves 1 SSTORE per mint)           ║
-║  2. Custom errors instead of require strings (~200 gas saved per revert)                              ║
-║  3. unchecked blocks for safe arithmetic (~30 gas saved per operation)                                ║
-║  4. No enumeration (ERC721Enumerable) - tokens tracked via events only                                ║
-║  5. Minimal storage: only _owners, _balances, _trophyData mappings                                    ║
-║                                                                                                       ║
-╚═══════════════════════════════════════════════════════════════════════════════════════════════════════╝
++=======================================================================================================+
+|                                       DegenerusTrophies                                               |
+|                          Soulbound ERC721 Trophies — Non-Transferable Achievements                    |
++=======================================================================================================+
+|                                                                                                       |
+|  ARCHITECTURE OVERVIEW                                                                                |
+|  ---------------------                                                                                |
+|  DegenerusTrophies is a minimal, gas-optimized soulbound NFT contract for ContractAddresses.GAME achievements.          |
+|  Implements the ERC721 interface surface but permanently disables all transfer/approval flows.        |
+|                                                                                                       |
+|  TROPHY TYPES                                                                                         |
+|  ------------                                                                                         |
+|  1. Exterminator  - Awarded for eliminating the final trait at level end                              |
+|  2. BAF           - "Burn and Flip" trophy for strategic coinflip wins                                |
+|  3. Affiliate     - Awarded to top affiliate performers per level                                     |
+|                                                                                                       |
+|  +--------------------------------------------------------------------------------------------------+ |
+|  |                              TROPHY DATA BIT LAYOUT (uint256)                                   | |
+|  |                                                                                                  | |
+|  |   +-----------------------------------------------------------------------------------------+   | |
+|  |   |  Bit 229        | TROPHY_FLAG_INVERT    | Visual inversion flag for ContractAddresses.TROPHY_RENDERER_ROUTER            |   | |
+|  |   |  Bit 203        | BAF_TROPHY_FLAG       | Identifies BAF trophy type                    |   | |
+|  |   |  Bit 201        | AFFILIATE_TROPHY_FLAG | Identifies Affiliate trophy type              |   | |
+|  |   |  Bits 152-167   | trait (uint16)        | Exterminator trait (low 8) or sentinel value  |   | |
+|  |   |  Bits 128-151   | level (uint24)        | Game level when trophy was earned             |   | |
+|  |   |  Bits 0-95      | score (uint96)        | Affiliate score or exterminator winnings      |   | |
+|  |   +-----------------------------------------------------------------------------------------+   | |
+|  |                                                                                                  | |
+|  |   Sentinel Values:                                                                               | |
+|  |   • AFFILIATE_TRAIT_SENTINEL (0xFFFE) - Indicates Affiliate trophy in trait field               | |
+|  |   • BAF_TRAIT_SENTINEL (0xFFFA)       - Indicates BAF trophy in trait field                     | |
+|  +--------------------------------------------------------------------------------------------------+ |
+|                                                                                                       |
+|  +--------------------------------------------------------------------------------------------------+ |
+|  |                              MINTING FLOW                                                        | |
+|  |                                                                                                  | |
+|  |   DegenerusGame ----► onlyGame ----► mintExterminator() ----► _mint() ----► Transfer event      | |
+|  |        |                                   |                                                     | |
+|  |        +-------------------------► mintBaf() ---------------► _mint() ----► Transfer event      | |
+|  |        |                                   |                                                     | |
+|  |        +-------------------------► mintAffiliate() ---------► _mint() ----► Transfer event      | |
+|  |                                                                                                  | |
+|  |   Note: All mints are gated by onlyGame modifier. Game address is fixed at deploy.             | |
+|  +--------------------------------------------------------------------------------------------------+ |
+|                                                                                                       |
+|  KEY INVARIANTS                                                                                       |
+|  --------------                                                                                       |
+|  • Tokens are permanently non-transferable (soulbound)                                                |
+|  • All transfer and approval setters revert (getters return zero/false)                               |
+|  • Once minted, a trophy cannot be burned or moved                                                    |
+|  • Token IDs are sequential starting from 1                                                           |
+|  • Only the ContractAddresses.GAME contract can mint trophies                                                           |
+|  • Game address can only be set once (one-time wiring pattern)                                        |
+|                                                                                                       |
++=======================================================================================================+
+|  SECURITY CONSIDERATIONS                                                                              |
+|  -----------------------                                                                              |
+|                                                                                                       |
+|  1. SOULBOUND ENFORCEMENT                                                                             |
+|     • All 5 transfer vectors blocked: transferFrom, safeTransferFrom (x2), approve, setApprovalForAll |
+|     • getApproved returns address(0), isApprovedForAll returns false                                  |
+|     • No internal _transfer function exists                                                           |
+|                                                                                                       |
+|  2. ACCESS CONTROL                                                                                    |
+|     • admin: none (addresses fixed at deploy)                                                        |
+|     • ContractAddresses.GAME: constant, set at construction                                                            |
+|     • ContractAddresses.TROPHY_RENDERER_ROUTER: constant, set at construction (use a router for upgradeable visuals)                 |
+|                                                                                                       |
+|  3. REENTRANCY                                                                                        |
+|     • No ETH handling (no payable functions, no withdrawals)                                          |
+|     • External call to ContractAddresses.TROPHY_RENDERER_ROUTER is view-only in tokenURI()                                            |
+|     • _mint follows checks-effects-interactions pattern                                               |
+|                                                                                                       |
+|  4. OVERFLOW SAFETY                                                                                   |
+|     • Token ID increment uses unchecked (safe: requires 2^256 mints to overflow)                      |
+|     • Balance increment uses unchecked (safe: same reasoning)                                         |
+|     • All bit operations are within uint256 bounds                                                    |
+|                                                                                                       |
++=======================================================================================================+
+|  TRUST ASSUMPTIONS                                                                                    |
+|  -----------------                                                                                    |
+|                                                                                                       |
+|  1. Deployer is trusted to set the correct ContractAddresses.GAME address                                                |
+|  2. Game contract is trusted to mint trophies fairly and correctly                                    |
+|  3. Renderer contract is trusted to return valid tokenURI data                                        |
+|  4. Renderer will not revert maliciously (would block tokenURI for all tokens)                        |
+|                                                                                                       |
++=======================================================================================================+
+|  GAS OPTIMIZATIONS                                                                                    |
+|  -----------------                                                                                    |
+|                                                                                                       |
+|  1. Affiliate score / exterminator winnings packed into bits 0-95 (saves 1 SSTORE per mint)           |
+|  2. Custom errors instead of require strings (~200 gas saved per revert)                              |
+|  3. unchecked blocks for safe arithmetic (~30 gas saved per operation)                                |
+|  4. No enumeration (ERC721Enumerable) - tokens tracked via events only                                |
+|  5. Minimal storage: only _owners, _balances, _trophyData mappings                                    |
+|                                                                                                       |
++=======================================================================================================+
 */
 
 import "./interfaces/IDegenerusTrophies.sol";
-import {DeployConstants} from "./DeployConstants.sol";
+import {ContractAddresses} from "./ContractAddresses.sol";
 
 /// @title DegenerusTrophies
-/// @notice Soulbound ERC721 trophies for Degenerus game achievements
+/// @notice Soulbound ERC721 trophies for Degenerus ContractAddresses.GAME achievements
 /// @dev Implements ERC721 interface but reverts all transfer/approval operations
 contract DegenerusTrophies is IDegenerusTrophies {
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
     // ERRORS
-    // ─────────────────────────────────────────────────────────────────────
-    /// @dev Caller is not the authorized game contract
+    // ---------------------------------------------------------------------
+    /// @dev Caller is not the authorized ContractAddresses.GAME contract
     error NotGame();
     /// @dev Token does not exist or invalid address provided
     error InvalidToken();
@@ -123,9 +123,9 @@ contract DegenerusTrophies is IDegenerusTrophies {
     /// @dev All transfer operations are permanently disabled (soulbound)
     error TransfersDisabled();
 
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
     // ENUMS
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
     /// @notice Trophy categories awarded for different achievements
     enum TrophyKind {
         Exterminator, // Awarded for eliminating the final trait
@@ -133,9 +133,9 @@ contract DegenerusTrophies is IDegenerusTrophies {
         Affiliate     // Top affiliate performer for a level
     }
 
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
     // EVENTS
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
     /// @dev ERC721 Transfer event - emitted on mint (from = address(0))
     event Transfer(address indexed from, address indexed to, uint256 indexed tokenId);
     /// @dev ERC721 Approval event - never emitted (approvals disabled)
@@ -146,13 +146,13 @@ contract DegenerusTrophies is IDegenerusTrophies {
     /// @param tokenId The newly minted token ID
     /// @param to The recipient address
     /// @param kind The trophy category (Exterminator, Baf, or Affiliate)
-    /// @param level The game level when the trophy was earned
+    /// @param level The ContractAddresses.GAME level when the trophy was earned
     /// @param trait The trait ID for Exterminator trophies (0 for others)
     event TrophyMinted(uint256 indexed tokenId, address indexed to, TrophyKind kind, uint24 level, uint8 trait);
 
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
     // CONSTANTS
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
     // Bit layout for _trophyData (uint256):
     //   Bits 0-95:    affiliate score or exterminator winnings (uint96, wei)
     //   Bits 128-151: level (uint24)
@@ -161,7 +161,7 @@ contract DegenerusTrophies is IDegenerusTrophies {
     //   Bit 203:      BAF_TROPHY_FLAG
     //   Bit 229:      TROPHY_FLAG_INVERT
 
-    /// @dev Flag indicating visual inversion for renderer (bit 229)
+    /// @dev Flag indicating visual inversion for ContractAddresses.TROPHY_RENDERER_ROUTER (bit 229)
     uint256 private constant TROPHY_FLAG_INVERT = uint256(1) << 229;
     /// @dev Flag identifying Affiliate trophy type (bit 201)
     uint256 private constant AFFILIATE_TROPHY_FLAG = uint256(1) << 201;
@@ -174,17 +174,15 @@ contract DegenerusTrophies is IDegenerusTrophies {
     /// @dev Bitmask to extract the low 96-bit score/winnings field
     uint256 private constant LOW_96_MASK = (uint256(1) << 96) - 1;
 
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
     // CONSTANTS & WIRING
-    // ─────────────────────────────────────────────────────────────────────
-    /// @notice The game contract authorized to mint trophies (constant).
-    address private constant game = DeployConstants.GAME;
-    /// @notice The renderer contract for generating tokenURI metadata (constant).
-    address private constant renderer = DeployConstants.TROPHY_RENDERER_ROUTER;
+    // ---------------------------------------------------------------------
+    /// @notice The ContractAddresses.GAME contract authorized to mint trophies (constant).
+    /// @notice The ContractAddresses.TROPHY_RENDERER_ROUTER contract for generating tokenURI metadata (constant).
 
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
     // STORAGE
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
     /// @dev Next token ID to mint (starts at 1, increments monotonically)
     uint256 private _nextId = 1;
     /// @dev Mapping from token ID to owner address
@@ -194,23 +192,23 @@ contract DegenerusTrophies is IDegenerusTrophies {
     /// @dev Mapping from token ID to packed trophy data (see bit layout above)
     mapping(uint256 => uint256) private _trophyData;
 
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
     // CONSTRUCTOR
-    // ─────────────────────────────────────────────────────────────────────
-    /// @notice Deploy the trophy contract with fixed renderer and game addresses.
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
+    /// @notice Deploy the trophy contract with fixed ContractAddresses.TROPHY_RENDERER_ROUTER and ContractAddresses.GAME addresses.
+    // ---------------------------------------------------------------------
     // MODIFIERS
-    // ─────────────────────────────────────────────────────────────────────
-    /// @dev Restricts function to the authorized game contract
+    // ---------------------------------------------------------------------
+    /// @dev Restricts function to the authorized ContractAddresses.GAME contract
     modifier onlyGame() {
-        address g = game;
+        address g = ContractAddresses.GAME;
         if (msg.sender != g) revert NotGame();
         _;
     }
 
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
     // MINTING (Game-Only)
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
     /// @notice Mint an Exterminator trophy for eliminating the final trait
     /// @param to Recipient address (will own the soulbound trophy)
     /// @param level Game level when the trait was exterminated
@@ -274,9 +272,9 @@ contract DegenerusTrophies is IDegenerusTrophies {
         emit Transfer(address(0), to, tokenId);
     }
 
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
     // ERC721 METADATA
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
     /// @notice Collection name for ERC721 metadata
     /// @return The collection name "Degenerus Trophies"
     function name() external pure returns (string memory) {
@@ -325,19 +323,19 @@ contract DegenerusTrophies is IDegenerusTrophies {
     }
 
     /// @notice Get the metadata URI for a token
-    /// @dev Delegates to the constant renderer contract
+    /// @dev Delegates to the constant ContractAddresses.TROPHY_RENDERER_ROUTER contract
     /// @param tokenId The token ID to query
     /// @return The metadata URI string
     function tokenURI(uint256 tokenId) external view returns (string memory) {
         if (_owners[tokenId] == address(0)) revert InvalidToken();
         uint256 data = _trophyData[tokenId];
         uint32[4] memory extras;
-        // Extract low 96 bits (affiliate score or exterminator winnings) for renderer metadata.
+        // Extract low 96 bits (affiliate score or exterminator winnings) for ContractAddresses.TROPHY_RENDERER_ROUTER metadata.
         uint96 score = uint96(data & LOW_96_MASK);
         extras[0] = uint32(score);
         extras[1] = uint32(score >> 32);
         extras[2] = uint32(score >> 64);
-        return ITrophyRenderer(renderer).tokenURI(tokenId, data, extras);
+        return ITrophyRenderer(ContractAddresses.TROPHY_RENDERER_ROUTER).tokenURI(tokenId, data, extras);
     }
 
     /// @notice Get the raw packed trophy data for a token
@@ -348,9 +346,9 @@ contract DegenerusTrophies is IDegenerusTrophies {
         return _trophyData[tokenId];
     }
 
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
     // ERC721 TRANSFER SURFACE (ALL DISABLED - SOULBOUND)
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
     // These functions implement the ERC721 interface but permanently revert.
     // Trophies are soulbound and cannot be transferred or approved.
 
@@ -397,11 +395,11 @@ contract DegenerusTrophies is IDegenerusTrophies {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // EXTERNAL INTERFACES
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
-/// @notice Interface for the trophy renderer contract
+/// @notice Interface for the trophy ContractAddresses.TROPHY_RENDERER_ROUTER contract
 /// @dev Generates tokenURI metadata for each trophy type
 interface ITrophyRenderer {
     /// @notice Generate the metadata URI for a trophy

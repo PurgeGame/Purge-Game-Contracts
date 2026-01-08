@@ -1,138 +1,138 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {DeployConstants} from "./DeployConstants.sol";
+import {ContractAddresses} from "./ContractAddresses.sol";
 
 /*
-╔═══════════════════════════════════════════════════════════════════════════════════════════════════════╗
-║                                       IconColorRegistry                                               ║
-║                         Color Customization Storage for Degenerus NFT Renders                         ║
-╠═══════════════════════════════════════════════════════════════════════════════════════════════════════╣
-║                                                                                                       ║
-║  ARCHITECTURE OVERVIEW                                                                                ║
-║  ─────────────────────                                                                                ║
-║  IconColorRegistry stores color customization preferences for Degenerus NFT metadata.                 ║
-║  Colors are stored as validated "#rrggbb" hex strings and used by renderers during SVG generation.   ║
-║  Per-token recoloring requires burning 50 BURNIE per token as a deflationary fee.                    ║
-║                                                                                                       ║
-║  ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐ ║
-║  │                              COLOR RESOLUTION CASCADE                                            │ ║
-║  │                                                                                                  │ ║
-║  │   Renderer queries color for (tokenContract, tokenId, channel):                                 │ ║
-║  │                                                                                                  │ ║
-║  │   1. Per-Token Override    ─► _custom[contract][tokenId].{channel}                              │ ║
-║  │          │ empty?                                                                                │ ║
-║  │          ▼                                                                                       │ ║
-║  │   2. Owner Default         ─► _addr[owner].{channel}                                            │ ║
-║  │          │ empty?                                                                                │ ║
-║  │          ▼                                                                                       │ ║
-║  │   3. Referrer Default      ─► _addr[referrer].{channel}                                         │ ║
-║  │          │ empty?                                                                                │ ║
-║  │          ▼                                                                                       │ ║
-║  │   4. Upline Default        ─► _addr[referrer's referrer].{channel}                              │ ║
-║  │          │ empty?                                                                                │ ║
-║  │          ▼                                                                                       │ ║
-║  │   5. Theme Default         ─► Hardcoded in renderer (e.g., "#fff", "#111")                      │ ║
-║  │                                                                                                  │ ║
-║  │   Note: This cascade is implemented in the RENDERER, not here.                                  │ ║
-║  │         Registry only stores and validates colors.                                               │ ║
-║  └──────────────────────────────────────────────────────────────────────────────────────────────────┘ ║
-║                                                                                                       ║
-║  ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐ ║
-║  │                              COLOR CHANNELS (0-3)                                                │ ║
-║  │                                                                                                  │ ║
-║  │   Channel 0: outline   ─► Border stroke, guide lines, frame color                               │ ║
-║  │   Channel 1: flame     ─► Center flame icon fill color                                          │ ║
-║  │   Channel 2: diamond   ─► Center diamond background fill                                        │ ║
-║  │   Channel 3: square    ─► Outer square background fill                                          │ ║
-║  └──────────────────────────────────────────────────────────────────────────────────────────────────┘ ║
-║                                                                                                       ║
-║  ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐ ║
-║  │                              RECOLORING FEE (BURNIE BURN)                                       │ ║
-║  │                                                                                                  │ ║
-║  │   Per-Token Recoloring Flow (using burnCoin for direct burn):                                   │ ║
-║  │   ┌─────────────┐    burnCoin     ┌─────────────┐                                               │ ║
-║  │   │    User     │ ───────────────► │   Burned    │                                               │ ║
-║  │   │ (50 BURNIE  │   (direct burn)  │  (supply ↓) │                                               │ ║
-║  │   │  per token) │                  │             │                                               │ ║
-║  │   └─────────────┘                  └─────────────┘                                               │ ║
-║  │                                                                                                  │ ║
-║  │   Cost: RECOLOR_COST_PER_TOKEN = 50 BURNIE (50 * 1e6 base units)                                │ ║
-║  │   Total cost = number of tokens × 50 BURNIE                                                     │ ║
-║  │                                                                                                  │ ║
-║  │   Note: No approval required; burns route through the trusted coin contract.                    │ ║
-║  │   Address-level colors (setMyColors) are FREE - no BURNIE required.                             │ ║
-║  └──────────────────────────────────────────────────────────────────────────────────────────────────┘ ║
-║                                                                                                       ║
-║  ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐ ║
-║  │                              ACCESS CONTROL                                                      │ ║
-║  │                                                                                                  │ ║
-║  │   Renderers (regular + trophy, fixed at deploy)                                                  │ ║
-║  │      │                                                                                           │ ║
-║  │      ├─► setMyColors()              Proxy for user's address-level defaults                     │ ║
-║  │      ├─► setCustomColorsForMany()   Proxy for per-token overrides (batch)                       │ ║
-║  │      └─► setTopAffiliateColor()     Proxy for affiliate trophy special color                    │ ║
-║  │                                                                                                  │ ║
-║  │   Anyone (view functions)                                                                        │ ║
-║  │      │                                                                                           │ ║
-║  │      ├─► tokenColor()          Read per-token color                                             │ ║
-║  │      ├─► addressColor()        Read per-address color                                           │ ║
-║  │      ├─► trophyOuter()         Read trophy size override                                        │ ║
-║  │      └─► topAffiliateColor()   Read affiliate special color                                     │ ║
-║  └──────────────────────────────────────────────────────────────────────────────────────────────────┘ ║
-║                                                                                                       ║
-╠═══════════════════════════════════════════════════════════════════════════════════════════════════════╣
-║  SECURITY CONSIDERATIONS                                                                              ║
-║  ───────────────────────                                                                              ║
-║                                                                                                       ║
-║  1. ACCESS CONTROL                                                                                    ║
-║     • onlyRenderer modifier gates all write operations                                                ║
-║     • Renderer allowlist is fixed at deployment via DeployConstants                                   ║
-║     • Ownership verification happens in write functions (ownerOf check)                               ║
-║                                                                                                       ║
-║  2. INPUT VALIDATION                                                                                  ║
-║     • _requireHex7() enforces strict "#rrggbb" lowercase format                                       ║
-║     • Invalid hex colors revert with InvalidHexColor()                                                ║
-║     • Empty strings are allowed (used to clear/delete overrides)                                      ║
-║                                                                                                       ║
-║  3. ALLOWLIST                                                                                         ║
-║     • Only _allowedToken contracts can have per-token overrides                                       ║
-║     • Prevents arbitrary contracts from polluting storage                                             ║
-║     • Initial NFT is allowed at construction                                                          ║
-║                                                                                                       ║
-║  4. REENTRANCY                                                                                        ║
-║     • BURNIE burnCoin called before state changes (checks-effects-interactions)                       ║
-║     • ownerOf is view-only call to trusted contracts                                                  ║
-║     • All storage writes happen after external calls complete                                         ║
-║                                                                                                       ║
-║  5. TOKEN BURN SAFETY                                                                                 ║
-║     • Uses burnCoin (direct burn from user balance, no approval)                                      ║
-║     • BURNIE token is constant (set at deploy, cannot be changed)                                     ║
-║     • No token accumulation in contract (burns directly from user)                                    ║
-║                                                                                                       ║
-║  6. GAS LIMITS                                                                                        ║
-║     • setCustomColorsForMany loops over tokenIds (bounded by gas)                                     ║
-║     • No explicit batch size limit; callers should limit to ~50-100 tokens                            ║
-║                                                                                                       ║
-╠═══════════════════════════════════════════════════════════════════════════════════════════════════════╣
-║  TRUST ASSUMPTIONS                                                                                    ║
-║  ─────────────────                                                                                    ║
-║                                                                                                       ║
-║  1. Renderer contract is trusted to correctly pass msg.sender as user                                 ║
-║  2. Allowed token contracts implement ownerOf correctly                                               ║
-║  3. Renderers are precomputed and must be correct at deployment                                       ║
-║  4. BURNIE token implements burnCoin correctly (reverts on insufficient balance)                     ║
-║                                                                                                       ║
-╠═══════════════════════════════════════════════════════════════════════════════════════════════════════╣
-║  GAS OPTIMIZATIONS                                                                                    ║
-║  ─────────────────                                                                                    ║
-║                                                                                                       ║
-║  1. Uses delete for clearing strings (refunds gas)                                                    ║
-║  2. Pre-validates hex strings once, stores validated result                                           ║
-║  3. Batch operations reduce per-token overhead                                                        ║
-║  4. Custom errors instead of require strings                                                          ║
-║                                                                                                       ║
-╚═══════════════════════════════════════════════════════════════════════════════════════════════════════╝
++=======================================================================================================+
+|                                       IconColorRegistry                                               |
+|                         Color Customization Storage for Degenerus NFT Renders                         |
++=======================================================================================================+
+|                                                                                                       |
+|  ARCHITECTURE OVERVIEW                                                                                |
+|  ---------------------                                                                                |
+|  IconColorRegistry stores color customization preferences for Degenerus NFT metadata.                 |
+|  Colors are stored as validated "#rrggbb" hex strings and used by renderers during SVG generation.   |
+|  Per-token recoloring requires burning 50 BURNIE per token as a deflationary fee.                    |
+|                                                                                                       |
+|  +--------------------------------------------------------------------------------------------------+ |
+|  |                              COLOR RESOLUTION CASCADE                                            | |
+|  |                                                                                                  | |
+|  |   Renderer queries color for (tokenContract, tokenId, channel):                                 | |
+|  |                                                                                                  | |
+|  |   1. Per-Token Override    -► _custom[contract][tokenId].{channel}                              | |
+|  |          | empty?                                                                                | |
+|  |          ▼                                                                                       | |
+|  |   2. Owner Default         -► _addr[owner].{channel}                                            | |
+|  |          | empty?                                                                                | |
+|  |          ▼                                                                                       | |
+|  |   3. Referrer Default      -► _addr[referrer].{channel}                                         | |
+|  |          | empty?                                                                                | |
+|  |          ▼                                                                                       | |
+|  |   4. Upline Default        -► _addr[referrer's referrer].{channel}                              | |
+|  |          | empty?                                                                                | |
+|  |          ▼                                                                                       | |
+|  |   5. Theme Default         -► Hardcoded in renderer (e.g., "#fff", "#111")                      | |
+|  |                                                                                                  | |
+|  |   Note: This cascade is implemented in the RENDERER, not here.                                  | |
+|  |         Registry only stores and validates colors.                                               | |
+|  +--------------------------------------------------------------------------------------------------+ |
+|                                                                                                       |
+|  +--------------------------------------------------------------------------------------------------+ |
+|  |                              COLOR CHANNELS (0-3)                                                | |
+|  |                                                                                                  | |
+|  |   Channel 0: outline   -► Border stroke, guide lines, frame color                               | |
+|  |   Channel 1: flame     -► Center flame icon fill color                                          | |
+|  |   Channel 2: diamond   -► Center diamond background fill                                        | |
+|  |   Channel 3: square    -► Outer square background fill                                          | |
+|  +--------------------------------------------------------------------------------------------------+ |
+|                                                                                                       |
+|  +--------------------------------------------------------------------------------------------------+ |
+|  |                              RECOLORING FEE (BURNIE BURN)                                       | |
+|  |                                                                                                  | |
+|  |   Per-Token Recoloring Flow (using burnCoin for direct burn):                                   | |
+|  |   +-------------+    burnCoin     +-------------+                                               | |
+|  |   |    User     | ---------------► |   Burned    |                                               | |
+|  |   | (50 BURNIE  |   (direct burn)  |  (supply ↓) |                                               | |
+|  |   |  per token) |                  |             |                                               | |
+|  |   +-------------+                  +-------------+                                               | |
+|  |                                                                                                  | |
+|  |   Cost: RECOLOR_COST_PER_TOKEN = 50 BURNIE (50 * 1e6 base units)                                | |
+|  |   Total cost = number of tokens × 50 BURNIE                                                     | |
+|  |                                                                                                  | |
+|  |   Note: No approval required; burns route through the trusted coin contract.                    | |
+|  |   Address-level colors (setMyColors) are FREE - no BURNIE required.                             | |
+|  +--------------------------------------------------------------------------------------------------+ |
+|                                                                                                       |
+|  +--------------------------------------------------------------------------------------------------+ |
+|  |                              ACCESS CONTROL                                                      | |
+|  |                                                                                                  | |
+|  |   Renderers (regular + trophy, fixed at deploy)                                                  | |
+|  |      |                                                                                           | |
+|  |      +-► setMyColors()              Proxy for user's address-level defaults                     | |
+|  |      +-► setCustomColorsForMany()   Proxy for per-token overrides (batch)                       | |
+|  |      +-► setTopAffiliateColor()     Proxy for affiliate trophy special color                    | |
+|  |                                                                                                  | |
+|  |   Anyone (view functions)                                                                        | |
+|  |      |                                                                                           | |
+|  |      +-► tokenColor()          Read per-token color                                             | |
+|  |      +-► addressColor()        Read per-address color                                           | |
+|  |      +-► trophyOuter()         Read trophy size override                                        | |
+|  |      +-► topAffiliateColor()   Read affiliate special color                                     | |
+|  +--------------------------------------------------------------------------------------------------+ |
+|                                                                                                       |
++=======================================================================================================+
+|  SECURITY CONSIDERATIONS                                                                              |
+|  -----------------------                                                                              |
+|                                                                                                       |
+|  1. ACCESS CONTROL                                                                                    |
+|     • onlyRenderer modifier gates all write operations                                                |
+|     • Renderer allowlist is fixed at deployment via ContractAddresses                                   |
+|     • Ownership verification happens in write functions (ownerOf check)                               |
+|                                                                                                       |
+|  2. INPUT VALIDATION                                                                                  |
+|     • _requireHex7() enforces strict "#rrggbb" lowercase format                                       |
+|     • Invalid hex colors revert with InvalidHexColor()                                                |
+|     • Empty strings are allowed (used to clear/delete overrides)                                      |
+|                                                                                                       |
+|  3. ALLOWLIST                                                                                         |
+|     • Only _allowedToken contracts can have per-token overrides                                       |
+|     • Prevents arbitrary contracts from polluting storage                                             |
+|     • Initial NFT is allowed at construction                                                          |
+|                                                                                                       |
+|  4. REENTRANCY                                                                                        |
+|     • BURNIE burnCoin called before state changes (checks-effects-interactions)                       |
+|     • ownerOf is view-only call to trusted contracts                                                  |
+|     • All storage writes happen after external calls complete                                         |
+|                                                                                                       |
+|  5. TOKEN BURN SAFETY                                                                                 |
+|     • Uses burnCoin (direct burn from user balance, no approval)                                      |
+|     • BURNIE token is constant (set at deploy, cannot be changed)                                     |
+|     • No token accumulation in contract (burns directly from user)                                    |
+|                                                                                                       |
+|  6. GAS LIMITS                                                                                        |
+|     • setCustomColorsForMany loops over tokenIds (bounded by gas)                                     |
+|     • No explicit batch size limit; callers should limit to ~50-100 tokens                            |
+|                                                                                                       |
++=======================================================================================================+
+|  TRUST ASSUMPTIONS                                                                                    |
+|  -----------------                                                                                    |
+|                                                                                                       |
+|  1. Renderer contract is trusted to correctly pass msg.sender as user                                 |
+|  2. Allowed token contracts implement ownerOf correctly                                               |
+|  3. Renderers are precomputed and must be correct at deployment                                       |
+|  4. BURNIE token implements burnCoin correctly (reverts on insufficient balance)                     |
+|                                                                                                       |
++=======================================================================================================+
+|  GAS OPTIMIZATIONS                                                                                    |
+|  -----------------                                                                                    |
+|                                                                                                       |
+|  1. Uses delete for clearing strings (refunds gas)                                                    |
+|  2. Pre-validates hex strings once, stores validated result                                           |
+|  3. Batch operations reduce per-token overhead                                                        |
+|  4. Custom errors instead of require strings                                                          |
+|                                                                                                       |
++=======================================================================================================+
 */
 
 import {IERC721Lite} from "./interfaces/IconRendererTypes.sol";
@@ -147,9 +147,9 @@ interface IDegenerusCoinBurn {
 /// @notice Storage for per-token and per-address color customization in Degenerus NFT renders
 /// @dev Accessed via renderer contracts; validates and stores "#rrggbb" hex color strings
 contract IconColorRegistry {
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
     // ERRORS
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
 
     /// @dev Caller is not the authorized renderer contract
     error NotRenderer();
@@ -163,9 +163,9 @@ contract IconColorRegistry {
     /// @dev Hex color string is not valid "#rrggbb" lowercase format
     error InvalidHexColor();
 
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
     // STRUCTS
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
 
     /// @notice Color preferences for 4 customizable channels
     /// @dev Empty strings indicate "not set" (use cascade fallback)
@@ -176,12 +176,12 @@ contract IconColorRegistry {
         string square;    // Channel 3: Outer square background
     }
 
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
     // CONSTANTS & WIRING
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
 
     /// @dev BURNIE token contract for recoloring fee burns
-    IDegenerusCoinBurn private constant _burnie = IDegenerusCoinBurn(DeployConstants.COIN);
+    IDegenerusCoinBurn private constant _burnie = IDegenerusCoinBurn(ContractAddresses.COIN);
 
     /// @notice Cost in BURNIE per token for recoloring (50 BURNIE)
     uint256 public constant RECOLOR_COST_PER_TOKEN = 50 * 1e6;
@@ -190,12 +190,10 @@ contract IconColorRegistry {
     mapping(address => bool) private _allowedToken;
 
     /// @dev Authorized renderer contracts (regular + trophy)
-    address private constant _rendererRegular = DeployConstants.RENDERER_REGULAR;
-    address private constant _rendererTrophy = DeployConstants.RENDERER_TROPHY;
 
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
     // STORAGE
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
 
     /// @dev Per-address default colors (owner, referrer, upline preferences)
     mapping(address => Colors) private _addr;
@@ -210,29 +208,29 @@ contract IconColorRegistry {
     ///      0 = not set, 1 = reset to default, 50000-1000000 = 5%-100%
     mapping(address => mapping(uint256 => uint32)) private _trophyOuterPct1e6;
 
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
     // CONSTRUCTOR
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
 
     /// @notice Deploy the color registry with precomputed contract addresses.
     constructor() {
-        _allowedToken[DeployConstants.GAMEPIECES] = true;
-        _allowedToken[DeployConstants.TROPHIES] = true;
+        _allowedToken[ContractAddresses.GAMEPIECES] = true;
+        _allowedToken[ContractAddresses.TROPHIES] = true;
     }
 
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
     // MODIFIERS
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
 
     /// @dev Restricts function to the authorized renderer contract
     modifier onlyRenderer() {
-        if (msg.sender != _rendererRegular && msg.sender != _rendererTrophy) revert NotRenderer();
+        if (msg.sender != ContractAddresses.RENDERER_REGULAR && msg.sender != ContractAddresses.RENDERER_TROPHY) revert NotRenderer();
         _;
     }
 
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
     // WRITE FUNCTIONS (Renderer-Proxied)
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
 
     /// @notice Set per-address default colors for a user
     /// @dev Called by renderer on behalf of msg.sender
@@ -376,9 +374,9 @@ contract IconColorRegistry {
         return true;
     }
 
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
     // VIEW FUNCTIONS
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
 
     /// @notice Read a per-token color override
     /// @param tokenContract The ERC721 contract address
@@ -422,9 +420,9 @@ contract IconColorRegistry {
         return _trophyOuterPct1e6[tokenContract][tokenId];
     }
 
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
     // INTERNAL HELPERS
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
 
     /// @dev Charge and burn BURNIE tokens for recoloring (burns directly from user)
     /// @param user The user to charge

@@ -2,53 +2,53 @@
 pragma solidity ^0.8.26;
 
 /*
-╔═══════════════════════════════════════════════════════════════════════════════════════════════════════╗
-║                                      IconRendererTypes                                                ║
-║                           Shared Interfaces for Degenerus Renderer System                             ║
-╠═══════════════════════════════════════════════════════════════════════════════════════════════════════╣
-║                                                                                                       ║
-║  OVERVIEW                                                                                             ║
-║  ────────                                                                                             ║
-║  This file contains the minimal interfaces shared across the Degenerus rendering system:              ║
-║                                                                                                       ║
-║  ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐ ║
-║  │                              INTERFACE RELATIONSHIPS                                             │ ║
-║  │                                                                                                  │ ║
-║  │   IIcons32 ◄────────── IconRendererRegular32, IconRendererTrophy32, IconRendererTrophy32Svg      │ ║
-║  │      │                                                                                           │ ║
-║  │      └─ data(i)       Returns SVG path data for icon at index i (0-32)                           │ ║
-║  │      └─ diamond()     Returns the flame/diamond center glyph path                                │ ║
-║  │      └─ symbol(q,i)   Returns human-readable symbol name for quadrant q, index i                 │ ║
-║  │                                                                                                  │ ║
-║  │   IColorRegistry ◄─── IconRendererRegular32, IconRendererTrophy32Svg                             │ ║
-║  │      │                                                                                           │ ║
-║  │      └─ setMyColors()             Set per-address color preferences                              │ ║
-║  │      └─ setCustomColorsForMany()  Set per-token color overrides (batch)                          │ ║
-║  │      └─ setTopAffiliateColor()    Set special affiliate trophy color                             │ ║
-║  │      └─ tokenColor()              Read per-token override for channel                            │ ║
-║  │      └─ addressColor()            Read per-address default for channel                           │ ║
-║  │      └─ trophyOuter()             Read trophy outer ring size override                           │ ║
-║  │      └─ topAffiliateColor()       Read top affiliate special color                               │ ║
-║  │                                                                                                  │ ║
-║  │   IERC721Lite ◄────── IconColorRegistry, IconRendererRegular32, IconRendererTrophy32Svg          │ ║
-║  │      │                                                                                           │ ║
-║  │      └─ ownerOf()     Minimal ERC721 lookup for ownership verification                           │ ║
-║  └──────────────────────────────────────────────────────────────────────────────────────────────────┘ ║
-║                                                                                                       ║
-║  COLOR CHANNELS                                                                                       ║
-║  ──────────────                                                                                       ║
-║  The renderer uses 4 color channels for customization:                                                ║
-║    Channel 0: outline   - Border/stroke color for frames and guides                                   ║
-║    Channel 1: flame     - Center diamond flame fill color                                             ║
-║    Channel 2: diamond   - Center diamond background fill color                                        ║
-║    Channel 3: square    - Outer square background fill color                                          ║
-║                                                                                                       ║
-╚═══════════════════════════════════════════════════════════════════════════════════════════════════════╝
++=======================================================================================================+
+|                                      IconRendererTypes                                                |
+|                           Shared Interfaces for Degenerus Renderer System                             |
++=======================================================================================================+
+|                                                                                                       |
+|  OVERVIEW                                                                                             |
+|  --------                                                                                             |
+|  This file contains the minimal interfaces shared across the Degenerus rendering system:              |
+|                                                                                                       |
+|  +--------------------------------------------------------------------------------------------------+ |
+|  |                              INTERFACE RELATIONSHIPS                                             | |
+|  |                                                                                                  | |
+|  |   IIcons32 ◄---------- IconRendererRegular32, IconRendererTrophy32, IconRendererTrophy32Svg      | |
+|  |      |                                                                                           | |
+|  |      +- data(i)       Returns SVG path data for icon at index i (0-32)                           | |
+|  |      +- diamond()     Returns the flame/diamond center glyph path                                | |
+|  |      +- symbol(q,i)   Returns human-readable symbol name for quadrant q, index i                 | |
+|  |                                                                                                  | |
+|  |   IColorRegistry ◄--- IconRendererRegular32, IconRendererTrophy32Svg                             | |
+|  |      |                                                                                           | |
+|  |      +- setMyColors()             Set per-address color preferences                              | |
+|  |      +- setCustomColorsForMany()  Set per-token color overrides (batch)                          | |
+|  |      +- setTopAffiliateColor()    Set special affiliate trophy color                             | |
+|  |      +- tokenColor()              Read per-token override for channel                            | |
+|  |      +- addressColor()            Read per-address default for channel                           | |
+|  |      +- trophyOuter()             Read trophy outer ring size override                           | |
+|  |      +- topAffiliateColor()       Read top affiliate special color                               | |
+|  |                                                                                                  | |
+|  |   IERC721Lite ◄------ IconColorRegistry, IconRendererRegular32, IconRendererTrophy32Svg          | |
+|  |      |                                                                                           | |
+|  |      +- ownerOf()     Minimal ERC721 lookup for ownership verification                           | |
+|  +--------------------------------------------------------------------------------------------------+ |
+|                                                                                                       |
+|  COLOR CHANNELS                                                                                       |
+|  --------------                                                                                       |
+|  The renderer uses 4 color channels for customization:                                                |
+|    Channel 0: outline   - Border/stroke color for frames and guides                                   |
+|    Channel 1: flame     - Center diamond flame fill color                                             |
+|    Channel 2: diamond   - Center diamond background fill color                                        |
+|    Channel 3: square    - Outer square background fill color                                          |
+|                                                                                                       |
++=======================================================================================================+
 */
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // ICON DATA INTERFACE
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 /// @title IIcons32
 /// @notice Interface for accessing SVG icon path data and symbol names
@@ -77,9 +77,9 @@ interface IIcons32 {
     function symbol(uint256 quadrant, uint8 idx) external view returns (string memory);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // COLOR REGISTRY INTERFACE
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 /// @title IColorRegistry
 /// @notice Interface for managing per-token and per-address color customization
@@ -163,9 +163,9 @@ interface IColorRegistry {
     function topAffiliateColor(address tokenContract, uint256 tokenId) external view returns (string memory);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // MINIMAL ERC721 INTERFACE
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 /// @title IERC721Lite
 /// @notice Minimal ERC721 interface for ownership checks

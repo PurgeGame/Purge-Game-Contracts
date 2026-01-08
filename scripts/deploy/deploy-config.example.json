@@ -30,5 +30,5 @@
     "STETH_TOKEN": "0x0000000000000000000000000000000000000000",
     "LINK_TOKEN": "0x0000000000000000000000000000000000000000"
   },
-  "output": "contracts/DeployConstants.sol"
+  "output": "contracts/ContractAddresses.sol"
 }

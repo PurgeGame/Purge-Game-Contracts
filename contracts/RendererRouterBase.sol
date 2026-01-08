@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {DeployConstants} from "./DeployConstants.sol";
+import {ContractAddresses} from "./ContractAddresses.sol";
 
 /// @title RendererRouterBase
 /// @notice Generic safe upgrade router for tokenURI rendering with fallback
@@ -12,7 +12,6 @@ abstract contract RendererRouterBase {
     uint256 private constant PRIMARY_GAS = 1_000_000;
     uint256 private constant MIN_FALLBACK_GAS = 200_000;
 
-    address private constant admin = DeployConstants.ADMIN;
     address public primary;
 
     event PrimaryRendererUpdated(address indexed previous, address indexed next);
@@ -28,7 +27,7 @@ abstract contract RendererRouterBase {
     /// @notice Update the primary renderer address
     /// @dev Only callable by admin
     function setPrimary(address newRenderer) public {
-        if (msg.sender != admin) revert NotAdmin();
+        if (msg.sender != ContractAddresses.ADMIN) revert NotAdmin();
         address prev = primary;
         primary = newRenderer;
         emit PrimaryRendererUpdated(prev, newRenderer);

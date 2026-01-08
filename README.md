@@ -24,28 +24,46 @@ npm run compile
 npm test
 ```
 
-## Deploy Constants
+## Production Deployment
 
-This repo uses precomputed addresses in `contracts/DeployConstants.sol`. Generate it with:
+This repo uses **precalculated addresses + compile-time constants** for maximum security and gas efficiency.
+
+### Quick Deploy (Recommended)
+
+Production-ready script with comprehensive safety checks:
 
 ```bash
+# Sepolia testnet
+node scripts/deploy/deploy-production.js --network sepolia
+
+# Mainnet
+node scripts/deploy/deploy-production.js --network mainnet
+```
+
+**Features:**
+- ✅ Pre-flight validation (balance, network, gas, nonce)
+- ✅ Address verification after each deployment
+- ✅ Cross-reference validation
+- ✅ 5-second confirmation window
+- ✅ Comprehensive error handling
+
+**📖 Full Guide:** [docs/PRODUCTION_DEPLOY_GUIDE.md](docs/PRODUCTION_DEPLOY_GUIDE.md)
+
+**🔒 Security Analysis:** [docs/SECURITY_AND_GAS_ANALYSIS.md](docs/SECURITY_AND_GAS_ANALYSIS.md)
+
+### Alternative: Manual Deploy
+
+Generate constants separately, then deploy:
+
+```bash
+# Generate DeployConstants.sol
 node scripts/deploy/precompute-addresses.js --config scripts/deploy/deploy-config.sepolia.json
-node scripts/deploy/precompute-addresses.js --config scripts/deploy/deploy-config.mainnet.json
-```
 
-Update `deployer` and `startNonce` in the config before generating. VRF settings are still wired post-deploy.
-
-CLI alternative (no config file edit):
-
-```bash
-node scripts/deploy/build-constants.js --deployer 0xYOUR_DEPLOYER --startNonce 0 --network sepolia
-```
-
-All-in-one (generate constants, compile, deploy in order, verify addresses):
-
-```bash
+# Deploy all contracts
 node scripts/deploy/deploy-and-verify.js --deployer 0xYOUR_DEPLOYER --startNonce 0 --network sepolia
 ```
+
+**Note:** VRF configuration still requires post-deploy `DegenerusAdmin.wireVrf()` call.
 
 ## Documentation
 

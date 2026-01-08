@@ -7,7 +7,7 @@ pragma solidity ^0.8.26;
  * @notice Shared storage layout between DegenerusGame and its delegatecall modules.
  *
  * @dev ARCHITECTURE OVERVIEW
- * ─────────────────────────────────────────────────────────────────────────────
+ * -----------------------------------------------------------------------------
  * This contract defines the canonical storage layout for the Degenerus game ecosystem.
  * It is inherited by:
  *   - DegenerusGame (main contract, holds actual state)
@@ -24,59 +24,60 @@ pragma solidity ^0.8.26;
  *   3. Never add storage variables to module contracts — they would collide with game storage.
  *
  * STORAGE SLOT LAYOUT (EVM assigns slots sequentially):
- * ─────────────────────────────────────────────────────────────────────────────
+ * -----------------------------------------------------------------------------
  *
- * ┌─────────────────────────────────────────────────────────────────────────────┐
- * │ SLOT 0 (32 bytes) — Timing, Batching, FSM                                   │
- * ├─────────────────────────────────────────────────────────────────────────────┤
- * │ [0:6]   levelStartTime           uint48   Timestamp when level opened       │
- * │ [6:12]  dailyIdx                 uint48   Monotonic day counter             │
- * │ [12:18] rngRequestTime           uint48   When last VRF request was fired   │
- * │ [18:22] airdropMapsProcessedCount uint32  Maps handled in current batch     │
- * │ [22:26] airdropIndex             uint32   Index into pendingMapMints        │
- * │ [26:29] level                    uint24   Current game level (1-indexed)    │
- * │ [29:31] lastExterminatedTrait    uint16   Last cleared trait (420=sentinel) │
- * │ [31:32] gameState                uint8    FSM: 0=idle,1=pre,2=mint,3=burn   │
- * └─────────────────────────────────────────────────────────────────────────────┘
+ * +-----------------------------------------------------------------------------+
+ * | SLOT 0 (32 bytes) — Timing, Batching, FSM                                   |
+ * +-----------------------------------------------------------------------------+
+ * | [0:6]   levelStartTime           uint48   Timestamp when level opened       |
+ * | [6:12]  dailyIdx                 uint48   Monotonic day counter             |
+ * | [12:18] rngRequestTime           uint48   When last VRF request was fired   |
+ * | [18:22] airdropMapsProcessedCount uint32  Maps handled in current batch     |
+ * | [22:26] airdropIndex             uint32   Index into pendingMapMints        |
+ * | [26:29] level                    uint24   Current game level (1-indexed)    |
+ * | [29:31] lastExterminatedTrait    uint16   Last cleared trait (420=sentinel) |
+ * | [31:32] gameState                uint8    FSM: 0=presale,1=setup,2=mint,3=burn (86=gameover) |
+ * +-----------------------------------------------------------------------------+
  *   Total: 6+6+6+4+4+3+2+1 = 32 bytes ✓ (perfectly packed)
  *
- * ┌─────────────────────────────────────────────────────────────────────────────┐
- * │ SLOT 1 (32 bytes) — Cursors, Counters, Boolean Flags                        │
- * ├─────────────────────────────────────────────────────────────────────────────┤
- * │ [0:4]   traitRebuildCursor       uint32   Cursor for trait count reseeding  │
- * │ [4:8]   airdropMultiplier        uint32   Bonus multiplier (scaled)         │
- * │ [8:9]   jackpotCounter           uint8    Jackpots processed this level     │
- * │ [9:10]  earlyBurnPercent         uint8    Previous pool % in early burn     │
- * │ [10:11] levelJackpotPaid         bool     Level jackpot executed flag       │
- * │ [11:12] lastPurchaseDay          bool     Prize target met flag             │
- * │ [12:13] decWindowOpen            bool     Decimator window latch            │
- * │ [13:14] earlyBurnBoostArmed      bool     Boost armed for next jackpot      │
- * │ [14:15] rngLockedFlag            bool     Waiting for VRF fulfillment       │
- * │ [15:16] rngFulfilled             bool     VRF lifecycle tracker             │
- * │ [16:17] traitCountsSeedQueued    bool     Initial traits staged flag        │
- * │ [17:18] decimatorHundredReady    bool     Level %100 special primed         │
- * │ [18:19] exterminationInvertFlag  bool     Exterminator bonus inversion      │
- * │ [19:20] bondMaintenancePending   bool     Bond maintenance needed flag      │
- * │ [20:21] mapJackpotType          uint8    0=none, 1=daily, 2=purchase        │
- * │ [21:32] <padding>                         11 bytes unused                   │
- * └─────────────────────────────────────────────────────────────────────────────┘
+ * +-----------------------------------------------------------------------------+
+ * | SLOT 1 (32 bytes) — Cursors, Counters, Boolean Flags                        |
+ * +-----------------------------------------------------------------------------+
+ * | [0:4]   traitRebuildCursor       uint32   Cursor for trait count reseeding  |
+ * | [4:8]   airdropMultiplier        uint32   Bonus multiplier (scaled)         |
+ * | [8:9]   jackpotCounter           uint8    Jackpots processed this level     |
+ * | [9:10]  earlyBurnPercent         uint8    Previous pool % in early burn     |
+ * | [10:11] levelJackpotPaid         bool     Level jackpot executed flag       |
+ * | [11:12] lastPurchaseDay          bool     Prize target met flag             |
+ * | [12:13] decWindowOpen            bool     Decimator window latch            |
+ * | [13:14] earlyBurnBoostArmed      bool     Boost armed for next jackpot      |
+ * | [14:15] rngLockedFlag            bool     Waiting for VRF fulfillment       |
+ * | [15:16] rngFulfilled             bool     VRF lifecycle tracker             |
+ * | [16:17] traitCountsSeedQueued    bool     Initial traits staged flag        |
+ * | [17:18] decimatorHundredReady    bool     Level %100 special primed         |
+ * | [18:19] exterminationInvertFlag  bool     Exterminator bonus inversion      |
+ * | [19:20] bondMaintenancePending   bool     Bond maintenance needed flag      |
+ * | [20:21] mapJackpotType          uint8    0=none, 1=daily, 2=purchase        |
+ * | [21:22] presaleJackpotQueued    bool     Legacy presale queue flag         |
+ * | [22:32] <padding>                         10 bytes unused                   |
+ * +-----------------------------------------------------------------------------+
  *   Total: 4+4+1+1+1+1+1+1+1+1+1+1+1+1+1+1 = 21 bytes (11 bytes padding)
  *
- * ┌─────────────────────────────────────────────────────────────────────────────┐
- * │ SLOT 2 (32 bytes) — Price                                                   │
- * ├─────────────────────────────────────────────────────────────────────────────┤
- * │ [0:16]  price                    uint128  Current mint price in wei         │
- * │ [16:32] <padding>                         16 bytes unused                   │
- * └─────────────────────────────────────────────────────────────────────────────┘
+ * +-----------------------------------------------------------------------------+
+ * | SLOT 2 (32 bytes) — Price                                                   |
+ * +-----------------------------------------------------------------------------+
+ * | [0:16]  price                    uint128  Current mint price in wei         |
+ * | [16:32] <padding>                         16 bytes unused                   |
+ * +-----------------------------------------------------------------------------+
  *
  * SLOTS 3+ — Full-width variables, arrays, and mappings
- * ─────────────────────────────────────────────────────────────────────────────
+ * -----------------------------------------------------------------------------
  * Each uint256, array length, or mapping root occupies its own slot.
  * Dynamic arrays: length at slot N, data at keccak256(N).
  * Mappings: value at keccak256(key . slot).
  *
  * SECURITY CONSIDERATIONS
- * ─────────────────────────────────────────────────────────────────────────────
+ * -----------------------------------------------------------------------------
  * 1. SLOT STABILITY: Never reorder, remove, or change types of existing variables.
  *    Append-only additions are safe for non-upgradeable contracts.
  *
@@ -90,7 +91,7 @@ pragma solidity ^0.8.26;
  * 4. INITIALIZATION: Default values are set inline. For critical variables:
  *    - levelStartTime = type(uint48).max (sentinel: game not started)
  *    - lastExterminatedTrait = 420 (sentinel: no trait exterminated)
- *    - gameState = 1 (pregame state)
+ *    - gameState = 0 (presale state)
  *    - decWindowOpen = true (decimator window starts open)
  *    - rngFulfilled = true (no pending request at deploy)
  *    - price = 0.025 ether (initial mint price)
@@ -104,13 +105,13 @@ pragma solidity ^0.8.26;
  *    keccak256(traitId . keccak256(level . slot)) for data location.
  *
  * UPGRADE NOTES
- * ─────────────────────────────────────────────────────────────────────────────
+ * -----------------------------------------------------------------------------
  * This contract is NOT upgradeable (no proxy pattern). However, if future
  * versions are deployed, they MUST preserve this exact layout to allow
  * state migration or fork compatibility. Document any additions here.
  *
  * VARIABLE DOCUMENTATION
- * ─────────────────────────────────────────────────────────────────────────────
+ * -----------------------------------------------------------------------------
  * See inline comments for each variable group below.
  */
 abstract contract DegenerusGameStorage {
@@ -119,9 +120,14 @@ abstract contract DegenerusGameStorage {
     // =========================================================================
 
     /// @dev Conversion factor for BURNIE token amounts.
-    ///      BURNIE uses 6 decimals, so 1000 BURNIE = 1_000_000_000 base units.
+    ///      BURNIE uses 18 decimals, so 1000 BURNIE = 1e21 base units.
     ///      Used in price calculations: price / PRICE_COIN_UNIT = BURNIE per mint.
-    uint256 internal constant PRICE_COIN_UNIT = 1_000_000_000;
+    uint256 internal constant PRICE_COIN_UNIT = 1000 ether;
+    uint8 internal constant GAME_STATE_PRESALE = 0;
+    uint8 internal constant GAME_STATE_SETUP = 1;
+    uint8 internal constant GAME_STATE_PURCHASE = 2;
+    uint8 internal constant GAME_STATE_BURN = 3;
+    uint8 internal constant GAME_STATE_GAMEOVER = 86;
 
     // =========================================================================
     // SLOT 0: Level Timing, Batching, and Finite State Machine
@@ -183,16 +189,17 @@ abstract contract DegenerusGameStorage {
     uint16 internal lastExterminatedTrait = 420;
 
     /// @dev Finite State Machine for game phases:
-    ///      0 = idle (unused in current implementation)
-    ///      1 = pregame (awaiting start or between major phases)
+    ///      0 = presale (RNG + flips only)
+    ///      1 = setup (awaiting start or between major phases)
     ///      2 = airdrop/mint phase (purchases open)
     ///      3 = burn window (extermination phase)
+    ///      86 = game over (terminal)
     ///
     ///      PUBLIC: Exposed for frontend state queries.
     ///
     ///      SECURITY: State transitions are guarded by modifiers in DegenerusGame.
     ///      Invalid state transitions revert, preventing exploitation.
-    uint8 public gameState = 1;
+    uint8 public gameState = 0;
 
     // =========================================================================
     // SLOT 1: Cursors, Counters, and Boolean Flags
@@ -278,6 +285,10 @@ abstract contract DegenerusGameStorage {
     ///      Timeout is computed on-the-fly from jackpotCounter >= JACKPOT_LEVEL_CAP.
     uint8 internal mapJackpotType;
 
+    /// @dev Legacy presale jackpot queue flag (unused).
+    ///      Kept for storage layout stability; do not repurpose or remove in-place.
+    bool internal presaleJackpotQueued;
+
     // =========================================================================
     // SLOT 2: Mint Price
     // =========================================================================
@@ -362,14 +373,14 @@ abstract contract DegenerusGameStorage {
     ///      PUBLIC: Exposed for transparency and off-chain monitoring.
     uint48 public deployTimestamp;
 
-    /// @dev Address of the DegenerusBonds contract.
-    ///      Wired once post-deploy via admin function; cannot be changed.
-    ///
-    ///      SECURITY: One-time wiring prevents malicious contract substitution.
+    /// @dev DEPRECATED: Address of the DegenerusBonds contract (now a constant in each contract).
+    ///      Kept for storage layout stability; do not repurpose or remove in-place.
+    ///      See ContractAddresses.BONDS instead.
     address internal bonds;
 
-    /// @dev Address of the reward vault for BURNIE/ETH/stETH routing.
-    ///      Handles complex fund flows between game components.
+    /// @dev DEPRECATED: Address of the reward vault (now a constant in each contract).
+    ///      Kept for storage layout stability; do not repurpose or remove in-place.
+    ///      See ContractAddresses.VAULT instead.
     address internal vault;
 
     /// @dev True once bondPool has been flushed to bonds contract.
@@ -479,17 +490,19 @@ abstract contract DegenerusGameStorage {
     // Cosmetic and Integration Modules
     // =========================================================================
 
-    /// @dev Address of standalone trophy contract (purely cosmetic NFTs).
-    ///      Trophies commemorate achievements but have no game-mechanical effect.
+    /// @dev DEPRECATED: Address of standalone trophy contract (now a constant in each contract).
+    ///      Kept for storage layout stability; do not repurpose or remove in-place.
+    ///      See ContractAddresses.TROPHIES instead.
     address internal trophies;
 
-    /// @dev Cached affiliate program address for trophy minting.
-    ///      Allows trophies to reference affiliate relationships.
+    /// @dev DEPRECATED: Cached affiliate program address (now a constant in each contract).
+    ///      Kept for storage layout stability; do not repurpose or remove in-place.
+    ///      See ContractAddresses.AFFILIATE instead.
     address internal affiliateProgramAddr;
 
-    /// @dev Quest module address for multiplier scoring.
-    ///      DegenerusQuests contract (standalone, not delegatecall).
-    ///      Handles daily quest tracking and streak bonuses.
+    /// @dev DEPRECATED: Quest module address (now a constant in each contract).
+    ///      Kept for storage layout stability; do not repurpose or remove in-place.
+    ///      See ContractAddresses.QUESTS instead.
     address internal questModule;
 
     // =========================================================================
@@ -515,5 +528,8 @@ abstract contract DegenerusGameStorage {
     ///      For daily: units for carryover (next-level) draw.
     ///      For purchase: unused (remains 0).
     uint256 internal mapJackpotUnits2;
+
+    /// @dev True if presale minting (tokens/maps) is enabled.
+    bool internal presaleMintingEnabledFlag;
 
 }

@@ -10,7 +10,12 @@
       "Bash(cat:*)",
       "Bash(git stash:*)",
       "Bash(git show:*)",
-      "Bash(forge fmt:*)"
+      "Bash(forge fmt:*)",
+      "Bash(npm run compile:*)",
+      "Bash(npm test:*)",
+      "Bash(mkdir:*)",
+      "Bash(done)",
+      "Bash(wc:*)"
     ]
   }
 }

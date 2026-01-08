@@ -2,135 +2,135 @@
 pragma solidity ^0.8.26;
 
 /*
-╔═══════════════════════════════════════════════════════════════════════════════════════════════════════╗
-║                                     IconRendererRegular32                                             ║
-║                    ERC721 Metadata & SVG Renderer for Degenerus Gamepieces                            ║
-╠═══════════════════════════════════════════════════════════════════════════════════════════════════════╣
-║                                                                                                       ║
-║  ARCHITECTURE OVERVIEW                                                                                ║
-║  ─────────────────────                                                                                ║
-║  IconRendererRegular32 is the primary renderer for Degenerus gamepiece tokens. It generates           ║
-║  complete ERC721 metadata including dynamically-rendered SVG images that reflect current game state.  ║
-║                                                                                                       ║
-║  ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐ ║
-║  │                              GAMEPIECE SVG LAYOUT                                                │ ║
-║  │                                                                                                  │ ║
-║  │   ┌─────────────────────────────────────────────────────────────────────┐                       │  ║
-║  │   │                        Outer Square Frame                           │                       │  ║
-║  │   │                     (customizable border color)                     │                       │  ║
-║  │   │                                                                     │                       │  ║
-║  │   │   ┌───────────────────┬───────────────────┐                        │                       │   ║
-║  │   │   │                   │                   │                        │                       │   ║
-║  │   │   │   Q2 (Cards)      │   Q3 (Dice)      │                        │                       │    ║
-║  │   │   │   ◉ Ring+Symbol   │   ◉ Ring+Symbol  │                        │                       │    ║
-║  │   │   │                   │                   │                        │                       │   ║
-║  │   │   ├───────────┬◆◆◆◆◆◆┼───────────────────┤                        │                       │    ║
-║  │   │   │           │ FLAME│                   │                        │                       │    ║
-║  │   │   │   Q0      │ ◆◆◆  │   Q1 (Zodiac)    │                        │                       │     ║
-║  │   │   │  (Crypto) │      │   ◉ Ring+Symbol  │                        │                       │     ║
-║  │   │   │ ◉ Ring    │      │                   │                        │                       │    ║
-║  │   │   └───────────────────┴───────────────────┘                        │                       │   ║
-║  │   │                                                                     │                       │  ║
-║  │   └─────────────────────────────────────────────────────────────────────┘                       │  ║
-║  │                                                                                                  │ ║
-║  │   Each quadrant contains:                                                                        │ ║
-║  │   • Outer ring: Quadrant's palette color (scarcity-scaled radius)                               │  ║
-║  │   • Middle ring: Dark (#111) contrast band                                                      │  ║
-║  │   • Inner ring: White (#fff) background for symbol                                              │  ║
-║  │   • Symbol: Quadrant-specific icon (Crypto/Zodiac/Cards/Dice)                                   │  ║
-║  └──────────────────────────────────────────────────────────────────────────────────────────────────┘ ║
-║                                                                                                       ║
-║  ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐ ║
-║  │                              GAMEPIECE DATA LAYOUT (24-bit packed traits)                       │  ║
-║  │                                                                                                  │ ║
-║  │   data parameter from DegenerusGamepieces:                                                      │  ║
-║  │   bits [0-5]:   Q0 trait (color*8 + symbol)                                                     │  ║
-║  │   bits [6-7]:   Q0 quadrant tag (0)                                                             │  ║
-║  │   bits [8-13]:  Q1 trait (color*8 + symbol)                                                     │  ║
-║  │   bits [14-15]: Q1 quadrant tag (1)                                                             │  ║
-║  │   bits [16-21]: Q2 trait (color*8 + symbol)                                                     │  ║
-║  │   bits [22-23]: Q2 quadrant tag (2)                                                             │  ║
-║  │   bits [24-29]: Q3 trait (color*8 + symbol)                                                     │  ║
-║  │   bits [30-31]: Q3 quadrant tag (3)                                                             │  ║
-║  │   bits [32-55]: Level (uint24)                                                                  │  ║
-║  │   bits [56-71]: Last exterminated trait (0..255 valid, 420 = none)                              │  ║
-║  └──────────────────────────────────────────────────────────────────────────────────────────────────┘ ║
-║                                                                                                       ║
-║  ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐ ║
-║  │                              DYNAMIC FEATURES                                                    │ ║
-║  │                                                                                                  │ ║
-║  │   SCARCITY-BASED RING SIZE                                                                       │ ║
-║  │   • Ring radius scales with trait scarcity                                                       │ ║
-║  │   • More rare = larger ring (50% base → 100% when only 1 remains)                               │  ║
-║  │   • Calculated from startTraitRemaining() vs current remaining                                  │  ║
-║  │                                                                                                  │ ║
-║  │   COLOR CUSTOMIZATION CASCADE                                                                    │ ║
-║  │   • Per-token override (from registry)                                                          │  ║
-║  │   • → Owner default (from registry)                                                             │  ║
-║  │   • → Referrer default (from affiliate program + registry)                                      │  ║
-║  │   • → Upline default (referrer's referrer)                                                      │  ║
-║  │   • → Theme default (hardcoded in renderer)                                                     │  ║
-║  │                                                                                                  │ ║
-║  │   EXTERMINATION HIGHLIGHTING                                                                     │ ║
-║  │   • When a trait was just exterminated, that quadrant is inverted                               │  ║
-║  │   • Level 90 special case: all traits EXCEPT the exterminated one are inverted                  │  ║
-║  │   • Uses SVG filter for color inversion effect                                                  │  ║
-║  │                                                                                                  │ ║
-║  │   LEVEL-BASED COLOR VARIATION                                                                    │ ║
-║  │   • Base palette colors shift slightly based on level cycle (0-9)                               │  ║
-║  │   • Creates visual variety across levels while maintaining recognizability                      │  ║
-║  └──────────────────────────────────────────────────────────────────────────────────────────────────┘ ║
-║                                                                                                       ║
-╠═══════════════════════════════════════════════════════════════════════════════════════════════════════╣
-║  SECURITY CONSIDERATIONS                                                                              ║
-║  ───────────────────────                                                                              ║
-║                                                                                                       ║
-║  1. VIEW-ONLY RENDERING                                                                               ║
-║     • tokenURI() is a view function - no state changes                                                ║
-║     • Safe for off-chain metadata generation                                                          ║
-║                                                                                                       ║
-║  2. ACCESS CONTROL                                                                                    ║
-║     • Constructor wiring via DeployConstants (no admin setters)                                       ║
-║     • setMyColors() proxies to registry with msg.sender                                               ║
-║     • setCustomColorsForMany() proxies with ownership verification                                    ║
-║                                                                                                       ║
-║  3. EXTERNAL CALLS                                                                                    ║
-║     • All external calls to trusted, constant addresses                                               ║
-║     • No value transfers, no callbacks                                                                ║
-║                                                                                                       ║
-╠═══════════════════════════════════════════════════════════════════════════════════════════════════════╣
-║  TRUST ASSUMPTIONS                                                                                    ║
-║  ─────────────────                                                                                    ║
-║                                                                                                       ║
-║  1. DegenerusGame provides accurate startTraitRemaining values                                        ║
-║  2. DegenerusGamepieces provides valid packed trait data                                              ║
-║  3. Icons32Data provides safe SVG path data                                                           ║
-║  4. IconColorRegistry returns validated hex colors                                                    ║
-║  5. DegenerusAffiliate correctly reports referrer relationships                                       ║
-║                                                                                                       ║
-╠═══════════════════════════════════════════════════════════════════════════════════════════════════════╣
-║  GAS OPTIMIZATIONS                                                                                    ║
-║  ─────────────────                                                                                    ║
-║                                                                                                       ║
-║  1. All rendering is view-only (free for off-chain calls)                                             ║
-║  2. Immutable addresses for dependencies (no SLOAD for contracts)                                     ║
-║  3. 1e6 fixed-point math avoids floating point overhead                                               ║
-║  4. String concatenation via abi.encodePacked                                                         ║
-║  5. unchecked blocks for safe arithmetic in loops                                                     ║
-║                                                                                                       ║
-╚═══════════════════════════════════════════════════════════════════════════════════════════════════════╝*/
++=======================================================================================================+
+|                                     IconRendererRegular32                                             |
+|                    ERC721 Metadata & SVG Renderer for Degenerus Gamepieces                            |
++=======================================================================================================+
+|                                                                                                       |
+|  ARCHITECTURE OVERVIEW                                                                                |
+|  ---------------------                                                                                |
+|  IconRendererRegular32 is the primary renderer for Degenerus gamepiece tokens. It generates           |
+|  complete ERC721 metadata including dynamically-rendered SVG images that reflect current game state.  |
+|                                                                                                       |
+|  +--------------------------------------------------------------------------------------------------+ |
+|  |                              GAMEPIECE SVG LAYOUT                                                | |
+|  |                                                                                                  | |
+|  |   +---------------------------------------------------------------------+                       |  |
+|  |   |                        Outer Square Frame                           |                       |  |
+|  |   |                     (customizable border color)                     |                       |  |
+|  |   |                                                                     |                       |  |
+|  |   |   +-------------------+-------------------+                        |                       |   |
+|  |   |   |                   |                   |                        |                       |   |
+|  |   |   |   Q2 (Cards)      |   Q3 (Dice)      |                        |                       |    |
+|  |   |   |   ◉ Ring+Symbol   |   ◉ Ring+Symbol  |                        |                       |    |
+|  |   |   |                   |                   |                        |                       |   |
+|  |   |   +-----------+◆◆◆◆◆◆+-------------------+                        |                       |    |
+|  |   |   |           | FLAME|                   |                        |                       |    |
+|  |   |   |   Q0      | ◆◆◆  |   Q1 (Zodiac)    |                        |                       |     |
+|  |   |   |  (Crypto) |      |   ◉ Ring+Symbol  |                        |                       |     |
+|  |   |   | ◉ Ring    |      |                   |                        |                       |    |
+|  |   |   +-------------------+-------------------+                        |                       |   |
+|  |   |                                                                     |                       |  |
+|  |   +---------------------------------------------------------------------+                       |  |
+|  |                                                                                                  | |
+|  |   Each quadrant contains:                                                                        | |
+|  |   • Outer ring: Quadrant's palette color (scarcity-scaled radius)                               |  |
+|  |   • Middle ring: Dark (#111) contrast band                                                      |  |
+|  |   • Inner ring: White (#fff) background for symbol                                              |  |
+|  |   • Symbol: Quadrant-specific icon (Crypto/Zodiac/Cards/Dice)                                   |  |
+|  +--------------------------------------------------------------------------------------------------+ |
+|                                                                                                       |
+|  +--------------------------------------------------------------------------------------------------+ |
+|  |                              GAMEPIECE DATA LAYOUT (24-bit packed traits)                       |  |
+|  |                                                                                                  | |
+|  |   data parameter from DegenerusGamepieces:                                                      |  |
+|  |   bits [0-5]:   Q0 trait (color*8 + symbol)                                                     |  |
+|  |   bits [6-7]:   Q0 quadrant tag (0)                                                             |  |
+|  |   bits [8-13]:  Q1 trait (color*8 + symbol)                                                     |  |
+|  |   bits [14-15]: Q1 quadrant tag (1)                                                             |  |
+|  |   bits [16-21]: Q2 trait (color*8 + symbol)                                                     |  |
+|  |   bits [22-23]: Q2 quadrant tag (2)                                                             |  |
+|  |   bits [24-29]: Q3 trait (color*8 + symbol)                                                     |  |
+|  |   bits [30-31]: Q3 quadrant tag (3)                                                             |  |
+|  |   bits [32-55]: Level (uint24)                                                                  |  |
+|  |   bits [56-71]: Last exterminated trait (0..255 valid, 420 = none)                              |  |
+|  +--------------------------------------------------------------------------------------------------+ |
+|                                                                                                       |
+|  +--------------------------------------------------------------------------------------------------+ |
+|  |                              DYNAMIC FEATURES                                                    | |
+|  |                                                                                                  | |
+|  |   SCARCITY-BASED RING SIZE                                                                       | |
+|  |   • Ring radius scales with trait scarcity                                                       | |
+|  |   • More rare = larger ring (50% base → 100% when only 1 remains)                               |  |
+|  |   • Calculated from startTraitRemaining() vs current remaining                                  |  |
+|  |                                                                                                  | |
+|  |   COLOR CUSTOMIZATION CASCADE                                                                    | |
+|  |   • Per-token override (from registry)                                                          |  |
+|  |   • → Owner default (from registry)                                                             |  |
+|  |   • → Referrer default (from affiliate program + registry)                                      |  |
+|  |   • → Upline default (referrer's referrer)                                                      |  |
+|  |   • → Theme default (hardcoded in renderer)                                                     |  |
+|  |                                                                                                  | |
+|  |   EXTERMINATION HIGHLIGHTING                                                                     | |
+|  |   • When a trait was just exterminated, that quadrant is inverted                               |  |
+|  |   • Level 90 special case: all traits EXCEPT the exterminated one are inverted                  |  |
+|  |   • Uses SVG filter for color inversion effect                                                  |  |
+|  |                                                                                                  | |
+|  |   LEVEL-BASED COLOR VARIATION                                                                    | |
+|  |   • Base palette colors shift slightly based on level cycle (0-9)                               |  |
+|  |   • Creates visual variety across levels while maintaining recognizability                      |  |
+|  +--------------------------------------------------------------------------------------------------+ |
+|                                                                                                       |
++=======================================================================================================+
+|  SECURITY CONSIDERATIONS                                                                              |
+|  -----------------------                                                                              |
+|                                                                                                       |
+|  1. VIEW-ONLY RENDERING                                                                               |
+|     • tokenURI() is a view function - no state changes                                                |
+|     • Safe for off-chain metadata generation                                                          |
+|                                                                                                       |
+|  2. ACCESS CONTROL                                                                                    |
+|     • Constructor wiring via ContractAddresses (no admin setters)                                       |
+|     • setMyColors() proxies to registry with msg.sender                                               |
+|     • setCustomColorsForMany() proxies with ownership verification                                    |
+|                                                                                                       |
+|  3. EXTERNAL CALLS                                                                                    |
+|     • All external calls to trusted, constant addresses                                               |
+|     • No value transfers, no callbacks                                                                |
+|                                                                                                       |
++=======================================================================================================+
+|  TRUST ASSUMPTIONS                                                                                    |
+|  -----------------                                                                                    |
+|                                                                                                       |
+|  1. DegenerusGame provides accurate startTraitRemaining values                                        |
+|  2. DegenerusGamepieces provides valid packed trait data                                              |
+|  3. Icons32Data provides safe SVG path data                                                           |
+|  4. IconColorRegistry returns validated hex colors                                                    |
+|  5. DegenerusAffiliate correctly reports referrer relationships                                       |
+|                                                                                                       |
++=======================================================================================================+
+|  GAS OPTIMIZATIONS                                                                                    |
+|  -----------------                                                                                    |
+|                                                                                                       |
+|  1. All rendering is view-only (free for off-chain calls)                                             |
+|  2. Immutable addresses for dependencies (no SLOAD for contracts)                                     |
+|  3. 1e6 fixed-point math avoids floating point overhead                                               |
+|  4. String concatenation via abi.encodePacked                                                         |
+|  5. unchecked blocks for safe arithmetic in loops                                                     |
+|                                                                                                       |
++=======================================================================================================+*/
 
 import "@openzeppelin/contracts/utils/Base64.sol";
 import "@openzeppelin/contracts/utils/Strings.sol";
-import {DeployConstants} from "./DeployConstants.sol";
+import {ContractAddresses} from "./ContractAddresses.sol";
 import "./interfaces/IDegenerusAffiliate.sol";
 import "./interfaces/IconRendererTypes.sol";
 import {RendererLibrary} from "./libraries/RendererLibrary.sol";
 import {ColorResolver} from "./libraries/ColorResolver.sol";
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // EXTERNAL INTERFACE
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 /// @notice Interface to read initial trait supply from game contract
 /// @dev Used to calculate scarcity-based ring sizes
@@ -141,9 +141,9 @@ interface IDegenerusGameStartRemaining {
     function startTraitRemaining(uint8 traitId) external view returns (uint32);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // CONTRACT
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 /// @title IconRendererRegular32
 /// @notice ERC721 metadata and SVG renderer for Degenerus gamepiece tokens
@@ -151,25 +151,25 @@ interface IDegenerusGameStartRemaining {
 contract IconRendererRegular32 is ColorResolver {
     using Strings for uint256;
 
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
     // ERRORS
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
 
     /// @dev Generic error for unauthorized access or invalid state
     error E();
 
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
     // CONSTANTS & WIRING
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
 
     /// @dev Icon path and symbol name data source
-    IIcons32 private constant icons = IIcons32(DeployConstants.ICONS_32);
+    IIcons32 private constant icons = IIcons32(ContractAddresses.ICONS_32);
 
     /// @dev Game contract for initial trait counts
-    IDegenerusGameStartRemaining private constant game = IDegenerusGameStartRemaining(DeployConstants.GAME);
+    IDegenerusGameStartRemaining private constant game = IDegenerusGameStartRemaining(ContractAddresses.GAME);
 
     /// @dev Gamepiece ERC721 contract
-    IERC721Lite private constant nft = IERC721Lite(DeployConstants.GAMEPIECES);
+    IERC721Lite private constant nft = IERC721Lite(ContractAddresses.GAMEPIECES);
 
     // ---------------- Validation ----------------
 

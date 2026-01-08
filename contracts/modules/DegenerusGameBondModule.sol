@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {DegenerusGameStorage} from "../storage/DegenerusGameStorage.sol";
+import {ContractAddresses} from "../ContractAddresses.sol";
 
 /// @notice Minimal interface for the Bonds contract used by this module.
 interface IBonds {
@@ -59,7 +60,7 @@ interface IStETHLite {
  *
  * ## Functions
  *
- * - `bondUpkeep`: Called during pregame (state 1) to distribute yield and fund bonds
+ * - `bondUpkeep`: Called during setup (state 1) to distribute yield and fund bonds
  * - `yieldPool`: View helper to calculate untracked surplus (solvency buffer)
  * - `stakeForTargetRatio`: Stake excess ETH into Lido stETH for yield generation
  * - `drainToBonds`: Shutdown flow - transfer all assets to bonds for final resolution
@@ -86,8 +87,8 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
     uint256 private constant MIN_STAKE = 0.01 ether;
 
     /**
-     * @notice Handle bond funding and yield distribution during pregame maintenance.
-     * @dev Called via delegatecall from DegenerusGame during state 1 (pregame).
+     * @notice Handle bond funding and yield distribution during setup maintenance.
+     * @dev Called via delegatecall from DegenerusGame during state 1 (setup).
      *      Executes once per level transition to:
      *      1. Calculate yield (untracked surplus)
      *      2. Distribute yield to bonds and reward pool
@@ -104,12 +105,12 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
      * ```
      * Total Yield = (ETH + stETH) - obligations
      *
-     * bondSkim (25%)  ──┬── Fill bondPool shortfall (if any)
-     *                   └── Send remainder to bonds for jackpots
+     * bondSkim (25%)  --+-- Fill bondPool shortfall (if any)
+     *                   +-- Send remainder to bonds for jackpots
      *
-     * rewardTopUp (5%) ──── Add to rewardPool for future jackpots
+     * rewardTopUp (5%) ---- Add to rewardPool for future jackpots
      *
-     * Unallocated (70%) ─── Remains as solvency buffer
+     * Unallocated (70%) --- Remains as solvency buffer
      * ```
      *
      * ## Bond Coverage Logic
@@ -121,9 +122,9 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
     function bondUpkeep(address bondsAddr, address stethAddr, address coinAddr, uint256 rngWord) external {
         IBonds bondContract = IBonds(bondsAddr);
 
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
         // Step 1: Snapshot current balances and calculate yield
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
 
         uint256 stBal = IStETHLite(stethAddr).balanceOf(address(this));
         uint256 ethBal = address(this).balance;
@@ -153,9 +154,9 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
         uint256 combined = ethBal + stBal;
         uint256 yieldTotal = combined > obligations ? combined - obligations : 0;
 
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
         // Step 2: Calculate distribution amounts
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
 
         // Mint 5% of lastPrizePool worth of BURNIE for bond jackpots.
         // Formula: (lastPrizePool in wei) * (BURNIE per wei at current price) / 20
@@ -166,9 +167,9 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
         uint256 bondSkim = yieldTotal / 4; // 25% of yield
         uint256 rewardTopUp = yieldTotal / 20; // 5% of yield
 
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
         // Step 3: Check bond coverage requirements and fill shortfall
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
 
         // Query bonds for how much ETH is needed for upcoming maturities.
         // Pass (bondPool + bondSkim) as stopAt hint for gas optimization.
@@ -190,9 +191,9 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
             bondPoolLocal += toBondPool;
         }
 
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
         // Step 4: Send leftover yield to bonds for jackpots
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
 
         // Leftover = bondSkim minus what went to bondPool
         // Safe unchecked: toBondPool <= bondSkim by construction
@@ -225,9 +226,9 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
             rewardPoolLocal += rewardTopUp;
         }
 
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
         // Step 5: Sweep excess bondPool to vault
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
 
         // If bondPool exceeds required cover, send excess to vault via bonds.
         // This prevents over-accumulation and routes surplus to creator.
@@ -253,9 +254,9 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
             }
         }
 
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
         // Step 6: Commit storage updates (single SSTORE per changed var)
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
 
         if (bondPoolLocal != bondPool) {
             bondPool = bondPoolLocal;
@@ -349,17 +350,17 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
         uint256 ethBal = address(this).balance;
         if (ethBal == 0) return; // Nothing to stake
 
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
         // Reserve ETH for claimable withdrawals (must stay liquid)
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
 
         uint256 ethReserve = claimablePool;
         if (ethBal <= ethReserve) return; // All ETH needed for claims
         uint256 ethStakeable = ethBal - ethReserve;
 
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
         // Calculate target stETH amount based on stakeable funds
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
 
         uint256 totalStakeable = stBal + ethStakeable;
         uint256 targetSt = (totalStakeable * uint256(targetBps)) / 10_000;
@@ -373,9 +374,9 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
         uint256 stakeAmt = needed < ethStakeable ? needed : ethStakeable;
         if (stakeAmt < MIN_STAKE) return; // Below Lido minimum
 
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
         // Submit to Lido (wrapped in try/catch to avoid blocking game)
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
 
         try IStETHLite(stethAddr).submit{value: stakeAmt}(address(0)) returns (uint256) {
             // Success - stETH balance increases, ETH balance decreases.
@@ -400,7 +401,7 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
      *      3. Transfers ALL ETH + stETH to bonds for final distribution
      *
      *      After this call:
-     *      - Game enters state 0 (shutdown)
+     *      - Game enters state 86 (gameover)
      *      - Bonds resolves maturities oldest-first with available funds
      *      - Players have 1 year to claim from bonds
      *      - Remainder swept to vault after grace period
@@ -435,9 +436,9 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
         // Signal shutdown to bonds (enables their resolution flow)
         bondContract.notifyGameOver();
 
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
         // Zero all game pools to prevent any further credits
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
 
         // Set flag first to block any bond-related game operations
         bondGameOver = true;
@@ -452,9 +453,9 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
         bafHundredPool = 0;
         dailyJackpotBase = 0;
 
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
         // Transfer ALL remaining assets to bonds
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
 
         uint256 stBal = IStETHLite(stethAddr).balanceOf(address(this));
         uint256 ethBal = address(this).balance;

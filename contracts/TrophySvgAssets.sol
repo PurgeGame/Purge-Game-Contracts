@@ -2,81 +2,81 @@
 pragma solidity ^0.8.26;
 
 /*
-╔═══════════════════════════════════════════════════════════════════════════════════════════════════════╗
-║                                        TrophySvgAssets                                                ║
-║                       On-Chain SVG Animation Assets for Degenerus Trophies                            ║
-╠═══════════════════════════════════════════════════════════════════════════════════════════════════════╣
-║                                                                                                       ║
-║  ARCHITECTURE OVERVIEW                                                                                ║
-║  ─────────────────────                                                                                ║
-║  TrophySvgAssets stores complex SVG markup for special trophy renders. Currently contains the         ║
-║  animated coin flip used for BAF (Burn and Flip) trophies.                                           ║
-║                                                                                                       ║
-║  ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐ ║
-║  │                              BAF COIN FLIP ANIMATION                                             │ ║
-║  │                                                                                                  │ ║
-║  │   ┌─────────────┐     6 second loop     ┌─────────────┐                                         │ ║
-║  │   │   Face A    │ ◄──────────────────── │   Face B    │                                         │ ║
-║  │   │  (XRP)    │ ──────────────────► │  (Ethereum) │                                         │ ║
-║  │   │   Red/111   │    Y-axis flip        │  Green/111  │                                         │ ║
-║  │   └─────────────┘                       └─────────────┘                                         │ ║
-║  │                                                                                                  │ ║
-║  │   Animation Phases (6s total):                                                                   │ ║
-║  │   • 0.00-1.50s: Face A visible                                                                  │ ║
-║  │   • 1.50-3.00s: Flip to Face B (scale Y: 1 → 0 → -1)                                           │ ║
-║  │   • 3.00-4.50s: Face B visible                                                                  │ ║
-║  │   • 4.50-6.00s: Flip to Face A (scale Y: -1 → 0 → 1)                                           │ ║
-║  │                                                                                                  │ ║
-║  │   Visual Structure:                                                                              │ ║
-║  │   • Outer ring (color-coded: Red=Purge, Green=ETH)                                              │ ║
-║  │   • Middle ring (dark #111)                                                                      │ ║
-║  │   • Inner circle (white #fff)                                                                    │ ║
-║  │   • Clipped symbol (Purge flame or Ethereum diamond)                                            │ ║
-║  └──────────────────────────────────────────────────────────────────────────────────────────────────┘ ║
-║                                                                                                       ║
-║  DESIGN RATIONALE                                                                                     ║
-║  ────────────────                                                                                     ║
-║  1. Pure function returns static SVG string - no state, no gas for storage reads                    ║
-║  2. SVG uses SMIL animation (native browser support, no JavaScript required)                        ║
-║  3. Symbols and clip paths are defined as reusable <symbol> elements                                ║
-║  4. Animation uses discrete keyTimes for crisp face switching                                       ║
-║                                                                                                       ║
-╠═══════════════════════════════════════════════════════════════════════════════════════════════════════╣
-║  SECURITY CONSIDERATIONS                                                                              ║
-║  ───────────────────────                                                                              ║
-║                                                                                                       ║
-║  1. PURE FUNCTION                                                                                     ║
-║     • bafFlipSymbol() is pure - no state reads or external calls                                     ║
-║     • Cannot be manipulated by contract state                                                        ║
-║     • Returns deterministic output                                                                   ║
-║                                                                                                       ║
-║  2. NO ADMIN FUNCTIONS                                                                                ║
-║     • Contract is completely stateless                                                               ║
-║     • No owner, no upgrade path, no state variables                                                  ║
-║                                                                                                       ║
-║  3. SVG INJECTION SAFETY                                                                              ║
-║     • All SVG content is hardcoded (no user input)                                                   ║
-║     • No script tags or event handlers in the SVG                                                    ║
-║     • Uses only path data and standard SVG elements                                                  ║
-║                                                                                                       ║
-║  4. GAS EFFICIENCY                                                                                    ║
-║     • Pure function - free for off-chain calls                                                       ║
-║     • String is compiled into contract bytecode                                                      ║
-║     • No storage operations                                                                          ║
-║                                                                                                       ║
-╠═══════════════════════════════════════════════════════════════════════════════════════════════════════╣
-║  TRUST ASSUMPTIONS                                                                                    ║
-║  ─────────────────                                                                                    ║
-║                                                                                                       ║
-║  1. SVG content was reviewed at deployment time for safety                                           ║
-║  2. Calling contracts (IconRendererTrophy32Svg) trust the returned SVG                               ║
-║                                                                                                       ║
-╚═══════════════════════════════════════════════════════════════════════════════════════════════════════╝
++=======================================================================================================+
+|                                        TrophySvgAssets                                                |
+|                       On-Chain SVG Animation Assets for Degenerus Trophies                            |
++=======================================================================================================+
+|                                                                                                       |
+|  ARCHITECTURE OVERVIEW                                                                                |
+|  ---------------------                                                                                |
+|  TrophySvgAssets stores complex SVG markup for special trophy renders. Currently contains the         |
+|  animated coin flip used for BAF (Burn and Flip) trophies.                                           |
+|                                                                                                       |
+|  +--------------------------------------------------------------------------------------------------+ |
+|  |                              BAF COIN FLIP ANIMATION                                             | |
+|  |                                                                                                  | |
+|  |   +-------------+     6 second loop     +-------------+                                         | |
+|  |   |   Face A    | ◄-------------------- |   Face B    |                                         | |
+|  |   |  (XRP)    | ------------------► |  (Ethereum) |                                         | |
+|  |   |   Red/111   |    Y-axis flip        |  Green/111  |                                         | |
+|  |   +-------------+                       +-------------+                                         | |
+|  |                                                                                                  | |
+|  |   Animation Phases (6s total):                                                                   | |
+|  |   • 0.00-1.50s: Face A visible                                                                  | |
+|  |   • 1.50-3.00s: Flip to Face B (scale Y: 1 → 0 → -1)                                           | |
+|  |   • 3.00-4.50s: Face B visible                                                                  | |
+|  |   • 4.50-6.00s: Flip to Face A (scale Y: -1 → 0 → 1)                                           | |
+|  |                                                                                                  | |
+|  |   Visual Structure:                                                                              | |
+|  |   • Outer ring (color-coded: Red=Purge, Green=ETH)                                              | |
+|  |   • Middle ring (dark #111)                                                                      | |
+|  |   • Inner circle (white #fff)                                                                    | |
+|  |   • Clipped symbol (Purge flame or Ethereum diamond)                                            | |
+|  +--------------------------------------------------------------------------------------------------+ |
+|                                                                                                       |
+|  DESIGN RATIONALE                                                                                     |
+|  ----------------                                                                                     |
+|  1. Pure function returns static SVG string - no state, no gas for storage reads                    |
+|  2. SVG uses SMIL animation (native browser support, no JavaScript required)                        |
+|  3. Symbols and clip paths are defined as reusable <symbol> elements                                |
+|  4. Animation uses discrete keyTimes for crisp face switching                                       |
+|                                                                                                       |
++=======================================================================================================+
+|  SECURITY CONSIDERATIONS                                                                              |
+|  -----------------------                                                                              |
+|                                                                                                       |
+|  1. PURE FUNCTION                                                                                     |
+|     • bafFlipSymbol() is pure - no state reads or external calls                                     |
+|     • Cannot be manipulated by contract state                                                        |
+|     • Returns deterministic output                                                                   |
+|                                                                                                       |
+|  2. NO ADMIN FUNCTIONS                                                                                |
+|     • Contract is completely stateless                                                               |
+|     • No owner, no upgrade path, no state variables                                                  |
+|                                                                                                       |
+|  3. SVG INJECTION SAFETY                                                                              |
+|     • All SVG content is hardcoded (no user input)                                                   |
+|     • No script tags or event handlers in the SVG                                                    |
+|     • Uses only path data and standard SVG elements                                                  |
+|                                                                                                       |
+|  4. GAS EFFICIENCY                                                                                    |
+|     • Pure function - free for off-chain calls                                                       |
+|     • String is compiled into contract bytecode                                                      |
+|     • No storage operations                                                                          |
+|                                                                                                       |
++=======================================================================================================+
+|  TRUST ASSUMPTIONS                                                                                    |
+|  -----------------                                                                                    |
+|                                                                                                       |
+|  1. SVG content was reviewed at deployment time for safety                                           |
+|  2. Calling contracts (IconRendererTrophy32Svg) trust the returned SVG                               |
+|                                                                                                       |
++=======================================================================================================+
 */
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // INTERFACE
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 /// @title ITrophySvgAssets
 /// @notice Interface for accessing trophy SVG assets
@@ -87,9 +87,9 @@ interface ITrophySvgAssets {
     function bafFlipSymbol() external pure returns (string memory);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // CONTRACT
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 /// @title TrophySvgAssets
 /// @notice On-chain storage for complex trophy SVG animations

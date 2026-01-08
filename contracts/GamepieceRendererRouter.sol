@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {DeployConstants} from "./DeployConstants.sol";
+import {ContractAddresses} from "./ContractAddresses.sol";
 import {RendererRouterBase} from "./RendererRouterBase.sol";
 
 /// @notice Token metadata renderer interface (gamepieces).
@@ -17,7 +17,7 @@ interface ITokenRenderer {
 /// @dev Uses staticcall and a fallback renderer to prevent tokenURI reverts.
 contract GamepieceRendererRouter is RendererRouterBase {
     function fallbackRenderer() public pure override returns (address) {
-        return DeployConstants.RENDERER_REGULAR;
+        return ContractAddresses.RENDERER_REGULAR;
     }
 
     function tokenURISelector() public pure override returns (bytes4) {

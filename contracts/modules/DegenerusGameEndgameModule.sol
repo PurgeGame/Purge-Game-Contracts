@@ -8,6 +8,7 @@ import {IDegenerusJackpots} from "../interfaces/IDegenerusJackpots.sol";
 import {IDegenerusTrophies} from "../interfaces/IDegenerusTrophies.sol";
 import {IDegenerusAffiliate} from "../interfaces/IDegenerusAffiliate.sol";
 import {DegenerusGameStorage} from "../storage/DegenerusGameStorage.sol";
+import {ContractAddresses} from "../ContractAddresses.sol";
 
 /// @notice Minimal interface for queuing NFT reward mints.
 interface IDegenerusGamepiecesRewards {
@@ -22,7 +23,7 @@ interface IDegenerusGamepiecesRewards {
  * @author Burnie Degenerus
  * @notice Delegate-called module handling level settlement after extermination or timeout.
  *
- * @dev This module is called via `delegatecall` from DegenerusGame during state 1 (pregame),
+ * @dev This module is called via `delegatecall` from DegenerusGame during state 1 (setup),
  *      meaning all storage reads/writes operate on the game contract's storage.
  *
  * ## When Called
@@ -34,19 +35,19 @@ interface IDegenerusGamepiecesRewards {
  *
  * ```
  * finalizeEndgame()
- *     │
- *     ├─ IF extermination occurred (not timeout):
- *     │   ├─ Mint exterminator trophy (winnings packed)
- *     │   ├─ Pay exterminator (20-40% of prize pool)
- *     │   │   └─ 25% of their share → bonds (if enabled)
- *     │   ├─ Pay extermination jackpot (trait ticket holders)
- *     │   └─ Pay purchase rewards (20% → NFT/MAP rewards for winners)
- *     │
- *     └─ IF previous level > 0:
- *         ├─ Mint affiliate trophy for top affiliate
- *         └─ Run reward jackpots:
- *             ├─ BAF (every 10 levels): 10-25% of rewardPool
- *             └─ Decimator (levels 15,25,35...85): 15% of rewardPool
+ *     |
+ *     +- IF extermination occurred (not timeout):
+ *     |   +- Mint exterminator trophy (winnings packed)
+ *     |   +- Pay exterminator (20-40% of prize pool)
+ *     |   |   +- 25% of their share → bonds (if enabled)
+ *     |   +- Pay extermination jackpot (trait ticket holders)
+ *     |   +- Pay purchase rewards (20% → NFT/MAP rewards for winners)
+ *     |
+ *     +- IF previous level > 0:
+ *         +- Mint affiliate trophy for top affiliate
+ *         +- Run reward jackpots:
+ *             +- BAF (every 10 levels): 10-25% of rewardPool
+ *             +- Decimator (levels 15,25,35...85): 15% of rewardPool
  * ```
  *
  * ## Exterminator Share Calculation
@@ -64,9 +65,9 @@ interface IDegenerusGamepiecesRewards {
  * This creates time-locked value that incentivizes continued game progression.
  */
 contract DegenerusGameEndgameModule is DegenerusGameStorage {
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
     // Events
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
 
     /// @notice Emitted when ETH is credited to a player's claimable balance.
     /// @param player Original winner address.
@@ -74,9 +75,9 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
     /// @param amount ETH amount credited.
     event PlayerCredited(address indexed player, address indexed recipient, uint256 amount);
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
     // Constants
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
 
     /// @notice Sentinel value indicating level ended via timeout, not extermination.
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
@@ -99,9 +100,9 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
     /// @notice Maximum winners for extermination purchase rewards.
     uint8 private constant EXTERMINATION_PURCHASE_WINNERS = 20;
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
     // Main Entry Point
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
 
     /**
      * @notice Settle a completed level by paying exterminator, jackpots, and rewards.
@@ -140,9 +141,9 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
         uint24 prevLevel = lvl - 1; // The level that just ended
         bool hasPrevLevel = prevLevel != 0;
 
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
         // Extermination Settlement (if not timeout)
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
 
         uint16 traitRaw = lastExterminatedTrait;
         if (traitRaw != TRAIT_ID_TIMEOUT) {
@@ -209,9 +210,9 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
             airdropIndex = 0;
         }
 
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
         // Reward Jackpots (BAF, Decimator) and Affiliate Trophy
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
 
         if (hasPrevLevel) {
             // Mint trophy for top affiliate of the completed level
@@ -221,18 +222,18 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
             claimableDelta += _runRewardJackpots(prevLevel, rngWord, jackpotsAddr);
         }
 
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
         // Commit claimable pool update
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
 
         if (claimableDelta != 0) {
             claimablePool += claimableDelta;
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
     // Reward Jackpots (BAF & Decimator)
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
 
     /**
      * @notice Run BAF and Decimator jackpots based on level triggers.
@@ -265,9 +266,9 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
         uint24 prevMod10 = prevLevel % 10;
         uint24 prevMod100 = prevLevel % 100;
 
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
         // BAF Jackpot (every 10 levels)
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
 
         if (prevMod10 == 0) {
             uint256 bafPoolWei;
@@ -297,9 +298,9 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
             }
         }
 
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
         // Decimator Jackpot (mid-decile, except 95)
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
 
         if (prevMod10 == 5 && prevLevel >= 15 && prevMod100 != 95) {
             // Fire decimator midway through each decile (15, 25, 35... not 95)
@@ -321,17 +322,17 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
      * @param prevLevel The level that just completed.
      */
     function _maybeMintAffiliateTop(uint24 prevLevel) private {
-        address affiliateAddr = affiliateProgramAddr;
+        address affiliateAddr = ContractAddresses.AFFILIATE;
         (address top, uint96 score) = IDegenerusAffiliate(affiliateAddr).affiliateTop(prevLevel);
         if (top == address(0)) return;
 
-        address trophyAddr = trophies;
+        address trophyAddr = ContractAddresses.TROPHIES;
         IDegenerusTrophies(trophyAddr).mintAffiliate(top, prevLevel, score);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
     // Exterminator Payout
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
 
     /**
      * @notice Pay the exterminator their share with bond split.
@@ -345,8 +346,8 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
      *
      * ```
      * Exterminator Share
-     *     ├─ 75% → claimable ETH
-     *     └─ 25% → bonds (creates time-locked position)
+     *     +- 75% → claimable ETH
+     *     +- 25% → bonds (creates time-locked position)
      * ```
      */
     function _payExterminatorShare(
@@ -356,7 +357,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
     ) private returns (uint256 claimableDelta) {
         if (exterminatorShare == 0) return 0;
 
-        address bondsAddr = bonds;
+        address bondsAddr = ContractAddresses.BONDS;
         bool bondPurchasesOpen;
         if (bondsAddr != address(0)) {
             bondPurchasesOpen = IDegenerusBondsJackpot(bondsAddr).purchasesEnabled();
@@ -474,9 +475,9 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
         return weiAmount;
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
     // Extermination Purchase Rewards
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
 
     /**
      * @notice Distribute NFT/MAP purchase rewards to extermination jackpot winners.
@@ -547,9 +548,9 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
 
         IDegenerusGamepiecesRewards nftRewards = IDegenerusGamepiecesRewards(nftAddr);
 
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
         // Select winners and categorize by ticket type
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
 
         address[] memory winners = new address[](maxWinners);
         uint256[] memory burnIdx = new uint256[](maxWinners);  // Indices of burn-ticket winners
@@ -602,9 +603,9 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
             }
         }
 
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
         // Convert burn units to NFTs (4 MAP units = 1 NFT)
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
 
         uint256 leftoverUnits = totalBurnUnits % 4;
         uint256 totalTokenQty = totalBurnUnits / 4;
@@ -635,9 +636,9 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
             }
         }
 
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
         // Distribute MAPs to MAP-ticket winners (or all if no MAP winners)
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
 
         if (totalMapUnits != 0) {
             if (mapWinners == 0) {
@@ -714,9 +715,9 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
     // Reward Jackpot Dispatch
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
 
     /**
      * @notice Route a jackpot slice to the appropriate jackpot handler.
@@ -748,9 +749,9 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
         return (0, 0);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
     // BAF Jackpot
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
 
     /**
      * @notice Execute BAF (Big-Ass Flip) jackpot distribution.
@@ -775,12 +776,12 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
      *
      * ```
      * Scatter Amount
-     *     │
-     *     ├─ Up to 50% of total scatter → MAPs
-     *     │   └─ Added to nextPrizePool
-     *     │
-     *     └─ Remainder → bonds (100%)
-     *         └─ If bonds unavailable → claimable ETH
+     *     |
+     *     +- Up to 50% of total scatter → MAPs
+     *     |   +- Added to nextPrizePool
+     *     |
+     *     +- Remainder → bonds (100%)
+     *         +- If bonds unavailable → claimable ETH
      * ```
      *
      * ## Trophy
@@ -793,7 +794,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
         uint256 rngWord,
         address jackpotsAddr
     ) private returns (uint256 netSpend, uint256 claimableDelta) {
-        address trophyAddr = trophies;
+        address trophyAddr = ContractAddresses.TROPHIES;
 
         // Get winners and payout info from jackpots contract
         (
@@ -807,7 +808,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
         uint256 topMask = bondMask & ((uint256(1) << BAF_BOND_MASK_OFFSET) - 1);
         uint256 scatterMask = bondMask >> BAF_BOND_MASK_OFFSET;
 
-        address bondsAddr = bonds;
+        address bondsAddr = ContractAddresses.BONDS;
         bool bondPurchasesOpen;
         if (bondsAddr != address(0)) {
             bondPurchasesOpen = IDegenerusBondsJackpot(bondsAddr).purchasesEnabled();
@@ -828,9 +829,9 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
         uint256 mapSpent;
         uint256 mapPrizeDelta;
 
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
         // Process each winner
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
 
         for (uint256 i; i < winnersArr.length; ) {
             uint256 amount = amountsArr[i];
@@ -841,9 +842,9 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
             bool topBond = (topMask & (uint256(1) << i)) != 0;
 
             if (scatterSpecial) {
-                // ─────────────────────────────────────────────────────────────
+                // -------------------------------------------------------------
                 // Scatter winner: MAPs first, remainder to bonds
-                // ─────────────────────────────────────────────────────────────
+                // -------------------------------------------------------------
 
                 if (mapPrice != 0 && mapSpent < mapTarget) {
                     uint256 qty = amount / mapPrice;
@@ -893,9 +894,9 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
                     );
                 }
             } else if (topBond) {
-                // ─────────────────────────────────────────────────────────────
+                // -------------------------------------------------------------
                 // Top winner: 20% to bonds, 80% to claimable
-                // ─────────────────────────────────────────────────────────────
+                // -------------------------------------------------------------
 
                 (ethPortion, tmpClaimable) = _splitEthWithBond(
                     winnersArr[i],
@@ -918,9 +919,9 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
             }
         }
 
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
         // Mint BAF trophy for first winner
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
 
         if (mapPrizeDelta != 0) {
             nextPrizePool += mapPrizeDelta;
@@ -934,9 +935,9 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
         return (netSpend, claimableDelta);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
     // Utility Functions
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
 
     /**
      * @notice Propagate revert data from a failed delegatecall.

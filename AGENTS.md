@@ -62,7 +62,7 @@ Quest system is standalone (`DegenerusQuests.sol`), not a delegatecall module.
 | BURNIE decimals | 6 |
 | PRICE_COIN_UNIT | 1e9 (= 1000 BURNIE) |
 | JACKPOT_RESET_TIME | 82620 seconds |
-| Game states | 0=shutdown, 1=pregame/endgame settlement, 2=purchase, 3=burn |
+| Game states | 0=presale, 1=pregame/endgame settlement, 2=purchase, 3=burn, 86=gameover |
 | BAF trigger | Every 10 levels |
 | Bond maturity | Every 10 levels |
 | Game over | ~365 days inactive |

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {DeployConstants} from "../DeployConstants.sol";
+import {ContractAddresses} from "../ContractAddresses.sol";
 import "../interfaces/IDegenerusAffiliate.sol";
 import "../interfaces/IconRendererTypes.sol";
 
@@ -9,8 +9,7 @@ import "../interfaces/IconRendererTypes.sol";
 /// @notice Shared color resolution logic with referrer cascade
 /// @dev Can be inherited by renderer contracts to provide unified color resolution
 abstract contract ColorResolver {
-    address private constant affiliateProgram = DeployConstants.AFFILIATE;
-    IColorRegistry internal constant registry = IColorRegistry(DeployConstants.ICON_COLOR_REGISTRY);
+    IColorRegistry internal constant registry = IColorRegistry(ContractAddresses.ICON_COLOR_REGISTRY);
 
     /// @notice Resolve color with full cascade: token → owner → referrer → upline → default
     /// @param nftContract The NFT contract address
@@ -93,6 +92,6 @@ abstract contract ColorResolver {
 
     function _getReferrer(address user) private view returns (address) {
         if (user == address(0)) return address(0);
-        return IDegenerusAffiliate(affiliateProgram).getReferrer(user);
+        return IDegenerusAffiliate(ContractAddresses.AFFILIATE).getReferrer(user);
     }
 }

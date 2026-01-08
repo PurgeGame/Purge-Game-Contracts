@@ -6,6 +6,7 @@ import {IDegenerusBondsJackpot} from "../interfaces/IDegenerusBondsJackpot.sol";
 import {IStETH} from "../interfaces/IStETH.sol";
 import {DegenerusGameStorage} from "../storage/DegenerusGameStorage.sol";
 import {DegenerusTraitUtils} from "../DegenerusTraitUtils.sol";
+import {ContractAddresses} from "../ContractAddresses.sol";
 
 /**
  * @title DegenerusGameJackpotModule
@@ -1372,7 +1373,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
     ) private returns (uint256 totalPaidEth) {
         uint16[4] memory baseBucketCounts = _traitBucketCounts(jp.entropy);
         uint16[4] memory bucketCounts = _scaleTraitBucketCounts(baseBucketCounts, jp.ethPool, jp.entropy);
-        address bondsAddr = bonds;
+        address bondsAddr = ContractAddresses.BONDS;
         return
             _distributeJackpotEth(
                 jp.lvl,
@@ -1406,7 +1407,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
         if (largeBucketSize != 0) {
             largeBucketCount = largeBucketSize;
         }
-        address bondsAddr = bonds;
+        address bondsAddr = ContractAddresses.BONDS;
         uint256 unit = uint256(price) / 4;
         uint8 remainderIdx = _soloBucketIndex(jp.entropy);
         bool bondPurchasesOpen;

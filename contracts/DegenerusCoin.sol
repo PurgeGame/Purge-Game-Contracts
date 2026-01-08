@@ -1,179 +1,50 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-/*
-╔═══════════════════════════════════════════════════════════════════════════════════════════════════════╗
-║                                        DegenerusCoin                                                  ║
-║                        In-Game ERC20 Token (BURNIE) & Coinflip Wager Hub                              ║
-╠═══════════════════════════════════════════════════════════════════════════════════════════════════════╣
-║                                                                                                       ║
-║  ARCHITECTURE OVERVIEW                                                                                ║
-║  ─────────────────────                                                                                ║
-║  DegenerusCoin is a lightweight ERC20 implementation ("BURNIE", 6 decimals) that serves as the        ║
-║  central accounting layer for multiple gameplay subsystems:                                           ║
-║                                                                                                       ║
-║  1. ERC20 Token      - Standard transfer/approve with game-contract transfer bypass                   ║
-║  2. Coinflip Wagers  - Daily windows where players stake BURNIE for 50/50 win/loss outcomes           ║
-║  3. Quest Rewards    - Integration with quest module for bonus flip credits on gameplay actions       ║
-║  4. Decimator Burns  - Burn-to-participate mechanic for decimator jackpot eligibility                 ║
-║  5. Bounty System    - Global record-breaking flip bounty with deferred payout                        ║
-║  6. Vault Escrow     - Virtual mint allowance for vault distributions                                 ║
-║                                                                                                       ║
-║  ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐ ║
-║  │                              COINFLIP LIFECYCLE                                                  │ ║
-║  │                                                                                                  │ ║
-║  │   depositCoinflip() ──┐                                                                          │ ║
-║  │   creditFlip()    ────┼──► addFlip() ──► coinflipBalance[day][player]                            │ ║
-║  │   quest rewards   ────┘         │                     │                                          │ ║
-║  │                                 │                     │                                          │ ║
-║  │                         ┌───────┴───────┐             │                                          │ ║
-║  │                         │ Auto-claims   │             │                                          │ ║
-║  │                         │ prior days    │             │                                          │ ║
-║  │                         └───────────────┘             ▼                                          │ ║
-║  │                                              processCoinflipPayouts()                            │ ║
-║  │                                                       │                                          │ ║
-║  │                                           ┌───────────┼───────────┐                              │ ║
-║  │                                           ▼           ▼           ▼                              │ ║
-║  │                                      RNG Roll    Win/Loss    flipsClaimableDay=day               │ ║
-║  │                                   (bonus 50-150%) (50/50)                                        │ ║
-║  │                                           │           │                                          │ ║
-║  │                                           └─────┬─────┘                                          │ ║
-║  │                                                 ▼                                                │ ║
-║  │                                      coinflipDayResult[day]                                      │ ║
-║  │                                                 │                                                │ ║
-║  │                                                 ▼                                                │ ║
-║  │                                 _claimCoinflipsInternal() [lazy claim]                           │ ║
-║  │                                                 │                                                │ ║
-║  │                                       ┌────────┴────────┐                                        │ ║
-║  │                                       ▼                 ▼                                        │ ║
-║  │                                    WIN: mint        LOSS: forfeit                                │ ║
-║  │                               principal + bonus        principal                                 │ ║
-║  └──────────────────────────────────────────────────────────────────────────────────────────────────┘ ║
-║                                                                                                       ║
-║  ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐ ║
-║  │                              BOUNTY SYSTEM                                                       │ ║
-║  │                                                                                                  │ ║
-║  │   Record-Breaking Flip         Bounty Armed            Payout on Win                             │ ║
-║  │   ─────────────────────        ────────────            ─────────────                             │ ║
-║  │   newStake > biggestFlipEver   bountyOwedTo = player   if (win) creditFlip(bountyOwedTo, half)   │ ║
-║  │           │                           │                         │                                │ ║
-║  │           ▼                           ▼                         ▼                                │ ║
-║  │   biggestFlipEver = newStake   BountyOwed event         BountyPaid event                         │ ║
-║  │                                                                                                  │ ║
-║  │   Bounty accumulates 1000 BURNIE per coinflip window; payer receives half on their win.          │ ║
-║  └──────────────────────────────────────────────────────────────────────────────────────────────────┘ ║
-║                                                                                                       ║
-║  ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐ ║
-║  │                              VAULT ESCROW                                                        │ ║
-║  │                                                                                                  │ ║
-║  │   _vaultMintAllowance (seeded 2M BURNIE)                                                         │ ║
-║  │            │                                                                                     │ ║
-║  │            ├──◄ vaultEscrow()  [vault/bonds/game deposit virtual coin]                           │ ║
-║  │            │                                                                                     │ ║
-║  │            └──► vaultMintTo()  [vault withdraws to recipient, mints circulating supply]          │ ║
-║  │                                                                                                  │ ║
-║  │   The vault holds a "virtual" reserve that only enters circulation when explicitly minted.       │ ║
-║  └──────────────────────────────────────────────────────────────────────────────────────────────────┘ ║
-║                                                                                                       ║
-║  KEY INVARIANTS                                                                                       ║
-║  ──────────────                                                                                       ║
-║  • totalSupply = Σ balanceOf[addr]  (standard ERC20)                                                  ║
-║  • supplyIncUncirculated = totalSupply + _vaultMintAllowance                                          ║
-║  • coinflipBalance[day][player] is immutable once day <= flipsClaimableDay (settled)                  ║
-║  • Only one bounty recipient can be armed at a time (bountyOwedTo)                                    ║
-║  • Quest rewards are credited as flip stakes, not direct mint (except link credit)                    ║
-║                                                                                                       ║
-╠═══════════════════════════════════════════════════════════════════════════════════════════════════════╣
-║  SECURITY CONSIDERATIONS                                                                              ║
-║  ───────────────────────                                                                              ║
-║                                                                                                       ║
-║  1. REENTRANCY                                                                                        ║
-║     • Burns occur BEFORE downstream calls (CEI pattern)                                               ║
-║     • All external calls are to trusted wired contracts                                               ║
-║     • No external calls with user-supplied callbacks                                                  ║
-║                                                                                                       ║
-║  2. ACCESS CONTROL                                                                                    ║
-║     • onlyDegenerusGameContract: Only the game contract                                               ║
-║     • onlyTrustedContracts: Game, NFT, affiliate, or color registry                                   ║
-║     • onlyFlipCreditors: Game, NFT, affiliate, or bonds                                               ║
-║     • onlyVault: Only the vault contract                                                              ║
-║     • Admin-only: wire(), creditLinkReward()                                                         ║
-║                                                                                                       ║
-║  3. FRONT-RUNNING                                                                                     ║
-║     • Coinflip outcomes use VRF-sourced entropy (passed from game)                                    ║
-║     • RNG lock prevents stake manipulation after entropy requested                                    ║
-║     • Bounty records frozen during RNG lock to prevent manipulation                                   ║
-║                                                                                                       ║
-║  4. INTEGER OVERFLOW/UNDERFLOW                                                                        ║
-║     • Solidity 0.8+ automatic checks on most operations                                               ║
-║     • unchecked blocks only where overflow is intentional/safe (loop counters, bounty wrap)           ║
-║     • _score96() caps at type(uint96).max to prevent truncation issues                                ║
-║                                                                                                       ║
-║  5. GRIEFING VECTORS                                                                                  ║
-║     • MIN threshold (100 BURNIE) prevents dust-attack spamming                                        ║
-║     • 30-day claim window (COIN_CLAIM_DAYS) auto-expires old stakes                                   ║
-║     • Lazy claim pattern amortizes gas across natural interactions                                    ║
-║                                                                                                       ║
-║  6. ECONOMIC SAFETY                                                                                   ║
-║     • No public mint function; all supply enters through defined flows                                ║
-║     • Vault allowance is bounded (seeded 2M, only increases via escrow)                               ║
-║     • Bounty cannot exceed uint128; wraps gracefully on overflow                                      ║
-║                                                                                                       ║
-╠═══════════════════════════════════════════════════════════════════════════════════════════════════════╣
-║  TRUST ASSUMPTIONS                                                                                    ║
-║  ─────────────────                                                                                    ║
-║                                                                                                       ║
-║  1. Admin is trusted for initial wiring only; no post-wire admin capabilities                         ║
-║  2. Wired contracts (game, NFT, quest, jackpots, bonds, vault, affiliate, color registry) are trusted ║
-║  3. VRF provider (Chainlink via game) provides unbiased randomness                                    ║
-║  4. Block.timestamp is accurate within ~15 minutes (sufficient for daily windows)                     ║
-║                                                                                                       ║
-╠═══════════════════════════════════════════════════════════════════════════════════════════════════════╣
-║  EXTERNAL INTERFACES                                                                                  ║
-║  ───────────────────                                                                                  ║
-║                                                                                                       ║
-║  Called by:                                                                                           ║
-║  • DegenerusGame         - processCoinflipPayouts, rollDailyQuest, notifyQuestBurn, etc.              ║
-║  • DegenerusGamepieces   - notifyQuestMint, burnCoin                                                  ║
-║  • DegenerusAffiliate    - burnCoin, affiliateQuestReward, claimPresale trigger                       ║
-║  • IconColorRegistry     - burnCoin (per-token recolor fee)                                           ║
-║  • DegenerusBonds        - creditFlip, notifyQuestBond, vaultEscrow                                   ║
-║  • DegenerusVault        - vaultMintTo, vaultEscrow                                                   ║
-║  • Players               - transfer, approve, depositCoinflip, decimatorBurn, claimPresale            ║
-║                                                                                                       ║
-║  Calls out to:                                                                                        ║
-║  • IDegenerusGame        - purchaseInfo, decWindow, playerBonusMultiplier, level, rngLocked, etc.     ║
-║  • IDegenerusQuests      - handleFlip, handleDecimator, handleMint, handleBurn, etc.                  ║
-║  • IDegenerusJackpots    - recordDecBurn, recordBafFlip                                               ║
-║  • IDegenerusAffiliateCoin - consumePresaleCoin                                                       ║
-║                                                                                                       ║
-╚═══════════════════════════════════════════════════════════════════════════════════════════════════════╝
-*/
+/**
+ * @title DegenerusCoin
+ * @author Burnie Degenerus
+ * @notice ERC20 in-game token (BURNIE, 18 decimals) with integrated coinflip wagering and quest rewards.
+ *
+ * @dev ARCHITECTURE:
+ *      - ERC20 standard with game contract transfer bypass
+ *      - Coinflip: Daily stake windows with VRF-based 50/50 outcomes, 50-150% bonus on wins
+ *      - Quest integration: Bonus flip credits for gameplay actions (mint/burn/bond)
+ *      - Decimator burns: Burn-to-participate for decimator jackpot eligibility
+ *      - Bounty: 1000 BURNIE/window accumulator; half paid to record-breaker on win
+ *      - Vault escrow: 2M BURNIE virtual reserve, minted only on ContractAddresses.VAULT withdrawal
+ *
+ * @dev CRITICAL INVARIANTS:
+ *      - totalSupply + _vaultMintAllowance = supplyIncUncirculated
+ *      - coinflipBalance[day][player] immutable after settlement (day <= flipsClaimableDay)
+ *      - Only one bountyOwedTo address at a time
+ *
+ * @dev SECURITY:
+ *      - Access control: onlyDegenerusGameContract, onlyFlipCreditors, onlyVault
+ *      - CEI pattern: burns before external calls
+ *      - RNG lock prevents stake manipulation during VRF callback
+ *      - MIN threshold (100 BURNIE) prevents dust spam
+ *      - 30-day auto-expiry on unclaimed coinflips
+ */
 
-/// @title DegenerusCoin
-/// @author Burnie Degenerus
-/// @notice ERC20-style game token (BURNIE) that doubles as accounting for coinflip wagers, quests, and jackpots.
-/// @dev Acts as the hub for gameplay modules (game, NFTs, quests, jackpots). Mint/burn only occurs through explicit
-///      gameplay flows; there is intentionally no public mint.
-/// @custom:security-contact burnie@degener.us
 import {DegenerusGamepieces} from "./DegenerusGamepieces.sol";
 import {IDegenerusGame} from "./interfaces/IDegenerusGame.sol";
 import {IDegenerusQuests, QuestInfo, PlayerQuestView} from "./interfaces/IDegenerusQuests.sol";
 import {IDegenerusJackpots} from "./interfaces/IDegenerusJackpots.sol";
-import {DeployConstants} from "./DeployConstants.sol";
+import {ContractAddresses} from "./ContractAddresses.sol";
 
 interface IDegenerusAffiliateCoin {
     function consumePresaleCoin(address player) external returns (uint256 amount);
 }
 
 contract DegenerusCoin {
-    /*╔══════════════════════════════════════════════════════════════════════╗
-      ║                              EVENTS                                  ║
-      ╠══════════════════════════════════════════════════════════════════════╣
-      ║  Lightweight ERC20 events plus gameplay signals for off-chain        ║
-      ║  indexers/clients. Events are the primary mechanism for UIs to       ║
-      ║  track coinflip results, quest completions, and bounty state.        ║
-      ╚══════════════════════════════════════════════════════════════════════╝*/
+    /*+======================================================================+
+      |                              EVENTS                                  |
+      +======================================================================+
+      |  Lightweight ERC20 events plus gameplay signals for off-chain        |
+      |  indexers/clients. Events are the primary mechanism for UIs to       |
+      |  track coinflip results, quest completions, and bounty state.        |
+      +======================================================================+*/
 
     /// @notice Standard ERC20 transfer event.
     /// @dev Emitted on transfer, mint (from=0), and burn (to=0).
@@ -189,7 +60,7 @@ contract DegenerusCoin {
 
     /// @notice Emitted when a player burns BURNIE during a decimator window.
     /// @param player The burner's address.
-    /// @param amountBurned The amount burned (6 decimals).
+    /// @param amountBurned The amount burned (18 decimals).
     /// @param bucket The effective bucket weight assigned (lower = more valuable).
     event DecimatorBurn(address indexed player, uint256 amountBurned, uint8 bucket);
 
@@ -229,22 +100,22 @@ contract DegenerusCoin {
         bool completedBoth
     );
 
-    /// @notice Emitted when admin credits LINK-funded bonus directly.
+    /// @notice Emitted when ContractAddresses.ADMIN credits LINK-funded bonus directly.
     /// @param player The recipient of the credit.
-    /// @param amount The amount minted (6 decimals).
+    /// @param amount The amount minted (18 decimals).
     event LinkCredit(address indexed player, uint256 amount);
 
-    /*╔══════════════════════════════════════════════════════════════════════╗
-      ║                              ERRORS                                  ║
-      ╠══════════════════════════════════════════════════════════════════════╣
-      ║  Custom errors for gas-efficient reverts. Each error corresponds     ║
-      ║  to a specific access control or validation failure.                 ║
-      ╚══════════════════════════════════════════════════════════════════════╝*/
+    /*+======================================================================+
+      |                              ERRORS                                  |
+      +======================================================================+
+      |  Custom errors for gas-efficient reverts. Each error corresponds     |
+      |  to a specific access control or validation failure.                 |
+      +======================================================================+*/
 
     /// @notice Caller is not the authorized DegenerusGame contract.
     error OnlyGame();
 
-    /// @notice Caller is not the authorized vault contract.
+    /// @notice Caller is not the authorized ContractAddresses.VAULT contract.
     error OnlyVault();
 
     /// @notice Requested amount exceeds available balance or allowance.
@@ -259,10 +130,10 @@ contract DegenerusCoin {
     /// @notice Decimator burn attempted outside an active decimator window.
     error NotDecimatorWindow();
 
-    /// @notice Caller is not the authorized bonds contract.
+    /// @notice Caller is not the authorized ContractAddresses.BONDS contract.
     error OnlyBonds();
 
-    /// @notice Caller is not the admin address.
+    /// @notice Caller is not the ContractAddresses.ADMIN address.
     error OnlyAdmin();
 
     /// @notice Caller is not the authorized affiliate contract.
@@ -274,21 +145,21 @@ contract DegenerusCoin {
     /// @notice Coinflip deposits are locked during level jackpot resolution.
     error CoinflipLocked();
 
-    /*╔══════════════════════════════════════════════════════════════════════╗
-      ║                         ERC20 STATE                                  ║
-      ╠══════════════════════════════════════════════════════════════════════╣
-      ║  Minimal ERC20 metadata/state. Transfers are protected by Solidity   ║
-      ║  0.8+ overflow checks. No SafeMath needed.                           ║
-      ║                                                                      ║
-      ║  STORAGE LAYOUT:                                                     ║
-      ║  ┌─────────────────────────────────────────────────────────────────┐ ║
-      ║  │ Slot │ Variable                    │ Type                       │ ║
-      ║  ├──────┼─────────────────────────────┼────────────────────────────┤ ║
-      ║  │  0   │ totalSupply                 │ uint256                    │ ║
-      ║  │  1   │ balanceOf                   │ mapping(address => uint256)│ ║
-      ║  │  2   │ allowance                   │ mapping(addr => mapping)   │ ║
-      ║  └─────────────────────────────────────────────────────────────────┘ ║
-      ╚══════════════════════════════════════════════════════════════════════╝*/
+    /*+======================================================================+
+      |                         ERC20 STATE                                  |
+      +======================================================================+
+      |  Minimal ERC20 metadata/state. Transfers are protected by Solidity   |
+      |  0.8+ overflow checks. No SafeMath needed.                           |
+      |                                                                      |
+      |  STORAGE LAYOUT:                                                     |
+      |  +-----------------------------------------------------------------+ |
+      |  | Slot | Variable                    | Type                       | |
+      |  +------+-----------------------------+----------------------------+ |
+      |  |  0   | totalSupply                 | uint256                    | |
+      |  |  1   | balanceOf                   | mapping(address => uint256)| |
+      |  |  2   | allowance                   | mapping(addr => mapping)   | |
+      |  +-----------------------------------------------------------------+ |
+      +======================================================================+*/
 
     /// @notice Token name displayed in wallets and explorers.
     string public constant name = "Burnies";
@@ -296,7 +167,7 @@ contract DegenerusCoin {
     /// @notice Token symbol (ticker).
     string public constant symbol = "BURNIE";
 
-    /// @notice Total circulating supply (excludes vault's virtual allowance).
+    /// @notice Total circulating supply (excludes ContractAddresses.VAULT's virtual allowance).
     /// @dev Increases on mint, decreases on burn. Always equals sum of all balanceOf entries.
     uint256 public totalSupply;
 
@@ -308,12 +179,12 @@ contract DegenerusCoin {
     /// @dev type(uint256).max indicates infinite approval.
     mapping(address => mapping(address => uint256)) public allowance;
 
-    /*╔══════════════════════════════════════════════════════════════════════╗
-      ║                         DATA TYPES                                   ║
-      ╠══════════════════════════════════════════════════════════════════════╣
-      ║  Packed structs for gas-efficient storage. Each struct fits within   ║
-      ║  a single 32-byte slot where possible.                               ║
-      ╚══════════════════════════════════════════════════════════════════════╝*/
+    /*+======================================================================+
+      |                         DATA TYPES                                   |
+      +======================================================================+
+      |  Packed structs for gas-efficient storage. Each struct fits within   |
+      |  a single 32-byte slot where possible.                               |
+      +======================================================================+*/
 
     /// @notice Leaderboard entry for tracking top flip bettors.
     /// @dev Packed into single slot: address (20 bytes) + uint96 (12 bytes) = 32 bytes.
@@ -331,76 +202,72 @@ contract DegenerusCoin {
         bool win;              // 1 byte  - true = players won, false = house won
     }
 
-    /*╔══════════════════════════════════════════════════════════════════════╗
-      ║                    WIRED CONTRACTS & MODULE STATE                    ║
-      ╠══════════════════════════════════════════════════════════════════════╣
-      ║  Core modules wired once via wire() or constructor. These contracts  ║
-      ║  form the trusted execution environment for gameplay flows.          ║
-      ║                                                                      ║
-      ║  WIRING PATTERN:                                                     ║
-      ║  • Immutables: Set in constructor, never change                      ║
-      ║  • Internal: Set via wire(), guarded by AlreadyWired                 ║
-      ║  • Private: Same as internal but with additional encapsulation       ║
-      ║                                                                      ║
-      ║  STORAGE SLOTS (non-immutable):                                      ║
-      ║  ┌─────────────────────────────────────────────────────────────────┐ ║
-      ║  │ Slot │ Variable              │ Type        │ Access              │ ║
-      ║  ├──────┼───────────────────────┼─────────────┼─────────────────────┤ ║
-      ║  │  3   │ degenerusGame         │ IDegGame    │ onlyAdmin via wire  │ ║
-      ║  │  4   │ degenerusGamepieces   │ DegGamePcs  │ onlyAdmin via wire  │ ║
-      ║  │  5   │ questModule           │ IDegQuests  │ onlyAdmin via wire  │ ║
-      ║  │  6   │ jackpots              │ address     │ onlyAdmin via wire  │ ║
-      ║  │  7   │ vault                 │ address     │ set at deploy       │ ║
-      ║  │  8   │ colorRegistry         │ address     │ onlyAdmin via wire  │ ║
-      ║  └─────────────────────────────────────────────────────────────────┘ ║
-      ╚══════════════════════════════════════════════════════════════════════╝*/
+    /*+======================================================================+
+      |                    WIRED CONTRACTS & MODULE STATE                    |
+      +======================================================================+
+      |  Core modules wired once via wire() or constructor. These contracts  |
+      |  form the trusted execution environment for gameplay flows.          |
+      |                                                                      |
+      |  WIRING PATTERN:                                                     |
+      |  • Immutables: Set in constructor, never change                      |
+      |  • Internal: Set via wire(), guarded by AlreadyWired                 |
+      |  • Private: Same as internal but with additional encapsulation       |
+      |                                                                      |
+      |  STORAGE SLOTS (non-immutable):                                      |
+      |  +-----------------------------------------------------------------+ |
+      |  | Slot | Variable              | Type        | Access              | |
+      |  +------+-----------------------+-------------+---------------------+ |
+      |  |  3   | degenerusGame         | IDegGame    | onlyAdmin via wire  | |
+      |  |  4   | degenerusGamepieces   | DegGamePcs  | onlyAdmin via wire  | |
+      |  |  5   | questModule           | IDegQuests  | onlyAdmin via wire  | |
+      |  |  6   | ContractAddresses.JACKPOTS              | address     | onlyAdmin via wire  | |
+      |  |  7   | ContractAddresses.VAULT                 | address     | set at deploy       | |
+      |  |  8   | ContractAddresses.ICON_COLOR_REGISTRY         | address     | onlyAdmin via wire  | |
+      |  +-----------------------------------------------------------------+ |
+      +======================================================================+*/
 
     /// @notice The main game contract; provides level, RNG state, and purchase info.
-    IDegenerusGame internal constant degenerusGame = IDegenerusGame(DeployConstants.GAME);
+    IDegenerusGame internal constant degenerusGame = IDegenerusGame(ContractAddresses.GAME);
 
     /// @notice The NFT contract for gamepieces; can credit flips and notify quests.
-    DegenerusGamepieces internal constant degenerusGamepieces = DegenerusGamepieces(DeployConstants.GAMEPIECES);
+    DegenerusGamepieces internal constant degenerusGamepieces = DegenerusGamepieces(ContractAddresses.GAMEPIECES);
 
     /// @notice The quest module handling daily quests and streak tracking.
-    IDegenerusQuests internal constant questModule = IDegenerusQuests(DeployConstants.QUESTS);
+    IDegenerusQuests internal constant questModule = IDegenerusQuests(ContractAddresses.QUESTS);
 
-    /// @notice The affiliate program contract for presale claims and referrals.
-    IDegenerusAffiliateCoin private constant affiliateProgram = IDegenerusAffiliateCoin(DeployConstants.AFFILIATE);
+    /// @notice The affiliate program contract for referrals and affiliate rewards.
+    IDegenerusAffiliateCoin private constant affiliateProgram = IDegenerusAffiliateCoin(ContractAddresses.AFFILIATE);
 
-    /// @notice The jackpots module for decimator burns and BAF flip tracking.
-    address private constant jackpots = DeployConstants.JACKPOTS;
+    /// @notice The ContractAddresses.JACKPOTS module for decimator burns and BAF flip tracking.
 
-    /// @notice The vault contract authorized to mint from the virtual allowance.
-    address private constant vault = DeployConstants.VAULT;
+    /// @notice The ContractAddresses.VAULT contract authorized to mint from the virtual allowance.
 
     /// @notice The color registry contract authorized to burn for recoloring.
-    address private constant colorRegistry = DeployConstants.ICON_COLOR_REGISTRY;
 
-    /// @notice The admin address authorized to credit LINK rewards.
-    address private constant admin = DeployConstants.ADMIN;
+    /// @notice The ContractAddresses.ADMIN address authorized to credit LINK rewards.
 
-    /*╔══════════════════════════════════════════════════════════════════════╗
-      ║                       COINFLIP ACCOUNTING                            ║
-      ╠══════════════════════════════════════════════════════════════════════╣
-      ║  Per-day coinflip stakes and results. Stakes are placed for the      ║
-      ║  "next" day and resolved when the day window closes.                 ║
-      ║                                                                      ║
-      ║  CLAIM LIFECYCLE:                                                    ║
-      ║  1. Player deposits → coinflipBalance[targetDay][player] increases   ║
-      ║  2. Day ends → processCoinflipPayouts() records result               ║
-      ║  3. flipsClaimableDay advances → old days become claimable           ║
-      ║  4. On next deposit → _claimCoinflipsInternal() auto-claims wins     ║
-      ║                                                                      ║
-      ║  STORAGE SLOTS:                                                      ║
-      ║  ┌─────────────────────────────────────────────────────────────────┐ ║
-      ║  │ Slot │ Variable              │ Type                             │ ║
-      ║  ├──────┼───────────────────────┼──────────────────────────────────┤ ║
-      ║  │  9   │ coinflipBalance       │ mapping(day => mapping(addr=>u)) │ ║
-      ║  │  10  │ coinflipDayResult     │ mapping(day => CoinflipDayResult)│ ║
-      ║  │  11  │ lastCoinflipClaim     │ mapping(addr => uint48)          │ ║
-      ║  │  12  │ flipsClaimableDay     │ uint48 (packed with other?)      │ ║
-      ║  └─────────────────────────────────────────────────────────────────┘ ║
-      ╚══════════════════════════════════════════════════════════════════════╝*/
+    /*+======================================================================+
+      |                       COINFLIP ACCOUNTING                            |
+      +======================================================================+
+      |  Per-day coinflip stakes and results. Stakes are placed for the      |
+      |  "next" day and resolved when the day window closes.                 |
+      |                                                                      |
+      |  CLAIM LIFECYCLE:                                                    |
+      |  1. Player deposits → coinflipBalance[targetDay][player] increases   |
+      |  2. Day ends → processCoinflipPayouts() records result               |
+      |  3. flipsClaimableDay advances → old days become claimable           |
+      |  4. On next deposit → _claimCoinflipsInternal() auto-claims wins     |
+      |                                                                      |
+      |  STORAGE SLOTS:                                                      |
+      |  +-----------------------------------------------------------------+ |
+      |  | Slot | Variable              | Type                             | |
+      |  +------+-----------------------+----------------------------------+ |
+      |  |  9   | coinflipBalance       | mapping(day => mapping(addr=>u)) | |
+      |  |  10  | coinflipDayResult     | mapping(day => CoinflipDayResult)| |
+      |  |  11  | lastCoinflipClaim     | mapping(addr => uint48)          | |
+      |  |  12  | flipsClaimableDay     | uint48 (packed with other?)      | |
+      |  +-----------------------------------------------------------------+ |
+      +======================================================================+*/
 
     /// @notice Per-day, per-player coinflip stake amounts.
     /// @dev Key: day index (from JACKPOT_RESET_TIME anchor) => player => stake.
@@ -420,26 +287,26 @@ contract DegenerusCoin {
     ///      Active betting day = flipsClaimableDay + 1 (via _targetFlipDay).
     uint48 internal flipsClaimableDay;
 
-    /*╔══════════════════════════════════════════════════════════════════════╗
-      ║                         VAULT ESCROW                                 ║
-      ╠══════════════════════════════════════════════════════════════════════╣
-      ║  Virtual mint allowance for the vault. This represents BURNIE that   ║
-      ║  exists "on paper" but hasn't entered circulation. The vault can     ║
-      ║  mint from this allowance when distributing to players.              ║
-      ╚══════════════════════════════════════════════════════════════════════╝*/
+    /*+======================================================================+
+      |                         VAULT ESCROW                                 |
+      +======================================================================+
+      |  Virtual mint allowance for the ContractAddresses.VAULT. This represents BURNIE that   |
+      |  exists "on paper" but hasn't entered circulation. The ContractAddresses.VAULT can     |
+      |  mint from this allowance when distributing to players.              |
+      +======================================================================+*/
 
-    /// @notice Virtual supply the vault is authorized to mint (not yet circulating).
+    /// @notice Virtual supply the ContractAddresses.VAULT is authorized to mint (not yet circulating).
     /// @dev Seeded to 2,000,000 BURNIE. Increases via vaultEscrow(), decreases via vaultMintTo().
     ///      supplyIncUncirculated = totalSupply + _vaultMintAllowance.
-    /// @custom:security Only vault/bonds/game can increase; only vault can mint from it.
+    /// @custom:security Only ContractAddresses.VAULT/ContractAddresses.BONDS/game can increase; only ContractAddresses.VAULT can mint from it.
     uint256 private _vaultMintAllowance = 2_000_000 ether;
 
-    /*╔══════════════════════════════════════════════════════════════════════╗
-      ║                       LEADERBOARD STATE                              ║
-      ╠══════════════════════════════════════════════════════════════════════╣
-      ║  Per-level and per-day tracking of the top coinflip bettor. Used     ║
-      ║  for bonus payouts and UI display. Scores stored in whole tokens.    ║
-      ╚══════════════════════════════════════════════════════════════════════╝*/
+    /*+======================================================================+
+      |                       LEADERBOARD STATE                              |
+      +======================================================================+
+      |  Per-level and per-day tracking of the top coinflip bettor. Used     |
+      |  for bonus payouts and UI display. Scores stored in whole tokens.    |
+      +======================================================================+*/
 
     /// @notice Tracks whether the top-flip bonus has been paid for a given game level.
     /// @dev Key: game level. Value: true if bonus already paid. One-time per level.
@@ -455,11 +322,11 @@ contract DegenerusCoin {
     ///      Reset implicitly each new day.
     mapping(uint48 => PlayerScore) internal coinflipTopByDay;
 
-    /*╔══════════════════════════════════════════════════════════════════════╗
-      ║                         VIEW HELPERS                                 ║
-      ╠══════════════════════════════════════════════════════════════════════╣
-      ║  Read-only functions for UIs and external contracts to query state.  ║
-      ╚══════════════════════════════════════════════════════════════════════╝*/
+    /*+======================================================================+
+      |                         VIEW HELPERS                                 |
+      +======================================================================+
+      |  Read-only functions for UIs and external contracts to query state.  |
+      +======================================================================+*/
 
     /// @notice View-only helper to estimate claimable coin (flips only) for the caller.
     /// @dev Does not include pending stakes, only resolved winning days.
@@ -469,39 +336,39 @@ contract DegenerusCoin {
         return _viewClaimableCoin(player);
     }
 
-    /// @notice Total supply including uncirculated vault allowance.
-    /// @dev Used by vault share calculations and dashboards.
-    /// @return The sum of circulating supply + virtual vault reserve.
+    /// @notice Total supply including uncirculated ContractAddresses.VAULT allowance.
+    /// @dev Used by ContractAddresses.VAULT share calculations and dashboards.
+    /// @return The sum of circulating supply + virtual ContractAddresses.VAULT reserve.
     function supplyIncUncirculated() external view returns (uint256) {
         return totalSupply + _vaultMintAllowance;
     }
 
-    /// @notice Virtual coin reserved for the vault (not yet circulating).
-    /// @dev Exposed for the vault share math and external dashboards.
-    /// @return The current vault mint allowance in BURNIE (6 decimals).
+    /// @notice Virtual coin reserved for the ContractAddresses.VAULT (not yet circulating).
+    /// @dev Exposed for the ContractAddresses.VAULT share math and external dashboards.
+    /// @return The current ContractAddresses.VAULT mint allowance in BURNIE (18 decimals).
     function vaultMintAllowance() external view returns (uint256) {
         return _vaultMintAllowance;
     }
 
-    /*╔══════════════════════════════════════════════════════════════════════╗
-      ║                         BOUNTY STATE                                 ║
-      ╠══════════════════════════════════════════════════════════════════════╣
-      ║  Global bounty pool for record-breaking flips. The bounty pool       ║
-      ║  accumulates 1000 BURNIE per coinflip window. When a player sets     ║
-      ║  a new all-time high flip, they arm the bounty. On their next        ║
-      ║  winning coinflip, half the pool is credited to their stake.         ║
-      ║                                                                      ║
-      ║  STORAGE LAYOUT (packed in slots):                                   ║
-      ║  ┌─────────────────────────────────────────────────────────────────┐ ║
-      ║  │ Slot │ Variable         │ Type     │ Size     │ Notes           │ ║
-      ║  ├──────┼──────────────────┼──────────┼──────────┼─────────────────┤ ║
-      ║  │  17  │ currentBounty    │ uint128  │ 16 bytes │ Pool size       │ ║
-      ║  │      │ biggestFlipEver  │ uint128  │ 16 bytes │ All-time record │ ║
-      ║  │  18  │ bountyOwedTo     │ address  │ 20 bytes │ Armed recipient │ ║
-      ║  └─────────────────────────────────────────────────────────────────┘ ║
-      ╚══════════════════════════════════════════════════════════════════════╝*/
+    /*+======================================================================+
+      |                         BOUNTY STATE                                 |
+      +======================================================================+
+      |  Global bounty pool for record-breaking flips. The bounty pool       |
+      |  accumulates 1000 BURNIE per coinflip window. When a player sets     |
+      |  a new all-time high flip, they arm the bounty. On their next        |
+      |  winning coinflip, half the pool is credited to their stake.         |
+      |                                                                      |
+      |  STORAGE LAYOUT (packed in slots):                                   |
+      |  +-----------------------------------------------------------------+ |
+      |  | Slot | Variable         | Type     | Size     | Notes           | |
+      |  +------+------------------+----------+----------+-----------------+ |
+      |  |  17  | currentBounty    | uint128  | 16 bytes | Pool size       | |
+      |  |      | biggestFlipEver  | uint128  | 16 bytes | All-time record | |
+      |  |  18  | bountyOwedTo     | address  | 20 bytes | Armed recipient | |
+      |  +-----------------------------------------------------------------+ |
+      +======================================================================+*/
 
-    /// @notice Current bounty pool size in BURNIE (6 decimals).
+    /// @notice Current bounty pool size in BURNIE (18 decimals).
     /// @dev Increases by 1000 BURNIE each coinflip window. Half paid on armed player's win.
     ///      Wraps on overflow (effectively resets to small value).
     uint128 public currentBounty = 1_000_000_000;
@@ -515,24 +382,23 @@ contract DegenerusCoin {
     /// @dev Cleared after payout. Only one player can hold bounty right at a time.
     address internal bountyOwedTo;
 
-    /// @notice The bonds contract address for flip credits and quest notifications.
-    address private constant bonds = DeployConstants.BONDS;
+    /// @notice The ContractAddresses.BONDS contract address for flip credits and quest notifications.
 
-    /*╔══════════════════════════════════════════════════════════════════════╗
-      ║                       ERC20 DECIMALS                                 ║
-      ╚══════════════════════════════════════════════════════════════════════╝*/
+    /*+======================================================================+
+      |                       ERC20 DECIMALS                                 |
+      +======================================================================+*/
 
     /// @notice Number of decimal places for BURNIE token.
     /// @dev 18 decimals (standard ERC20). 1 BURNIE = 1e18 base units.
     uint8 public constant decimals = 18;
 
-    /*╔══════════════════════════════════════════════════════════════════════╗
-      ║                       ERC20 FUNCTIONS                                ║
-      ╠══════════════════════════════════════════════════════════════════════╣
-      ║  Standard ERC20 interface with game-contract bypass for transferFrom.║
-      ║  The game contract can transfer on behalf of players without prior   ║
-      ║  approval (trusted contract pattern).                                ║
-      ╚══════════════════════════════════════════════════════════════════════╝*/
+    /*+======================================================================+
+      |                       ERC20 FUNCTIONS                                |
+      +======================================================================+
+      |  Standard ERC20 interface with game-contract bypass for transferFrom.|
+      |  The game contract can transfer on behalf of players without prior   |
+      |  approval (trusted contract pattern).                                |
+      +======================================================================+*/
 
     /// @notice Approve `spender` to transfer up to `amount` tokens on behalf of caller.
     /// @dev Standard ERC20 approve. Setting to type(uint256).max indicates infinite approval.
@@ -548,7 +414,7 @@ contract DegenerusCoin {
     /// @notice Transfer `amount` tokens from caller to `to`.
     /// @dev Standard ERC20 transfer. Reverts on insufficient balance.
     /// @param to The recipient address.
-    /// @param amount The amount to transfer (6 decimals).
+    /// @param amount The amount to transfer (18 decimals).
     /// @return True on success.
     function transfer(address to, uint256 amount) public returns (bool) {
         _transfer(msg.sender, to, amount);
@@ -561,7 +427,7 @@ contract DegenerusCoin {
     ///      This enables seamless gameplay transactions without pre-approval steps.
     /// @param from The source address.
     /// @param to The destination address.
-    /// @param amount The amount to transfer (6 decimals).
+    /// @param amount The amount to transfer (18 decimals).
     /// @return True on success.
     function transferFrom(address from, address to, uint256 amount) public returns (bool) {
         // Game contract bypass: no allowance check needed for trusted game operations
@@ -596,7 +462,7 @@ contract DegenerusCoin {
     /// @notice Internal mint helper - creates new tokens.
     /// @dev Increases totalSupply and recipient balance. Emits Transfer from address(0).
     /// @param to The recipient address (cannot be zero).
-    /// @param amount The amount to mint (6 decimals).
+    /// @param amount The amount to mint (18 decimals).
     function _mint(address to, uint256 amount) internal {
         if (to == address(0)) revert ZeroAddress();
         totalSupply += amount;
@@ -608,7 +474,7 @@ contract DegenerusCoin {
     /// @dev Decreases totalSupply and sender balance. Emits Transfer to address(0).
     ///      SECURITY: Burns BEFORE any external calls (CEI pattern) in depositCoinflip/decimatorBurn.
     /// @param from The address to burn from (cannot be zero).
-    /// @param amount The amount to burn (6 decimals).
+    /// @param amount The amount to burn (18 decimals).
     function _burn(address from, uint256 amount) internal {
         if (from == address(0)) revert ZeroAddress();
         // Solidity 0.8+ reverts on underflow if balanceOf[from] < amount
@@ -617,22 +483,22 @@ contract DegenerusCoin {
         emit Transfer(from, address(0), amount);
     }
 
-    /*╔══════════════════════════════════════════════════════════════════════╗
-      ║                         CONSTANTS                                    ║
-      ╠══════════════════════════════════════════════════════════════════════╣
-      ║  Protocol parameters and unit conversions. These define the          ║
-      ║  economic boundaries of the coinflip and decimator systems.          ║
-      ║                                                                      ║
-      ║  VALUE SUMMARY:                                                      ║
-      ║  • ether (1e18)            - Standard 18-decimal token unit          ║
-      ║  • PRICE_COIN_UNIT (1000)  - Bounty increment per window             ║
-      ║  • MIN (100 BURNIE)        - Minimum deposit/burn threshold          ║
-      ║  • COINFLIP_EXTRA [78-115] - Payout multiplier range for normal      ║
-      ║  • BPS_DENOMINATOR (10000) - Basis points conversion                 ║
-      ║  • DECIMATOR_BUCKET (10)   - Base bucket for decimator weighting     ║
-      ║  • JACKPOT_RESET_TIME      - Epoch anchor for day indexing           ║
-      ║  • COIN_CLAIM_DAYS (30)    - Max days to claim past winnings         ║
-      ╚══════════════════════════════════════════════════════════════════════╝*/
+    /*+======================================================================+
+      |                         CONSTANTS                                    |
+      +======================================================================+
+      |  Protocol parameters and unit conversions. These define the          |
+      |  economic boundaries of the coinflip and decimator systems.          |
+      |                                                                      |
+      |  VALUE SUMMARY:                                                      |
+      |  • ether (1e18)            - Standard 18-decimal token unit          |
+      |  • PRICE_COIN_UNIT (1000)  - Bounty increment per window             |
+      |  • MIN (100 BURNIE)        - Minimum deposit/burn threshold          |
+      |  • COINFLIP_EXTRA [78-115] - Payout multiplier range for normal      |
+      |  • BPS_DENOMINATOR (10000) - Basis points conversion                 |
+      |  • DECIMATOR_BUCKET (10)   - Base bucket for decimator weighting     |
+      |  • JACKPOT_RESET_TIME      - Epoch anchor for day indexing           |
+      |  • COIN_CLAIM_DAYS (30)    - Max days to claim past winnings         |
+      +======================================================================+*/
 
     /// @dev 1000 BURNIE - used for bounty accumulation and top-flip rewards.
     uint256 private constant PRICE_COIN_UNIT = 1000 ether;
@@ -667,22 +533,22 @@ contract DegenerusCoin {
     ///      Levels are grouped into brackets of 10 for leaderboard tracking.
     uint24 private constant MAX_BAF_BRACKET = (type(uint24).max / 10) * 10;
 
-    /*╔══════════════════════════════════════════════════════════════════════╗
-      ║                         MODIFIERS                                    ║
-      ╠══════════════════════════════════════════════════════════════════════╣
-      ║  Access control modifiers for privileged operations. Each modifier   ║
-      ║  gates access to a specific set of trusted contracts.                ║
-      ║                                                                      ║
-      ║  MODIFIER HIERARCHY:                                                 ║
-      ║  ┌─────────────────────────────────────────────────────────────────┐ ║
-      ║  │  Modifier              │ Allowed Callers                        │ ║
-      ║  ├────────────────────────┼────────────────────────────────────────┤ ║
-      ║  │  onlyDegenerusGame     │ degenerusGame only                     │ ║
-      ║  │  onlyTrustedContracts  │ game, NFT, affiliate, color registry   │ ║
-      ║  │  onlyFlipCreditors     │ game, NFT, affiliate, bonds            │ ║
-      ║  │  onlyVault             │ vault only                             │ ║
-      ║  └─────────────────────────────────────────────────────────────────┘ ║
-      ╚══════════════════════════════════════════════════════════════════════╝*/
+    /*+======================================================================+
+      |                         MODIFIERS                                    |
+      +======================================================================+
+      |  Access control modifiers for privileged operations. Each modifier   |
+      |  gates access to a specific set of trusted contracts.                |
+      |                                                                      |
+      |  MODIFIER HIERARCHY:                                                 |
+      |  +-----------------------------------------------------------------+ |
+      |  |  Modifier              | Allowed Callers                        | |
+      |  +------------------------+----------------------------------------+ |
+      |  |  onlyDegenerusGame     | degenerusGame only                     | |
+      |  |  onlyTrustedContracts  | game, NFT, affiliate, color registry   | |
+      |  |  onlyFlipCreditors     | game, NFT, affiliate, ContractAddresses.BONDS            | |
+      |  |  onlyVault             | ContractAddresses.VAULT only                             | |
+      |  +-----------------------------------------------------------------+ |
+      +======================================================================+*/
 
     /// @dev Restricts access to the DegenerusGame contract only.
     ///      Used for: processCoinflipPayouts, rollDailyQuest, notifyQuestBurn.
@@ -699,60 +565,60 @@ contract DegenerusCoin {
             sender != address(degenerusGame) &&
             sender != address(degenerusGamepieces) &&
             sender != address(affiliateProgram) &&
-            sender != colorRegistry
+            sender != ContractAddresses.ICON_COLOR_REGISTRY
         ) revert OnlyGame();
         _;
     }
 
     /// @dev Restricts access to contracts that can credit flip stakes.
     ///      Used for: creditFlip, creditFlipBatch.
-    ///      Includes bonds in addition to trusted contracts.
+    ///      Includes ContractAddresses.BONDS in addition to trusted contracts.
     modifier onlyFlipCreditors() {
         address sender = msg.sender;
         if (
             sender != address(degenerusGame) &&
             sender != address(degenerusGamepieces) &&
             sender != address(affiliateProgram) &&
-            sender != bonds
+            sender != ContractAddresses.BONDS
         ) revert OnlyGame();
         _;
     }
 
-    /// @dev Restricts access to the vault contract only.
+    /// @dev Restricts access to the ContractAddresses.VAULT contract only.
     ///      Used for: vaultMintTo.
     modifier onlyVault() {
-        if (msg.sender != vault) revert OnlyVault();
+        if (msg.sender != ContractAddresses.VAULT) revert OnlyVault();
         _;
     }
 
-    /*╔══════════════════════════════════════════════════════════════════════╗
-      ║                         CONSTRUCTOR                                  ║
-      ╠══════════════════════════════════════════════════════════════════════╣
-      ║  Validates precomputed references from DeployConstants.              ║
-      ╚══════════════════════════════════════════════════════════════════════╝*/
+    /*+======================================================================+
+      |                         CONSTRUCTOR                                  |
+      +======================================================================+
+      |  Validates precomputed references from ContractAddresses.              |
+      +======================================================================+*/
 
     /// @notice Initialize the BURNIE token.
     /// @dev All contract references are precomputed constants.
-    /*╔══════════════════════════════════════════════════════════════════════╗
-      ║                      PLAYER COINFLIP FUNCTIONS                       ║
-      ╠══════════════════════════════════════════════════════════════════════╣
-      ║  External entry points for players to deposit BURNIE into the        ║
-      ║  daily coinflip pool. Stakes are placed for the next day window.     ║
-      ║                                                                      ║
-      ║  FLOW:                                                               ║
-      ║  1. Player calls depositCoinflip(amount)                             ║
-      ║  2. BURNIE is burned from player (CEI pattern)                       ║
-      ║  3. Quest module checks for bonus rewards                            ║
-      ║  4. Stake + bonuses added via addFlip() to next day's pool           ║
-      ║  5. On next window close, win/loss is resolved via VRF               ║
-      ║  6. Winnings auto-claimed on next deposit                            ║
-      ╚══════════════════════════════════════════════════════════════════════╝*/
+    /*+======================================================================+
+      |                      PLAYER COINFLIP FUNCTIONS                       |
+      +======================================================================+
+      |  External entry points for players to deposit BURNIE into the        |
+      |  daily coinflip pool. Stakes are placed for the next day window.     |
+      |                                                                      |
+      |  FLOW:                                                               |
+      |  1. Player calls depositCoinflip(amount)                             |
+      |  2. BURNIE is burned from player (CEI pattern)                       |
+      |  3. Quest module checks for bonus rewards                            |
+      |  4. Stake + bonuses added via addFlip() to next day's pool           |
+      |  5. On next window close, win/loss is resolved via VRF               |
+      |  6. Winnings auto-claimed on next deposit                            |
+      +======================================================================+*/
 
     /// @notice Burn BURNIE to increase the caller's coinflip stake, applying quest rewards when eligible.
     /// @dev Zero-amount calls act as cash-out of pending winnings without adding new stake.
     ///      SECURITY: Burns BEFORE downstream calls (CEI pattern) to prevent reentrancy.
     ///      Locked during level jackpot resolution to prevent stake manipulation.
-    /// @param amount Amount (6 decimals) to burn; must satisfy MIN (100 BURNIE), or zero for cash-out.
+    /// @param amount Amount (18 decimals) to burn; must satisfy MIN (100 BURNIE), or zero for cash-out.
     function depositCoinflip(uint256 amount) external {
         // Allow zero-amount calls to act as a cash-out of pending winnings without adding a new stake.
         if (amount == 0) {
@@ -795,49 +661,48 @@ contract DegenerusCoin {
     }
 
     /// @dev Check if coinflip deposits are locked during level jackpot resolution.
-    ///      Locked when: gameState=2 (exterminate) AND lastPurchaseDay AND rngLocked.
+    ///      Locked when: gameState=2 (purchase) AND lastPurchaseDay AND rngLocked.
     /// @return locked True if deposits should be rejected.
     function _coinflipLockedDuringLevelJackpot() private view returns (bool locked) {
         (, uint8 gameState_, bool lastPurchaseDay_, bool rngLocked_, ) = degenerusGame.purchaseInfo();
         locked = (gameState_ == 2) && lastPurchaseDay_ && rngLocked_;
     }
 
-    /// @notice Claim presale/early affiliate bonuses that were deferred to the affiliate contract.
-    /// @dev Mints BURNIE directly to caller based on affiliate program's recorded presale allocation.
-    ///      No-op if caller has no presale balance to claim.
+    /// @notice Claim presale/early affiliate bonuses.
+    /// @dev Deprecated: presale rewards are paid immediately; this is typically a no-op.
     function claimPresale() external {
         uint256 amount = affiliateProgram.consumePresaleCoin(msg.sender);
         if (amount == 0) return;
         _mint(msg.sender, amount);
     }
 
-    /*╔══════════════════════════════════════════════════════════════════════╗
-      ║                      DECIMATOR BURN FUNCTION                         ║
-      ╠══════════════════════════════════════════════════════════════════════╣
-      ║  Burns BURNIE during decimator windows to participate in jackpots.   ║
-      ║  Weighted participation based on player's mint streak and level.     ║
-      ║                                                                      ║
-      ║  BUCKET CALCULATION:                                                 ║
-      ║  • Base bucket = 10 (lower = more valuable)                          ║
-      ║  • Non-100 levels: bucket = 10 - (streak / 10), min 5                ║
-      ║  • 100-levels: bucket = 10 - (streak/20 + mintLvls/25), min 2        ║
-      ║                                                                      ║
-      ║  The effective burn amount is scaled by player's bonus multiplier,   ║
-      ║  but the multiplier is disabled once effective score reaches cap.    ║
-      ╚══════════════════════════════════════════════════════════════════════╝*/
+    /*+======================================================================+
+      |                      DECIMATOR BURN FUNCTION                         |
+      +======================================================================+
+      |  Burns BURNIE during decimator windows to participate in ContractAddresses.JACKPOTS.   |
+      |  Weighted participation based on player's mint streak and level.     |
+      |                                                                      |
+      |  BUCKET CALCULATION:                                                 |
+      |  • Base bucket = 10 (lower = more valuable)                          |
+      |  • Non-100 levels: bucket = 10 - (streak / 10), min 5                |
+      |  • 100-levels: bucket = 10 - (streak/20 + mintLvls/25), min 2        |
+      |                                                                      |
+      |  The effective burn amount is scaled by player's bonus multiplier,   |
+      |  but the multiplier is disabled once effective score reaches cap.    |
+      +======================================================================+*/
 
     /// @notice Burn BURNIE during an active Decimator window to accrue weighted participation.
     /// @dev SECURITY: Burns BEFORE downstream calls (CEI pattern).
     ///      Quest rewards are added to the base amount before bucket calculation.
     ///      Bucket determines jackpot weight (lower = better odds).
-    /// @param amount Amount (6 decimals) to burn; must satisfy MIN (100 BURNIE).
+    /// @param amount Amount (18 decimals) to burn; must satisfy MIN (100 BURNIE).
     function decimatorBurn(uint256 amount) external {
         IDegenerusGame game = degenerusGame;
         (bool decOn, uint24 lvl) = game.decWindow();
         if (!decOn) revert NotDecimatorWindow();
         if (amount < MIN) revert AmountLTMin();
 
-        address moduleAddr = jackpots;
+        address moduleAddr = ContractAddresses.JACKPOTS;
 
         address caller = msg.sender;
         // CEI PATTERN: Burn first to anchor the amount used for bonuses.
@@ -883,7 +748,7 @@ contract DegenerusCoin {
             bucket = reduced < 2 ? uint8(2) : uint8(reduced);
         }
 
-        // Record the burn with the jackpots module
+        // Record the burn with the ContractAddresses.JACKPOTS module
         uint8 bucketUsed = IDegenerusJackpots(moduleAddr).recordDecBurn(
             caller,
             lvl,
@@ -934,28 +799,28 @@ contract DegenerusCoin {
         }
     }
 
-    /*╔══════════════════════════════════════════════════════════════════════╗
-      ║                       VAULT FUNCTIONS                                ║
-      ╠══════════════════════════════════════════════════════════════════════╣
-      ║  Manage the virtual vault reserve and mint from it when needed.      ║
-      ╚══════════════════════════════════════════════════════════════════════╝*/
+    /*+======================================================================+
+      |                       VAULT FUNCTIONS                                |
+      +======================================================================+
+      |  Manage the virtual ContractAddresses.VAULT reserve and mint from it when needed.      |
+      +======================================================================+*/
 
-    /// @notice Escrow virtual coin to the vault (no token movement); increases mint allowance.
-    /// @dev Access: vault, bonds, or game when routing coin share without touching the vault.
-    ///      This increases the "paper" reserve that vault can later mint from.
+    /// @notice Escrow virtual coin to the ContractAddresses.VAULT (no token movement); increases mint allowance.
+    /// @dev Access: ContractAddresses.VAULT, ContractAddresses.BONDS, or game when routing coin share without touching the ContractAddresses.VAULT.
+    ///      This increases the "paper" reserve that ContractAddresses.VAULT can later mint from.
     /// @param amount The amount of virtual BURNIE to add to the allowance.
     function vaultEscrow(uint256 amount) external {
         if (amount == 0) return;
         address sender = msg.sender;
-        if (sender != vault && sender != bonds && sender != address(degenerusGame)) revert OnlyVault();
+        if (sender != ContractAddresses.VAULT && sender != ContractAddresses.BONDS && sender != address(degenerusGame)) revert OnlyVault();
         _vaultMintAllowance += amount;
     }
 
-    /// @notice Mint coin out of the vault allowance to a recipient.
-    /// @dev Access: vault only. Converts virtual reserve into circulating supply.
+    /// @notice Mint coin out of the ContractAddresses.VAULT allowance to a recipient.
+    /// @dev Access: ContractAddresses.VAULT only. Converts virtual reserve into circulating supply.
     ///      Reverts if amount exceeds available allowance.
     /// @param to The recipient address.
-    /// @param amount The amount to mint (6 decimals).
+    /// @param amount The amount to mint (18 decimals).
     function vaultMintTo(address to, uint256 amount) external onlyVault {
         if (amount == 0) return;
         uint256 allowanceVault = _vaultMintAllowance;
@@ -964,30 +829,30 @@ contract DegenerusCoin {
         _mint(to, amount);
     }
 
-    /*╔══════════════════════════════════════════════════════════════════════╗
-      ║                       FLIP CREDIT FUNCTIONS                          ║
-      ╠══════════════════════════════════════════════════════════════════════╣
-      ║  Allow authorized contracts to credit coinflip stakes to players     ║
-      ║  without requiring them to burn BURNIE directly.                     ║
-      ╚══════════════════════════════════════════════════════════════════════╝*/
+    /*+======================================================================+
+      |                       FLIP CREDIT FUNCTIONS                          |
+      +======================================================================+
+      |  Allow authorized contracts to credit coinflip stakes to players     |
+      |  without requiring them to burn BURNIE directly.                     |
+      +======================================================================+*/
 
-    /// @notice Credit a coinflip stake from authorized contracts (game, NFT, affiliate, bonds).
+    /// @notice Credit a coinflip stake from authorized contracts (game, NFT, affiliate, ContractAddresses.BONDS).
     /// @dev Zero address or zero amount is a no-op.
     ///      Does NOT arm bounty (canArmBounty=false) - only direct deposits can set records.
     /// @param player The player to credit.
-    /// @param amount The stake amount to add (6 decimals).
+    /// @param amount The stake amount to add (18 decimals).
     function creditFlip(address player, uint256 amount) external onlyFlipCreditors {
         if (player == address(0) || amount == 0) return;
         addFlip(player, amount, false, false, false);
     }
 
-    /// @notice Credit LINK-funded bonus directly (admin-triggered, not presale).
+    /// @notice Credit LINK-funded bonus directly (ContractAddresses.ADMIN-triggered, not presale).
     /// @dev Admin-only. Mints directly to player's balance (not as flip stake).
     ///      Used for promotional rewards funded by LINK token proceeds.
     /// @param player The recipient address.
-    /// @param amount The amount to mint (6 decimals).
+    /// @param amount The amount to mint (18 decimals).
     function creditLinkReward(address player, uint256 amount) external {
-        if (msg.sender != admin) revert OnlyAdmin();
+        if (msg.sender != ContractAddresses.ADMIN) revert OnlyAdmin();
         if (player == address(0) || amount == 0) return;
         _mint(player, amount);
         emit LinkCredit(player, amount);
@@ -997,7 +862,7 @@ contract DegenerusCoin {
     /// @dev Gas optimization for crediting multiple players in one transaction.
     ///      Zero addresses or amounts are skipped.
     /// @param players Array of 3 player addresses.
-    /// @param amounts Array of 3 stake amounts (6 decimals each).
+    /// @param amounts Array of 3 stake amounts (18 decimals each).
     function creditFlipBatch(address[3] calldata players, uint256[3] calldata amounts) external onlyFlipCreditors {
         for (uint256 i; i < 3; ) {
             address player = players[i];
@@ -1031,13 +896,13 @@ contract DegenerusCoin {
         return _questApplyReward(player, reward, hardMode, questType, streak, completed, completedBoth);
     }
 
-    /*╔══════════════════════════════════════════════════════════════════════╗
-      ║                       QUEST INTEGRATION                              ║
-      ╠══════════════════════════════════════════════════════════════════════╣
-      ║  Daily quest lifecycle functions. The coin contract acts as a hub    ║
-      ║  to route quest-related calls to the quest module while maintaining  ║
-      ║  access control and emitting events for indexers.                    ║
-      ╚══════════════════════════════════════════════════════════════════════╝*/
+    /*+======================================================================+
+      |                       QUEST INTEGRATION                              |
+      +======================================================================+
+      |  Daily quest lifecycle functions. The coin contract acts as a hub    |
+      |  to route quest-related calls to the quest module while maintaining  |
+      |  access control and emitting events for indexers.                    |
+      +======================================================================+*/
 
     /// @notice Roll the daily quest for a given day using VRF entropy.
     /// @dev Access: game contract only. Emits DailyQuestRolled for each quest type.
@@ -1115,11 +980,11 @@ contract DegenerusCoin {
     }
 
     /// @notice Notify quest module of a bond purchase.
-    /// @dev Access: bonds contract only. Credits quest rewards as flip stakes.
-    /// @param player The player who purchased bonds.
+    /// @dev Access: ContractAddresses.BONDS contract only. Credits quest rewards as flip stakes.
+    /// @param player The player who purchased ContractAddresses.BONDS.
     /// @param basePerBondWei The ETH value per bond (for quest threshold calculation).
     function notifyQuestBond(address player, uint256 basePerBondWei) external {
-        if (msg.sender != bonds) revert OnlyBonds();
+        if (msg.sender != ContractAddresses.BONDS) revert OnlyBonds();
         IDegenerusQuests module = questModule;
         if (player == address(0) || basePerBondWei == 0) return;
         (
@@ -1194,20 +1059,20 @@ contract DegenerusCoin {
     ///      Used for purchases, fees, and affiliate utilities.
     ///      Reverts on zero address or insufficient balance.
     /// @param target The address to burn from.
-    /// @param amount The amount to burn (6 decimals).
+    /// @param amount The amount to burn (18 decimals).
     function burnCoin(address target, uint256 amount) external onlyTrustedContracts {
         _burn(target, amount);
     }
 
-    /*╔══════════════════════════════════════════════════════════════════════╗
-      ║                       COINFLIP VIEW FUNCTIONS                        ║
-      ╠══════════════════════════════════════════════════════════════════════╣
-      ║  Read-only functions for querying coinflip stake amounts.            ║
-      ╚══════════════════════════════════════════════════════════════════════╝*/
+    /*+======================================================================+
+      |                       COINFLIP VIEW FUNCTIONS                        |
+      +======================================================================+
+      |  Read-only functions for querying coinflip stake amounts.            |
+      +======================================================================+*/
 
     /// @notice Get a player's coinflip stake for the current betting window.
     /// @param player The player address to query.
-    /// @return The stake amount for the current target day (6 decimals).
+    /// @return The stake amount for the current target day (18 decimals).
     function coinflipAmount(address player) external view returns (uint256) {
         uint48 day = _targetFlipDay();
         return coinflipBalance[day][player];
@@ -1217,7 +1082,7 @@ contract DegenerusCoin {
     /// @dev This is the prior day relative to `_targetFlipDay()` (since stakes always target the next day).
     ///      Useful for UIs showing "last day's bet" that is now being resolved.
     /// @param player The player address to query.
-    /// @return The stake amount from the previous day (6 decimals).
+    /// @return The stake amount from the previous day (18 decimals).
     function coinflipAmountLastDay(address player) external view returns (uint256) {
         uint48 day = _targetFlipDay();
         unchecked {
@@ -1225,12 +1090,12 @@ contract DegenerusCoin {
         }
     }
 
-    /*╔══════════════════════════════════════════════════════════════════════╗
-      ║                    INTERNAL CLAIM FUNCTIONS                          ║
-      ╠══════════════════════════════════════════════════════════════════════╣
-      ║  Process past coinflip winnings for a player. Called lazily during   ║
-      ║  addFlip() (claimNow) to auto-claim wins before adding new stakes.   ║
-      ╚══════════════════════════════════════════════════════════════════════╝*/
+    /*+======================================================================+
+      |                    INTERNAL CLAIM FUNCTIONS                          |
+      +======================================================================+
+      |  Process past coinflip winnings for a player. Called lazily during   |
+      |  addFlip() (claimNow) to auto-claim wins before adding new stakes.   |
+      +======================================================================+*/
 
     /// @dev Process coinflip claims for up to COIN_CLAIM_DAYS resolved days.
     ///      Called by addFlip() only when claimNow=true (manual deposits).
@@ -1311,13 +1176,13 @@ contract DegenerusCoin {
         return uint24(bracket);
     }
 
-    /*╔══════════════════════════════════════════════════════════════════════╗
-      ║                    COINFLIP RESOLUTION (GAME-ONLY)                   ║
-      ╠══════════════════════════════════════════════════════════════════════╣
-      ║  Called by DegenerusGame to resolve the daily coinflip using VRF.    ║
-      ║  Determines win/loss and payout multiplier, then advances the        ║
-      ║  claimable day window.                                               ║
-      ╚══════════════════════════════════════════════════════════════════════╝*/
+    /*+======================================================================+
+      |                    COINFLIP RESOLUTION (GAME-ONLY)                   |
+      +======================================================================+
+      |  Called by DegenerusGame to resolve the daily coinflip using VRF.    |
+      |  Determines win/loss and payout multiplier, then advances the        |
+      |  claimable day window.                                               |
+      +======================================================================+*/
 
     /// @notice Progress coinflip payouts for the current level in bounded slices.
     /// @dev Called by DegenerusGame; runs in three phases per settlement:
@@ -1412,11 +1277,11 @@ contract DegenerusCoin {
         return true;
     }
 
-    /*╔══════════════════════════════════════════════════════════════════════╗
-      ║                    LEADERBOARD VIEW FUNCTIONS                        ║
-      ╠══════════════════════════════════════════════════════════════════════╣
-      ║  Read-only functions for querying top bettors by level or day.       ║
-      ╚══════════════════════════════════════════════════════════════════════╝*/
+    /*+======================================================================+
+      |                    LEADERBOARD VIEW FUNCTIONS                        |
+      +======================================================================+
+      |  Read-only functions for querying top bettors by level or day.       |
+      +======================================================================+*/
 
     /// @notice Return the top coinflip bettor recorded for a given level.
     /// @dev Reads the level-keyed leaderboard entry.
@@ -1440,16 +1305,16 @@ contract DegenerusCoin {
         }
     }
 
-    /*╔══════════════════════════════════════════════════════════════════════╗
-      ║                    INTERNAL STAKE MANAGEMENT                         ║
-      ╠══════════════════════════════════════════════════════════════════════╣
-      ║  Core internal function for adding coinflip stakes. Handles:         ║
-      ║  • Auto-claiming past winnings (manual deposits only)                ║
-      ║  • Recycling bonus (1% for rolling forward)                          ║
-      ║  • Leaderboard updates                                               ║
-      ║  • Bounty arming logic                                               ║
-      ║  • BAF (Biggest Active Flip) jackpot tracking                        ║
-      ╚══════════════════════════════════════════════════════════════════════╝*/
+    /*+======================================================================+
+      |                    INTERNAL STAKE MANAGEMENT                         |
+      +======================================================================+
+      |  Core internal function for adding coinflip stakes. Handles:         |
+      |  • Auto-claiming past winnings (manual deposits only)                |
+      |  • Recycling bonus (1% for rolling forward)                          |
+      |  • Leaderboard updates                                               |
+      |  • Bounty arming logic                                               |
+      |  • BAF (Biggest Active Flip) jackpot tracking                        |
+      +======================================================================+*/
 
     /// @notice Increase a player's pending coinflip stake and possibly arm a bounty.
     /// @dev Central function for all stake additions. Called by depositCoinflip, creditFlip, etc.
@@ -1510,7 +1375,7 @@ contract DegenerusCoin {
         _updateTopDayBettor(player, newStake, targetDay);
 
         // Record flip for BAF (Biggest Active Flip) jackpot tracking
-        address module = jackpots;
+        address module = ContractAddresses.JACKPOTS;
         if (coinflipDeposit != 0) {
             uint24 bafLvl = _bafBracketLevel(currLevel);
             IDegenerusJackpots(module).recordBafFlip(player, bafLvl, coinflipDeposit);
@@ -1538,9 +1403,9 @@ contract DegenerusCoin {
         }
     }
 
-    /*╔══════════════════════════════════════════════════════════════════════╗
-      ║                    INTERNAL HELPER FUNCTIONS                         ║
-      ╚══════════════════════════════════════════════════════════════════════╝*/
+    /*+======================================================================+
+      |                    INTERNAL HELPER FUNCTIONS                         |
+      +======================================================================+*/
 
     /// @dev Apply quest reward if quest was completed. Emits QuestCompleted event.
     /// @param player The player who completed the quest.
@@ -1580,7 +1445,7 @@ contract DegenerusCoin {
 
     /// @dev Update level leaderboard if player's score is higher than current leader.
     /// @param player The player address.
-    /// @param stakeScore The player's total stake (raw, 6 decimals).
+    /// @param stakeScore The player's total stake (raw, 18 decimals).
     /// @param lvl The game level.
     function _updateTopBettor(address player, uint256 stakeScore, uint24 lvl) private {
         uint96 score = _score96(stakeScore);
@@ -1592,7 +1457,7 @@ contract DegenerusCoin {
 
     /// @dev Update day leaderboard if player's score is higher than current leader.
     /// @param player The player address.
-    /// @param stakeScore The player's total stake (raw, 6 decimals).
+    /// @param stakeScore The player's total stake (raw, 18 decimals).
     /// @param day The day index.
     function _updateTopDayBettor(address player, uint256 stakeScore, uint48 day) private {
         uint96 score = _score96(stakeScore);

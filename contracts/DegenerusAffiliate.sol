@@ -2,121 +2,33 @@
 pragma solidity ^0.8.26;
 
 import {IDegenerusGame} from "./interfaces/IDegenerusGame.sol";
-import {DeployConstants} from "./DeployConstants.sol";
+import {ContractAddresses} from "./ContractAddresses.sol";
 
-// ═══════════════════════════════════════════════════════════════════════════════════════════════════
-// @title DegenerusAffiliate
-// @author Burnie Degenerus
-// @notice Multi-tier affiliate referral system with presale support and leaderboard tracking.
-//
-// ┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
-// │ ARCHITECTURE OVERVIEW                                                                           │
-// ├─────────────────────────────────────────────────────────────────────────────────────────────────┤
-// │                                                                                                 │
-// │  1. AFFILIATE CODES                                                                             │
-// │     • Players create codes with configurable rakeback (0-25%)                                   │
-// │     • Rakeback = portion of affiliate reward returned to the referred player                    │
-// │     • Codes are permanent once created; owner cannot be changed                                 │
-// │                                                                                                 │
-// │  2. REFERRAL CHAIN (3 tiers)                                                                    │
-// │     Player → Affiliate (direct) → Upline1 (20%) → Upline2 (4%)                                  │
-// │                                                                                                 │
-// │     Example with 1000 FLIP reward and 10% rakeback:                                             │
-// │       - Player rakeback: 100 FLIP (10% of 1000)                                                 │
-// │       - Affiliate: 900 FLIP (1000 - 100)                                                        │
-// │       - Upline1: 200 FLIP (20% of 1000)                                                         │
-// │       - Upline2: 40 FLIP (20% of 200)                                                           │
-// │                                                                                                 │
-// │  3. PRESALE vs POST-PRESALE                                                                     │
-// │     ┌──────────────────────┬──────────────────────────────────────┐                             │
-// │     │ PRESALE ACTIVE       │ POST-PRESALE                         │                             │
-// │     ├──────────────────────┼──────────────────────────────────────┤                             │
-// │     │ Rewards → presale-   │ Rewards → creditFlip() immediate     │                             │
-// │     │ CoinEarned mapping   │ mint + quest rewards                 │                             │
-// │     │ Only bonds can pay   │ coin, bonds, gamepieces can pay      │                             │
-// │     │ Claimed via coin's   │ Auto-distributed on each purchase    │                             │
-// │     │ claimPresale()       │                                      │                             │
-// │     └──────────────────────┴──────────────────────────────────────┘                             │
-// │                                                                                                 │
-// │  4. REFERRAL DECAY (anti-gaming)                                                                │
-// │     • Full rewards for first 50 levels after joining                                            │
-// │     • Linear decay from 100% → 25% over next 100 levels                                         │
-// │     • Minimum 25% rewards thereafter                                                            │
-// │     • Prevents early players from earning full rewards indefinitely                             │
-// │                                                                                                 │
-// │  5. LEADERBOARD TRACKING                                                                        │
-// │     • Tracks top affiliate per game level                                                       │
-// │     • Used to calculate bonus points for mint trait rolls                                       │
-// │     • Score = whole tokens earned (6 decimal precision truncated)                               │
-// │                                                                                                 │
-// └─────────────────────────────────────────────────────────────────────────────────────────────────┘
-//
-// ┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
-// │ SECURITY CONSIDERATIONS                                                                         │
-// ├─────────────────────────────────────────────────────────────────────────────────────────────────┤
-// │                                                                                                 │
-// │  1. ACCESS CONTROL                                                                              │
-// │     • payAffiliate(): coin, bonds, or gamepieces only                                           │
-// │     • consumePresaleCoin(): coin only                                                           │
-// │     • addPresaleCoinCredit(): coin, bonds, or bondsAdmin                                        │
-// │     • shutdownPresale(): bonds only                                                             │
-// │                                                                                                 │
-// │  2. FIXED ADDRESSES                                                                            │
-// │     • External contract addresses are fixed at deploy time                                      │
-// │     • Prevents malicious re-pointing after deployment                                           │
-// │                                                                                                 │
-// │  3. REFERRAL LOCKING                                                                            │
-// │     • Invalid referral attempts (self-referral, unknown code) lock the slot                     │
-// │     • Locked slots use REF_CODE_LOCKED sentinel (bytes32(1))                                    │
-// │     • Locking active only after presale shutdown                                                 │
-// │                                                                                                 │
-// │  4. CEI PATTERN                                                                                 │
-// │     • consumePresaleCoin(): zeros balance before returning amount                               │
-// │     • Protects against reentrancy even though caller is trusted                                 │
-// │                                                                                                 │
-// │  5. ETH HANDLING                                                                                │
-// │     • receive() forwards all ETH to bonds contract                                              │
-// │     • Prevents accidental ETH from being stuck                                                  │
-// │                                                                                                 │
-// │  6. OVERFLOW PROTECTION                                                                         │
-// │     • _score96(): caps at type(uint96).max to prevent truncation errors                         │
-// │     • All arithmetic in Solidity 0.8+ with automatic overflow checks                            │
-// │                                                                                                 │
-// └─────────────────────────────────────────────────────────────────────────────────────────────────┘
-//
-// ┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
-// │ TRUST ASSUMPTIONS                                                                               │
-// ├─────────────────────────────────────────────────────────────────────────────────────────────────┤
-// │                                                                                                 │
-// │  • bonds: Trusted to call payAffiliate with correct amounts/parameters                          │
-// │  • bondsAdmin: Trusted to apply admin credits                                                   │
-// │  • coin: Trusted to correctly process creditFlip and affiliateQuestReward                       │
-// │  • gamepieces: Trusted to call payAffiliate with valid purchase data                            │
-// │  • degenerusGame: Trusted to return accurate level() for join tracking                          │
-// │                                                                                                 │
-// │  These contracts form a closed trust perimeter; no external untrusted calls are made.           │
-// │                                                                                                 │
-// └─────────────────────────────────────────────────────────────────────────────────────────────────┘
-//
-// ┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
-// │ GAS OPTIMIZATION NOTES                                                                          │
-// ├─────────────────────────────────────────────────────────────────────────────────────────────────┤
-// │                                                                                                 │
-// │  • PlayerScore struct packs (address, uint96) into single slot                                  │
-// │  • AffiliateCodeInfo packs (address, uint8) into single slot                                    │
-// │  • creditFlipBatch() used when multiple recipients (saves gas vs individual calls)              │
-// │  • Local variable caching (coinAddr, gamepiecesAddr) to minimize SLOAD                          │
-// │  • unchecked blocks for safe increments (cursor++)                                              │
-// │                                                                                                 │
-// └─────────────────────────────────────────────────────────────────────────────────────────────────┘
-// ═══════════════════════════════════════════════════════════════════════════════════════════════════
+/**
+ * @title DegenerusAffiliate
+ * @author Burnie Degenerus
+ * @notice Multi-tier affiliate referral system with configurable rakeback and decay mechanics.
+ *
+ * @dev ARCHITECTURE:
+ *      - 3-tier referral: Player → Affiliate (base) → Upline1 (20%) → Upline2 (4%)
+ *      - Rakeback: 0-25% of reward returned to referred player
+ *      - Presale: immediate creditFlip (ContractAddresses.BONDS only); Post-presale: immediate creditFlip()
+ *      - Decay: 100% rewards (levels 0-50) → linear decay to 25% (levels 51-150) → 25% floor
+ *      - Leaderboard: tracks top affiliate per level for mint trait bonus
+ *
+ * @dev SECURITY:
+ *      - Access control: payAffiliate (coin/ContractAddresses.BONDS/gamepieces), consumePresaleCoin (coin only)
+ *      - Referral locking: invalid codes lock slot post-presale (REF_CODE_LOCKED sentinel)
+ *      - CEI pattern in consumePresaleCoin (zeros balance before return)
+ *      - Fixed contract addresses at deploy (no re-pointing)
+ */
 
 /// @notice Interface for crediting FLIP tokens to players via the coin contract.
 /// @dev Called post-presale to distribute affiliate rewards.
 interface IDegenerusCoinAffiliate {
     /// @notice Credit FLIP to a single player.
     /// @param player Recipient address.
-    /// @param amount Amount of FLIP (6 decimals).
+    /// @param amount Amount of FLIP (18 decimals).
     function creditFlip(address player, uint256 amount) external;
 
     /// @notice Credit FLIP to up to 3 players in a single call (gas optimization).
@@ -157,10 +69,10 @@ contract DegenerusAffiliate {
     //                              ERRORS
     // =====================================================================
 
-    /// @notice Thrown when a function restricted to bonds is called by another address.
+    /// @notice Thrown when a function restricted to ContractAddresses.BONDS is called by another address.
     error OnlyBonds();
 
-    /// @notice Thrown when caller is not in the authorized set (coin, bonds, bondsAdmin, gamepieces).
+    /// @notice Thrown when caller is not in the authorized set (coin, ContractAddresses.BONDS, ContractAddresses.ADMIN, gamepieces).
     error OnlyAuthorized();
 
     /// @notice Thrown when attempting to create an affiliate code with zero or reserved value.
@@ -184,10 +96,10 @@ contract DegenerusAffiliate {
      * @dev Used in affiliateTopByLevel mapping to track best performer per level.
      *
      * STORAGE LAYOUT (32 bytes):
-     * ┌────────────────────────────────────────────────────┐
-     * │ [0:20]  player   address   Top affiliate address   │
-     * │ [20:32] score    uint96    Whole tokens earned     │
-     * └────────────────────────────────────────────────────┘
+     * +----------------------------------------------------+
+     * | [0:20]  player   address   Top affiliate address   |
+     * | [20:32] score    uint96    Whole tokens earned     |
+     * +----------------------------------------------------+
      */
     struct PlayerScore {
         address player; // 20 bytes - address of top affiliate
@@ -199,11 +111,11 @@ contract DegenerusAffiliate {
      * @dev Packed into single storage slot for gas efficiency.
      *
      * STORAGE LAYOUT (32 bytes, 11 bytes used):
-     * ┌────────────────────────────────────────────────────┐
-     * │ [0:20]  owner     address   Code owner/recipient   │
-     * │ [20:21] rakeback  uint8     Rakeback % (0-25)      │
-     * │ [21:32] unused    ---       11 bytes padding       │
-     * └────────────────────────────────────────────────────┘
+     * +----------------------------------------------------+
+     * | [0:20]  owner     address   Code owner/recipient   |
+     * | [20:21] rakeback  uint8     Rakeback % (0-25)      |
+     * | [21:32] unused    ---       11 bytes padding       |
+     * +----------------------------------------------------+
      */
     struct AffiliateCodeInfo {
         address owner; // 20 bytes - receives affiliate rewards
@@ -239,20 +151,17 @@ contract DegenerusAffiliate {
     /// @notice DegenerusBonds contract address (constant).
     /// @dev Primary caller for payAffiliate() during bond purchases.
     ///      Also authorized for shutdownPresale() and addPresaleCoinCredit().
-    address private constant bonds = DeployConstants.BONDS;
 
     /// @notice DegenerusAdmin address (constant).
     /// @dev Authorized for addPresaleCoinCredit() as fallback admin.
-    address private constant bondsAdmin = DeployConstants.ADMIN;
 
     /// @notice DegenerusCoin contract for FLIP token operations (constant).
-    IDegenerusCoinAffiliate private constant coin = IDegenerusCoinAffiliate(DeployConstants.COIN);
+    IDegenerusCoinAffiliate private constant coin = IDegenerusCoinAffiliate(ContractAddresses.COIN);
 
     /// @notice DegenerusGame contract for level queries (constant).
-    IDegenerusGame private constant degenerusGame = IDegenerusGame(DeployConstants.GAME);
+    IDegenerusGame private constant degenerusGame = IDegenerusGame(ContractAddresses.GAME);
 
     /// @notice DegenerusGamepieces contract address for affiliate payout access control (constant).
-    address private constant degenerusGamepieces = DeployConstants.GAMEPIECES;
 
     // =====================================================================
     //                        AFFILIATE STATE
@@ -279,8 +188,7 @@ contract DegenerusAffiliate {
     mapping(address => uint24) public referralJoinLevel;
 
     /// @notice Presale-era affiliate earnings awaiting claim.
-    /// @dev Accumulated during presale, claimable via coin.claimPresale() after shutdown.
-    ///      Cleared to 0 when consumePresaleCoin() is called.
+    /// @dev Deprecated: presale rewards are now paid immediately.
     mapping(address => uint256) public presaleCoinEarned;
 
     /// @notice Top affiliate per game level for bonus calculations.
@@ -289,20 +197,19 @@ contract DegenerusAffiliate {
     mapping(uint24 => PlayerScore) private affiliateTopByLevel;
 
     /// @notice Total unclaimed presale coin across all players.
-    /// @dev Invariant: sum(presaleCoinEarned[*]) == presaleClaimableTotal.
-    ///      Used for accounting verification; decremented on consume.
+    /// @dev Deprecated: preserved for storage compatibility.
     uint256 public presaleClaimableTotal;
 
     /// @notice Flag indicating presale period has ended.
     /// @dev Set permanently via shutdownPresale(). Once true:
-    ///      - payAffiliate() switches from presale accumulation to direct creditFlip()
-    ///      - consumePresaleCoin() becomes functional
+    ///      - payAffiliate() continues direct creditFlip() distribution
+    ///      - consumePresaleCoin() is deprecated
     ///      - Cannot be unset (one-way state transition)
     bool private presaleShutdown;
 
     /**
      * @notice Initialize affiliate contract with trusted contract addresses.
-     * @dev All dependencies are fixed at deploy time via DeployConstants.
+     * @dev All dependencies are fixed at deploy time via ContractAddresses.
      */
     // =====================================================================
     //                    EXTERNAL PLAYER ENTRYPOINTS
@@ -358,13 +265,7 @@ contract DegenerusAffiliate {
         if (existing != bytes32(0)) revert Insufficient();
         playerReferralCode[msg.sender] = code_;
         // Record the level at which the player joined (for reward decay calculation).
-        address gameAddr = address(degenerusGame);
-        if (gameAddr != address(0)) {
-            _recordReferralJoinLevel(msg.sender, degenerusGame.level());
-        } else {
-            // Presale/early: record join at level 0 for decay tracking.
-            _recordReferralJoinLevel(msg.sender, 0);
-        }
+        _recordReferralJoinLevel(msg.sender, degenerusGame.level());
         emit Affiliate(0, code_, msg.sender); // 0 = player referred
     }
 
@@ -380,8 +281,8 @@ contract DegenerusAffiliate {
 
     /**
      * @notice Check if presale period is still active.
-     * @dev Returns true until shutdownPresale() is called by bonds.
-     *      During presale, affiliate rewards are deferred (not immediately minted).
+     * @dev Returns true until shutdownPresale() is called by ContractAddresses.BONDS.
+     *      During presale, affiliate rewards are paid immediately (ContractAddresses.BONDS only).
      * @return True if presale is active, false if shutdown.
      */
     function presaleActive() external view returns (bool) {
@@ -390,16 +291,16 @@ contract DegenerusAffiliate {
 
     /**
      * @notice Permanently close the presale period.
-     * @dev Can only be called by bonds contract. One-way state transition.
+     * @dev Can only be called by ContractAddresses.BONDS contract. One-way state transition.
      *      After shutdown:
-     *      - payAffiliate() switches to direct creditFlip() distribution
-     *      - consumePresaleCoin() becomes claimable
+     *      - payAffiliate() continues direct creditFlip() distribution
+     *      - consumePresaleCoin() is deprecated
      *
-     * ACCESS: bonds only.
+     * ACCESS: ContractAddresses.BONDS only.
      */
     function shutdownPresale() external {
-        // SECURITY: Only bonds can shutdown presale.
-        if (msg.sender != bonds) revert OnlyBonds();
+        // SECURITY: Only ContractAddresses.BONDS can shutdown presale.
+        if (msg.sender != ContractAddresses.BONDS) revert OnlyBonds();
         presaleShutdown = true;
     }
 
@@ -412,24 +313,24 @@ contract DegenerusAffiliate {
      * @dev Core payout logic. Handles referral resolution, reward scaling,
      *      multi-tier distribution, and presale vs post-presale logic.
      *
-     * ACCESS: coin, bonds, or gamepieces only.
+     * ACCESS: coin, ContractAddresses.BONDS, or gamepieces only.
      *
      * REWARD FLOW:
-     * ┌────────────────────────────────────────────────────────────────────┐
-     * │ 1. Resolve referral code (stored or provided)                      │
-     * │ 2. Apply reward decay based on levels since join                   │
-     * │ 3. Calculate rakeback (returned to player)                         │
-     * │ 4. Pay direct affiliate (base - rakeback)                          │
-     * │ 5. Pay upline1 (20% of scaled amount)                              │
-     * │ 6. Pay upline2 (20% of upline1 share = 4%)                         │
-     * │ 7. Quest rewards added on top (post-presale only)                  │
-     * └────────────────────────────────────────────────────────────────────┘
+     * +--------------------------------------------------------------------+
+     * | 1. Resolve referral code (stored or provided)                      |
+     * | 2. Apply reward decay based on levels since join                   |
+     * | 3. Calculate rakeback (returned to player)                         |
+     * | 4. Pay direct affiliate (base - rakeback)                          |
+     * | 5. Pay upline1 (20% of scaled amount)                              |
+     * | 6. Pay upline2 (20% of upline1 share = 4%)                         |
+     * | 7. Quest rewards added on top (post-presale only)                  |
+     * +--------------------------------------------------------------------+
      *
      * PRESALE vs POST-PRESALE:
-     * - Presale: Rewards deferred to presaleCoinEarned mapping
+     * - Presale: Rewards immediately distributed via creditFlip() (ContractAddresses.BONDS only)
      * - Post-presale: Rewards immediately distributed via creditFlip()
      *
-     * @param amount Base reward amount (6 decimals).
+     * @param amount Base reward amount (18 decimals).
      * @param code Affiliate code provided with the transaction (may be bytes32(0)).
      * @param sender The player making the purchase.
      * @param lvl Current game level (for join tracking and leaderboard).
@@ -445,38 +346,38 @@ contract DegenerusAffiliate {
         uint8 gameState,
         bool rngLocked
     ) external returns (uint256 playerRakeback) {
-        // ─────────────────────────────────────────────────────────────────
+        // -----------------------------------------------------------------
         // ACCESS CONTROL
-        // ─────────────────────────────────────────────────────────────────
+        // -----------------------------------------------------------------
         gameState;
         rngLocked;
         address caller = msg.sender;
         address coinAddr = address(coin);
-        address gamepiecesAddr = degenerusGamepieces;
+        address gamepiecesAddr = ContractAddresses.GAMEPIECES;
         // SECURITY: Only trusted contracts can distribute affiliate rewards.
-        if (caller != coinAddr && caller != bonds && caller != gamepiecesAddr) revert OnlyAuthorized();
+        if (caller != coinAddr && caller != ContractAddresses.BONDS && caller != gamepiecesAddr) revert OnlyAuthorized();
 
-        // ─────────────────────────────────────────────────────────────────
+        // -----------------------------------------------------------------
         // PRESALE GATE
-        // ─────────────────────────────────────────────────────────────────
+        // -----------------------------------------------------------------
         bool presaleOpen = !presaleShutdown;
         if (presaleOpen) {
             // During presale, only bond purchases accrue rewards.
             // This keeps presale distribution anchored to bond purchases.
-            if (caller != bonds) return 0;
+            if (caller != ContractAddresses.BONDS) return 0;
         }
 
-        // ─────────────────────────────────────────────────────────────────
+        // -----------------------------------------------------------------
         // REFERRAL RESOLUTION
-        // ─────────────────────────────────────────────────────────────────
+        // -----------------------------------------------------------------
         bytes32 storedCode = playerReferralCode[sender];
         // SECURITY: Locked slots cannot earn or generate affiliate rewards.
         if (storedCode == REF_CODE_LOCKED) return 0;
 
         AffiliateCodeInfo storage info;
         if (storedCode == bytes32(0)) {
-            // Bonds never pass a code; don't lock or set a referral on "no code" paths.
-            if (code == bytes32(0) && caller == bonds) return 0;
+            // No referral provided: don't lock or set a referral on "no code" paths.
+            if (code == bytes32(0)) return 0;
             // No stored code - try to use the provided code.
             AffiliateCodeInfo storage candidate = affiliateCode[code];
             if (candidate.owner == address(0) || candidate.owner == sender) {
@@ -503,9 +404,9 @@ contract DegenerusAffiliate {
             }
         }
 
-        // ─────────────────────────────────────────────────────────────────
+        // -----------------------------------------------------------------
         // FINAL VALIDATION
-        // ─────────────────────────────────────────────────────────────────
+        // -----------------------------------------------------------------
         address affiliateAddr = info.owner;
         // SECURITY: Double-check no self-referral (belt-and-suspenders).
         if (affiliateAddr == address(0) || affiliateAddr == sender) {
@@ -514,9 +415,9 @@ contract DegenerusAffiliate {
         }
         uint8 rakebackPct = info.rakeback;
 
-        // ─────────────────────────────────────────────────────────────────
+        // -----------------------------------------------------------------
         // REWARD CALCULATION
-        // ─────────────────────────────────────────────────────────────────
+        // -----------------------------------------------------------------
         mapping(address => uint256) storage earned = affiliateCoinEarned[lvl];
 
         // Apply decay based on how many levels since the referral was established.
@@ -534,9 +435,9 @@ contract DegenerusAffiliate {
         _updateTopAffiliate(affiliateAddr, newTotal, lvl);
         playerRakeback = rakebackShare;
 
-        // ─────────────────────────────────────────────────────────────────
+        // -----------------------------------------------------------------
         // DISTRIBUTION (POST-PRESALE)
-        // ─────────────────────────────────────────────────────────────────
+        // -----------------------------------------------------------------
         if (!presaleOpen) {
             // Batch recipients for gas efficiency.
             address[3] memory players;
@@ -553,9 +454,9 @@ contract DegenerusAffiliate {
                 ++cursor;
             }
 
-            // ─────────────────────────────────────────────────────────────
+            // -------------------------------------------------------------
             // UPLINE TIER 1 (20% of scaled amount)
-            // ─────────────────────────────────────────────────────────────
+            // -------------------------------------------------------------
             address upline = _referrerAddress(affiliateAddr);
             if (upline != address(0) && upline != sender) {
                 uint256 baseBonus = scaledAmount / 5; // 20%
@@ -569,9 +470,9 @@ contract DegenerusAffiliate {
                     ++cursor;
                 }
 
-                // ─────────────────────────────────────────────────────────
+                // ---------------------------------------------------------
                 // UPLINE TIER 2 (20% of tier 1 = 4% of original)
-                // ─────────────────────────────────────────────────────────
+                // ---------------------------------------------------------
                 address upline2 = _referrerAddress(upline);
                 if (upline2 != address(0)) {
                     uint256 bonus2 = baseBonus / 5; // 20% of 20% = 4%
@@ -596,41 +497,54 @@ contract DegenerusAffiliate {
                 }
             }
         } else {
-            // ─────────────────────────────────────────────────────────────
+            // -------------------------------------------------------------
             // DISTRIBUTION (PRESALE)
-            // ─────────────────────────────────────────────────────────────
-            // Defer all rewards to presaleCoinEarned mapping.
-            // No quest rewards during presale.
-            uint256 presaleTotalIncrease = affiliateShareBase;
-            presaleCoinEarned[affiliateAddr] += affiliateShareBase;
+            // -------------------------------------------------------------
+            // Directly credit flip stakes; no quest rewards during presale.
+            address[3] memory players;
+            uint256[3] memory amounts;
+            uint256 cursor;
+
+            players[cursor] = affiliateAddr;
+            amounts[cursor] = affiliateShareBase;
+            unchecked {
+                ++cursor;
+            }
 
             // Upline tier 1 (20% of scaled amount).
             address uplinePre = _referrerAddress(affiliateAddr);
             if (uplinePre != address(0) && uplinePre != sender) {
                 uint256 baseBonusPre = scaledAmount / 5;
                 earned[uplinePre] = earned[uplinePre] + baseBonusPre;
-                presaleCoinEarned[uplinePre] += baseBonusPre;
-                presaleTotalIncrease += baseBonusPre;
+                players[cursor] = uplinePre;
+                amounts[cursor] = baseBonusPre;
+                unchecked {
+                    ++cursor;
+                }
 
                 // Upline tier 2 (20% of tier 1).
                 address upline2Pre = _referrerAddress(uplinePre);
                 if (upline2Pre != address(0)) {
                     uint256 bonus2Pre = baseBonusPre / 5;
                     earned[upline2Pre] = earned[upline2Pre] + bonus2Pre;
-                    presaleCoinEarned[upline2Pre] += bonus2Pre;
-                    presaleTotalIncrease += bonus2Pre;
+                    players[cursor] = upline2Pre;
+                    amounts[cursor] = bonus2Pre;
+                    unchecked {
+                        ++cursor;
+                    }
                 }
             }
 
-            // Credit rakeback to the purchasing player during presale.
-            if (playerRakeback != 0) {
-                presaleCoinEarned[sender] += playerRakeback;
-                presaleTotalIncrease += playerRakeback;
+            if (cursor != 0) {
+                if (cursor == 1) {
+                    coin.creditFlip(players[0], amounts[0]);
+                } else {
+                    coin.creditFlipBatch(players, amounts);
+                }
             }
 
-            // Update global presale total for accounting invariant.
-            if (presaleTotalIncrease != 0) {
-                presaleClaimableTotal += presaleTotalIncrease;
+            if (playerRakeback != 0) {
+                coin.creditFlip(sender, playerRakeback);
             }
         }
 
@@ -640,19 +554,12 @@ contract DegenerusAffiliate {
 
     /**
      * @notice Consume and return a player's accrued presale coin for minting.
-     * @dev Called by DegenerusCoin.claimPresale() to convert deferred rewards to tokens.
+     * @dev Deprecated: presale rewards are paid immediately.
      *
      * ACCESS: coin only.
      *
-     * CEI PATTERN:
-     * 1. Read amount
-     * 2. Zero the balance (effect)
-     * 3. Return amount (caller handles minting)
-     *
-     * INVARIANT: presaleClaimableTotal is decremented to maintain sum consistency.
-     *
      * @param player The player claiming their presale rewards.
-     * @return amount The amount to mint for the player.
+     * @return amount The amount to mint for the player (legacy only).
      */
     function consumePresaleCoin(address player) external returns (uint256 amount) {
         // SECURITY: Only coin contract can consume presale balances.
@@ -676,37 +583,31 @@ contract DegenerusAffiliate {
 
     /**
      * @notice Credit presale coin from external sources (e.g., LINK donation rewards).
-     * @dev Allows coin, bonds, or bondsAdmin to add presale credits for special cases.
+     * @dev Deprecated: credits are paid immediately as flip stakes.
      *
-     * ACCESS: coin, bonds, or bondsAdmin.
-     *
-     * USE CASES:
-     * - LINK donation rewards via DegenerusAdmin
-     * - Manual corrections by admin
-     * - Bonus distributions
+     * ACCESS: coin, ContractAddresses.BONDS, or ContractAddresses.ADMIN.
      *
      * @param player The player to credit.
-     * @param amount The amount to credit (6 decimals).
+     * @param amount The amount to credit (18 decimals).
      */
     function addPresaleCoinCredit(address player, uint256 amount) external {
         address caller = msg.sender;
         // SECURITY: Only trusted contracts can add presale credits.
-        if (caller != address(coin) && caller != bonds && caller != bondsAdmin) revert OnlyAuthorized();
+        if (caller != address(coin) && caller != ContractAddresses.BONDS && caller != ContractAddresses.ADMIN) revert OnlyAuthorized();
         // Skip no-op calls.
         if (player == address(0) || amount == 0) return;
-        presaleCoinEarned[player] += amount;
-        presaleClaimableTotal += amount;
+        coin.creditFlip(player, amount);
     }
 
     /**
-     * @notice Forward any received ETH to the bonds contract.
+     * @notice Forward any received ETH to the ContractAddresses.BONDS contract.
      * @dev Prevents ETH from being accidentally stuck in this contract.
-     *      This contract should not hold ETH; all ETH flows through bonds.
+     *      This contract should not hold ETH; all ETH flows through ContractAddresses.BONDS.
      *
      * SECURITY: Reverts if forward fails, preventing silent loss of funds.
      */
     receive() external payable {
-        (bool ok, ) = payable(bonds).call{value: msg.value}("");
+        (bool ok, ) = payable(ContractAddresses.BONDS).call{value: msg.value}("");
         if (!ok) revert Insufficient();
     }
 
@@ -836,13 +737,13 @@ contract DegenerusAffiliate {
      *      earning full rewards indefinitely.
      *
      * DECAY SCHEDULE:
-     * ┌─────────────────────────────────────────────────────────────────┐
-     * │ Levels since join    │ Scale (bps)  │ Percentage               │
-     * ├─────────────────────────────────────────────────────────────────┤
-     * │ 0 - 50               │ 10,000       │ 100% (full rewards)      │
-     * │ 51 - 150             │ linear decay │ 100% → 25% (-0.75%/lvl)  │
-     * │ 151+                 │ 2,500        │ 25% (minimum floor)      │
-     * └─────────────────────────────────────────────────────────────────┘
+     * +-----------------------------------------------------------------+
+     * | Levels since join    | Scale (bps)  | Percentage               |
+     * +-----------------------------------------------------------------+
+     * | 0 - 50               | 10,000       | 100% (full rewards)      |
+     * | 51 - 150             | linear decay | 100% → 25% (-0.75%/lvl)  |
+     * | 151+                 | 2,500        | 25% (minimum floor)      |
+     * +-----------------------------------------------------------------+
      *
      * @param player The player whose rewards are being calculated.
      * @param currentLevel The current game level.
@@ -873,7 +774,7 @@ contract DegenerusAffiliate {
      * @notice Convert a raw amount to a uint96 score in whole tokens.
      * @dev Caps at uint96 max to prevent overflow/truncation errors.
      *      uint96 max ≈ 79 billion whole tokens, far exceeding realistic supply.
-     * @param s Raw amount (6 decimals).
+     * @param s Raw amount (18 decimals).
      * @return Whole token count as uint96.
      */
     function _score96(uint256 s) private pure returns (uint96) {
@@ -916,7 +817,7 @@ contract DegenerusAffiliate {
      * @dev Only updates storage if score exceeds current top.
      *      Leaderboard tracking is per-level (resets each level).
      * @param player The affiliate whose score is being checked.
-     * @param total The affiliate's new total earnings (raw, 6 decimals).
+     * @param total The affiliate's new total earnings (raw, 18 decimals).
      * @param lvl The game level.
      */
     function _updateTopAffiliate(address player, uint256 total, uint24 lvl) private {

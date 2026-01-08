@@ -3,7 +3,7 @@ pragma solidity ^0.8.26;
 
 import "./interfaces/IDegenerusQuests.sol";
 import "./interfaces/IDegenerusGame.sol";
-import {DeployConstants} from "./DeployConstants.sol";
+import {ContractAddresses} from "./ContractAddresses.sol";
 
 /**
  * @title DegenerusQuests
@@ -11,23 +11,23 @@ import {DeployConstants} from "./DeployConstants.sol";
  * @notice Tracks two rotating daily quests and validates player progress against Degenerus game actions.
  *
  * @dev Architecture Overview
- * ─────────────────────────────────────────────────────────────────────────────
+ * -----------------------------------------------------------------------------
  * This contract operates as an external standalone contract (NOT delegatecall)
- * called by the Degenerus coin contract. It manages:
+ * called by the Degenerus ContractAddresses.COIN contract. It manages:
  *   1. Daily quest rolling using VRF entropy
  *   2. Per-player progress tracking with version-gated resets
  *   3. Streak accounting with tier-based reward scaling
  *
  * Security Model
- * ─────────────────────────────────────────────────────────────────────────────
- * • All player-action handlers are coin-gated via `onlyCoin` modifier
- * • Quest normalization allows coin OR game to trigger via `onlyCoinOrGame`
+ * -----------------------------------------------------------------------------
+ * • All player-action handlers are ContractAddresses.COIN-gated via `onlyCoin` modifier
+ * • Quest normalization allows ContractAddresses.COIN OR game to trigger via `onlyCoinOrGame`
  * • Game address fixed at deploy time
  * • No external calls to untrusted contracts — only reads trusted `questGame`
  * • No ETH handling or callbacks — reentrancy is not a concern
  *
  * Quest Lifecycle
- * ─────────────────────────────────────────────────────────────────────────────
+ * -----------------------------------------------------------------------------
  * 1. Coin calls `rollDailyQuest()` with VRF entropy at day transition
  * 2. Two quest slots are seeded with weighted random types and difficulty flags
  * 3. Player actions trigger handle* functions (handleMint, handleFlip, etc.)
@@ -35,13 +35,13 @@ import {DeployConstants} from "./DeployConstants.sol";
  * 5. Both slots must complete for streak credit (prevents partial farming)
  *
  * Progress Versioning
- * ─────────────────────────────────────────────────────────────────────────────
+ * -----------------------------------------------------------------------------
  * Each quest has a monotonic `version` field. When a quest mutates mid-day
  * (e.g., burn quest converts to mint when burning is disabled), the version
  * bumps and stale player progress is automatically reset via `_questSyncProgress`.
  *
  * Streak & Tier System
- * ─────────────────────────────────────────────────────────────────────────────
+ * -----------------------------------------------------------------------------
  * • Streaks increment only when BOTH slots complete on a day
  * • Tiers (0-2) are derived from streak in spans of 10
  * • Higher tiers unlock higher quest targets but also better rewards
@@ -52,7 +52,7 @@ contract DegenerusQuests is IDegenerusQuests {
     //                              CUSTOM ERRORS
     // =========================================================================
 
-    /// @dev Thrown when caller is not the authorized coin contract.
+    /// @dev Thrown when caller is not the authorized ContractAddresses.COIN contract.
     error OnlyCoin();
     /// @dev Thrown when quest day is invalid (unused in current impl but reserved).
     error InvalidQuestDay();
@@ -65,16 +65,16 @@ contract DegenerusQuests is IDegenerusQuests {
     //                              CONSTANTS
     // =========================================================================
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
     // Unit Conversions
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
 
     /// @dev Price unit for reward calculations (1000 BURNIE).
     uint256 private constant PRICE_COIN_UNIT = 1000 ether;
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
     // Quest Type Constants
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
 
     /// @dev Number of concurrent quest slots per day.
     uint8 private constant QUEST_SLOT_COUNT = 2;
@@ -99,18 +99,18 @@ contract DegenerusQuests is IDegenerusQuests {
     /// @dev Total number of quest types for iteration bounds.
     uint8 private constant QUEST_TYPE_COUNT = 7;
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
     // Difficulty Flags (packed into quest.flags)
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
 
     /// @dev Flag indicating high difficulty (rolled > 500/1024).
     uint8 private constant QUEST_FLAG_HIGH_DIFFICULTY = 1 << 0;
     /// @dev Flag indicating very high difficulty (rolled > 750/1024).
     uint8 private constant QUEST_FLAG_VERY_HIGH_DIFFICULTY = 1 << 1;
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
     // Streak & Tier Constants
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
 
     /// @dev Maximum tier index (0, 1, 2 = three tiers).
     uint8 private constant QUEST_TIER_MAX_INDEX = 2;
@@ -121,9 +121,9 @@ contract DegenerusQuests is IDegenerusQuests {
     /// @dev Flag bit indicating streak was already credited this day.
     uint8 private constant QUEST_STATE_STREAK_CREDITED = 1 << 7;
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
     // Quest Target Minimums
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
 
     /// @dev Minimum token target for affiliate/general quests (250 BURNIE).
     uint16 private constant QUEST_MIN_TOKEN = 250;
@@ -136,16 +136,15 @@ contract DegenerusQuests is IDegenerusQuests {
     //                           IMMUTABLE ADDRESSES
     // =========================================================================
 
-    /// @notice The coin contract authorized to drive quest logic.
-    /// @dev Constant; all handle* functions require msg.sender == coin.
-    address private constant coin = DeployConstants.COIN;
+    /// @notice The ContractAddresses.COIN contract authorized to drive quest logic.
+    /// @dev Constant; all handle* functions require msg.sender == ContractAddresses.COIN.
 
     // =========================================================================
     //                              STATE VARIABLES
     // =========================================================================
 
     /// @dev Reference to the Degenerus game contract for state queries.
-    IDegenerusGame private constant questGame = IDegenerusGame(DeployConstants.GAME);
+    IDegenerusGame private constant questGame = IDegenerusGame(ContractAddresses.GAME);
 
     // =========================================================================
     //                                 STRUCTS
@@ -156,9 +155,9 @@ contract DegenerusQuests is IDegenerusQuests {
      * @dev Stored in the `activeQuests` array (one per slot).
      *
      * Layout (memory):
-     * ┌─────────────┬──────────┬───────┬─────────┬─────────────────────────────┐
-     * │ day (48b)   │ type(8b) │ flags │ version │ entropy (256b full word)    │
-     * └─────────────┴──────────┴───────┴─────────┴─────────────────────────────┘
+     * +-------------+----------+-------+---------+-----------------------------+
+     * | day (48b)   | type(8b) | flags | version | entropy (256b full word)    |
+     * +-------------+----------+-------+---------+-----------------------------+
      *
      * Version Semantics:
      * - Increments when quest is first seeded each day
@@ -188,10 +187,10 @@ contract DegenerusQuests is IDegenerusQuests {
      * - Mismatch triggers automatic progress reset via `_questSyncProgress`
      *
      * Completion Mask Layout:
-     * ┌─────────────────────────────────┬─────────┬─────────┐
-     * │ bit 7: STREAK_CREDITED          │ bit 1   │ bit 0   │
-     * │ (prevents double streak credit) │ slot 1  │ slot 0  │
-     * └─────────────────────────────────┴─────────┴─────────┘
+     * +---------------------------------+---------+---------+
+     * | bit 7: STREAK_CREDITED          | bit 1   | bit 0   |
+     * | (prevents double streak credit) | slot 1  | slot 0  |
+     * +---------------------------------+---------+---------+
      */
     struct PlayerQuestState {
         uint32 lastCompletedDay;                    // Last day where BOTH quests completed
@@ -225,9 +224,9 @@ contract DegenerusQuests is IDegenerusQuests {
     /// @dev Per-player quest state including progress and streak.
     mapping(address => PlayerQuestState) private questPlayerState;
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
     // Packed Target Tables
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
     // These constants encode per-tier maximum targets as 16-bit values packed
     // into a uint256. Tier 0 occupies bits [0:15], tier 1 [16:31], etc.
     // Use `_questPackedValue(packed, tier)` to extract.
@@ -247,23 +246,23 @@ contract DegenerusQuests is IDegenerusQuests {
     // =========================================================================
 
     /**
-     * @notice Deploys the quest contract with fixed coin and game references.
-     * @dev All dependencies are provided via DeployConstants.
+     * @notice Deploys the quest contract with fixed ContractAddresses.COIN and game references.
+     * @dev All dependencies are provided via ContractAddresses.
      */
     // =========================================================================
     //                              MODIFIERS
     // =========================================================================
 
-    /// @dev Restricts access to the authorized coin contract only.
+    /// @dev Restricts access to the authorized ContractAddresses.COIN contract only.
     modifier onlyCoin() {
-        if (msg.sender != coin) revert OnlyCoin();
+        if (msg.sender != ContractAddresses.COIN) revert OnlyCoin();
         _;
     }
 
-    /// @dev Restricts access to coin or game contract (for quest normalization).
+    /// @dev Restricts access to ContractAddresses.COIN or game contract (for quest normalization).
     modifier onlyCoinOrGame() {
         address sender = msg.sender;
-        if (sender != coin && sender != address(questGame)) revert OnlyCoin();
+        if (sender != ContractAddresses.COIN && sender != address(questGame)) revert OnlyCoin();
         _;
     }
 
@@ -390,7 +389,7 @@ contract DegenerusQuests is IDegenerusQuests {
     // 6. On completion, credit rewards and check if other slot also completes
     //
     // Return values are consistent across all handlers:
-    // - reward: BURNIE tokens to credit (in base units, 6 decimals)
+    // - reward: BURNIE tokens to credit (in base units, 18 decimals)
     // - hardMode: True if quest had high difficulty flag
     // - questType: The type of quest that was processed
     // - streak: Player's current streak after this action
@@ -476,7 +475,7 @@ contract DegenerusQuests is IDegenerusQuests {
     }
 
     /**
-     * @notice Handle flip/unstake progress credited in BURNIE base units (6 decimals).
+     * @notice Handle flip/unstake progress credited in BURNIE base units (18 decimals).
      * @param player The player who staked/unstaked.
      * @param flipCredit Amount of BURNIE staked/unstaked (in base units).
      * @dev Progress tracks cumulative flip volume for the day.
@@ -515,7 +514,7 @@ contract DegenerusQuests is IDegenerusQuests {
     }
 
     /**
-     * @notice Handle decimator burns counted in BURNIE base units (6 decimals).
+     * @notice Handle decimator burns counted in BURNIE base units (18 decimals).
      * @param player The player who performed the decimator burn.
      * @param burnAmount Amount of BURNIE burned (in base units).
      * @dev Decimator quests have 2x the target of equivalent flip quests.
@@ -600,7 +599,7 @@ contract DegenerusQuests is IDegenerusQuests {
     }
 
     /**
-     * @notice Handle affiliate earnings credited in BURNIE base units (6 decimals).
+     * @notice Handle affiliate earnings credited in BURNIE base units (18 decimals).
      * @param player The affiliate who earned commission.
      * @param amount BURNIE earned from affiliate referrals (in base units).
      */
@@ -813,9 +812,9 @@ contract DegenerusQuests is IDegenerusQuests {
     //                           INTERNAL HELPERS
     // =========================================================================
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
     // View Data Assembly
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
 
     /**
      * @dev Shared helper for view functions to pack quest info/progress consistently.
@@ -881,9 +880,9 @@ contract DegenerusQuests is IDegenerusQuests {
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
     // Quest Conversion & Lookup
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
 
     /**
      * @dev Downgrades burn quests to ETH mint (or affiliate) when burning is paused.
@@ -931,9 +930,9 @@ contract DegenerusQuests is IDegenerusQuests {
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
     // Game State Queries
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
 
     /**
      * @dev Burn quests are only enabled when the core game is in burn state.
@@ -991,9 +990,9 @@ contract DegenerusQuests is IDegenerusQuests {
         return (currLevel % 10) < 5;
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
     // Arithmetic Utilities
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
 
     /**
      * @dev Adds delta to current, clamping at uint128 max to prevent overflow.
@@ -1025,9 +1024,9 @@ contract DegenerusQuests is IDegenerusQuests {
         newVersion = questVersionCounter++;
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
     // Progress Handling
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
 
     /**
      * @dev Processes a mint against a given quest slot, updating progress and returning rewards.
@@ -1057,9 +1056,9 @@ contract DegenerusQuests is IDegenerusQuests {
         return (0, false, quest.questType, state.streak, false, false);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
     // State Synchronization
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
 
     /**
      * @dev Resets per-day bookkeeping and streak if a day was missed.
@@ -1149,9 +1148,9 @@ contract DegenerusQuests is IDegenerusQuests {
         return state.lastSyncDay == quest.day && (state.completionMask & uint8(1 << slot)) != 0;
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
     // Tier & Target Calculations
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
 
     /**
      * @dev Group streak into tiers to avoid per-day bespoke tables.
@@ -1310,9 +1309,9 @@ contract DegenerusQuests is IDegenerusQuests {
         return target;
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
     // Quest Type Selection
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
 
     /**
      * @dev Map entropy to difficulty flags.
@@ -1496,9 +1495,9 @@ contract DegenerusQuests is IDegenerusQuests {
         return primaryType == QUEST_TYPE_MINT_ETH ? QUEST_TYPE_AFFILIATE : QUEST_TYPE_MINT_ETH;
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
     // Quest Completion & Rewards
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
 
     /**
      * @dev Completes a quest slot, credits streak when all slots finish, and returns rewards.
@@ -1708,9 +1707,9 @@ contract DegenerusQuests is IDegenerusQuests {
         return false;
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
     // Bonus Calculations
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
 
     /**
      * @dev Fixed per-quest difficulty bonus based on tier.
@@ -1750,9 +1749,9 @@ contract DegenerusQuests is IDegenerusQuests {
         return uint256(step) * 500 * 1 ether;
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
     // Quest Seeding
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
 
     /**
      * @dev Seeds a quest slot with a new quest definition.

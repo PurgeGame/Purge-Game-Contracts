@@ -9,18 +9,18 @@ import "@openzeppelin/contracts/utils/Strings.sol";
 library RendererLibrary {
     using Strings for uint256;
 
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
     // CONSTANTS
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
 
     /// @dev Ratio constants for ring sizing (1e6 scale)
     uint32 internal constant RATIO_MID_1e6 = 780_000;
     uint32 internal constant RATIO_IN_1e6 = 620_000;
     uint16 internal constant ICON_VB = 512;
 
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
     // COLOR UTILITIES
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
 
     /// @notice Get palette color by index
     function paletteColorRGB(uint8 idx) internal pure returns (uint24) {
@@ -88,9 +88,9 @@ library RendererLibrary {
         return bytes1(v + (v < 10 ? 48 : 87));
     }
 
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
     // FIXED-POINT MATH (1e6 SCALE)
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
 
     /// @notice Format 1e6 fixed-point unsigned value as string
     function dec6(uint256 x) internal pure returns (string memory) {
@@ -133,9 +133,9 @@ library RendererLibrary {
         return string.concat("-", uint256(-x).toString());
     }
 
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
     // SVG HELPERS
-    // ─────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------
 
     /// @notice SVG header with inversion filter and outer square
     function svgHeader(string memory borderColor, string memory squareFill) internal pure returns (string memory) {

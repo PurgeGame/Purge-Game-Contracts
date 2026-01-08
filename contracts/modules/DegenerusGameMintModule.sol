@@ -47,16 +47,16 @@ import {DegenerusGameStorage} from "../storage/DegenerusGameStorage.sol";
  * - Higher-numbered sub-traits within each category are slightly rarer
  */
 contract DegenerusGameMintModule is DegenerusGameStorage {
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
     // Errors
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
 
     /// @notice Generic revert for overflow conditions.
     error E();
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
     // Constants
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
 
     /// @notice Time offset for day calculation (matches game's jackpot reset time).
     uint48 private constant JACKPOT_RESET_TIME = 82620;
@@ -67,9 +67,9 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
     /// @notice Reduced batch size for level 1 (smaller initial supply).
     uint32 private constant TRAIT_REBUILD_TOKENS_LEVEL1 = 1800;
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
     // Bit Packing Masks and Shifts
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
 
     /// @notice Mask for 24-bit fields.
     uint256 private constant MINT_MASK_24 = (uint256(1) << 24) - 1;
@@ -101,9 +101,9 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
     /// @notice Bit shift for bonus-paid flag (1 bit at position 244).
     uint256 private constant ETH_LEVEL_BONUS_SHIFT = 244;
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
     // Mint Data Recording
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
 
     /**
      * @notice Record mint metadata and compute BURNIE rewards for ETH mints.
@@ -147,9 +147,9 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
         uint32 day = _currentMintDay();
         uint256 priceCoinLocal = PRICE_COIN_UNIT;
 
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
         // Unpack previous state
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
 
         uint24 prevLevel = uint24((prevData >> ETH_LAST_LEVEL_SHIFT) & MINT_MASK_24);
         uint24 total = uint24((prevData >> ETH_LEVEL_COUNT_SHIFT) & MINT_MASK_24);
@@ -160,9 +160,9 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
         bool sameUnitsLevel = unitsLevel == lvl;
         bool newCentury = (prevLevel / 100) != (lvl / 100);
 
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
         // Handle level units and bonus
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
 
         // Get previous level units (reset on level change)
         uint256 levelUnitsBefore = sameUnitsLevel ? ((prevData >> ETH_LEVEL_UNITS_SHIFT) & MINT_MASK_16) : 0;
@@ -183,9 +183,9 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
             bonusPaid = true;
         }
 
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
         // Early exit: New level with <4 units (not counted as "minted")
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
 
         if (!sameLevel && levelUnitsAfter < 4) {
             // Just update units and bonus flag, don't update level/streak/total
@@ -198,15 +198,15 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
             return coinReward;
         }
 
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
         // Update mint day
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
 
         data = _setMintDay(prevData, day, ETH_DAY_SHIFT, MINT_MASK_32);
 
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
         // Same level: Just update units
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
 
         if (sameLevel) {
             data = _setPacked(data, ETH_LEVEL_UNITS_SHIFT, MINT_MASK_16, levelUnitsAfter);
@@ -218,9 +218,9 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
             return coinReward;
         }
 
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
         // New level with ≥4 units: Full state update
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
 
         // Update total (resets on century boundary)
         if (newCentury) {
@@ -252,9 +252,9 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
         data = _setPacked(data, ETH_LEVEL_UNITS_LEVEL_SHIFT, MINT_MASK_24, lvl);
         data = _setPacked(data, ETH_LEVEL_BONUS_SHIFT, 1, bonusPaid ? 1 : 0);
 
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
         // Streak bonus (every 5th consecutive level)
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
 
         if (streak >= 5 && (streak % 5 == 0)) {
             // Formula: min(500 + ((streak/5 - 1) × 250), 2000)
@@ -268,9 +268,9 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
             }
         }
 
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
         // Commit to storage (only if changed)
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
 
         if (data != prevData) {
             mintPacked_[player] = data;
@@ -278,9 +278,9 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
         return coinReward;
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
     // Airdrop Multiplier
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
 
     /**
      * @notice Calculate airdrop multiplier for low-participation levels.
@@ -367,9 +367,9 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
         return uint32(scaled);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
     // Trait Count Rebuilding
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
 
     /**
      * @notice Rebuild traitRemaining[] by scanning scheduled token traits.
@@ -410,9 +410,9 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
         // Already complete
         if (cursor >= target) return true;
 
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
         // Determine batch size
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
 
         uint32 batch = (tokenBudget == 0) ? TRAIT_REBUILD_TOKENS_PER_TX : tokenBudget;
         bool startingSlice = cursor == 0;
@@ -427,9 +427,9 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
         uint32 remaining = target - cursor;
         if (batch > remaining) batch = remaining;
 
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
         // Scan tokens and count traits (in-memory)
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
 
         uint32[256] memory localCounts;
 
@@ -452,9 +452,9 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
             }
         }
 
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
         // Commit counts to storage
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
 
         uint32[256] storage remainingCounts = traitRemaining;
 
@@ -474,17 +474,17 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
             }
         }
 
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
         // Update cursor and return status
-        // ─────────────────────────────────────────────────────────────────────
+        // ---------------------------------------------------------------------
 
         traitRebuildCursor = cursor + batch;
         finished = (traitRebuildCursor == target);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
     // Internal Helpers
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
 
     /**
      * @notice Get current day index for mint tracking.
@@ -529,9 +529,9 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
         return (data & ~(mask << shift)) | ((value & mask) << shift);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
     // Trait Generation
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
 
     /**
      * @notice Convert random value to weighted trait index (0-7).
