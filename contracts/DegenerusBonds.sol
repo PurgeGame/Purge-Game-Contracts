@@ -557,6 +557,12 @@ abstract contract DegenerusBondsStorage {
     error NotReady();
     /// @notice Thrown when bps value exceeds 10000.
     error InvalidBps();
+    /// @notice Thrown when series not yet resolved for claim.
+    error SeriesNotResolved();
+    /// @notice Thrown when beneficiary address is zero.
+    error InvalidBeneficiary();
+    /// @notice Thrown when stETH or vault approval fails.
+    error ApprovalFailed();
 
     // =====================================================================
     //                              EVENTS
@@ -671,6 +677,10 @@ abstract contract DegenerusBondsStorage {
     /// @param mintedTotal DGNRS minted.
     /// @param rngWord Entropy used.
     event PresaleJackpot(uint8 indexed round, uint256 mintedTotal, uint256 rngWord);
+
+    /// @notice Emitted when reward stake target is changed.
+    /// @param newBps New target bps (10000 = 100%).
+    event RewardStakeTargetChanged(uint16 newBps);
 
     // =====================================================================
     //                            CONSTANTS
@@ -894,6 +904,25 @@ abstract contract DegenerusBondsStorage {
     /// @dev Constant wrapper saves ~100 gas per read vs storage variable.
     BondToken internal constant tokenDGNRS = BondToken(ContractAddresses.DGNRS);
 
+    /// @notice DegenerusVault contract reference (used 7x).
+    IVaultLike internal constant vault = IVaultLike(ContractAddresses.VAULT);
+
+    /// @notice BurnieCoin contract reference (used 3x).
+    IDegenerusCoin internal constant coin = IDegenerusCoin(ContractAddresses.COIN);
+
+    /// @notice Game bond bank interface (used 10x; also includes level queries via inheritance).
+    IDegenerusGameBondBank internal constant gameBondBank = IDegenerusGameBondBank(ContractAddresses.GAME);
+
+    /// @notice Game RNG interface (used 2x).
+    IDegenerusGameRng internal constant gameRng = IDegenerusGameRng(ContractAddresses.GAME);
+
+    /// @notice Affiliate presale status interface (used 2x).
+    IAffiliatePresaleStatus internal constant affiliatePresaleStatus =
+        IAffiliatePresaleStatus(ContractAddresses.AFFILIATE);
+
+    /// @notice Lido stETH token interface (used 5x).
+    IStETH internal constant steth = IStETH(ContractAddresses.STETH_TOKEN);
+
     // ---------------------------------------------------------------------
     // Per-Player State
     // ---------------------------------------------------------------------
@@ -935,23 +964,19 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
         if (amount < MIN_DEPOSIT) revert MinimumDeposit();
         if (_gameRngLocked()) revert PurchasesDisabled();
 
-        address aff = ContractAddresses.AFFILIATE;
-        if (!IAffiliatePresaleStatus(aff).presaleActive()) revert PresaleClosed();
+        if (!affiliatePresaleStatus.presaleActive()) revert PresaleClosed();
 
         uint48 day = _currentDayIndex();
         _getOrCreateSeries(0);
-
-        address vaultAddr = ContractAddresses.VAULT;
-        address gameAddr = ContractAddresses.GAME;
 
         uint256 vaultShare = (amount * 30) / 100;
         uint256 rewardShare = (amount * 50) / 100;
         uint256 yieldShare = amount - vaultShare - rewardShare; // 20%
 
-        IVaultLike(vaultAddr).deposit{value: vaultShare}(0, 0);
-        _sendEthOrRevert(gameAddr, rewardShare);
+        vault.deposit{value: vaultShare}(0, 0);
+        _sendEthOrRevert(ContractAddresses.GAME, rewardShare);
         if (yieldShare != 0) {
-            IDegenerusGameBondBank(gameAddr).bondDeposit{value: yieldShare}(false);
+            gameBondBank.bondDeposit{value: yieldShare}(false);
         }
 
         address ben = beneficiary == address(0) ? msg.sender : beneficiary;
@@ -1084,7 +1109,7 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
         uint256 pulledStEth;
         if (stEthAmount != 0) {
             uint256 beforeBal = _stEthBalance();
-            try IStETH(ContractAddresses.STETH_TOKEN).transferFrom(msg.sender, address(this), stEthAmount) {} catch {}
+            try steth.transferFrom(msg.sender, address(this), stEthAmount) {} catch {}
             uint256 afterBal = _stEthBalance();
             if (afterBal > beforeBal) {
                 pulledStEth = afterBal - beforeBal;
@@ -1096,7 +1121,7 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
         _runCoinJackpot(rngWord);
         if (gameOverStarted) return;
         if (msg.value != 0 || pulledStEth != 0) {
-            IVaultLike(ContractAddresses.VAULT).deposit{value: msg.value}(0, pulledStEth);
+            vault.deposit{value: msg.value}(0, pulledStEth);
         }
     }
 
@@ -1132,62 +1157,8 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
         (uint8 lane, bool ok) = _pickNonEmptyLane(target.lanes, rngWord);
         if (!ok) return false;
 
-        uint256 top = (amount * COIN_JACKPOT_TOP_BPS) / 10_000;
-        uint256 mid = (amount * COIN_JACKPOT_MID_BPS) / 10_000;
-        uint256 low = (amount * COIN_JACKPOT_LOW_BPS) / 10_000;
-        uint256 tiny = (amount * COIN_JACKPOT_TINY_BPS) / 10_000;
-        uint256 distributed = top +
-            (mid * COIN_JACKPOT_MID_COUNT) +
-            (low * COIN_JACKPOT_LOW_COUNT) +
-            (tiny * COIN_JACKPOT_TINY_COUNT);
-        if (distributed < amount) {
-            unchecked {
-                top += amount - distributed;
-            }
-        }
-
         Lane storage chosen = target.lanes[lane];
-        uint256 entropy = rngWord;
-        address winner = _weightedLanePick(chosen, entropy);
-        if (winner == address(0)) return false;
-
-        _creditCoinJackpot(winner, top, targetMat, lane);
-
-        uint256 salt = 1;
-        if (mid != 0) {
-            for (uint256 i; i < COIN_JACKPOT_MID_COUNT; ) {
-                entropy = _nextEntropy(entropy, salt);
-                winner = _weightedLanePick(chosen, entropy);
-                _creditCoinJackpot(winner, mid, targetMat, lane);
-                unchecked {
-                    ++i;
-                    ++salt;
-                }
-            }
-        }
-        if (low != 0) {
-            for (uint256 i; i < COIN_JACKPOT_LOW_COUNT; ) {
-                entropy = _nextEntropy(entropy, salt);
-                winner = _weightedLanePick(chosen, entropy);
-                _creditCoinJackpot(winner, low, targetMat, lane);
-                unchecked {
-                    ++i;
-                    ++salt;
-                }
-            }
-        }
-        if (tiny != 0) {
-            for (uint256 i; i < COIN_JACKPOT_TINY_COUNT; ) {
-                entropy = _nextEntropy(entropy, salt);
-                winner = _weightedLanePick(chosen, entropy);
-                _creditCoinJackpot(winner, tiny, targetMat, lane);
-                unchecked {
-                    ++i;
-                    ++salt;
-                }
-            }
-        }
-        return true;
+        return _distributeLotteryPayout(chosen, amount, rngWord, targetMat, lane, true);
     }
 
     function _payPresaleBuyerCoinJackpot(uint256 amount, uint256 rngWord, uint8 lane) private returns (bool paid) {
@@ -1196,6 +1167,27 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
         Lane storage chosen = p.buyerLanes[lane];
         if (chosen.total == 0) return false;
 
+        return _distributeLotteryPayout(chosen, amount, rngWord, 0, lane, false);
+    }
+
+    /// @notice Generic lottery payout distributor for coin jackpots.
+    /// @dev Shared logic for both normal and presale coin jackpots.
+    /// @param lane Storage reference to the lane to pick winners from.
+    /// @param amount Total BURNIE amount to distribute.
+    /// @param rngWord Entropy source for winner selection.
+    /// @param maturityLevel Series maturity (for event emission, 0 for presale).
+    /// @param laneIndex Lane index (for event emission).
+    /// @param isSeriesJackpot True for series jackpots, false for presale buyer jackpots.
+    /// @return success True if payout was distributed.
+    function _distributeLotteryPayout(
+        Lane storage lane,
+        uint256 amount,
+        uint256 rngWord,
+        uint24 maturityLevel,
+        uint8 laneIndex,
+        bool isSeriesJackpot
+    ) private returns (bool success) {
+        // Calculate prize buckets
         uint256 top = (amount * COIN_JACKPOT_TOP_BPS) / 10_000;
         uint256 mid = (amount * COIN_JACKPOT_MID_BPS) / 10_000;
         uint256 low = (amount * COIN_JACKPOT_LOW_BPS) / 10_000;
@@ -1204,64 +1196,89 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
             (mid * COIN_JACKPOT_MID_COUNT) +
             (low * COIN_JACKPOT_LOW_COUNT) +
             (tiny * COIN_JACKPOT_TINY_COUNT);
+
+        // Add rounding dust to top prize
         if (distributed < amount) {
             unchecked {
                 top += amount - distributed;
             }
         }
 
+        // Pick and credit top winner
         uint256 entropy = rngWord;
-        address winner = _weightedLanePick(chosen, entropy);
+        address winner = _weightedLanePick(lane, entropy);
         if (winner == address(0)) return false;
 
-        _creditPresaleBuyerCoinJackpot(winner, top, lane);
+        if (isSeriesJackpot) {
+            _creditCoinJackpot(winner, top, maturityLevel, laneIndex);
+        } else {
+            _creditPresaleBuyerCoinJackpot(winner, top, laneIndex);
+        }
 
+        // Distribute mid-tier prizes
         uint256 salt = 1;
         if (mid != 0) {
             for (uint256 i; i < COIN_JACKPOT_MID_COUNT; ) {
                 entropy = _nextEntropy(entropy, salt);
-                winner = _weightedLanePick(chosen, entropy);
-                _creditPresaleBuyerCoinJackpot(winner, mid, lane);
+                winner = _weightedLanePick(lane, entropy);
+                if (isSeriesJackpot) {
+                    _creditCoinJackpot(winner, mid, maturityLevel, laneIndex);
+                } else {
+                    _creditPresaleBuyerCoinJackpot(winner, mid, laneIndex);
+                }
                 unchecked {
                     ++i;
                     ++salt;
                 }
             }
         }
+
+        // Distribute low-tier prizes
         if (low != 0) {
             for (uint256 i; i < COIN_JACKPOT_LOW_COUNT; ) {
                 entropy = _nextEntropy(entropy, salt);
-                winner = _weightedLanePick(chosen, entropy);
-                _creditPresaleBuyerCoinJackpot(winner, low, lane);
+                winner = _weightedLanePick(lane, entropy);
+                if (isSeriesJackpot) {
+                    _creditCoinJackpot(winner, low, maturityLevel, laneIndex);
+                } else {
+                    _creditPresaleBuyerCoinJackpot(winner, low, laneIndex);
+                }
                 unchecked {
                     ++i;
                     ++salt;
                 }
             }
         }
+
+        // Distribute tiny-tier prizes
         if (tiny != 0) {
             for (uint256 i; i < COIN_JACKPOT_TINY_COUNT; ) {
                 entropy = _nextEntropy(entropy, salt);
-                winner = _weightedLanePick(chosen, entropy);
-                _creditPresaleBuyerCoinJackpot(winner, tiny, lane);
+                winner = _weightedLanePick(lane, entropy);
+                if (isSeriesJackpot) {
+                    _creditCoinJackpot(winner, tiny, maturityLevel, laneIndex);
+                } else {
+                    _creditPresaleBuyerCoinJackpot(winner, tiny, laneIndex);
+                }
                 unchecked {
                     ++i;
                     ++salt;
                 }
             }
         }
+
         return true;
     }
 
     function _creditCoinJackpot(address winner, uint256 amount, uint24 maturityLevel, uint8 lane) private {
         if (winner == address(0) || amount == 0) return;
-        IDegenerusCoin(ContractAddresses.COIN).creditFlip(winner, amount);
+        coin.creditFlip(winner, amount);
         emit BondCoinJackpot(winner, amount, maturityLevel, lane);
     }
 
     function _creditPresaleBuyerCoinJackpot(address winner, uint256 amount, uint8 lane) private {
         if (winner == address(0) || amount == 0) return;
-        IDegenerusCoin(ContractAddresses.COIN).creditFlip(winner, amount);
+        coin.creditFlip(winner, amount);
         emit PresaleBuyerCoinJackpot(winner, amount, lane);
     }
 
@@ -1368,7 +1385,7 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
             _sweepExcessToVault();
         }
 
-        // Note: RNG lock is enforced by reading IDegenerusGameLevel(ContractAddresses.GAME).rngLocked().
+        // Note: RNG lock is enforced by reading gameBondBank.rngLocked().
         done = !hitCap;
         return done;
     }
@@ -1465,7 +1482,7 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
                 uint256 stSend = remainingStEth < surplus ? remainingStEth : surplus;
                 uint256 ethSend = surplus - stSend;
                 if (stSend != 0 || ethSend != 0) {
-                    IVaultLike(ContractAddresses.VAULT).deposit{value: ethSend}(0, stSend);
+                    vault.deposit{value: ethSend}(0, stSend);
                 }
             }
         }
@@ -1492,7 +1509,7 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
 
     function claim(uint24 maturityLevel) external {
         BondSeries storage s = series[maturityLevel];
-        if (!s.resolved) revert SaleClosed(); // Reusing SaleClosed or similar "NotReady" error
+        if (!s.resolved) revert SeriesNotResolved();
 
         uint256 payout;
         uint8 lane = s.winningLane;
@@ -1526,9 +1543,9 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
             bool isArchived = false;
             uint24 head = activeMaturityIndex;
             if (head > 0) {
-                if (head == maturities.length) {
+                if (head >= maturities.length) {
                     isArchived = true;
-                } else if (maturityLevel < series[maturities[head]].maturityLevel) {
+                } else if (head < maturities.length && maturityLevel < series[maturities[head]].maturityLevel) {
                     isArchived = true;
                 }
             }
@@ -1617,11 +1634,7 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
     }
 
     function _currentLevel() internal view returns (uint24) {
-        return IDegenerusGameLevel(ContractAddresses.GAME).level();
-    }
-
-    function _currentLevelOrZero() internal view returns (uint24) {
-        return IDegenerusGameLevel(ContractAddresses.GAME).level();
+        return gameBondBank.level();
     }
 
     function _currentDayIndex() private view returns (uint48 day) {
@@ -1643,9 +1656,9 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
             }
         }
 
-        uint256 targetPool = IDegenerusGameLevel(ContractAddresses.GAME).prizePoolTargetView();
+        uint256 targetPool = gameBondBank.prizePoolTargetView();
         if (targetPool != 0) {
-            uint256 nextPool = IDegenerusGameLevel(ContractAddresses.GAME).nextPrizePoolView();
+            uint256 nextPool = gameBondBank.nextPrizePoolView();
             if (nextPool >= targetPool) {
                 _queuePresaleStop(day);
             }
@@ -1667,7 +1680,7 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
     }
 
     function _presaleActive() internal view returns (bool active) {
-        try IAffiliatePresaleStatus(ContractAddresses.AFFILIATE).presaleActive() returns (bool ok) {
+        try affiliatePresaleStatus.presaleActive() returns (bool ok) {
             return ok;
         } catch {
             return false;
@@ -1675,7 +1688,7 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
     }
 
     function _scoreWithMultiplier(address player, uint256 baseScore) internal view returns (uint256) {
-        uint256 multBps = IDegenerusGameLevel(ContractAddresses.GAME).playerBonusMultiplier(player);
+        uint256 multBps = gameBondBank.playerBonusMultiplier(player);
         return (baseScore * multBps) / 10000;
     }
 
@@ -1686,11 +1699,11 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
 
     function _prepareEntropy(uint256 provided) private view returns (uint256 entropy) {
         if (provided != 0) return provided;
-        return IDegenerusGameRng(ContractAddresses.GAME).lastRngWord();
+        return gameRng.lastRngWord();
     }
 
     function _gameRngLocked() internal view returns (bool locked) {
-        return IDegenerusGameRng(ContractAddresses.GAME).rngLocked();
+        return gameRng.rngLocked();
     }
 
     function _isFunded(BondSeries storage s) private view returns (bool) {
@@ -1740,13 +1753,13 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
 
     function _availableBank() private view returns (uint256 available) {
         if (!gameOverStarted) {
-            return IDegenerusGameBondBank(ContractAddresses.GAME).bondAvailable();
+            return gameBondBank.bondAvailable();
         }
         return address(this).balance + _stEthBalance();
     }
 
     function _stEthBalance() private view returns (uint256 bal) {
-        try IStETH(ContractAddresses.STETH_TOKEN).balanceOf(address(this)) returns (uint256 b) {
+        try steth.balanceOf(address(this)) returns (uint256 b) {
             return b;
         } catch {
             return 0;
@@ -1819,7 +1832,7 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
 
         _sendEthOrRevert(gameAddr, rewardEth);
         if (yieldEth != 0) {
-            IDegenerusGameBondBank(gameAddr).bondDeposit{value: yieldEth}(false);
+            gameBondBank.bondDeposit{value: yieldEth}(false);
         }
     }
 
@@ -2133,7 +2146,7 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
         if (liveGame) {
             payoutWinners = new address[](14);
             payoutAmounts = new uint256[](14);
-            mapPrice = IDegenerusGameBondBank(ContractAddresses.GAME).mintPrice() / 4;
+            mapPrice = gameBondBank.mintPrice() / 4;
             mapParity = uint8(rngWord & 1);
         }
 
@@ -2157,7 +2170,7 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
                     uint256 qty = prize / mapPrice;
                     if (qty != 0) {
                         if (qty > type(uint32).max) qty = type(uint32).max;
-                        IDegenerusGameBondBank(ContractAddresses.GAME).bondSpendToMaps(winner, prize, uint32(qty));
+                        gameBondBank.bondSpendToMaps(winner, prize, uint32(qty));
                         paid += prize;
                         continue;
                     }
@@ -2297,7 +2310,7 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
     function _creditPayout(address player, uint256 amount) private returns (bool) {
         if (amount == 0) return true;
         if (!gameOverStarted) {
-            IDegenerusGameBondBank(ContractAddresses.GAME).bondCreditToClaimable(player, amount);
+            gameBondBank.bondCreditToClaimable(player, amount);
             return true;
         }
         uint256 remaining = amount;
@@ -2310,7 +2323,7 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
             }
         }
         if (remaining != 0) {
-            try IStETH(ContractAddresses.STETH_TOKEN).transfer(player, remaining) returns (bool ok) {
+            try steth.transfer(player, remaining) returns (bool ok) {
                 if (!ok) return false;
             } catch {
                 return false;
@@ -2325,7 +2338,7 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
             mstore(winners, count)
             mstore(amounts, count)
         }
-        IDegenerusGameBondBank(ContractAddresses.GAME).bondCreditToClaimableBatch(winners, amounts);
+        gameBondBank.bondCreditToClaimableBatch(winners, amounts);
     }
 
     function _upperBound(uint256[] storage arr, uint256 target) private view returns (uint256 idx) {
@@ -2423,8 +2436,8 @@ contract DegenerusBonds is DegenerusBondsModule {
      */
     constructor() {
         // Approve vault to spend stETH for yield management
-        if (!IStETH(ContractAddresses.STETH_TOKEN).approve(ContractAddresses.VAULT, type(uint256).max)) {
-            revert BankCallFailed();
+        if (!steth.approve(ContractAddresses.VAULT, type(uint256).max)) {
+            revert ApprovalFailed();
         }
     }
 
@@ -2437,6 +2450,7 @@ contract DegenerusBonds is DegenerusBondsModule {
     function setRewardStakeTargetBps(uint16 bps) external onlyAdmin {
         if (bps > 10_000) revert InvalidBps();
         rewardStakeTargetBps = bps;
+        emit RewardStakeTargetChanged(bps);
     }
 
     /// @notice Player toggle to auto-burn any DGNRS minted from bond jackpots.
@@ -2471,7 +2485,8 @@ contract DegenerusBonds is DegenerusBondsModule {
     /// @param amount Amount of DGNRS to mint/burn
     /// @param currLevel Current game level (used for routing burns to correct maturity)
     function mintJackpotDgnrs(address beneficiary, uint256 amount, uint24 currLevel) external onlyGame {
-        if (amount == 0 || beneficiary == address(0)) return;
+        if (amount == 0) return;
+        if (beneficiary == address(0)) revert InvalidBeneficiary();
         if (gameOverStarted) revert SaleClosed();
 
         bool presaleActive = _presaleActive();
@@ -2512,7 +2527,7 @@ contract DegenerusBonds is DegenerusBondsModule {
         if (gameOverStarted) revert SaleClosed();
         if (!fromGame && _gameRngLocked()) revert PurchasesDisabled();
 
-        uint24 currLevel = IDegenerusGameLevel(ContractAddresses.GAME).level();
+        uint24 currLevel = gameBondBank.level();
         if (!_bondPurchasesOpen(currLevel)) revert PurchasesDisabled();
         uint24 maturityLevel = _activeMaturityAt(currLevel);
         BondSeries storage s = _getOrCreateSeries(maturityLevel);
@@ -2531,13 +2546,13 @@ contract DegenerusBonds is DegenerusBondsModule {
             uint256 stUsed;
             if (vaultShare != 0) {
                 uint256 stBal;
-                try IStETH(ContractAddresses.STETH_TOKEN).balanceOf(gameAddr) returns (uint256 b) {
+                try steth.balanceOf(gameAddr) returns (uint256 b) {
                     stBal = b;
                 } catch {}
                 if (stBal != 0) {
                     uint256 stPull = stBal < vaultShare ? stBal : vaultShare;
                     bool pulled;
-                    try IStETH(ContractAddresses.STETH_TOKEN).transferFrom(gameAddr, address(this), stPull) returns (
+                    try steth.transferFrom(gameAddr, address(this), stPull) returns (
                         bool ok
                     ) {
                         pulled = ok;
@@ -2556,14 +2571,14 @@ contract DegenerusBonds is DegenerusBondsModule {
             }
             if (stUsed != 0) {
                 // Swap path: vault got stETH; send the swapped ETH to the game.
-                IDegenerusGameBondBank(gameAddr).bondDeposit{value: stUsed}(false);
+                gameBondBank.bondDeposit{value: stUsed}(false);
             }
 
             if (bondShare != 0) {
-                IDegenerusGameBondBank(gameAddr).bondDeposit{value: bondShare}(true);
+                gameBondBank.bondDeposit{value: bondShare}(true);
             }
             if (yieldShare != 0) {
-                IDegenerusGameBondBank(gameAddr).bondDeposit{value: yieldShare}(false);
+                gameBondBank.bondDeposit{value: yieldShare}(false);
             }
             if (rewardShare != 0) {
                 _sendEthOrRevert(gameAddr, rewardShare);
@@ -2573,7 +2588,7 @@ contract DegenerusBonds is DegenerusBondsModule {
         scoreAwarded = _scoreWithMultiplier(beneficiary, amount);
         if (!fromGame) {
             _payAffiliateReward(beneficiary, amount, AFFILIATE_BOND_BPS);
-            IDegenerusCoin(ContractAddresses.COIN).notifyQuestBond(beneficiary, amount);
+            coin.notifyQuestBond(beneficiary, amount);
         }
 
         // Append new weight slice for jackpot selection (append-only cumulative for O(log N) sampling).
@@ -2607,7 +2622,7 @@ contract DegenerusBonds is DegenerusBondsModule {
         if (presaleActive) {
             currLevel = 0;
         } else {
-            currLevel = IDegenerusGameLevel(ContractAddresses.GAME).level();
+            currLevel = gameBondBank.level();
         }
         _burnDgnrsFor(msg.sender, amount, currLevel, true);
     }

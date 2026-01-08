@@ -7,16 +7,9 @@ import {IDegenerusBondsJackpot} from "../interfaces/IDegenerusBondsJackpot.sol";
 import {IDegenerusJackpots} from "../interfaces/IDegenerusJackpots.sol";
 import {IDegenerusTrophies} from "../interfaces/IDegenerusTrophies.sol";
 import {IDegenerusAffiliate} from "../interfaces/IDegenerusAffiliate.sol";
+import {IDegenerusGamepieces} from "../interfaces/IDegenerusGamepieces.sol";
 import {DegenerusGameStorage} from "../storage/DegenerusGameStorage.sol";
 import {ContractAddresses} from "../ContractAddresses.sol";
-
-/// @notice Minimal interface for queuing NFT reward mints.
-interface IDegenerusGamepiecesRewards {
-    /// @notice Queue reward NFT mints for a player (processed during advanceGame).
-    /// @param player Address to receive the NFTs.
-    /// @param quantity Number of NFTs to mint.
-    function queueRewardMints(address player, uint32 quantity) external;
-}
 
 /**
  * @title DegenerusGameEndgameModule
@@ -110,10 +103,6 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
      *
      * @param lvl Current level index (1-based) - this is the NEW level after advancement.
      * @param rngWord VRF entropy for jackpot selection and randomization.
-     * @param jackpotsAddr Address of DegenerusJackpots contract.
-     * @param jackpotModuleAddr Address of jackpot module for delegatecall.
-     * @param coinContract BURNIE coin contract for reward credits.
-     * @param nftAddr NFT contract for queuing reward mints.
      *
      * ## State Changes
      *
@@ -129,14 +118,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
      * - Extermination: `lastExterminatedTrait != 420` - full settlement with payouts
      * - Timeout: `lastExterminatedTrait == 420` - skip exterminator/jackpot payouts
      */
-    function finalizeEndgame(
-        uint24 lvl,
-        uint256 rngWord,
-        address jackpotsAddr,
-        address jackpotModuleAddr,
-        IDegenerusCoinModule coinContract,
-        address nftAddr
-    ) external {
+    function finalizeEndgame(uint24 lvl, uint256 rngWord) external {
         uint256 claimableDelta;
         uint24 prevLevel = lvl - 1; // The level that just ended
         bool hasPrevLevel = prevLevel != 0;
@@ -159,7 +141,8 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
 
             uint96 exterminatorWinnings =
                 exterminatorShare > type(uint96).max ? type(uint96).max : uint96(exterminatorShare);
-            IDegenerusTrophies(trophies).mintExterminator(
+
+            IDegenerusTrophies(ContractAddresses.TROPHIES).mintExterminator(
                 ex,
                 prevLevel,
                 traitId,
@@ -187,21 +170,21 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
                 }
 
                 // Pay extermination jackpot (trait-only ticket holders)
-                (bool ok, bytes memory data) = jackpotModuleAddr.delegatecall(
+                (bool ok, bytes memory data) = ContractAddresses.GAME_JACKPOT_MODULE.delegatecall(
                     abi.encodeWithSelector(
                         IDegenerusGameJackpotModule.payExterminationJackpot.selector,
                         prevLevel,
                         traitId,
                         rngWord,
                         exterminationPool,
-                        coinContract
+                        IDegenerusCoinModule(ContractAddresses.COIN)
                     )
                 );
                 if (!ok) _revertDelegate(data);
 
                 // Run purchase rewards (NFT/MAP distribution to winners)
                 if (purchasePool != 0) {
-                    _runExterminationPurchaseRewards(prevLevel, traitId, rngWord, purchasePool, nftAddr);
+                    _runExterminationPurchaseRewards(prevLevel, traitId, rngWord, purchasePool);
                 }
             }
 
@@ -219,7 +202,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
             _maybeMintAffiliateTop(prevLevel);
 
             // Run BAF (every 10 levels) and Decimator (mid-decile) jackpots
-            claimableDelta += _runRewardJackpots(prevLevel, rngWord, jackpotsAddr);
+            claimableDelta += _runRewardJackpots(prevLevel, rngWord);
         }
 
         // ---------------------------------------------------------------------
@@ -241,7 +224,6 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
      *
      * @param prevLevel The level that just completed.
      * @param rngWord VRF entropy for jackpot resolution.
-     * @param jackpotsAddr DegenerusJackpots contract address.
      * @return claimableDelta Total ETH credited to claimable balances.
      *
      * ## BAF (Big-Ass Flip) Trigger Schedule
@@ -257,11 +239,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
      * Fires at: 15, 25, 35, 45, 55, 65, 75, 85 (NOT 95)
      * Pool: 15% of rewardPool
      */
-    function _runRewardJackpots(
-        uint24 prevLevel,
-        uint256 rngWord,
-        address jackpotsAddr
-    ) private returns (uint256 claimableDelta) {
+    function _runRewardJackpots(uint24 prevLevel, uint256 rngWord) private returns (uint256 claimableDelta) {
         uint256 rewardPoolLocal = rewardPool;
         uint24 prevMod10 = prevLevel % 10;
         uint24 prevMod100 = prevLevel % 100;
@@ -284,7 +262,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
                 bafPoolWei = (rewardPoolLocal * (prevLevel == 50 ? 25 : 10)) / 100;
             }
 
-            (uint256 netSpend, uint256 claimed) = _rewardJackpot(0, bafPoolWei, prevLevel, rngWord, jackpotsAddr);
+            (uint256 netSpend, uint256 claimed) = _rewardJackpot(0, bafPoolWei, prevLevel, rngWord);
             claimableDelta += claimed;
 
             if (reservedBaf) {
@@ -299,14 +277,14 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
         }
 
         // ---------------------------------------------------------------------
-        // Decimator Jackpot (mid-decile, except 95)
+        // Decimator Jackpot (levels ending in 5, except 95)
         // ---------------------------------------------------------------------
 
-        if (prevMod10 == 5 && prevLevel >= 15 && prevMod100 != 95) {
-            // Fire decimator midway through each decile (15, 25, 35... not 95)
+        if (prevMod10 == 5 && prevMod100 != 95) {
+            // Fire decimator midway through each decile (5, 15, 25... not 95)
             uint256 decPoolWei = (rewardPoolLocal * 15) / 100;
             if (decPoolWei != 0) {
-                (uint256 spend, uint256 claimed) = _rewardJackpot(1, decPoolWei, prevLevel, rngWord, jackpotsAddr);
+                (uint256 spend, uint256 claimed) = _rewardJackpot(1, decPoolWei, prevLevel, rngWord);
                 rewardPoolLocal -= spend;
                 claimableDelta += claimed;
             }
@@ -322,12 +300,10 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
      * @param prevLevel The level that just completed.
      */
     function _maybeMintAffiliateTop(uint24 prevLevel) private {
-        address affiliateAddr = ContractAddresses.AFFILIATE;
-        (address top, uint96 score) = IDegenerusAffiliate(affiliateAddr).affiliateTop(prevLevel);
+        (address top, uint96 score) = IDegenerusAffiliate(ContractAddresses.AFFILIATE).affiliateTop(prevLevel);
         if (top == address(0)) return;
 
-        address trophyAddr = ContractAddresses.TROPHIES;
-        IDegenerusTrophies(trophyAddr).mintAffiliate(top, prevLevel, score);
+        IDegenerusTrophies(ContractAddresses.TROPHIES).mintAffiliate(top, prevLevel, score);
     }
 
     // -------------------------------------------------------------------------
@@ -357,20 +333,12 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
     ) private returns (uint256 claimableDelta) {
         if (exterminatorShare == 0) return 0;
 
-        address bondsAddr = ContractAddresses.BONDS;
-        bool bondPurchasesOpen;
-        if (bondsAddr != address(0)) {
-            bondPurchasesOpen = IDegenerusBondsJackpot(bondsAddr).purchasesEnabled();
-        }
-
         // Split between ETH and bonds
         (uint256 ethPortion, uint256 splitClaimable) = _splitEthWithBond(
             ex,
             exterminatorShare,
             BOND_BPS_EX,
-            lvl,
-            bondsAddr,
-            bondPurchasesOpen
+            lvl
         );
 
         // Credit ETH portion to claimable
@@ -385,8 +353,6 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
      * @param amount Total ETH amount before split.
      * @param bondBps Basis points to route to bonds (e.g., 2500 = 25%).
      * @param lvl Current level for bond routing.
-     * @param bondsAddr Bonds contract address (zero disables bond prizes).
-     * @param bondPurchasesOpen Whether bond purchases are currently open.
      * @return ethPortion Amount to credit as claimable ETH.
      * @return claimableDelta Additional claimable from bond operations (currently 0).
      */
@@ -394,69 +360,39 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
         address winner,
         uint256 amount,
         uint16 bondBps,
-        uint24 lvl,
-        address bondsAddr,
-        bool bondPurchasesOpen
+        uint24 lvl
     ) private returns (uint256 ethPortion, uint256 claimableDelta) {
         uint256 bondBudget = (amount * bondBps) / 10_000;
 
         ethPortion = amount;
 
-        // If bonds unavailable or zero budget, return full amount as ETH
-        if (bondBudget == 0 || bondsAddr == address(0)) {
+        // If zero budget, return full amount as ETH
+        if (bondBudget == 0) {
             return (ethPortion, claimableDelta);
         }
 
-        // Deposit to bonds; reduce ETH portion on success
-        if (_awardBondPrize(bondsAddr, winner, bondBudget, lvl, bondPurchasesOpen)) {
-            ethPortion -= bondBudget;
-        }
+        // Award bonds and reduce ETH portion
+        _awardBondPrize(winner, bondBudget, lvl);
+        ethPortion -= bondBudget;
 
         return (ethPortion, claimableDelta);
     }
 
     /**
      * @notice Award bond prizes for endgame payouts.
-     * @dev Uses try/catch to avoid blocking settlement on bond failures.
-     *      When purchases are open, records a bond purchase (half tracked in bondPool).
-     *      When closed, mints/burns DGNRS 1:1 and tracks the full amount in bondPool.
+     * @dev Delegates routing logic to bonds contract via awardFromGame.
      *
-     * @param bondsAddr Bonds contract address.
      * @param beneficiary Address to credit the bond prize.
      * @param amount ETH amount to convert into bonds.
      * @param lvl Current level for bond routing.
-     * @param bondPurchasesOpen True if bond purchases are open.
-     * @return spent True if bond award succeeded.
      */
     function _awardBondPrize(
-        address bondsAddr,
         address beneficiary,
         uint256 amount,
-        uint24 lvl,
-        bool bondPurchasesOpen
-    ) private returns (bool spent) {
-        if (amount == 0) return false;
-
-        if (bondPurchasesOpen) {
-            try IDegenerusBondsJackpot(bondsAddr).depositFromGame(beneficiary, amount) {
-                // Add half to bondPool (game-originated deposit accounting)
-                uint256 bondShare = amount / 2;
-                if (bondShare != 0) {
-                    bondPool += bondShare;
-                }
-                spent = true;
-            } catch {
-                // Bond deposit failed - continue without blocking settlement
-            }
-            return spent;
-        }
-
-        try IDegenerusBondsJackpot(bondsAddr).mintJackpotDgnrs(beneficiary, amount, lvl) {
-            bondPool += amount;
-            spent = true;
-        } catch {
-            // Bond mint failed - continue without blocking settlement
-        }
+        uint24 lvl
+    ) private {
+        IDegenerusBondsJackpot(ContractAddresses.BONDS).awardFromGame(beneficiary, amount, lvl);
+        bondPool += amount;
     }
 
     /**
@@ -488,7 +424,6 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
      * @param traitId The exterminated trait ID.
      * @param rngWord VRF entropy for winner selection.
      * @param poolWei ETH amount to convert to rewards.
-     * @param nftAddr NFT contract for queuing mints.
      *
      * ## Winner Selection
      *
@@ -512,8 +447,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
         uint24 prevLevel,
         uint8 traitId,
         uint256 rngWord,
-        uint256 poolWei,
-        address nftAddr
+        uint256 poolWei
     ) private {
         if (poolWei == 0) return;
 
@@ -545,8 +479,6 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
         if (maxWinners > EXTERMINATION_PURCHASE_WINNERS) maxWinners = EXTERMINATION_PURCHASE_WINNERS;
         if (maxWinners > len) maxWinners = len;
         if (maxWinners == 0) return;
-
-        IDegenerusGamepiecesRewards nftRewards = IDegenerusGamepiecesRewards(nftAddr);
 
         // ---------------------------------------------------------------------
         // Select winners and categorize by ticket type
@@ -627,7 +559,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
                     qty = type(uint32).max;
                 }
                 if (qty != 0) {
-                    nftRewards.queueRewardMints(winners[idx], uint32(qty));
+                    IDegenerusGamepieces(ContractAddresses.GAMEPIECES).queueRewardMints(winners[idx], uint32(qty));
                 }
 
                 unchecked {
@@ -725,7 +657,6 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
      * @param poolWei ETH amount for the jackpot.
      * @param lvl Level tied to the jackpot.
      * @param rngWord VRF entropy for jackpot resolution.
-     * @param jackpotsAddr DegenerusJackpots contract.
      * @return netSpend Amount of rewardPool consumed (poolWei minus refund).
      * @return claimableDelta ETH credited to claimable balances.
      */
@@ -733,15 +664,14 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
         uint8 kind,
         uint256 poolWei,
         uint24 lvl,
-        uint256 rngWord,
-        address jackpotsAddr
+        uint256 rngWord
     ) private returns (uint256 netSpend, uint256 claimableDelta) {
         if (kind == 0) {
-            return _runBafJackpot(poolWei, lvl, rngWord, jackpotsAddr);
+            return _runBafJackpot(poolWei, lvl, rngWord);
         }
         if (kind == 1) {
             // Decimator: jackpots contract handles distribution
-            uint256 returnWei = IDegenerusJackpots(jackpotsAddr).runDecimatorJackpot(poolWei, lvl, rngWord);
+            uint256 returnWei = IDegenerusJackpots(ContractAddresses.JACKPOTS).runDecimatorJackpot(poolWei, lvl, rngWord);
             // Decimator pool is reserved in claimablePool; per-player credits happen on claim
             uint256 spend = poolWei - returnWei;
             return (spend, spend);
@@ -760,7 +690,6 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
      * @param poolWei Total ETH for BAF distribution.
      * @param lvl Level triggering the BAF.
      * @param rngWord VRF entropy for winner selection.
-     * @param jackpotsAddr DegenerusJackpots contract.
      * @return netSpend Amount consumed from rewardPool.
      * @return claimableDelta ETH credited to claimable balances.
      *
@@ -791,28 +720,20 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
     function _runBafJackpot(
         uint256 poolWei,
         uint24 lvl,
-        uint256 rngWord,
-        address jackpotsAddr
+        uint256 rngWord
     ) private returns (uint256 netSpend, uint256 claimableDelta) {
-        address trophyAddr = ContractAddresses.TROPHIES;
-
         // Get winners and payout info from jackpots contract
         (
             address[] memory winnersArr,
             uint256[] memory amountsArr,
             uint256 bondMask,
             uint256 refund
-        ) = IDegenerusJackpots(jackpotsAddr).runBafJackpot(poolWei, lvl, rngWord);
+        ) = IDegenerusJackpots(ContractAddresses.JACKPOTS).runBafJackpot(poolWei, lvl, rngWord);
 
         // Parse bondMask: low bits = top winners, high bits = scatter winners
         uint256 topMask = bondMask & ((uint256(1) << BAF_BOND_MASK_OFFSET) - 1);
         uint256 scatterMask = bondMask >> BAF_BOND_MASK_OFFSET;
 
-        address bondsAddr = ContractAddresses.BONDS;
-        bool bondPurchasesOpen;
-        if (bondsAddr != address(0)) {
-            bondPurchasesOpen = IDegenerusBondsJackpot(bondsAddr).purchasesEnabled();
-        }
         uint256 mapPrice = uint256(price) / 4;
 
         // Calculate total scatter amount for MAP budget (50% of scatter → MAPs)
@@ -863,9 +784,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
                                 winnersArr[i],
                                 remainder,
                                 BAF_SCATTER_BOND_BPS, // 100% to bonds
-                                lvl,
-                                bondsAddr,
-                                bondPurchasesOpen
+                                lvl
                             );
                         } else {
                             ethPortion = 0;
@@ -877,9 +796,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
                             winnersArr[i],
                             amount,
                             BAF_SCATTER_BOND_BPS,
-                            lvl,
-                            bondsAddr,
-                            bondPurchasesOpen
+                            lvl
                         );
                     }
                 } else {
@@ -888,9 +805,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
                         winnersArr[i],
                         amount,
                         BAF_SCATTER_BOND_BPS,
-                        lvl,
-                        bondsAddr,
-                        bondPurchasesOpen
+                        lvl
                     );
                 }
             } else if (topBond) {
@@ -902,9 +817,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
                     winnersArr[i],
                     amount,
                     BAF_TOP_BOND_BPS,
-                    lvl,
-                    bondsAddr,
-                    bondPurchasesOpen
+                    lvl
                 );
             }
             // Else: regular winner - full amount as claimable ETH (no split)
@@ -928,7 +841,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
         }
 
         if (winnersArr.length != 0) {
-            try IDegenerusTrophies(trophyAddr).mintBaf(winnersArr[0], lvl) {} catch {}
+            try IDegenerusTrophies(ContractAddresses.TROPHIES).mintBaf(winnersArr[0], lvl) {} catch {}
         }
 
         netSpend = poolWei - refund;

@@ -21,4 +21,9 @@ interface IDegenerusGamepieces {
     function tokensOwed(address player) external view returns (uint32);
 
     function processDormant(uint32 maxCount) external returns (bool worked);
+
+    /// @notice Queue reward NFT mints for a player (processed during advanceGame).
+    /// @param player Address to receive the NFTs.
+    /// @param quantity Number of NFTs to mint.
+    function queueRewardMints(address player, uint32 quantity) external;
 }

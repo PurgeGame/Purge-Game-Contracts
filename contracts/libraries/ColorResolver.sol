@@ -10,6 +10,7 @@ import "../interfaces/IconRendererTypes.sol";
 /// @dev Can be inherited by renderer contracts to provide unified color resolution
 abstract contract ColorResolver {
     IColorRegistry internal constant registry = IColorRegistry(ContractAddresses.ICON_COLOR_REGISTRY);
+    IDegenerusAffiliate private constant affiliate = IDegenerusAffiliate(ContractAddresses.AFFILIATE);
 
     /// @notice Resolve color with full cascade: token → owner → referrer → upline → default
     /// @param nftContract The NFT contract address
@@ -92,6 +93,6 @@ abstract contract ColorResolver {
 
     function _getReferrer(address user) private view returns (address) {
         if (user == address(0)) return address(0);
-        return IDegenerusAffiliate(ContractAddresses.AFFILIATE).getReferrer(user);
+        return affiliate.getReferrer(user);
     }
 }

@@ -36,7 +36,7 @@ pragma solidity ^0.8.26;
 |  +--------------------------------------------------------------------------------------------------+ |
 |  |                              TROPHY DATA BIT LAYOUT (from DegenerusTrophies)                    |  |
 |  |                                                                                                  | |
-|  |   bits [0-95]:    Affiliate score or exterminator winnings (uint96, wei)                         | |
+|  |   bits [0-95]:    Affiliate score or exterminator winnings (uint96, 18 decimals)                | |
 |  |   bits [128-151]: Level (uint24)                                                                |  |
 |  |   bits [152-167]: Exterminated trait (uint16) or sentinel                                       |  |
 |  |   bit 201:        AFFILIATE_TROPHY_FLAG                                                         |  |
@@ -137,13 +137,6 @@ contract IconRendererTrophy32 {
     /// @dev Trophy NFT contract
     IERC721Lite private constant nft = IERC721Lite(ContractAddresses.TROPHIES);
 
-    // ---------------------------------------------------------------------
-    // ERRORS
-    // ---------------------------------------------------------------------
-
-    /// @dev Generic error for unauthorized access or invalid state
-    error E();
-
     function setMyColors(
         string calldata outlineHex,
         string calldata flameHex,
@@ -171,7 +164,7 @@ contract IconRendererTrophy32 {
         return
             registry.setCustomColorsForMany(
                 msg.sender,
-                address(nft),
+                ContractAddresses.TROPHIES,
                 tokenIds,
                 outlineHex,
                 flameHex,
@@ -185,7 +178,7 @@ contract IconRendererTrophy32 {
         uint256 tokenId,
         string calldata trophyHex
     ) external returns (bool) {
-        return registry.setTopAffiliateColor(msg.sender, address(nft), tokenId, trophyHex);
+        return registry.setTopAffiliateColor(msg.sender, ContractAddresses.TROPHIES, tokenId, trophyHex);
     }
 
     function tokenURI(
@@ -203,7 +196,7 @@ contract IconRendererTrophy32 {
     function _tokenURI(
         uint256 tokenId,
         uint256 data,
-        uint32[4] memory extras
+        uint32[4] calldata extras
     ) private view returns (string memory) {
         if ((data >> 128) == 0) revert("renderer:notTrophy");
 
@@ -285,8 +278,6 @@ contract IconRendererTrophy32 {
         if (ex16 == 0xFFFE || ex16 == BAF_TRAIT_SENTINEL) return ex16;
         return uint16(uint8(ex16));
     }
-
-
 
     function _symbolTitle(
         uint8 quadrant,
@@ -430,8 +421,8 @@ contract IconRendererTrophy32 {
     }
 
     function _formatCoinAmount(uint256 amount) private pure returns (string memory) {
-        uint256 whole = amount / 1e6;
-        uint256 frac = amount % 1e6;
+        uint256 whole = amount / 1 ether;
+        uint256 frac = (amount % 1 ether) / 1e12;
         bytes memory fracStr = new bytes(6);
         fracStr[0] = bytes1(uint8(48 + (frac / 100000) % 10));
         fracStr[1] = bytes1(uint8(48 + (frac / 10000) % 10));

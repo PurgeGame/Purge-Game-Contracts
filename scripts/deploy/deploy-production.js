@@ -80,7 +80,7 @@ const CONTRACT_METADATA = {
     path: "contracts/DegenerusBonds.sol:DegenerusBonds"
   },
   COIN: {
-    path: "contracts/DegenerusCoin.sol:DegenerusCoin"
+    path: "contracts/BurnieCoin.sol:BurnieCoin"
   },
   VAULT: {
     path: "contracts/DegenerusVault.sol:DegenerusVault"

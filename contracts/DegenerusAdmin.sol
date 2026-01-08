@@ -6,7 +6,7 @@ import {ContractAddresses} from "./ContractAddresses.sol";
 /**
  * @title DegenerusAdmin
  * @author Burnie Degenerus
- * @notice Central administration contract for the Degenerus ContractAddresses.GAME ecosystem.
+ * @notice Central administration contract for the Degenerus GAME ecosystem.
  *
  * @dev ARCHITECTURE OVERVIEW
  * -----------------------------------------------------------------------------
@@ -16,32 +16,33 @@ import {ContractAddresses} from "./ContractAddresses.sol";
  *   3. LINK token donation handling with reward multipliers
  *   4. Presale administration functions
  *
- * DEPLOYMENT ORDER:
- *   1. Deploy all contracts using the precomputed ContractAddresses order
- *   2. Call wireVrf() to configure VRF and add the ContractAddresses.GAME consumer
+ * DEPLOYMENT:
+ *   - Deploy with no constructor parameters (VRF config from ContractAddresses)
+ *   - VRF subscription created and Game consumer configured atomically on deployment
+ *   - No post-deployment setup needed
  *
  * OWNERSHIP MODEL:
- *   - Single owner (ContractAddresses.CREATOR) set via ContractAddresses
+ *   - Single owner (CREATOR) set via ContractAddresses
  *   - No ownership transfer capability (intentional simplicity)
  *   - Owner cannot change after deployment
  *
  * VRF SUBSCRIPTION LIFECYCLE:
- *   1. Created during first wireVrf() call (if subId not provided)
- *   2. Consumer (ContractAddresses.GAME) added automatically
+ *   1. Created atomically during constructor call
+ *   2. Consumer (Game contract) added automatically during construction
  *   3. LINK funding via onTokenTransfer (ERC-677)
- *   4. Emergency recovery if stalled 3+ days
- *   5. Shutdown after ContractAddresses.GAME-over with LINK refund
+ *   4. Emergency recovery if stalled 3+ days (see emergencyRecover)
+ *   5. Shutdown after GAME-over with LINK refund
  *
  * SECURITY CONSIDERATIONS
  * -----------------------------------------------------------------------------
  * 1. CONSTANT OWNER: Creator is fixed and cannot be changed, eliminating
  *    ownership transfer attack vectors.
  *
- * 2. ONE-TIME VRF WIRING: wireVrf() is idempotent to prevent re-pointing
- *    contracts to malicious coordinators after initial setup.
+ * 2. IMMUTABLE VRF CONFIG: Coordinator and keyHash are compile-time constants.
+ *    Changes only allowed via emergencyRecover (requires 3-day stall).
  *
  * 3. STALL-GATED RECOVERY: Emergency VRF migration requires 3-day stall proof
- *    from the ContractAddresses.GAME contract, preventing premature or malicious migration.
+ *    from the GAME contract, preventing premature or malicious migration.
  *
  * 4. GAME-OVER GUARD: Shutdown functions check gameOverStarted/Attempted flags
  *    to prevent premature subscription cancellation.
@@ -81,7 +82,9 @@ interface IVRFCoordinatorV2_5Owner {
     /// @return reqCount Number of requests made.
     /// @return owner The subscription owner.
     /// @return consumers Array of consumer addresses.
-    function getSubscription(uint256 subId)
+    function getSubscription(
+        uint256 subId
+    )
         external
         view
         returns (uint96 balance, uint96 nativeBalance, uint64 reqCount, address owner, address[] memory consumers);
@@ -105,7 +108,7 @@ interface IDegenerusGameVrf {
 /// @dev Game contract interface for quest module wiring.
 /// @dev Bonds contract admin interface.
 interface IDegenerusBondsAdmin {
-    /// @notice Configure the target stETH share (in bps) for ContractAddresses.GAME-held liquidity; 0 disables staking.
+    /// @notice Configure the target stETH share (in bps) for GAME-held liquidity; 0 disables staking.
     function setRewardStakeTargetBps(uint16 bps) external;
 }
 
@@ -121,23 +124,23 @@ interface IDegenerusGamePresaleMinting {
     function setPresaleMintingEnabled(bool enabled) external;
 }
 
-/// @dev Bonds contract ContractAddresses.GAME-over status interface.
+/// @dev Bonds contract GAME-over status interface.
 interface IDegenerusBondsGameOverFlag {
     /// @notice True if final entropy request has been attempted.
     function gameOverEntropyAttempted() external view returns (bool);
 
-    /// @notice True if ContractAddresses.GAME-over sequence has started.
+    /// @notice True if GAME-over sequence has started.
     function gameOverStarted() external view returns (bool);
 }
 
 /// @dev Game contract liquidity management interface.
 interface IDegenerusGameLiquidityAdmin {
-    /// @notice Swap owner ETH for ContractAddresses.GAME-held stETH (1:1 exchange).
+    /// @notice Swap owner ETH for GAME-held stETH (1:1 exchange).
     /// @param recipient Address to receive the stETH.
     /// @param amount Amount of ETH/stETH to swap.
     function adminSwapEthForStEth(address recipient, uint256 amount) external payable;
 
-    /// @notice Stake ContractAddresses.GAME-held ETH into stETH via Lido.
+    /// @notice Stake GAME-held ETH into stETH via Lido.
     /// @param amount Amount of ETH to stake.
     function adminStakeEthForStEth(uint256 amount) external;
 }
@@ -154,11 +157,11 @@ interface ILinkTokenLike {
     function transferAndCall(address to, uint256 value, bytes calldata data) external returns (bool success);
 }
 
-/// @dev Coin contract interface for LINK reward credits.
-interface IDegenerusCoinPresaleLink {
-    /// @notice Credit BURNIE tokens to a player for LINK donation.
+/// @dev Coin contract interface for LINK donation flip credits.
+interface IDegenerusCoinLinkReward {
+    /// @notice Credit flip stake to a player for LINK donation.
     /// @param player Address to credit.
-    /// @param amount Amount of BURNIE to credit (18 decimals).
+    /// @param amount Amount of BURNIE to credit as flip stake (18 decimals).
     function creditLinkReward(address player, uint256 amount) external;
 }
 
@@ -182,19 +185,18 @@ interface IAggregatorV3 {
 /**
  * @title DegenerusAdmin
  * @notice Central admin contract: owns the VRF subscription and wires VRF
- *         configuration for the ContractAddresses.GAME. Deployed using precomputed constants.
+ *         configuration for the GAME. Deployed using precomputed constants.
  *
  * @dev TRUST ASSUMPTIONS
  * -----------------------------------------------------------------------------
- * - The `ContractAddresses.CREATOR` is a trusted EOA or multisig that won't act maliciously before all contracts are deployed.
+ * - The CREATOR is a trusted EOA or multisig that won't act maliciously before all contracts are deployed.
  * - The LINK token address is correct and constant.
- * - External contracts (ContractAddresses.GAME, ContractAddresses.BONDS, ContractAddresses.COIN, etc.) are correctly implemented.
+ * - External contracts (GAME, BONDS, COIN, etc.) are correctly implemented.
  * - Chainlink VRF coordinator and price feeds are trusted oracles.
  *
  * GAS CONSIDERATIONS
  * -----------------------------------------------------------------------------
- * - wireVrf() adds the ContractAddresses.GAME consumer and sets VRF config; should only be called once.
- * - Should only be called once during initial setup.
+ * - Constructor creates subscription and wires GAME consumer atomically.
  * - Emergency functions are designed for rare use and prioritize safety over gas.
  */
 contract DegenerusAdmin {
@@ -203,7 +205,7 @@ contract DegenerusAdmin {
     // =========================================================================
     // Using custom errors for gas efficiency and clear failure reasons.
 
-    /// @dev Caller is not the contract ContractAddresses.CREATOR/owner.
+    /// @dev Caller is not the contract CREATOR/owner.
     error NotOwner();
 
     /// @dev Caller is not authorized for this operation (e.g., wrong token sender).
@@ -235,7 +237,6 @@ contract DegenerusAdmin {
 
     /// @dev Price feed is healthy; replacement not allowed.
     error FeedHealthy();
-
 
     // =========================================================================
     // EVENTS
@@ -275,7 +276,7 @@ contract DegenerusAdmin {
     /// @notice Emitted when LINK donation credit is recorded.
     /// @param player Address receiving the credit.
     /// @param amount BURNIE amount credited.
-    /// @param minted True if credited to live ContractAddresses.COIN, false if presale-escrowed.
+    /// @param minted True if credited to live COIN, false if presale-escrowed.
     event LinkCreditRecorded(address indexed player, uint256 amount, bool minted);
 
     /// @notice Emitted when LINK/ETH price feed is updated.
@@ -286,27 +287,25 @@ contract DegenerusAdmin {
     event PresaleShutdown();
 
     // =========================================================================
-    // OWNER STATE
+    // PRECOMPUTED ADDRESSES
     // =========================================================================
-    // Set once at construction; cannot be changed.
+    // Trusted external contracts wired from ContractAddresses (compile-time).
 
-    /// @notice The contract ContractAddresses.CREATOR/owner. Fixed via ContractAddresses.
-    /// @dev No ownership transfer mechanism exists by design — simplifies security model.
-
-    /// @notice LINK token address (ERC-677 compatible).
-
-    // =========================================================================
-    // CONSTANT REFERENCES
-    // =========================================================================
-    // External contract addresses, fixed at deployment.
-
-    /// @notice Bonds contract address.
-
-    /// @notice BURNIE ContractAddresses.COIN contract address.
-
-    /// @notice Main ContractAddresses.GAME contract address.
-
-    /// @notice Vault contract address for reward routing.
+    IVRFCoordinatorV2_5Owner private constant vrfCoordinatorConst =
+        IVRFCoordinatorV2_5Owner(ContractAddresses.VRF_COORDINATOR);
+    IDegenerusGameVrf private constant gameVrf = IDegenerusGameVrf(ContractAddresses.GAME);
+    IDegenerusGamePresaleMinting private constant gamePresaleMinting =
+        IDegenerusGamePresaleMinting(ContractAddresses.GAME);
+    IDegenerusGameLiquidityAdmin private constant gameLiquidityAdmin =
+        IDegenerusGameLiquidityAdmin(ContractAddresses.GAME);
+    IDegenerusBondsPresaleAdmin private constant bondsPresaleAdmin =
+        IDegenerusBondsPresaleAdmin(ContractAddresses.BONDS);
+    IDegenerusBondsAdmin private constant bondsAdmin = IDegenerusBondsAdmin(ContractAddresses.BONDS);
+    IDegenerusBondsGameOverFlag private constant bondsGameOverFlag =
+        IDegenerusBondsGameOverFlag(ContractAddresses.BONDS);
+    ILinkTokenLike private constant linkToken = ILinkTokenLike(ContractAddresses.LINK_TOKEN);
+    IDegenerusCoinLinkReward private constant coinLinkReward =
+        IDegenerusCoinLinkReward(ContractAddresses.COIN);
 
     // =========================================================================
     // VRF STATE
@@ -332,13 +331,8 @@ contract DegenerusAdmin {
     /// @notice Chainlink LINK/ETH price feed address.
     /// @dev Zero address disables oracle-based valuation.
     ///      Only replaceable if current feed is unhealthy.
+    ///      Assumes Chainlink LINK/ETH feed with 18 decimals (standard for this pair).
     address public linkEthPriceFeed;
-
-    /// @dev True if price needs to be scaled up (feed decimals < 18).
-    bool private linkEthPriceScaleUp;
-
-    /// @dev Scale factor for price normalization to 18 decimals.
-    uint256 private linkEthPriceScale;
 
     /// @dev BURNIE conversion constant: 1000 BURNIE = 1e21 base units (18 decimals).
     ///      Used to convert ETH-equivalent value to BURNIE credit amount.
@@ -348,7 +342,7 @@ contract DegenerusAdmin {
     // ACCESS CONTROL
     // =========================================================================
 
-    /// @dev Restricts function to the contract ContractAddresses.CREATOR only.
+    /// @dev Restricts function to the contract CREATOR only.
     ///      SECURITY: Simple and auditable — no complex role hierarchy.
     modifier onlyOwner() {
         if (msg.sender != ContractAddresses.CREATOR) revert NotOwner();
@@ -356,44 +350,40 @@ contract DegenerusAdmin {
     }
 
     // =========================================================================
+    // CONSTRUCTOR
+    // =========================================================================
+
+    /// @notice Initialize admin contract and configure VRF on deployment.
+    /// @dev Atomically creates new VRF subscription and wires the Game consumer.
+    ///      VRF coordinator and keyHash are compile-time constants from ContractAddresses.
+    constructor() {
+        _wireVrf();
+    }
+
+    // =========================================================================
     // VRF SETUP
     // =========================================================================
 
-    /// @notice Initialize VRF configuration and wire ContractAddresses.GAME consumer.
-    /// @dev If subId is zero, a new subscription is created on the coordinator.
-    ///      Subsequent calls must match existing config.
-    /// @param coordinator_ VRF coordinator address.
-    /// @param subId Existing VRF subscription ID (0 to create).
-    /// @param bondKeyHash_ VRF key hash (gas lane).
-    function wireVrf(address coordinator_, uint256 subId, bytes32 bondKeyHash_) external onlyOwner {
-        if (coordinator_ == address(0) || bondKeyHash_ == bytes32(0)) revert ZeroAddress();
+    /// @dev Create VRF subscription and wire Game consumer.
+    ///      Called once from constructor. Uses network constants from ContractAddresses.
+    function _wireVrf() private {
+        // Create new subscription
+        uint256 subId = vrfCoordinatorConst.createSubscription();
 
-        if (subscriptionId == 0) {
-            if (subId == 0) {
-                subId = IVRFCoordinatorV2_5Owner(coordinator_).createSubscription();
-                emit SubscriptionCreated(subId);
-            }
-            coordinator = coordinator_;
-            subscriptionId = subId;
-            vrfKeyHash = bondKeyHash_;
-            emit CoordinatorUpdated(coordinator_, subId);
-        } else {
-            if (coordinator_ != coordinator) revert AlreadyWired();
-            if (subId != 0 && subId != subscriptionId) revert AlreadyWired();
-            if (bondKeyHash_ != vrfKeyHash) revert AlreadyWired();
-            if (subId == 0) {
-                subId = subscriptionId;
-            }
-        }
+        // Store VRF config
+        coordinator = ContractAddresses.VRF_COORDINATOR;
+        subscriptionId = subId;
+        vrfKeyHash = ContractAddresses.VRF_KEY_HASH;
 
-        address gameAddr = ContractAddresses.GAME;
+        emit SubscriptionCreated(subId);
+        emit CoordinatorUpdated(ContractAddresses.VRF_COORDINATOR, subId);
 
-        // Add consumers; try/catch handles already-added case.
-        try IVRFCoordinatorV2_5Owner(coordinator).addConsumer(subscriptionId, gameAddr) {
-            emit ConsumerAdded(gameAddr);
+        // Add Game as consumer
+        try vrfCoordinatorConst.addConsumer(subId, ContractAddresses.GAME) {
+            emit ConsumerAdded(ContractAddresses.GAME);
         } catch {}
-
-        IDegenerusGameVrf(gameAddr).wireVrf(coordinator, subscriptionId, vrfKeyHash);
+        // Wire Game's VRF config
+        gameVrf.wireVrf(ContractAddresses.VRF_COORDINATOR, subId, ContractAddresses.VRF_KEY_HASH);
     }
 
     // =========================================================================
@@ -406,33 +396,15 @@ contract DegenerusAdmin {
     ///
     ///      SECURITY NOTES:
     ///      - FeedHealthy guard prevents changing a working feed.
-    ///      - Decimal normalization handles feeds with different precisions.
+    ///      - Assumes feed has 18 decimals (Chainlink LINK/ETH standard).
     ///      - Invalid feed data (answer <= 0) causes _linkAmountToEth to return 0.
     ///
     /// @param feed New price feed address (zero to disable).
     function setLinkEthPriceFeed(address feed) external onlyOwner {
         address current = linkEthPriceFeed;
         // Only allow replacement if current feed is unhealthy or doesn't exist.
-        if (current != address(0) && _feedHealthy(current)) revert FeedHealthy();
+        if (_feedHealthy(current)) revert FeedHealthy();
         linkEthPriceFeed = feed;
-
-        if (feed == address(0)) {
-            linkEthPriceScale = 0;
-            linkEthPriceScaleUp = true;
-            emit LinkEthFeedUpdated(feed);
-            return;
-        }
-
-        // Configure decimal scaling for price normalization.
-        uint8 dec = IAggregatorV3(feed).decimals();
-        if (dec <= 18) {
-            linkEthPriceScale = 10 ** (18 - dec);
-            linkEthPriceScaleUp = true;
-        } else {
-            linkEthPriceScale = 10 ** (dec - 18);
-            linkEthPriceScaleUp = false;
-        }
-
         emit LinkEthFeedUpdated(feed);
     }
 
@@ -442,32 +414,29 @@ contract DegenerusAdmin {
 
     /// @notice Queue presale shutdown after the next jackpot time.
     function shutdownPresale() external onlyOwner {
-        address bondsAddr = ContractAddresses.BONDS;
-        IDegenerusBondsPresaleAdmin(bondsAddr).shutdownPresale();
+        bondsPresaleAdmin.shutdownPresale();
         emit PresaleShutdown();
     }
 
     /// @notice Enable or disable presale minting (tokens/maps).
     function setPresaleMintingEnabled(bool enabled) external onlyOwner {
-        address gameAddr = ContractAddresses.GAME;
-        IDegenerusGamePresaleMinting(gameAddr).setPresaleMintingEnabled(enabled);
+        gamePresaleMinting.setPresaleMintingEnabled(enabled);
     }
 
     // =========================================================================
     // BONDS ADMINISTRATION
     // =========================================================================
 
-    /// @notice Configure the target stETH share (in bps) for ContractAddresses.GAME-held liquidity; 0 disables staking.
+    /// @notice Configure the target stETH share (in bps) for GAME-held liquidity; 0 disables staking.
     function setRewardStakeTargetBps(uint16 bps) external onlyOwner {
-        address bondsAddr = ContractAddresses.BONDS;
-        IDegenerusBondsAdmin(bondsAddr).setRewardStakeTargetBps(bps);
+        bondsAdmin.setRewardStakeTargetBps(bps);
     }
 
     // =========================================================================
     // LIQUIDITY MANAGEMENT
     // =========================================================================
 
-    /// @notice Swap owner ETH for ContractAddresses.GAME-held stETH (1:1 exchange).
+    /// @notice Swap owner ETH for GAME-held stETH (1:1 exchange).
     /// @dev Allows owner to provide ETH liquidity in exchange for stETH yield.
     ///
     ///      SECURITY NOTES:
@@ -477,17 +446,15 @@ contract DegenerusAdmin {
     ///
     /// @param amount Amount of ETH to swap.
     function swapGameEthForStEth(uint256 amount) external payable onlyOwner {
-        address gameAddr = ContractAddresses.GAME;
         if (amount == 0 || msg.value != amount) revert InvalidAmount();
-        IDegenerusGameLiquidityAdmin(gameAddr).adminSwapEthForStEth{value: msg.value}(msg.sender, amount);
+        gameLiquidityAdmin.adminSwapEthForStEth{value: msg.value}(msg.sender, amount);
     }
 
-    /// @notice Stake ContractAddresses.GAME-held ETH into stETH via Lido.
+    /// @notice Stake GAME-held ETH into stETH via Lido.
     /// @dev Converts idle ETH to yield-bearing stETH.
     /// @param amount Amount of ETH to stake.
     function stakeGameEthToStEth(uint256 amount) external onlyOwner {
-        address gameAddr = ContractAddresses.GAME;
-        IDegenerusGameLiquidityAdmin(gameAddr).adminStakeEthForStEth(amount);
+        gameLiquidityAdmin.adminStakeEthForStEth(amount);
     }
 
     // =========================================================================
@@ -498,10 +465,10 @@ contract DegenerusAdmin {
     /// @dev Emergency recovery path when Chainlink VRF becomes unavailable.
     ///
     ///      EXECUTION ORDER:
-    ///      1. Verify 3-day stall via ContractAddresses.GAME.rngStalledForThreeDays()
+    ///      1. Verify 3-day stall via GAME.rngStalledForThreeDays()
     ///      2. Cancel old subscription (LINK refunds to this contract)
     ///      3. Create new subscription on new coordinator
-    ///      4. Add ContractAddresses.GAME as consumer
+    ///      4. Add GAME as consumer
     ///      5. Push new config to game
     ///      6. Transfer any LINK balance to new subscription
     ///
@@ -519,21 +486,17 @@ contract DegenerusAdmin {
         bytes32 newKeyHash
     ) external onlyOwner returns (uint256 newSubId) {
         if (subscriptionId == 0) revert NotWired();
-        address gameAddr = ContractAddresses.GAME;
         // SECURITY: Require provable 3-day VRF stall before allowing migration.
-        if (!IDegenerusGameVrf(gameAddr).rngStalledForThreeDays()) revert NotStalled();
+        if (!gameVrf.rngStalledForThreeDays()) revert NotStalled();
         if (newCoordinator == address(0) || newKeyHash == bytes32(0)) revert ZeroAddress();
 
         uint256 oldSub = subscriptionId;
         address oldCoord = coordinator;
 
         // Cancel old subscription to recover LINK.
-        if (oldSub != 0) {
-            try IVRFCoordinatorV2_5Owner(oldCoord).cancelSubscription(oldSub, address(this)) {
-                emit SubscriptionCancelled(oldSub, address(this));
-            } catch {}
-        }
-
+        try IVRFCoordinatorV2_5Owner(oldCoord).cancelSubscription(oldSub, address(this)) {
+            emit SubscriptionCancelled(oldSub, address(this));
+        } catch {}
         // Create new subscription.
         coordinator = newCoordinator;
         newSubId = IVRFCoordinatorV2_5Owner(newCoordinator).createSubscription();
@@ -543,17 +506,17 @@ contract DegenerusAdmin {
         emit SubscriptionCreated(newSubId);
 
         // Add consumers to new subscription.
-        try IVRFCoordinatorV2_5Owner(newCoordinator).addConsumer(newSubId, gameAddr) {
-            emit ConsumerAdded(gameAddr);
+        try IVRFCoordinatorV2_5Owner(newCoordinator).addConsumer(newSubId, ContractAddresses.GAME) {
+            emit ConsumerAdded(ContractAddresses.GAME);
         } catch {}
-        // Push new config to ContractAddresses.GAME — must succeed to maintain consistency.
-        IDegenerusGameVrf(gameAddr).updateVrfCoordinatorAndSub(newCoordinator, newSubId, newKeyHash);
+        // Push new config to GAME — must succeed to maintain consistency.
+        gameVrf.updateVrfCoordinatorAndSub(newCoordinator, newSubId, newKeyHash);
 
         // Transfer any LINK to new subscription.
-        uint256 bal = ILinkTokenLike(ContractAddresses.LINK_TOKEN).balanceOf(address(this));
+        uint256 bal = linkToken.balanceOf(address(this));
         uint256 funded;
         if (bal != 0) {
-            try ILinkTokenLike(ContractAddresses.LINK_TOKEN).transferAndCall(newCoordinator, bal, abi.encode(newSubId)) returns (bool ok) {
+            try linkToken.transferAndCall(newCoordinator, bal, abi.encode(newSubId)) returns (bool ok) {
                 if (ok) {
                     funded = bal;
                 }
@@ -563,8 +526,8 @@ contract DegenerusAdmin {
         emit EmergencyRecovered(newCoordinator, newSubId, funded);
     }
 
-    /// @notice Cancel VRF subscription and sweep LINK after ContractAddresses.GAME-over.
-    /// @dev Final cleanup function. No VRF stall required — only ContractAddresses.GAME-over flag.
+    /// @notice Cancel VRF subscription and sweep LINK after GAME-over.
+    /// @dev Final cleanup function. No VRF stall required — only GAME-over flag.
     ///
     ///      SECURITY NOTES:
     ///      - Requires gameOverEntropyAttempted() to be true.
@@ -577,8 +540,8 @@ contract DegenerusAdmin {
         uint256 subId = subscriptionId;
         if (subId == 0) revert NoSubscription();
 
-        // SECURITY: Only allow shutdown after ContractAddresses.GAME-over entropy has been attempted.
-        if (!IDegenerusBondsGameOverFlag(ContractAddresses.BONDS).gameOverEntropyAttempted()) revert BondsNotReady();
+        // SECURITY: Only allow shutdown after GAME-over entropy has been attempted.
+        if (!bondsGameOverFlag.gameOverEntropyAttempted()) revert BondsNotReady();
 
         // Cancel subscription; LINK refunds go to target.
         try IVRFCoordinatorV2_5Owner(coordinator).cancelSubscription(subId, target) {
@@ -587,9 +550,9 @@ contract DegenerusAdmin {
         subscriptionId = 0;
 
         // Sweep any LINK sitting on this contract to target.
-        uint256 bal = ILinkTokenLike(ContractAddresses.LINK_TOKEN).balanceOf(address(this));
+        uint256 bal = linkToken.balanceOf(address(this));
         if (bal != 0) {
-            try ILinkTokenLike(ContractAddresses.LINK_TOKEN).transferAndCall(target, bal, "") {
+            try linkToken.transferAndCall(target, bal, "") {
                 emit SubscriptionShutdown(subId, target, bal);
                 return;
             } catch {}
@@ -610,11 +573,11 @@ contract DegenerusAdmin {
     ///      2. Forward LINK to VRF subscription
     ///      3. Calculate reward multiplier based on subscription balance
     ///      4. Convert LINK to ETH-equivalent using price feed
-    ///      5. Credit BURNIE reward to donor (live ContractAddresses.COIN)
+    ///      5. Credit BURNIE reward to donor (live COIN)
     ///
     ///      SECURITY NOTES:
     ///      - msg.sender validation prevents fake LINK attacks.
-    ///      - GameOver guard prevents donations after ContractAddresses.GAME ends.
+    ///      - GameOver guard prevents donations after GAME ends.
     ///      - Multiplier decreases as subscription fills (incentivizes early donations).
     ///      - No rewards if price feed unavailable.
     ///
@@ -624,22 +587,18 @@ contract DegenerusAdmin {
         // SECURITY: Only accept calls from the LINK token contract.
         if (msg.sender != ContractAddresses.LINK_TOKEN) revert NotAuthorized();
         if (amount == 0) revert InvalidAmount();
-        if (subscriptionId == 0) revert NotWired();
 
-        // Prevent donations after ContractAddresses.GAME-over.
-        if (IDegenerusBondsGameOverFlag(ContractAddresses.BONDS).gameOverStarted()) revert GameOver();
+        // Prevent donations after GAME-over.
+        if (bondsGameOverFlag.gameOverStarted()) revert GameOver();
 
         // Forward LINK to VRF subscription.
-        try ILinkTokenLike(ContractAddresses.LINK_TOKEN).transferAndCall(address(coordinator), amount, abi.encode(subscriptionId)) returns (
-            bool ok
-        ) {
+        try linkToken.transferAndCall(address(coordinator), amount, abi.encode(subscriptionId)) returns (bool ok) {
             if (!ok) revert InvalidAmount();
         } catch {
             revert InvalidAmount();
         }
-
         // Calculate reward using tiered multiplier.
-        (uint96 bal,,,, ) = IVRFCoordinatorV2_5Owner(coordinator).getSubscription(subscriptionId);
+        (uint96 bal, , , , ) = IVRFCoordinatorV2_5Owner(coordinator).getSubscription(subscriptionId);
         uint256 mult = _linkRewardMultiplier(uint256(bal));
         if (mult == 0) return; // No reward if subscription is fully funded.
 
@@ -652,7 +611,7 @@ contract DegenerusAdmin {
         uint256 credit = (baseCredit * mult) / 1e18;
         if (credit == 0) return;
 
-        IDegenerusCoinPresaleLink(ContractAddresses.COIN).creditLinkReward(from, credit);
+        coinLinkReward.creditLinkReward(from, credit);
         emit LinkCreditRecorded(from, credit, true);
     }
 
@@ -665,24 +624,19 @@ contract DegenerusAdmin {
     /// @return ethAmount ETH-equivalent amount (18 decimals), or 0 if unavailable.
     ///
     /// SECURITY NOTES:
-    /// - Returns 0 on missing feed, zero amount, invalid price, or zero scale.
-    /// - Handles feeds with different decimal precisions.
+    /// - Returns 0 on missing feed, zero amount, or invalid price.
+    /// - Assumes feed returns 18 decimal price (Chainlink LINK/ETH standard).
     /// - Negative price answers are rejected.
     function _linkAmountToEth(uint256 amount) private view returns (uint256 ethAmount) {
         address feed = linkEthPriceFeed;
         if (feed == address(0) || amount == 0) return 0;
 
-        (, int256 answer,,,) = IAggregatorV3(feed).latestRoundData();
+        (, int256 answer, , , ) = IAggregatorV3(feed).latestRoundData();
         if (answer <= 0) return 0;
 
-        uint256 price = uint256(answer);
-        uint256 scale = linkEthPriceScale;
-        if (scale == 0) return 0;
-
-        // Normalize to 18 decimals.
-        uint256 priceWei = linkEthPriceScaleUp ? price * scale : price / scale;
-
+        uint256 priceWei = uint256(answer);
         if (priceWei == 0) return 0;
+
         ethAmount = (amount * priceWei) / 1 ether;
     }
 
@@ -720,7 +674,7 @@ contract DegenerusAdmin {
         try IAggregatorV3(feed).latestRoundData() returns (
             uint80 roundId,
             int256 answer,
-            uint256, /*startedAt*/
+            uint256 /*startedAt*/,
             uint256 updatedAt,
             uint80 answeredInRound
         ) {

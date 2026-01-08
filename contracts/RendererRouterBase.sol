@@ -18,11 +18,11 @@ abstract contract RendererRouterBase {
 
     /// @notice Get the fallback renderer address (immutable per deployment)
     /// @dev Must be implemented by child contract
-    function fallbackRenderer() public view virtual returns (address);
+    function fallbackRenderer() internal view virtual returns (address);
 
     /// @notice Get the function selector for tokenURI calls
     /// @dev Must be implemented by child contract (e.g., ITokenRenderer.tokenURI.selector)
-    function tokenURISelector() public pure virtual returns (bytes4);
+    function tokenURISelector() internal pure virtual returns (bytes4);
 
     /// @notice Update the primary renderer address
     /// @dev Only callable by admin
@@ -76,7 +76,7 @@ abstract contract RendererRouterBase {
             len := mload(add(ret, 0x40))
         }
         if (offset != 0x20) return (false, "");
-        if (ret.length < 0x40 + len) return (false, "");
+        if (len > ret.length - 0x40) return (false, "");
         uri = abi.decode(ret, (string));
         if (bytes(uri).length == 0) return (false, "");
         return (true, uri);

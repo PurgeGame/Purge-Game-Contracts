@@ -57,7 +57,7 @@ import {ContractAddresses} from "./ContractAddresses.sol";
 |  |   |  per token) |                  |             |                                               | |
 |  |   +-------------+                  +-------------+                                               | |
 |  |                                                                                                  | |
-|  |   Cost: RECOLOR_COST_PER_TOKEN = 50 BURNIE (50 * 1e6 base units)                                | |
+|  |   Cost: RECOLOR_COST_PER_TOKEN = 50 BURNIE (50 * 1e18 base units)                               | |
 |  |   Total cost = number of tokens × 50 BURNIE                                                     | |
 |  |                                                                                                  | |
 |  |   Note: No approval required; burns route through the trusted coin contract.                    | |
@@ -96,9 +96,9 @@ import {ContractAddresses} from "./ContractAddresses.sol";
 |     • Empty strings are allowed (used to clear/delete overrides)                                      |
 |                                                                                                       |
 |  3. ALLOWLIST                                                                                         |
-|     • Only _allowedToken contracts can have per-token overrides                                       |
+|     • Only Gamepieces/Trophies contracts can have per-token overrides                                 |
 |     • Prevents arbitrary contracts from polluting storage                                             |
-|     • Initial NFT is allowed at construction                                                          |
+|     • Allowlist fixed to ContractAddresses.GAMEPIECES/TROPHIES                                        |
 |                                                                                                       |
 |  4. REENTRANCY                                                                                        |
 |     • BURNIE burnCoin called before state changes (checks-effects-interactions)                       |
@@ -154,9 +154,6 @@ contract IconColorRegistry {
     /// @dev Caller is not the authorized renderer contract
     error NotRenderer();
 
-    /// @dev Required address was zero.
-    error ZeroAddress();
-
     /// @dev Trophy outer percentage is outside valid range (5%-100% or special values 0/1)
     error InvalidTrophyOuterPercentage();
 
@@ -183,13 +180,8 @@ contract IconColorRegistry {
     /// @dev BURNIE token contract for recoloring fee burns
     IDegenerusCoinBurn private constant _burnie = IDegenerusCoinBurn(ContractAddresses.COIN);
 
-    /// @notice Cost in BURNIE per token for recoloring (50 BURNIE)
-    uint256 public constant RECOLOR_COST_PER_TOKEN = 50 * 1e6;
-
-    /// @dev Mapping of allowed token contracts for per-token customization
-    mapping(address => bool) private _allowedToken;
-
-    /// @dev Authorized renderer contracts (regular + trophy)
+    /// @notice Cost in BURNIE per token for recoloring (50 BURNIE).
+    uint256 private constant RECOLOR_COST_PER_TOKEN = 50 * 1 ether;
 
     // ---------------------------------------------------------------------
     // STORAGE
@@ -207,16 +199,6 @@ contract IconColorRegistry {
     /// @dev Trophy outer ring size override: tokenContract => tokenId => size (1e6-scaled %)
     ///      0 = not set, 1 = reset to default, 50000-1000000 = 5%-100%
     mapping(address => mapping(uint256 => uint32)) private _trophyOuterPct1e6;
-
-    // ---------------------------------------------------------------------
-    // CONSTRUCTOR
-    // ---------------------------------------------------------------------
-
-    /// @notice Deploy the color registry with precomputed contract addresses.
-    constructor() {
-        _allowedToken[ContractAddresses.GAMEPIECES] = true;
-        _allowedToken[ContractAddresses.TROPHIES] = true;
-    }
 
     // ---------------------------------------------------------------------
     // MODIFIERS
@@ -287,7 +269,7 @@ contract IconColorRegistry {
         uint32 trophyOuterPct1e6
     ) external onlyRenderer returns (bool) {
         // Verify token contract is in allowlist
-        if (!_allowedToken[tokenContract]) revert NotRenderer();
+        if (!_isAllowedToken(tokenContract)) revert NotRenderer();
 
         // Charge BURNIE recoloring fee: 50 BURNIE per token, burned
         _chargeBurnie(user, tokenIds.length);
@@ -362,7 +344,7 @@ contract IconColorRegistry {
         uint256 tokenId,
         string calldata trophyHex
     ) external onlyRenderer returns (bool) {
-        if (!_allowedToken[tokenContract]) revert NotRenderer();
+        if (!_isAllowedToken(tokenContract)) revert NotRenderer();
         if (IERC721Lite(tokenContract).ownerOf(tokenId) != user) revert NotRenderer();
 
         if (bytes(trophyHex).length == 0) {
@@ -384,7 +366,7 @@ contract IconColorRegistry {
     /// @param channel Color channel (0=outline, 1=flame, 2=diamond, 3=square)
     /// @return The hex color string, or "" if not set or contract not allowed
     function tokenColor(address tokenContract, uint256 tokenId, uint8 channel) external view returns (string memory) {
-        if (!_allowedToken[tokenContract]) return "";
+        if (!_isAllowedToken(tokenContract)) return "";
         Colors storage c = _custom[tokenContract][tokenId];
         if (channel == 0) return c.outline;
         if (channel == 1) return c.flame;
@@ -431,6 +413,12 @@ contract IconColorRegistry {
         if (tokenCount == 0) return;
         uint256 totalCost = tokenCount * RECOLOR_COST_PER_TOKEN;
         _burnie.burnCoin(user, totalCost);
+    }
+
+    function _isAllowedToken(address tokenContract) private pure returns (bool) {
+        return
+            tokenContract == ContractAddresses.GAMEPIECES ||
+            tokenContract == ContractAddresses.TROPHIES;
     }
 
     /// @dev Validate and return a "#rrggbb" lowercase hex color string

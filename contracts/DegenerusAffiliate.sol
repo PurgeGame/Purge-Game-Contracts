@@ -50,7 +50,7 @@ interface IDegenerusCoinAffiliate {
  *
  * INTEGRATION POINTS:
  * - DegenerusBonds: Calls payAffiliate() for bond purchases, addPresaleCoinCredit() for rewards
- * - DegenerusCoin: Calls consumePresaleCoin() for presale claims
+ * - BurnieCoin: Calls consumePresaleCoin() for presale claims
  * - DegenerusGamepieces: Calls payAffiliate() for map purchases
  * - DegenerusAdmin: Can call addPresaleCoinCredit() for LINK donation rewards
  */
@@ -98,12 +98,12 @@ contract DegenerusAffiliate {
      * STORAGE LAYOUT (32 bytes):
      * +----------------------------------------------------+
      * | [0:20]  player   address   Top affiliate address   |
-     * | [20:32] score    uint96    Whole tokens earned     |
+     * | [20:32] score    uint96    Raw BURNIE earned       |
      * +----------------------------------------------------+
      */
     struct PlayerScore {
         address player; // 20 bytes - address of top affiliate
-        uint96 score; // 12 bytes - whole tokens (truncated from 6-decimal amounts)
+        uint96 score; // 12 bytes - raw 18-decimal amount (capped to uint96 max)
     }
 
     /**
@@ -126,10 +126,6 @@ contract DegenerusAffiliate {
     //                            CONSTANTS
     // =====================================================================
 
-    /// @notice Token decimal multiplier (BURNIE has 18 decimals).
-    /// @dev 1 ether = 1e18, standard Solidity unit for 18-decimal tokens.
-    // No constant needed - use `1 ether` directly throughout code
-
     /// @notice Maximum bonus points an affiliate can earn from leaderboard position.
     /// @dev Applied to mint trait rolls; top 20% of leaderboard earns this max.
     uint256 private constant AFFILIATE_BONUS_MAX = 25;
@@ -144,24 +140,11 @@ contract DegenerusAffiliate {
     ///      after the game has started. Prevents gaming by trying multiple codes.
     bytes32 private constant REF_CODE_LOCKED = bytes32(uint256(1));
 
-    // =====================================================================
-    //                           CONSTANTS
-    // =====================================================================
-
-    /// @notice DegenerusBonds contract address (constant).
-    /// @dev Primary caller for payAffiliate() during bond purchases.
-    ///      Also authorized for shutdownPresale() and addPresaleCoinCredit().
-
-    /// @notice DegenerusAdmin address (constant).
-    /// @dev Authorized for addPresaleCoinCredit() as fallback admin.
-
-    /// @notice DegenerusCoin contract for FLIP token operations (constant).
+    /// @notice BurnieCoin contract for FLIP token operations (constant).
     IDegenerusCoinAffiliate private constant coin = IDegenerusCoinAffiliate(ContractAddresses.COIN);
 
     /// @notice DegenerusGame contract for level queries (constant).
     IDegenerusGame private constant degenerusGame = IDegenerusGame(ContractAddresses.GAME);
-
-    /// @notice DegenerusGamepieces contract address for affiliate payout access control (constant).
 
     // =====================================================================
     //                        AFFILIATE STATE
@@ -189,7 +172,8 @@ contract DegenerusAffiliate {
 
     /// @notice Presale-era affiliate earnings awaiting claim.
     /// @dev Deprecated: presale rewards are now paid immediately.
-    mapping(address => uint256) public presaleCoinEarned;
+    ///      Preserved for storage compatibility.
+    mapping(address => uint256) private presaleCoinEarned;
 
     /// @notice Top affiliate per game level for bonus calculations.
     /// @dev Private storage; use affiliateTop() view to read.
@@ -198,7 +182,7 @@ contract DegenerusAffiliate {
 
     /// @notice Total unclaimed presale coin across all players.
     /// @dev Deprecated: preserved for storage compatibility.
-    uint256 public presaleClaimableTotal;
+    uint256 private presaleClaimableTotal;
 
     /// @notice Flag indicating presale period has ended.
     /// @dev Set permanently via shutdownPresale(). Once true:
@@ -351,11 +335,8 @@ contract DegenerusAffiliate {
         // -----------------------------------------------------------------
         gameState;
         rngLocked;
-        address caller = msg.sender;
-        address coinAddr = address(coin);
-        address gamepiecesAddr = ContractAddresses.GAMEPIECES;
         // SECURITY: Only trusted contracts can distribute affiliate rewards.
-        if (caller != coinAddr && caller != ContractAddresses.BONDS && caller != gamepiecesAddr) revert OnlyAuthorized();
+        if (msg.sender != ContractAddresses.COIN && msg.sender != ContractAddresses.BONDS && msg.sender != ContractAddresses.GAMEPIECES) revert OnlyAuthorized();
 
         // -----------------------------------------------------------------
         // PRESALE GATE
@@ -364,7 +345,7 @@ contract DegenerusAffiliate {
         if (presaleOpen) {
             // During presale, only bond purchases accrue rewards.
             // This keeps presale distribution anchored to bond purchases.
-            if (caller != ContractAddresses.BONDS) return 0;
+            if (msg.sender != ContractAddresses.BONDS) return 0;
         }
 
         // -----------------------------------------------------------------
@@ -405,14 +386,9 @@ contract DegenerusAffiliate {
         }
 
         // -----------------------------------------------------------------
-        // FINAL VALIDATION
+        // REWARD CALCULATION SETUP
         // -----------------------------------------------------------------
         address affiliateAddr = info.owner;
-        // SECURITY: Double-check no self-referral (belt-and-suspenders).
-        if (affiliateAddr == address(0) || affiliateAddr == sender) {
-            playerReferralCode[sender] = presaleOpen ? bytes32(0) : REF_CODE_LOCKED;
-            return 0;
-        }
         uint8 rakebackPct = info.rakeback;
 
         // -----------------------------------------------------------------
@@ -563,7 +539,7 @@ contract DegenerusAffiliate {
      */
     function consumePresaleCoin(address player) external returns (uint256 amount) {
         // SECURITY: Only coin contract can consume presale balances.
-        if (msg.sender != address(coin)) revert OnlyAuthorized();
+        if (msg.sender != ContractAddresses.COIN) revert OnlyAuthorized();
         // Only claimable after presale ends.
         if (!presaleShutdown) return 0;
 
@@ -571,13 +547,7 @@ contract DegenerusAffiliate {
         if (amount != 0) {
             // CEI: Zero balance before returning (even though caller is trusted).
             presaleCoinEarned[player] = 0;
-            // Maintain invariant: presaleClaimableTotal = sum(presaleCoinEarned).
-            // Defensive: handle edge case where total drifted (shouldn't happen).
-            if (amount <= presaleClaimableTotal) {
-                presaleClaimableTotal -= amount;
-            } else {
-                presaleClaimableTotal = 0;
-            }
+            presaleClaimableTotal -= amount;
         }
     }
 
@@ -591,9 +561,8 @@ contract DegenerusAffiliate {
      * @param amount The amount to credit (18 decimals).
      */
     function addPresaleCoinCredit(address player, uint256 amount) external {
-        address caller = msg.sender;
         // SECURITY: Only trusted contracts can add presale credits.
-        if (caller != address(coin) && caller != ContractAddresses.BONDS && caller != ContractAddresses.ADMIN) revert OnlyAuthorized();
+        if (msg.sender != ContractAddresses.COIN && msg.sender != ContractAddresses.BONDS && msg.sender != ContractAddresses.ADMIN) revert OnlyAuthorized();
         // Skip no-op calls.
         if (player == address(0) || amount == 0) return;
         coin.creditFlip(player, amount);
@@ -621,7 +590,7 @@ contract DegenerusAffiliate {
      *      Used for bonus point calculations in mint trait rolls.
      * @param lvl The game level to query.
      * @return player Address of the top affiliate.
-     * @return score Their score in whole tokens (6-decimal amount / 1 ether).
+     * @return score Their score in BURNIE base units (18 decimals).
      */
     function affiliateTop(uint24 lvl) public view returns (address player, uint96 score) {
         PlayerScore memory stored = affiliateTopByLevel[lvl];
@@ -635,7 +604,7 @@ contract DegenerusAffiliate {
      * @param lvl The game level to query.
      * @param player The player to get score for.
      * @return topScore The highest score for this level.
-     * @return playerScore The queried player's score (whole tokens).
+     * @return playerScore The queried player's score (18 decimals).
      */
     function affiliateBonusInfo(
         uint24 lvl,
@@ -645,7 +614,7 @@ contract DegenerusAffiliate {
         if (topScore == 0 || player == address(0)) return (topScore, 0);
         uint256 earned = affiliateCoinEarned[lvl][player];
         if (earned == 0) return (topScore, 0);
-        playerScore = earned / 1 ether;
+        playerScore = earned;
     }
 
     /**
@@ -724,7 +693,6 @@ contract DegenerusAffiliate {
      * @param lvl The current game level.
      */
     function _recordReferralJoinLevel(address player, uint24 lvl) private {
-        if (player == address(0)) return;
         // Only record the first join level (immutable after set).
         if (referralJoinLevel[player] == 0) {
             referralJoinLevel[player] = lvl;
@@ -763,27 +731,22 @@ contract DegenerusAffiliate {
         // Linear decay zone: 51-150 levels since join.
         uint256 decayLevels = delta - 50; // 0 at start of decay window
         uint256 reduction = decayLevels * 75; // 0.75% per level (75 bps)
-        scaleBps = 10_000 - reduction;
-        // Defensive floor (should be unreachable but belt-and-suspenders).
-        if (scaleBps < 2_500) {
-            scaleBps = 2_500;
-        }
+        return 10_000 - reduction;
     }
 
     /**
-     * @notice Convert a raw amount to a uint96 score in whole tokens.
+     * @notice Convert a raw amount to a uint96 score in base units.
      * @dev Caps at uint96 max to prevent overflow/truncation errors.
-     *      uint96 max ≈ 79 billion whole tokens, far exceeding realistic supply.
+     *      uint96 max ≈ 7.9e28 base units (~79 billion tokens).
      * @param s Raw amount (18 decimals).
-     * @return Whole token count as uint96.
+     * @return Raw token amount (18 decimals) as uint96.
      */
     function _score96(uint256 s) private pure returns (uint96) {
-        uint256 wholeTokens = s / 1 ether;
         // SECURITY: Cap at max to prevent truncation errors.
-        if (wholeTokens > type(uint96).max) {
-            wholeTokens = type(uint96).max;
+        if (s > type(uint96).max) {
+            return type(uint96).max;
         }
-        return uint96(wholeTokens);
+        return uint96(s);
     }
 
     /**
@@ -800,9 +763,7 @@ contract DegenerusAffiliate {
     function _affiliateBonusPointsAt(uint24 lvl, address player) private view returns (uint256 points) {
         uint96 topScore = affiliateTopByLevel[lvl].score;
         if (topScore == 0) return 0;
-        uint256 earned = affiliateCoinEarned[lvl][player];
-        if (earned == 0) return 0;
-        uint256 playerScore = earned / 1 ether;
+        uint256 playerScore = affiliateCoinEarned[lvl][player];
         if (playerScore == 0) return 0;
         unchecked {
             // Scale: playerScore * 125 / topScore, capped at 25.

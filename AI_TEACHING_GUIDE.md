@@ -20,7 +20,7 @@ Guide for AI assistants answering questions about the Degenerus contracts.
 |----------|---------|
 | `DegenerusGame.sol` | State machine, ETH/stETH buckets, RNG gating |
 | `DegenerusGamepieces.sol` | ERC721 gamepiece NFT |
-| `DegenerusCoin.sol` | BURNIE (6 decimals), coinflip, quests |
+| `BurnieCoin.sol` | BURNIE (18 decimals), coinflip, quests |
 | `DegenerusQuests.sol` | Daily quest state and rewards (standalone) |
 | `DegenerusBonds.sol` | Maturity cycles, game-over resolution |
 | `DegenerusVault.sol` | Four share classes (BURNIE, DGNRS, ETH/stETH, DGVA all-share) |
@@ -55,8 +55,8 @@ Quest system is a standalone contract (`DegenerusQuests.sol`) wired once by admi
 
 | Constant | Value | Notes |
 |----------|-------|-------|
-| BURNIE decimals | 6 | |
-| PRICE_COIN_UNIT | 1e9 | = 1000 BURNIE |
+| BURNIE decimals | 18 | |
+| PRICE_COIN_UNIT | 1e21 | = 1000 BURNIE |
 | JACKPOT_RESET_TIME | 82620 seconds | Day boundary anchor |
 | COIN_CLAIM_DAYS | 30 | Coinflip claim window (days) |
 
@@ -120,7 +120,7 @@ See [ETH_BUCKETS_AND_SOLVENCY.md](ETH_BUCKETS_AND_SOLVENCY.md) for full details.
 1. `payInCoin=false`: NFT routes to `DegenerusGame.recordMint(...)` -> funds `nextPrizePool`
    `payInCoin=true`: burns BURNIE, no ETH contribution
 2. Streak bonuses computed in `DegenerusGameMintModule`
-3. BURNIE credits via `DegenerusCoin.creditFlip(...)`
+3. BURNIE credits via `BurnieCoin.creditFlip(...)`
 4. Affiliate handling via `DegenerusAffiliate.payAffiliate(...)`
 5. In state 3, ETH/claimable mints also enqueue MAP tickets for jackpots
 6. Jackpot payouts can convert a slice into MAP tickets; that MAP cost is routed into `nextPrizePool`

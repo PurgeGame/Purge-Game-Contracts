@@ -86,8 +86,8 @@ pragma solidity ^0.8.26;
   |     • onlyGame: runBafJackpot, runDecimatorJackpot, consumeDecClaim          |
   |     • addresses fixed at deploy (no wiring)                                  |
   |                                                                              |
-  |  2. SET-ONCE WIRING:                                                         |
-  |     • coin, game, ContractAddresses.AFFILIATE addresses locked after first set                 |
+  |  2. CONSTANT ADDRESSES:                                                      |
+  |     • coin, game, affiliate addresses are compile-time constants             |
   |     • Prevents malicious contract replacement                                |
   |                                                                              |
   |  3. RNG FAIRNESS:                                                            |
@@ -117,12 +117,10 @@ pragma solidity ^0.8.26;
   |                           TRUST ASSUMPTIONS                                  |
   +==============================================================================+
   |                                                                              |
-  |  TRUSTED CONTRACTS (set-once after construction):                            |
-  |  • coin:          DegenerusCoin (calls recordBafFlip, recordDecBurn)         |
+  |  TRUSTED CONTRACTS (compile-time constants):                                 |
+  |  • coin:          BurnieCoin (calls recordBafFlip, recordDecBurn)            |
   |  • degenerusGame: Core game (calls runBafJackpot, runDecimatorJackpot)       |
-  |  • ContractAddresses.AFFILIATE:     Affiliate program (queries for top referrers)              |
-  |  • ContractAddresses.BONDS:         Bonds contract (constant from constructor)                 |
-  |  • bondsAdmin:    none (addresses fixed at deploy)                           |
+  |  • affiliate:     Affiliate program (queries for top referrers)              |
   |                                                                              |
   +==============================================================================+*/
 
@@ -163,7 +161,7 @@ interface IDegenerusCoinJackpotView {
  * @title DegenerusJackpots
  * @author Burnie Degenerus
  * @notice Standalone contract managing BAF and Decimator jackpot systems.
- * @dev DegenerusCoin forwards flips/burns into this contract; game calls to resolve jackpots.
+ * @dev BurnieCoin forwards flips/burns into this contract; game calls to resolve jackpots.
  *      - BAF: Leaderboard-based distribution to top coinflip bettors
  *      - Decimator: Pro-rata bucket-based distribution to burn participants
  * @custom:security-contact burnie@degener.us
@@ -184,9 +182,6 @@ contract DegenerusJackpots is IDegenerusJackpots {
 
     /// @notice Player's subbucket did not win the Decimator draw.
     error DecNotWinner();
-
-    /// @notice Caller is not the ContractAddresses.BONDS contract.
-    error OnlyBonds();
 
     /// @notice Caller is not the coin contract.
     error OnlyCoin();
@@ -262,8 +257,7 @@ contract DegenerusJackpots is IDegenerusJackpots {
     IDegenerusGame private constant degenerusGame = IDegenerusGame(ContractAddresses.GAME);
 
     /// @notice Affiliate program contract for referrer queries (constant).
-
-    /// @notice Bonds contract address (constant).
+    IDegenerusAffiliate private constant affiliate = IDegenerusAffiliate(ContractAddresses.AFFILIATE);
 
     /*+======================================================================+
       |                            CONSTANTS                                 |
@@ -346,28 +340,21 @@ contract DegenerusJackpots is IDegenerusJackpots {
     /// @dev Restricts function to coin contract only.
     ///      Used for recordBafFlip and recordDecBurn hooks.
     modifier onlyCoin() {
-        if (msg.sender != address(coin)) revert OnlyCoin();
+        if (msg.sender != ContractAddresses.COIN) revert OnlyCoin();
         _;
     }
 
     /// @dev Restricts function to game contract only.
     ///      Used for runBafJackpot, runDecimatorJackpot, consumeDecClaim.
     modifier onlyGame() {
-        if (msg.sender != address(degenerusGame)) revert OnlyGame();
+        if (msg.sender != ContractAddresses.GAME) revert OnlyGame();
         _;
     }
 
     /*+======================================================================+
-      |                           CONSTRUCTOR                                |
-      +======================================================================+
-      |  Validate constant addresses from ContractAddresses.                   |
-      +======================================================================+*/
-
-    /// @notice Initialize the jackpots contract with precomputed addresses.
-    /*+======================================================================+
       |                      COIN CONTRACT HOOKS                             |
       +======================================================================+
-      |  Called by DegenerusCoin to record coinflip/burn activity.           |
+      |  Called by BurnieCoin to record coinflip/burn activity.              |
       |  These hooks build state used by jackpot resolution.                 |
       +======================================================================+*/
 
@@ -514,7 +501,7 @@ contract DegenerusJackpots is IDegenerusJackpots {
         returns (address[] memory winners, uint256[] memory amounts, uint256 bondMask, uint256 returnAmountWei)
     {
         uint256 P = poolWei;
-        // Max distinct winners: 1 (top BAF) + 1 (top flip) + 1 (pick) + 3 (exterminator draw) + 3 (ContractAddresses.AFFILIATE draw) + 3 (retro) + 50 + 50 (scatter buckets) = 112.
+        // Max distinct winners: 1 (top BAF) + 1 (top flip) + 1 (pick) + 3 (exterminator draw) + 3 (affiliate draw) + 3 (retro) + 50 + 50 (scatter buckets) = 112.
         address[] memory tmpW = new address[](112);
         uint256[] memory tmpA = new uint256[](112);
         uint256 n;
@@ -713,7 +700,7 @@ contract DegenerusJackpots is IDegenerusJackpots {
         }
 
         {
-            // Slice C: ContractAddresses.AFFILIATE achievers (past 20 levels) share 10% across four descending prizes.
+            // Slice C: affiliate achievers (past 20 levels) share 10% across four descending prizes.
             uint256[4] memory affiliatePrizes = [(P * 5) / 100, (P * 3) / 100, (P * 2) / 100, uint256(0)];
             uint256 affiliateSlice;
             unchecked {
@@ -725,16 +712,14 @@ contract DegenerusJackpots is IDegenerusJackpots {
             }
             entropy = uint256(keccak256(abi.encodePacked(entropy, salt)));
 
-            address affiliateAddr = ContractAddresses.AFFILIATE;
-            IDegenerusAffiliate affiliateContract = IDegenerusAffiliate(affiliateAddr);
             address[20] memory candidates;
             uint256[20] memory candidateScores;
             uint8 candidateCount;
 
-            // Collect the top ContractAddresses.AFFILIATE from each of the prior 20 levels (deduped).
+            // Collect the top affiliates from each of the prior 20 levels (deduped).
             for (uint8 offset = 1; offset <= 20; ) {
                 if (lvl <= offset) break;
-                (address player, ) = affiliateContract.affiliateTop(uint24(lvl - offset));
+                (address player, ) = affiliate.affiliateTop(uint24(lvl - offset));
                 if (player != address(0)) {
                     bool seen;
                     for (uint8 i; i < candidateCount; ) {

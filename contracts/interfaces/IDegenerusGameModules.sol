@@ -4,22 +4,14 @@ pragma solidity ^0.8.26;
 import {IDegenerusCoinModule} from "./DegenerusGameModuleInterfaces.sol";
 
 interface IDegenerusGameEndgameModule {
-    function finalizeEndgame(
-        uint24 lvl,
-        uint256 rngWord,
-        address jackpots,
-        address jackpotModule,
-        IDegenerusCoinModule coinContract,
-        address nftAddr
-    ) external;
+    function finalizeEndgame(uint24 lvl, uint256 rngWord) external;
 }
 
 interface IDegenerusGameJackpotModule {
     function payDailyJackpot(
         bool isDaily,
         uint24 lvl,
-        uint256 randWord,
-        IDegenerusCoinModule coinContract
+        uint256 randWord
     ) external;
 
     function payMapJackpot(
@@ -30,43 +22,34 @@ interface IDegenerusGameJackpotModule {
     function payCarryoverExterminationJackpot(
         uint24 lvl,
         uint8 traitId,
-        uint256 randWord,
-        IDegenerusCoinModule coinContract
+        uint256 randWord
     ) external returns (uint256 paidEth);
 
     function payExterminationJackpot(
         uint24 lvl,
         uint8 traitId,
         uint256 randWord,
-        uint256 ethPool,
-        IDegenerusCoinModule coinContract
+        uint256 ethPool
     ) external returns (uint256 paidEth);
 
     function payLevelJackpot(
         uint24 lvl,
         uint256 rngWord,
-        uint256 effectiveWei,
-        IDegenerusCoinModule coinContract
+        uint256 effectiveWei
     ) external;
 
     function calcPrizePoolForLevelJackpot(
         uint24 lvl,
-        uint256 rngWord,
-        address stethAddr
+        uint256 rngWord
     ) external returns (uint256 effectiveWei);
 
     function processMapBatch(uint32 writesBudget) external returns (bool finished);
 }
 
 interface IDegenerusGameBondModule {
-    function bondUpkeep(
-        address bondsAddr,
-        address stethAddr,
-        address coinAddr,
-        uint256 rngWord
-    ) external;
-    function stakeForTargetRatio(address bondsAddr, address stethAddr, uint24 lvl) external;
-    function drainToBonds(address bondsAddr, address stethAddr) external;
+    function bondUpkeep(uint256 rngWord) external;
+    function stakeForTargetRatio(uint24 lvl) external;
+    function drainToBonds() external;
 }
 
 interface IDegenerusGameMintModule {

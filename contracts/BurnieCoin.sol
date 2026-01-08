@@ -2,7 +2,7 @@
 pragma solidity ^0.8.26;
 
 /**
- * @title DegenerusCoin
+ * @title BurnieCoin
  * @author Burnie Degenerus
  * @notice ERC20 in-game token (BURNIE, 18 decimals) with integrated coinflip wagering and quest rewards.
  *
@@ -11,7 +11,7 @@ pragma solidity ^0.8.26;
  *      - Coinflip: Daily stake windows with VRF-based 50/50 outcomes, 50-150% bonus on wins
  *      - Quest integration: Bonus flip credits for gameplay actions (mint/burn/bond)
  *      - Decimator burns: Burn-to-participate for decimator jackpot eligibility
- *      - Bounty: 1000 BURNIE/window accumulator; half paid to record-breaker on win
+ *      - Bounty: 1000 BURNIE/window accumulator; half removed each window (paid on win)
  *      - Vault escrow: 2M BURNIE virtual reserve, minted only on ContractAddresses.VAULT withdrawal
  *
  * @dev CRITICAL INVARIANTS:
@@ -27,17 +27,12 @@ pragma solidity ^0.8.26;
  *      - 30-day auto-expiry on unclaimed coinflips
  */
 
-import {DegenerusGamepieces} from "./DegenerusGamepieces.sol";
 import {IDegenerusGame} from "./interfaces/IDegenerusGame.sol";
-import {IDegenerusQuests, QuestInfo, PlayerQuestView} from "./interfaces/IDegenerusQuests.sol";
+import {IDegenerusQuests} from "./interfaces/IDegenerusQuests.sol";
 import {IDegenerusJackpots} from "./interfaces/IDegenerusJackpots.sol";
 import {ContractAddresses} from "./ContractAddresses.sol";
 
-interface IDegenerusAffiliateCoin {
-    function consumePresaleCoin(address player) external returns (uint256 amount);
-}
-
-contract DegenerusCoin {
+contract BurnieCoin {
     /*+======================================================================+
       |                              EVENTS                                  |
       +======================================================================+
@@ -205,46 +200,23 @@ contract DegenerusCoin {
     /*+======================================================================+
       |                    WIRED CONTRACTS & MODULE STATE                    |
       +======================================================================+
-      |  Core modules wired once via wire() or constructor. These contracts  |
-      |  form the trusted execution environment for gameplay flows.          |
+      |  All external dependencies are compile-time constants sourced from  |
+      |  ContractAddresses. No storage slots are consumed for wiring, and    |
+      |  the references cannot be updated post-deploy.                       |
       |                                                                      |
-      |  WIRING PATTERN:                                                     |
-      |  • Immutables: Set in constructor, never change                      |
-      |  • Internal: Set via wire(), guarded by AlreadyWired                 |
-      |  • Private: Same as internal but with additional encapsulation       |
-      |                                                                      |
-      |  STORAGE SLOTS (non-immutable):                                      |
-      |  +-----------------------------------------------------------------+ |
-      |  | Slot | Variable              | Type        | Access              | |
-      |  +------+-----------------------+-------------+---------------------+ |
-      |  |  3   | degenerusGame         | IDegGame    | onlyAdmin via wire  | |
-      |  |  4   | degenerusGamepieces   | DegGamePcs  | onlyAdmin via wire  | |
-      |  |  5   | questModule           | IDegQuests  | onlyAdmin via wire  | |
-      |  |  6   | ContractAddresses.JACKPOTS              | address     | onlyAdmin via wire  | |
-      |  |  7   | ContractAddresses.VAULT                 | address     | set at deploy       | |
-      |  |  8   | ContractAddresses.ICON_COLOR_REGISTRY         | address     | onlyAdmin via wire  | |
-      |  +-----------------------------------------------------------------+ |
+      |  CONSTANT REFERENCES:                                                |
+      |  • GAME, QUESTS, JACKPOTS, AFFILIATE                                  |
+      |  • VAULT, BONDS, ADMIN, ICON_COLOR_REGISTRY                           |
       +======================================================================+*/
 
     /// @notice The main game contract; provides level, RNG state, and purchase info.
     IDegenerusGame internal constant degenerusGame = IDegenerusGame(ContractAddresses.GAME);
 
-    /// @notice The NFT contract for gamepieces; can credit flips and notify quests.
-    DegenerusGamepieces internal constant degenerusGamepieces = DegenerusGamepieces(ContractAddresses.GAMEPIECES);
-
     /// @notice The quest module handling daily quests and streak tracking.
     IDegenerusQuests internal constant questModule = IDegenerusQuests(ContractAddresses.QUESTS);
 
-    /// @notice The affiliate program contract for referrals and affiliate rewards.
-    IDegenerusAffiliateCoin private constant affiliateProgram = IDegenerusAffiliateCoin(ContractAddresses.AFFILIATE);
-
-    /// @notice The ContractAddresses.JACKPOTS module for decimator burns and BAF flip tracking.
-
-    /// @notice The ContractAddresses.VAULT contract authorized to mint from the virtual allowance.
-
-    /// @notice The color registry contract authorized to burn for recoloring.
-
-    /// @notice The ContractAddresses.ADMIN address authorized to credit LINK rewards.
+    /// @notice The jackpots module for decimator burns and BAF flip tracking.
+    IDegenerusJackpots private constant jackpots = IDegenerusJackpots(ContractAddresses.JACKPOTS);
 
     /*+======================================================================+
       |                       COINFLIP ACCOUNTING                            |
@@ -356,7 +328,8 @@ contract DegenerusCoin {
       |  Global bounty pool for record-breaking flips. The bounty pool       |
       |  accumulates 1000 BURNIE per coinflip window. When a player sets     |
       |  a new all-time high flip, they arm the bounty. On their next        |
-      |  winning coinflip, half the pool is credited to their stake.         |
+      |  coinflip resolution, half the pool is removed; if they win, that    |
+      |  half is credited to their stake.                                    |
       |                                                                      |
       |  STORAGE LAYOUT (packed in slots):                                   |
       |  +-----------------------------------------------------------------+ |
@@ -369,7 +342,7 @@ contract DegenerusCoin {
       +======================================================================+*/
 
     /// @notice Current bounty pool size in BURNIE (18 decimals).
-    /// @dev Increases by 1000 BURNIE each coinflip window. Half paid on armed player's win.
+    /// @dev Increases by 1000 BURNIE each coinflip window. Half removed per resolution (paid on win).
     ///      Wraps on overflow (effectively resets to small value).
     uint128 public currentBounty = 1_000_000_000;
 
@@ -381,8 +354,6 @@ contract DegenerusCoin {
     /// @notice Address that has armed the bounty (set new record).
     /// @dev Cleared after payout. Only one player can hold bounty right at a time.
     address internal bountyOwedTo;
-
-    /// @notice The ContractAddresses.BONDS contract address for flip credits and quest notifications.
 
     /*+======================================================================+
       |                       ERC20 DECIMALS                                 |
@@ -431,7 +402,7 @@ contract DegenerusCoin {
     /// @return True on success.
     function transferFrom(address from, address to, uint256 amount) public returns (bool) {
         // Game contract bypass: no allowance check needed for trusted game operations
-        if (msg.sender != address(degenerusGame)) {
+        if (msg.sender != ContractAddresses.GAME) {
             uint256 allowed = allowance[from][msg.sender];
             // Infinite approval optimization: skip allowance update for max value
             if (allowed != type(uint256).max) {
@@ -553,7 +524,7 @@ contract DegenerusCoin {
     /// @dev Restricts access to the DegenerusGame contract only.
     ///      Used for: processCoinflipPayouts, rollDailyQuest, notifyQuestBurn.
     modifier onlyDegenerusGameContract() {
-        if (msg.sender != address(degenerusGame)) revert OnlyGame();
+        if (msg.sender != ContractAddresses.GAME) revert OnlyGame();
         _;
     }
 
@@ -562,9 +533,9 @@ contract DegenerusCoin {
     modifier onlyTrustedContracts() {
         address sender = msg.sender;
         if (
-            sender != address(degenerusGame) &&
-            sender != address(degenerusGamepieces) &&
-            sender != address(affiliateProgram) &&
+            sender != ContractAddresses.GAME &&
+            sender != ContractAddresses.GAMEPIECES &&
+            sender != ContractAddresses.AFFILIATE &&
             sender != ContractAddresses.ICON_COLOR_REGISTRY
         ) revert OnlyGame();
         _;
@@ -576,9 +547,9 @@ contract DegenerusCoin {
     modifier onlyFlipCreditors() {
         address sender = msg.sender;
         if (
-            sender != address(degenerusGame) &&
-            sender != address(degenerusGamepieces) &&
-            sender != address(affiliateProgram) &&
+            sender != ContractAddresses.GAME &&
+            sender != ContractAddresses.GAMEPIECES &&
+            sender != ContractAddresses.AFFILIATE &&
             sender != ContractAddresses.BONDS
         ) revert OnlyGame();
         _;
@@ -591,14 +562,6 @@ contract DegenerusCoin {
         _;
     }
 
-    /*+======================================================================+
-      |                         CONSTRUCTOR                                  |
-      +======================================================================+
-      |  Validates precomputed references from ContractAddresses.              |
-      +======================================================================+*/
-
-    /// @notice Initialize the BURNIE token.
-    /// @dev All contract references are precomputed constants.
     /*+======================================================================+
       |                      PLAYER COINFLIP FUNCTIONS                       |
       +======================================================================+
@@ -668,14 +631,6 @@ contract DegenerusCoin {
         locked = (gameState_ == 2) && lastPurchaseDay_ && rngLocked_;
     }
 
-    /// @notice Claim presale/early affiliate bonuses.
-    /// @dev Deprecated: presale rewards are paid immediately; this is typically a no-op.
-    function claimPresale() external {
-        uint256 amount = affiliateProgram.consumePresaleCoin(msg.sender);
-        if (amount == 0) return;
-        _mint(msg.sender, amount);
-    }
-
     /*+======================================================================+
       |                      DECIMATOR BURN FUNCTION                         |
       +======================================================================+
@@ -701,8 +656,6 @@ contract DegenerusCoin {
         (bool decOn, uint24 lvl) = game.decWindow();
         if (!decOn) revert NotDecimatorWindow();
         if (amount < MIN) revert AmountLTMin();
-
-        address moduleAddr = ContractAddresses.JACKPOTS;
 
         address caller = msg.sender;
         // CEI PATTERN: Burn first to anchor the amount used for bonuses.
@@ -734,7 +687,15 @@ contract DegenerusCoin {
 
         // Calculate bucket based on level type and player's mint streak
         uint8 bucket = DECIMATOR_BUCKET;
-        if (lvl % 100 != 0) {
+        if (lvl == 5) {
+            // Level 5: bucket by mint-level count (0->10 ... 5+->5).
+            uint24 mintLvls = game.ethMintLevelCount(caller);
+            if (mintLvls >= 5) {
+                bucket = 5;
+            } else {
+                bucket = uint8(DECIMATOR_BUCKET - uint8(mintLvls));
+            }
+        } else if (lvl % 100 != 0) {
             // Non-100 levels: simpler bucket reduction based on streak
             uint24 dec = game.ethMintStreakCount(caller) / 10;
             bucket = dec >= 5 ? uint8(5) : uint8(DECIMATOR_BUCKET - uint8(dec));
@@ -742,14 +703,24 @@ contract DegenerusCoin {
             // 100-levels: more complex calculation factoring in both streak and mint levels
             uint24 streak = game.ethMintStreakCount(caller);
             uint24 mintLvls = game.ethMintLevelCount(caller);
-            uint256 dec = uint256(streak / 20) + uint256(mintLvls / 25);
+            uint256 mintContribution;
+            if (lvl > 100) {
+                uint256 maxCount = (uint256(lvl) * 75) / 100;
+                if (maxCount != 0) {
+                    mintContribution = (uint256(mintLvls) * 4) / maxCount;
+                    if (mintContribution > 4) mintContribution = 4;
+                }
+            } else {
+                mintContribution = uint256(mintLvls / 25);
+            }
+            uint256 dec = uint256(streak / 20) + mintContribution;
             uint256 reduced = dec >= DECIMATOR_BUCKET ? 0 : uint256(DECIMATOR_BUCKET) - dec;
             // Floor at 2 for 100-levels (more valuable base)
             bucket = reduced < 2 ? uint8(2) : uint8(reduced);
         }
 
         // Record the burn with the ContractAddresses.JACKPOTS module
-        uint8 bucketUsed = IDegenerusJackpots(moduleAddr).recordDecBurn(
+        uint8 bucketUsed = jackpots.recordDecBurn(
             caller,
             lvl,
             bucket,
@@ -812,7 +783,7 @@ contract DegenerusCoin {
     function vaultEscrow(uint256 amount) external {
         if (amount == 0) return;
         address sender = msg.sender;
-        if (sender != ContractAddresses.VAULT && sender != ContractAddresses.BONDS && sender != address(degenerusGame)) revert OnlyVault();
+        if (sender != ContractAddresses.VAULT && sender != ContractAddresses.BONDS && sender != ContractAddresses.GAME) revert OnlyVault();
         _vaultMintAllowance += amount;
     }
 
@@ -847,14 +818,14 @@ contract DegenerusCoin {
     }
 
     /// @notice Credit LINK-funded bonus directly (ContractAddresses.ADMIN-triggered, not presale).
-    /// @dev Admin-only. Mints directly to player's balance (not as flip stake).
+    /// @dev Admin-only. Credits flip stake for LINK donation rewards.
     ///      Used for promotional rewards funded by LINK token proceeds.
     /// @param player The recipient address.
-    /// @param amount The amount to mint (18 decimals).
+    /// @param amount The amount to credit as flip stake (18 decimals).
     function creditLinkReward(address player, uint256 amount) external {
         if (msg.sender != ContractAddresses.ADMIN) revert OnlyAdmin();
         if (player == address(0) || amount == 0) return;
-        _mint(player, amount);
+        addFlip(player, amount, false, false, false);
         emit LinkCredit(player, amount);
     }
 
@@ -882,7 +853,7 @@ contract DegenerusCoin {
     /// @param amount The base amount for quest calculation.
     /// @return questReward The bonus reward earned (if any quest completed).
     function affiliateQuestReward(address player, uint256 amount) external returns (uint256 questReward) {
-        if (msg.sender != address(affiliateProgram)) revert OnlyAffiliate();
+        if (msg.sender != ContractAddresses.AFFILIATE) revert OnlyAffiliate();
         IDegenerusQuests module = questModule;
         if (player == address(0) || amount == 0) return 0;
         (
@@ -963,7 +934,7 @@ contract DegenerusCoin {
     /// @param quantity Number of NFTs minted.
     /// @param paidWithEth Whether the mint was paid with ETH (vs BURNIE).
     function notifyQuestMint(address player, uint32 quantity, bool paidWithEth) external {
-        if (msg.sender != address(degenerusGamepieces)) revert OnlyNft();
+        if (msg.sender != ContractAddresses.GAMEPIECES) revert OnlyNft();
         IDegenerusQuests module = questModule;
         (
             uint256 reward,
@@ -1006,7 +977,7 @@ contract DegenerusCoin {
     /// @param player The player who burned NFTs.
     /// @param quantity Number of NFTs burned.
     function notifyQuestBurn(address player, uint32 quantity) external {
-        if (msg.sender != address(degenerusGame)) revert OnlyGame();
+        if (msg.sender != ContractAddresses.GAME) revert OnlyGame();
         IDegenerusQuests module = questModule;
         (
             uint256 reward,
@@ -1020,38 +991,6 @@ contract DegenerusCoin {
         if (questReward != 0) {
             addFlip(player, questReward, false, false, false);
         }
-    }
-
-    /// @notice Get the currently active quests for today.
-    /// @return quests Array of 2 QuestInfo structs with quest details.
-    function getActiveQuests() external view returns (QuestInfo[2] memory quests) {
-        IDegenerusQuests module = questModule;
-        return module.getActiveQuests();
-    }
-
-    /// @notice Get a player's quest progress and streak information.
-    /// @param player The player address to query.
-    /// @return streak Current completion streak count.
-    /// @return lastCompletedDay The day index of their last quest completion.
-    /// @return progress Progress values for each of the 2 active quests.
-    /// @return completed Completion status for each of the 2 active quests.
-    function playerQuestStates(
-        address player
-    )
-        external
-        view
-        returns (uint32 streak, uint32 lastCompletedDay, uint128[2] memory progress, bool[2] memory completed)
-    {
-        IDegenerusQuests module = questModule;
-        return module.playerQuestStates(player);
-    }
-
-    /// @notice Get comprehensive quest view data for a player.
-    /// @param player The player address to query.
-    /// @return viewData Structured view with all quest-related player data.
-    function getPlayerQuestView(address player) external view returns (PlayerQuestView memory viewData) {
-        IDegenerusQuests module = questModule;
-        return module.getPlayerQuestView(player);
     }
 
     /// @notice Burn BURNIE from `target` during gameplay/affiliate flows.
@@ -1208,8 +1147,7 @@ contract DegenerusCoin {
         uint48 epoch
     ) external onlyDegenerusGameContract returns (bool finished) {
         // Mix entropy with epoch for unique per-day randomness
-        uint256 seedWord = rngWord;
-        seedWord = uint256(keccak256(abi.encodePacked(rngWord, epoch)));
+        uint256 seedWord = uint256(keccak256(abi.encodePacked(rngWord, epoch)));
 
         // Determine payout bonus percent:
         // ~5% each for extreme bonus outcomes (50% or 150%), rest is [78%, 115%]
@@ -1238,7 +1176,7 @@ contract DegenerusCoin {
         dayResult.rewardPercent = rewardPercent;
         dayResult.win = win;
 
-        // Bounty payout: if someone armed the bounty and we won, credit half to them
+        // Bounty resolution: if someone armed the bounty, remove half; if win, credit that half to them.
         if (bountyOwedTo != address(0) && currentBounty > 0) {
             address to = bountyOwedTo;
             uint256 slice = currentBounty >> 1; // pay/delete half of the bounty pool
@@ -1375,10 +1313,9 @@ contract DegenerusCoin {
         _updateTopDayBettor(player, newStake, targetDay);
 
         // Record flip for BAF (Biggest Active Flip) jackpot tracking
-        address module = ContractAddresses.JACKPOTS;
         if (coinflipDeposit != 0) {
             uint24 bafLvl = _bafBracketLevel(currLevel);
-            IDegenerusJackpots(module).recordBafFlip(player, bafLvl, coinflipDeposit);
+            jackpots.recordBafFlip(player, bafLvl, coinflipDeposit);
         }
 
         // Update level leaderboard (allowed even during RNG lock)

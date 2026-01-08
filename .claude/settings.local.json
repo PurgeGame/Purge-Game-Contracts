@@ -15,7 +15,12 @@
       "Bash(npm test:*)",
       "Bash(mkdir:*)",
       "Bash(done)",
-      "Bash(wc:*)"
+      "Bash(wc:*)",
+      "Bash(forge clean:*)",
+      "Bash(git checkout:*)",
+      "Bash(for iface in IDegenerusGame IDegenerusCoin IDegenerusAffiliate IDegenerusGamepieces IDegenerusBonds IDegenerusVault)",
+      "Bash(do echo \"\")",
+      "Bash(echo:*)"
     ]
   }
 }

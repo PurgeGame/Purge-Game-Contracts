@@ -123,7 +123,6 @@ pragma solidity ^0.8.26;
 import "@openzeppelin/contracts/utils/Base64.sol";
 import "@openzeppelin/contracts/utils/Strings.sol";
 import {ContractAddresses} from "./ContractAddresses.sol";
-import "./interfaces/IDegenerusAffiliate.sol";
 import "./interfaces/IconRendererTypes.sol";
 import {RendererLibrary} from "./libraries/RendererLibrary.sol";
 import {ColorResolver} from "./libraries/ColorResolver.sol";
@@ -152,13 +151,6 @@ contract IconRendererRegular32 is ColorResolver {
     using Strings for uint256;
 
     // ---------------------------------------------------------------------
-    // ERRORS
-    // ---------------------------------------------------------------------
-
-    /// @dev Generic error for unauthorized access or invalid state
-    error E();
-
-    // ---------------------------------------------------------------------
     // CONSTANTS & WIRING
     // ---------------------------------------------------------------------
 
@@ -170,8 +162,6 @@ contract IconRendererRegular32 is ColorResolver {
 
     /// @dev Gamepiece ERC721 contract
     IERC721Lite private constant nft = IERC721Lite(ContractAddresses.GAMEPIECES);
-
-    // ---------------- Validation ----------------
 
     // ---------------------------------------------------------------------
     // User defaults
@@ -194,8 +184,8 @@ contract IconRendererRegular32 is ColorResolver {
 
     /// @notice Batch set the same per‑token color overrides for many tokenIds.
     /// @dev
-    /// - Max 150 tokenIds per call (reverts with "renderer:max150" if exceeded).
-    /// - Caller must own each tokenId in `game`.
+    /// - Caller must own each tokenId in `nft`.
+    /// - No explicit batch size limit; bounded by gas.
     /// - Pass "" for a channel to clear it on each token.
     function setCustomColorsForMany(
         uint256[] calldata tokenIds,
@@ -207,7 +197,7 @@ contract IconRendererRegular32 is ColorResolver {
         return
             registry.setCustomColorsForMany(
                 msg.sender,
-                address(nft),
+                ContractAddresses.GAMEPIECES,
                 tokenIds,
                 outlineHex,
                 flameHex,
@@ -226,8 +216,10 @@ contract IconRendererRegular32 is ColorResolver {
     uint32 private constant GLOBAL_BADGE_BOOST_1e6 = 1_010_000;
 
     // Quadrant offsets.
-    int16[4] private CX = [int16(-25), int16(25), int16(-25), int16(25)];
-    int16[4] private CY = [int16(25), int16(25), int16(-25), int16(-25)];
+    int16 private constant CX_LEFT = -25;
+    int16 private constant CX_RIGHT = 25;
+    int16 private constant CY_TOP = -25;
+    int16 private constant CY_BOTTOM = 25;
 
     // ---------------------------------------------------------------------
     // Trait baselines
@@ -344,10 +336,10 @@ contract IconRendererRegular32 is ColorResolver {
     ) private view returns (string memory out) {
         // Resolve palette (owner/custom overrides cascade inside `_resolveColor`)
         string memory borderColor0 = _borderColor(tokenId, traitsPacked, col, level);
-        string memory borderColor = _resolveColor(address(nft), tokenId, 0, borderColor0);
-        string memory diamondFill = _resolveColor(address(nft), tokenId, 2, "#fff");
-        string memory flameFill = _resolveColor(address(nft), tokenId, 1, "#111");
-        string memory squareFill = _resolveColor(address(nft), tokenId, 3, "#d9d9d9");
+        string memory borderColor = _resolveColor(ContractAddresses.GAMEPIECES, tokenId, 0, borderColor0);
+        string memory diamondFill = _resolveColor(ContractAddresses.GAMEPIECES, tokenId, 2, "#fff");
+        string memory flameFill = _resolveColor(ContractAddresses.GAMEPIECES, tokenId, 1, "#111");
+        string memory squareFill = _resolveColor(ContractAddresses.GAMEPIECES, tokenId, 3, "#d9d9d9");
 
         // Frame + guides
         out = RendererLibrary.svgHeader(borderColor, squareFill);
@@ -405,7 +397,16 @@ contract IconRendererRegular32 is ColorResolver {
 
         // Concentric rings
         string memory colorHex = _paletteColor(colorIndex, level);
-        string memory ringsSvg = RendererLibrary.rings(colorHex, "#111", "#fff", rOuter, rMiddle, rInner, CX[quadPos], CY[quadPos]);
+        string memory ringsSvg = RendererLibrary.rings(
+            colorHex,
+            "#111",
+            "#fff",
+            rOuter,
+            rMiddle,
+            rInner,
+            _cx(quadPos),
+            _cy(quadPos)
+        );
 
         // Symbol path selection (32 icons total: quadId*8 + symbolIndex)
         uint256 iconIndex = quadId * 8 + symbolIndex;
@@ -415,8 +416,8 @@ contract IconRendererRegular32 is ColorResolver {
         uint32 scale1e6 = uint32((uint256(2) * rInner * fit1e6) / RendererLibrary.ICON_VB);
 
         // Place symbol centered at quadrant origin in micro‑space
-        int256 cxMicro = int256(int32(CX[quadPos])) * 1_000_000;
-        int256 cyMicro = int256(int32(CY[quadPos])) * 1_000_000;
+        int256 cxMicro = int256(int32(_cx(quadPos))) * 1_000_000;
+        int256 cyMicro = int256(int32(_cy(quadPos))) * 1_000_000;
         int256 txMicro = cxMicro - (int256(uint256(RendererLibrary.ICON_VB)) * int256(uint256(scale1e6))) / 2;
         int256 tyMicro = cyMicro - (int256(uint256(RendererLibrary.ICON_VB)) * int256(uint256(scale1e6))) / 2;
 
@@ -477,7 +478,7 @@ contract IconRendererRegular32 is ColorResolver {
     function _descFromRem(
         uint8[4] memory col,
         uint8[4] memory sym,
-        uint32[4] memory rem
+        uint32[4] calldata rem
     ) private view returns (string memory) {
         return
             string(
@@ -580,7 +581,6 @@ contract IconRendererRegular32 is ColorResolver {
 
     // ---------------- Helpers ------------------------------------------------------------------------
 
-    /// @dev Utility: replicate a single palette index into a 4‑tuple (used by border resolver).
     /// @dev Compose a global 0..255 trait id.
     function _traitId(uint8 dataQ, uint8 colIdx, uint8 symIdx) private pure returns (uint8) {
         return ((colIdx << 3) | symIdx) + (dataQ << 6);
@@ -608,8 +608,8 @@ contract IconRendererRegular32 is ColorResolver {
      *      clamped to 24 to preserve spacing relative to guides and center glyph.
      */
     function _rMaxAt(uint256 pos) private view returns (uint32) {
-        int32 cx = int32(CX[pos]);
-        int32 cy = int32(CY[pos]);
+        int32 cx = int32(_cx(pos));
+        int32 cy = int32(_cy(pos));
 
         // Distance to vertical centerline and to outer square border on Y
         uint32 dx = uint32(cx < 0 ? -cx : cx);
@@ -619,6 +619,14 @@ contract IconRendererRegular32 is ColorResolver {
         uint32 r = dx < dyEdge ? dx : dyEdge;
         if (r > 24) r = 24;
         return r;
+    }
+
+    function _cx(uint256 pos) private pure returns (int16) {
+        return (pos & 1) == 0 ? CX_LEFT : CX_RIGHT;
+    }
+
+    function _cy(uint256 pos) private pure returns (int16) {
+        return pos < 2 ? CY_BOTTOM : CY_TOP;
     }
 
     /**

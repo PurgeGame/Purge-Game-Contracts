@@ -116,7 +116,6 @@ pragma solidity ^0.8.26;
 
 import "@openzeppelin/contracts/utils/Strings.sol";
 import {ContractAddresses} from "./ContractAddresses.sol";
-import "./interfaces/IDegenerusAffiliate.sol";
 import "./interfaces/IconRendererTypes.sol";
 import {ITrophySvgAssets} from "./TrophySvgAssets.sol";
 import {RendererLibrary} from "./libraries/RendererLibrary.sol";
@@ -157,13 +156,6 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg, ColorResolver {
     using Strings for uint256;
 
     // ---------------------------------------------------------------------
-    // ERRORS
-    // ---------------------------------------------------------------------
-
-    /// @dev Generic error for unauthorized access or invalid state
-    error E();
-
-    // ---------------------------------------------------------------------
     // CONSTANTS & WIRING
     // ---------------------------------------------------------------------
 
@@ -183,6 +175,7 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg, ColorResolver {
     /// @dev Sentinel value indicating BAF trophy type in trait field
     uint16 private constant BAF_TRAIT_SENTINEL = 0xFFFA;
     uint16 private constant BAF_FLIP_VB = 130;
+    uint32 private constant INNER_SQUARE_SIDE = 88;
     string private constant MAP_CORNER_TRANSFORM = "matrix(0.51 0 0 0.51 -6.12 -6.12)";
     string private constant FLAME_CORNER_TRANSFORM = "matrix(0.02810 0 0 0.02810 -12.03 -9.082)";
     uint32 private constant TOP_AFFILIATE_FIT_1e6 = (760_000 * 936) / 1_000;
@@ -197,7 +190,7 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg, ColorResolver {
         bool isBaf = params.isBaf;
         uint24 lvl = params.lvl;
 
-        uint32 innerSide = _innerSquareSide();
+        uint32 innerSide = INNER_SQUARE_SIDE;
         bool isExtermination = !isAffiliate && !isBaf;
 
         bool isTopAffiliate = isAffiliate && exterminatedTrait == 0xFFFE;
@@ -212,28 +205,21 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg, ColorResolver {
         uint8 symIdx = isTopAffiliate ? 0 : (six & 0x07);
 
         string memory ringOuterColor;
-        bool hasCustomAffiliateColor;
         {
             string memory defaultColor = _paletteColor(colIdx, lvl);
             if (isTopAffiliate) {
-                string memory custom = registry.topAffiliateColor(address(nft), tokenId);
-                hasCustomAffiliateColor = bytes(custom).length != 0;
-                ringOuterColor = hasCustomAffiliateColor ? custom : defaultColor;
+                string memory custom = registry.topAffiliateColor(ContractAddresses.TROPHIES, tokenId);
+                ringOuterColor = bytes(custom).length != 0 ? custom : defaultColor;
             } else {
                 ringOuterColor = defaultColor;
             }
         }
 
-        string memory border;
-        if (isTopAffiliate && hasCustomAffiliateColor) {
-            border = _resolveColorSafe(address(nft), tokenId, 0, ringOuterColor);
-        } else {
-            border = _resolveColorSafe(address(nft), tokenId, 0, _borderColor(tokenId, uint32(six), uint8(1) << colIdx, lvl));
-        }
+        string memory border = _resolveColorSafe(ContractAddresses.TROPHIES, tokenId, 0, ringOuterColor);
 
-        string memory flameColor = _resolveColorSafe(address(nft), tokenId, 1, "#111");
+        string memory flameColor = _resolveColorSafe(ContractAddresses.TROPHIES, tokenId, 1, "#111");
 
-        uint32 pct2 = registry.trophyOuter(address(nft), tokenId);
+        uint32 pct2 = registry.trophyOuter(ContractAddresses.TROPHIES, tokenId);
         uint32 rOut2 = (pct2 <= 1) ? 44 : uint32((uint256(innerSide) * pct2) / 2_000_000);
         uint32 rMid2 = uint32((uint256(rOut2) * RendererLibrary.RATIO_MID_1e6) / 1_000_000);
         uint32 rIn2 = uint32((uint256(rOut2) * RendererLibrary.RATIO_IN_1e6) / 1_000_000);
@@ -248,7 +234,7 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg, ColorResolver {
                 abi.encodePacked("<g transform='", RendererLibrary.mat6(scale, offsetX, offsetY), "'>", assets.bafFlipSymbol(), "</g>")
             );
 
-            return _composeSvg(RendererLibrary.svgHeader(border, _resolveColorSafe(address(nft), tokenId, 3, "#d9d9d9")), anim, isExtermination);
+            return _composeSvg(RendererLibrary.svgHeader(border, _resolveColorSafe(ContractAddresses.TROPHIES, tokenId, 3, "#d9d9d9")), anim, isExtermination);
         }
 
         string memory iconPath;
@@ -298,7 +284,7 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg, ColorResolver {
 
         string memory ringsAndSymbol = string(
             abi.encodePacked(
-                RendererLibrary.rings(ringOuterColor, flameColor, _resolveColorSafe(address(nft), tokenId, 2, "#fff"), rOut2, rMid2, rIn2, 0, 0),
+                RendererLibrary.rings(ringOuterColor, flameColor, _resolveColorSafe(ContractAddresses.TROPHIES, tokenId, 2, "#fff"), rOut2, rMid2, rIn2, 0, 0),
                 "<defs><clipPath id='ct2'><circle cx='0' cy='0' r='",
                 uint256(rIn2).toString(),
                 "'/></clipPath></defs>",
@@ -313,7 +299,7 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg, ColorResolver {
             ringsAndSymbol = string(abi.encodePacked('<g filter="url(#inv)">', ringsAndSymbol, "</g>"));
         }
 
-        return _composeSvg(RendererLibrary.svgHeader(border, _resolveColorSafe(address(nft), tokenId, 3, "#d9d9d9")), ringsAndSymbol, isExtermination);
+        return _composeSvg(RendererLibrary.svgHeader(border, _resolveColorSafe(ContractAddresses.TROPHIES, tokenId, 3, "#d9d9d9")), ringsAndSymbol, isExtermination);
     }
 
 
@@ -339,22 +325,6 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg, ColorResolver {
         return string(abi.encodePacked(head, inner, corners, RendererLibrary.svgFooter()));
     }
 
-
-    function _borderColor(
-        uint256 tokenId,
-        uint32 six,
-        uint8 colorMask,
-        uint24 level
-    ) private view returns (string memory) {
-        uint8 colIdx = uint8((six >> 3) & 0x07);
-        if ((colorMask & (uint8(1) << colIdx)) == 0) {
-            colIdx = 0;
-        }
-        string memory palette = _paletteColor(colIdx, level);
-        string memory ownerColor = _resolveColorSafe(address(nft), tokenId, 0, palette);
-        if (bytes(ownerColor).length == 0) return palette;
-        return ownerColor;
-    }
 
     function _paletteColor(uint8 idx, uint24 level) private pure returns (string memory) {
         uint24 rgb = _paletteColorRGB(idx, level);
@@ -389,11 +359,6 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg, ColorResolver {
         if (g > 255) g = delta > 0 ? int256(255) : int256(0);
         if (b > 255) b = delta > 0 ? int256(255) : int256(0);
         return (uint24(uint16(uint256(r))) << 16) | (uint24(uint16(uint256(g))) << 8) | uint24(uint16(uint256(b)));
-    }
-
-
-    function _innerSquareSide() private pure returns (uint32) {
-        return 88;
     }
 
 

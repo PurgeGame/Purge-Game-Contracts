@@ -30,4 +30,8 @@ library ContractAddresses {
     address internal constant STETH_TOKEN = 0x8464135c8F25Da09e49BC8782676a84730C318bC;
     address internal constant LINK_TOKEN = 0x71C95911E9a5D330f4D621842EC243EE1343292e;
     address internal constant CREATOR = 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266;
+
+    // VRF Configuration (network-specific constants)
+    address internal constant VRF_COORDINATOR = 0x9DdfaCa8183c41ad55329BdeeD9F6A8d53168B1B; // Sepolia VRFCoordinatorV2_5
+    bytes32 internal constant VRF_KEY_HASH = 0x787d74caea10b2b357790d5b5247c2f63d1d91572a9846f780606e4d953677ae; // 100 gwei Sepolia
 }

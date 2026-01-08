@@ -31,7 +31,7 @@ npm run sim:report   # Simulation report
 |----------|---------|
 | `DegenerusGame.sol` | State machine, ETH/stETH buckets, RNG |
 | `DegenerusGamepieces.sol` | ERC721, purchase flows |
-| `DegenerusCoin.sol` | BURNIE, coinflip, decimator |
+| `BurnieCoin.sol` | BURNIE, coinflip, decimator |
 | `DegenerusBonds.sol` | Maturities, bond payouts |
 | `DegenerusJackpots.sol` | BAF + Decimator jackpots |
 | `DegenerusAffiliate.sol` | Referrals + rakeback |
@@ -59,8 +59,8 @@ Quest system is standalone (`DegenerusQuests.sol`), not a delegatecall module.
 
 | Constant | Value |
 |----------|-------|
-| BURNIE decimals | 6 |
-| PRICE_COIN_UNIT | 1e9 (= 1000 BURNIE) |
+| BURNIE decimals | 18 |
+| PRICE_COIN_UNIT | 1e21 (= 1000 BURNIE) |
 | JACKPOT_RESET_TIME | 82620 seconds |
 | Game states | 0=presale, 1=pregame/endgame settlement, 2=purchase, 3=burn, 86=gameover |
 | BAF trigger | Every 10 levels |

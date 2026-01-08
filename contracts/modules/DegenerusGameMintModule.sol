@@ -23,14 +23,15 @@ import {DegenerusGameStorage} from "../storage/DegenerusGameStorage.sol";
  * All per-player mint history is packed into a single uint256:
  *
  * ```
- * Bits 0-23:   lastLevel     - Last level with ETH mint
- * Bits 24-47:  levelCount    - Levels minted this century (resets every 100)
-* Bits 48-71:  levelStreak   - Consecutive levels minted
-* Bits 72-103: lastMintDay   - Day index of last mint
- * Bits 104-127: unitsLevel  - Level index for levelUnits tracking
-* Bits 228-243: levelUnits   - Units minted this level (1 NFT = 4 units)
-* Bit 244:     bonusPaid     - Whether 400-unit bonus was paid this level
-* ```
+ * Bits 0-23:    lastLevel     - Last level with ETH mint
+ * Bits 24-47:   levelCount    - Total levels minted (lifetime)
+ * Bits 48-71:   levelStreak   - Consecutive levels minted
+ * Bits 72-103:  lastMintDay   - Day index of last mint
+ * Bits 104-127: unitsLevel    - Level index for levelUnits tracking
+ * Bits 128-227: (reserved)    - Future use
+ * Bits 228-243: levelUnits    - Units minted this level (1 NFT = 4 units)
+ * Bit 244:      bonusPaid     - Whether 400-unit bonus was paid this level
+ * ```
  *
  * ## BURNIE Reward Structure
  *
@@ -83,7 +84,7 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
     /// @notice Bit shift for last minted level (24 bits at position 0).
     uint256 private constant ETH_LAST_LEVEL_SHIFT = 0;
 
-    /// @notice Bit shift for level count within century (24 bits at position 24).
+    /// @notice Bit shift for level count (24 bits at position 24).
     uint256 private constant ETH_LEVEL_COUNT_SHIFT = 24;
 
     /// @notice Bit shift for consecutive level streak (24 bits at position 48).
@@ -132,7 +133,7 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
      * - Same level: Just update units and check bonus
      * - New level with <4 units: Only track units, don't count as "minted"
      * - New level with ≥4 units: Update streak, total, and award rewards
-     * - Century boundary (level 100, 200...): Reset total to 1
+ * - Century boundary (level 100, 200...): Total continues to accumulate
      */
     function recordMintData(
         address player,
@@ -158,7 +159,6 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
 
         bool sameLevel = prevLevel == lvl;
         bool sameUnitsLevel = unitsLevel == lvl;
-        bool newCentury = (prevLevel / 100) != (lvl / 100);
 
         // ---------------------------------------------------------------------
         // Handle level units and bonus
@@ -222,10 +222,8 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
         // New level with ≥4 units: Full state update
         // ---------------------------------------------------------------------
 
-        // Update total (resets on century boundary)
-        if (newCentury) {
-            total = 1;
-        } else if (total < type(uint24).max) {
+        // Update total (lifetime count)
+        if (total < type(uint24).max) {
             unchecked {
                 total = uint24(total + 1);
             }

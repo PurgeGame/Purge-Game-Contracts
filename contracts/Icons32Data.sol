@@ -17,9 +17,9 @@ pragma solidity ^0.8.26;
 |  |                                                                                                  | |
 |  |   _paths[0-7]   -► Quadrant 0 (Crypto):   Bitcoin, Ethereum, Litecoin, etc.                     | |
 |  |   _paths[8-15]  -► Quadrant 1 (Zodiac):   Aries, Taurus, Gemini, etc.                           | |
-|  |   _paths[16-23] -► Quadrant 2 (Cards):    Horseshoe, King, Cashsack, Club, Diamond, Heart | |
-|  |                                      Spade, Ace                                           | |
-|  |   _paths[24-31] -► Quadrant 3 (Dice):     1-8                                             | |
+|  |   _paths[16-23] -► Quadrant 2 (Cards):    Horseshoe, King, Cashsack, Club, Diamond, Heart       | |
+|  |                                      Spade, Ace                                                 | |
+|  |   _paths[24-31] -► Quadrant 3 (Dice):     1-8                                                   | |
 |  |   _paths[32]    -► Affiliate Badge:       Special icon for affiliate trophies                   | |
 |  |                                                                                                  | |
 |  |   _diamond      -► Flame icon:            Center glyph for all token renders                    | |

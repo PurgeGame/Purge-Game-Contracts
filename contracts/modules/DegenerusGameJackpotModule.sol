@@ -215,21 +215,20 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
     /// @dev Mutable context passed through ETH distribution loops to track cumulative state.
     ///      Using a struct avoids stack-too-deep and makes the flow explicit.
     struct JackpotEthCtx {
-        uint256 entropyState;     // Rolling entropy for winner selection.
-        uint256 liabilityDelta;   // Cumulative claimable liability added this run.
-        uint256 totalPaidEth;     // Total ETH paid out (including bond purchases).
+        uint256 entropyState; // Rolling entropy for winner selection.
+        uint256 liabilityDelta; // Cumulative claimable liability added this run.
+        uint256 totalPaidEth; // Total ETH paid out (including bond purchases).
     }
 
     /// @dev Packed parameters for a single jackpot execution. Keeps external call surface lean
-    ///      and avoids passing 7+ parameters through multiple internal functions.
+    ///      and avoids passing 6+ parameters through multiple internal functions.
     struct JackpotParams {
-        uint24 lvl;                      // Current game level (1-indexed).
-        uint256 ethPool;                 // ETH available for this jackpot.
-        uint256 coinPool;                // COIN available for this jackpot.
-        uint256 entropy;                 // VRF-derived entropy for winner selection.
-        uint32 winningTraitsPacked;      // 4 trait IDs packed into 32 bits (8 bits each).
-        uint64 traitShareBpsPacked;      // 4 share percentages packed (16 bits each).
-        IDegenerusCoinModule coinContract; // Coin module for COIN credits.
+        uint24 lvl; // Current game level (1-indexed).
+        uint256 ethPool; // ETH available for this jackpot.
+        uint256 coinPool; // COIN available for this jackpot.
+        uint256 entropy; // VRF-derived entropy for winner selection.
+        uint32 winningTraitsPacked; // 4 trait IDs packed into 32 bits (8 bits each).
+        uint64 traitShareBpsPacked; // 4 share percentages packed (16 bits each).
     }
 
     // =========================================================================
@@ -254,8 +253,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
     /// @param isDaily True for scheduled daily jackpot, false for early-burn jackpot.
     /// @param lvl Current game level.
     /// @param randWord VRF entropy for winner selection and trait derivation.
-    /// @param coinContract Coin module for COIN payouts and quest rolls.
-    function payDailyJackpot(bool isDaily, uint24 lvl, uint256 randWord, IDegenerusCoinModule coinContract) external {
+    function payDailyJackpot(bool isDaily, uint24 lvl, uint256 randWord) external {
         uint48 questDay = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
         uint32 winningTraitsPacked;
 
@@ -274,8 +272,10 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
             }
 
             uint256 entropyDaily = randWord ^ (uint256(lvl) << 192);
-            (uint16[4] memory baseBucketCountsDaily, uint16[4] memory bucketCountsDaily) =
-                _bucketCountsForPool(budget, entropyDaily);
+            (uint16[4] memory baseBucketCountsDaily, uint16[4] memory bucketCountsDaily) = _bucketCountsForPool(
+                budget,
+                entropyDaily
+            );
             bucketCountsDaily = _capBucketCounts(bucketCountsDaily, DAILY_ETH_MAX_WINNERS, entropyDaily);
 
             uint256 paidDailyEth = _runMainJackpotEthFlow(
@@ -285,8 +285,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
                     coinPool: 0,
                     entropy: entropyDaily,
                     winningTraitsPacked: winningTraitsPacked,
-                    traitShareBpsPacked: DAILY_JACKPOT_SHARES_PACKED,
-                    coinContract: coinContract
+                    traitShareBpsPacked: DAILY_JACKPOT_SHARES_PACKED
                 }),
                 baseBucketCountsDaily,
                 bucketCountsDaily,
@@ -365,10 +364,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
             uint256 paidCarryEth;
             if (futureEthPool != 0) {
                 uint8[4] memory traitIds = _unpackWinningTraits(winningTraitsPacked);
-                uint16[4] memory shareBps = _shareBpsByBucket(
-                    DAILY_JACKPOT_SHARES_PACKED,
-                    uint8(entropyNext & 3)
-                );
+                uint16[4] memory shareBps = _shareBpsByBucket(DAILY_JACKPOT_SHARES_PACKED, uint8(entropyNext & 3));
                 paidCarryEth = _distributeJackpotEth(
                     nextLevel,
                     futureEthPool,
@@ -376,8 +372,6 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
                     traitIds,
                     shareBps,
                     bucketCountsNext,
-                    coinContract,
-                    bonds,
                     BOND_BPS_DAILY,
                     0
                 );
@@ -400,7 +394,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
                 _clearDailyBurnCount();
             }
 
-            _rollQuestForJackpot(coinContract, randWord, false, questDay);
+            _rollQuestForJackpot(randWord, false, questDay);
             return;
         }
 
@@ -448,8 +442,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
                 coinPool: coinPool,
                 entropy: randWord ^ (uint256(lvl) << 192),
                 winningTraitsPacked: winningTraitsPacked,
-                traitShareBpsPacked: DAILY_JACKPOT_SHARES_PACKED,
-                coinContract: coinContract
+                traitShareBpsPacked: DAILY_JACKPOT_SHARES_PACKED
             }),
             false,
             false,
@@ -468,7 +461,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
             mapJackpotType = MAP_JACKPOT_PURCHASE;
             mapJackpotUnits1 = mapUnits;
         }
-        _rollQuestForJackpot(coinContract, randWord, false, questDay);
+        _rollQuestForJackpot(randWord, false, questDay);
     }
 
     /// @notice Pays the queued MAP jackpot (daily or purchase) in a separate transaction.
@@ -570,14 +563,12 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
     /// @param traitId The trait being exterminated (0-255).
     /// @param randWord VRF entropy for winner selection.
     /// @param ethPool ETH allocated for this extermination jackpot.
-    /// @param coinContract Coin module (unused for ETH-only extermination jackpots).
     /// @return paidEth Actual ETH distributed to winners.
     function payExterminationJackpot(
         uint24 lvl,
         uint8 traitId,
         uint256 randWord,
-        uint256 ethPool,
-        IDegenerusCoinModule coinContract
+        uint256 ethPool
     ) external returns (uint256 paidEth) {
         // Pack the same trait into all 4 slots — ensures all buckets draw from the same trait pool.
         uint32 packedTrait = uint32(traitId);
@@ -592,8 +583,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
                 coinPool: 0,
                 entropy: randWord ^ (uint256(lvl) << 192),
                 winningTraitsPacked: packedTrait,
-                traitShareBpsPacked: DAILY_JACKPOT_SHARES_PACKED,
-                coinContract: coinContract
+                traitShareBpsPacked: DAILY_JACKPOT_SHARES_PACKED
             }),
             false,
             false,
@@ -610,13 +600,11 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
     /// @param lvl Target level for ticket lookup (typically current level + 1).
     /// @param traitId The exterminated trait whose holders are rewarded.
     /// @param randWord VRF entropy for winner selection.
-    /// @param coinContract Coin module for quest rolls.
     /// @return paidEth Actual ETH distributed (debited from rewardPool).
     function payCarryoverExterminationJackpot(
         uint24 lvl,
         uint8 traitId,
-        uint256 randWord,
-        IDegenerusCoinModule coinContract
+        uint256 randWord
     ) external returns (uint256 paidEth) {
         uint48 questDay = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
         // 1% of rewardPool, scaled down as level progresses through 100-level band.
@@ -635,8 +623,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
                     coinPool: 0,
                     entropy: randWord ^ (uint256(lvl) << 192),
                     winningTraitsPacked: packedTrait,
-                    traitShareBpsPacked: DAILY_JACKPOT_SHARES_PACKED,
-                    coinContract: coinContract
+                    traitShareBpsPacked: DAILY_JACKPOT_SHARES_PACKED
                 }),
                 false,
                 false,
@@ -649,7 +636,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
             }
         }
 
-        _rollQuestForJackpot(coinContract, randWord, false, questDay);
+        _rollQuestForJackpot(randWord, false, questDay);
     }
 
     /// @notice Pays the level jackpot at the end of the purchase phase.
@@ -660,13 +647,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
     /// @param lvl Current game level.
     /// @param rngWord VRF entropy for trait and winner selection.
     /// @param effectiveWei Total ETH allocated for the level jackpot (from calcPrizePoolForLevelJackpot).
-    /// @param coinContract Coin module for quest rolls.
-    function payLevelJackpot(
-        uint24 lvl,
-        uint256 rngWord,
-        uint256 effectiveWei,
-        IDegenerusCoinModule coinContract
-    ) external {
+    function payLevelJackpot(uint24 lvl, uint256 rngWord, uint256 effectiveWei) external {
         uint8[4] memory winningTraits = _getRandomTraits(rngWord);
         uint32 winningTraitsPacked = _packWinningTraits(winningTraits);
 
@@ -684,8 +665,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
             }
         }
 
-        (uint16[4] memory baseBucketCounts, uint16[4] memory bucketCounts) =
-            _bucketCountsForPool(ethPool, rngWord);
+        (uint16[4] memory baseBucketCounts, uint16[4] memory bucketCounts) = _bucketCountsForPool(ethPool, rngWord);
 
         // Main jackpot flow with bond integration for solo and large-bucket winners.
         uint256 paidEth = _runMainJackpotEthFlow(
@@ -695,8 +675,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
                 coinPool: 0,
                 entropy: rngWord,
                 winningTraitsPacked: winningTraitsPacked,
-                traitShareBpsPacked: LEVEL_JACKPOT_SHARES_PACKED,
-                coinContract: coinContract
+                traitShareBpsPacked: LEVEL_JACKPOT_SHARES_PACKED
             }),
             baseBucketCounts,
             bucketCounts,
@@ -716,7 +695,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
         }
 
         uint48 questDay = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
-        _rollQuestForJackpot(coinContract, rngWord, true, questDay);
+        _rollQuestForJackpot(rngWord, true, questDay);
     }
 
     /// @notice Computes and applies prize pool splits at the start of a new level's jackpot phase.
@@ -731,13 +710,8 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
     ///
     /// @param lvl Current game level.
     /// @param rngWord VRF entropy for percentage rolls.
-    /// @param stethAddr stETH contract address for balance checks.
     /// @return effectiveWei ETH allocated for the level jackpot.
-    function calcPrizePoolForLevelJackpot(
-        uint24 lvl,
-        uint256 rngWord,
-        address stethAddr
-    ) external returns (uint256 effectiveWei) {
+    function calcPrizePoolForLevelJackpot(uint24 lvl, uint256 rngWord) external returns (uint256 effectiveWei) {
         // Consolidate pools for this level's jackpot calculations.
         currentPrizePool += nextPrizePool;
         nextPrizePool = 0;
@@ -767,7 +741,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
         effectiveWei = levelJackpotWei;
 
         if ((lvl % 100) == 0) {
-            uint256 stBal = IStETH(stethAddr).balanceOf(address(this));
+            uint256 stBal = IStETH(ContractAddresses.STETH_TOKEN).balanceOf(address(this));
             uint256 totalBal = address(this).balance + stBal;
             uint256 obligations = currentPrizePool + nextPrizePool + rewardPool + claimablePool + bondPool;
             uint256 bafPool = bafHundredPool;
@@ -855,10 +829,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
 
     /// @dev Derives MAP ticket units and total cost from an ETH pool slice.
     ///      Uses the current MAP price (25% of the NFT price) and floors to whole units.
-    function _mapUnitsAndCost(
-        uint256 ethPool,
-        uint16 mapBps
-    ) private view returns (uint256 mapUnits, uint256 mapCost) {
+    function _mapUnitsAndCost(uint256 ethPool, uint16 mapBps) private view returns (uint256 mapUnits, uint256 mapCost) {
         if (ethPool == 0 || mapBps == 0) return (0, 0);
         uint256 mapPrice = uint256(price) / 4;
         if (mapPrice == 0) return (0, 0);
@@ -1016,10 +987,10 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
     /// @return counts Winner counts for each bucket [bucket0, bucket1, bucket2, bucket3].
     function _traitBucketCounts(uint256 entropy) private pure returns (uint16[4] memory counts) {
         uint16[4] memory base;
-        base[0] = 25;  // Large bucket
-        base[1] = 15;  // Mid bucket
-        base[2] = 8;   // Small bucket
-        base[3] = 1;   // Solo bucket (receives the 60% share via rotation)
+        base[0] = 25; // Large bucket
+        base[1] = 15; // Mid bucket
+        base[2] = 8; // Small bucket
+        base[3] = 1; // Solo bucket (receives the 60% share via rotation)
 
         // Rotate bucket assignments based on entropy for fairness across traits.
         uint8 offset = uint8(entropy & 3);
@@ -1046,13 +1017,11 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
         if (ethPool < JACKPOT_SCALE_FIRST_WEI) {
             uint256 range = JACKPOT_SCALE_FIRST_WEI - JACKPOT_SCALE_MIN_WEI;
             uint256 progress = ethPool - JACKPOT_SCALE_MIN_WEI;
-            scaleBps = JACKPOT_SCALE_BASE_BPS
-                + (progress * (JACKPOT_SCALE_FIRST_BPS - JACKPOT_SCALE_BASE_BPS)) / range;
+            scaleBps = JACKPOT_SCALE_BASE_BPS + (progress * (JACKPOT_SCALE_FIRST_BPS - JACKPOT_SCALE_BASE_BPS)) / range;
         } else if (ethPool < JACKPOT_SCALE_SECOND_WEI) {
             uint256 range = JACKPOT_SCALE_SECOND_WEI - JACKPOT_SCALE_FIRST_WEI;
             uint256 progress = ethPool - JACKPOT_SCALE_FIRST_WEI;
-            scaleBps = JACKPOT_SCALE_FIRST_BPS
-                + (progress * (JACKPOT_SCALE_MAX_BPS - JACKPOT_SCALE_FIRST_BPS)) / range;
+            scaleBps = JACKPOT_SCALE_FIRST_BPS + (progress * (JACKPOT_SCALE_MAX_BPS - JACKPOT_SCALE_FIRST_BPS)) / range;
         } else {
             scaleBps = JACKPOT_SCALE_MAX_BPS;
         }
@@ -1224,7 +1193,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
             } else {
                 adjusted = 0;
             }
-        // Flips halved or worse → increase retention by 2% (preserve reserves).
+            // Flips halved or worse → increase retention by 2% (preserve reserves).
         } else if (currentTotal < prevTotal && prevTotal - currentTotal > currentTotal) {
             adjusted += 4;
         }
@@ -1251,10 +1220,10 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
     ///      Adds variance to prevent predictable jackpot sizing.
     function _rewardPoolBonus(uint256 rngWord) private pure returns (uint256) {
         uint256 seed = uint256(keccak256(abi.encodePacked(rngWord, CARRYOVER_BONUS_TAG)));
-        uint256 d4a = (seed & 0xF) % 4;        // 0-3
+        uint256 d4a = (seed & 0xF) % 4; // 0-3
         uint256 d4b = ((seed >> 8) & 0xF) % 4; // 0-3
         uint256 d14 = ((seed >> 16) & 0xFF) % 14; // 0-13
-        return d4a + d4b + d14 + 3;            // 3-23
+        return d4a + d4b + d14 + 3; // 3-23
     }
 
     /// @dev Legacy fallback for reward pool calculation on levels outside the main formula.
@@ -1270,8 +1239,8 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
         else if (lvlMod100 == 99) base = 93;
         else base = 65 + (rngWord % 26);
 
-        if ((lvl % 10) == 9) base += 5;  // Boost on "9" levels
-        base += lvl / 100;               // Slight increase per 100-level era
+        if ((lvl % 10) == 9) base += 5; // Boost on "9" levels
+        base += lvl / 100; // Slight increase per 100-level era
         return base * 2;
     }
 
@@ -1305,7 +1274,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
     ///      Fixed at 40% for "big" levels (16, 36, 56, 76, 96); otherwise 20-40% random.
     function _levelJackpotPercent(uint24 lvl, uint256 rngWord) private pure returns (uint256) {
         if (lvl % 20 == 16) return 40; // Big level jackpot levels get fixed 40%
-        return 20 + (rngWord % 21);    // Otherwise 20-40% random
+        return 20 + (rngWord % 21); // Otherwise 20-40% random
     }
 
     /// @dev Returns the basis points for the nth daily jackpot (0-9).
@@ -1373,20 +1342,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
     ) private returns (uint256 totalPaidEth) {
         uint16[4] memory baseBucketCounts = _traitBucketCounts(jp.entropy);
         uint16[4] memory bucketCounts = _scaleTraitBucketCounts(baseBucketCounts, jp.ethPool, jp.entropy);
-        address bondsAddr = ContractAddresses.BONDS;
-        return
-            _distributeJackpotEth(
-                jp.lvl,
-                jp.ethPool,
-                jp.entropy,
-                traitIds,
-                shareBps,
-                bucketCounts,
-                jp.coinContract,
-                bondsAddr,
-                bondBps,
-                mapBps
-            );
+        return _distributeJackpotEth(jp.lvl, jp.ethPool, jp.entropy, traitIds, shareBps, bucketCounts, bondBps, mapBps);
     }
 
     /// @dev Main ETH flow for MAP/daily jackpots with solo and large-bucket bond integration.
@@ -1403,17 +1359,8 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
     ) private returns (uint256 totalPaidEth) {
         uint8[4] memory traitIds = _unpackWinningTraits(jp.winningTraitsPacked);
         uint16[4] memory shareBps = _shareBpsByBucket(jp.traitShareBpsPacked, uint8(jp.entropy & 3));
-        uint16 largeBucketCount;
-        if (largeBucketSize != 0) {
-            largeBucketCount = largeBucketSize;
-        }
-        address bondsAddr = ContractAddresses.BONDS;
         uint256 unit = uint256(price) / 4;
         uint8 remainderIdx = _soloBucketIndex(jp.entropy);
-        bool bondPurchasesOpen;
-        if (bondsAddr != address(0) && (soloBondBps != 0 || (largeBucketSize != 0 && largeBucketBondWinners != 0))) {
-            bondPurchasesOpen = IDegenerusBondsJackpot(bondsAddr).purchasesEnabled();
-        }
         uint256[4] memory shares = _bucketShares(jp.ethPool, shareBps, bucketCounts, remainderIdx, unit);
 
         JackpotEthCtx memory ctx;
@@ -1428,13 +1375,19 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
 
             if (bucketCount == 1) {
                 bucketBondBps = soloBondBps;
-            } else if (baseBucketCounts[traitIdx] == largeBucketCount && largeBucketSize != 0 && largeBucketBondWinners != 0) {
+            } else if (
+                largeBucketSize != 0 && baseBucketCounts[traitIdx] == largeBucketSize && largeBucketBondWinners != 0
+            ) {
                 bondWinnerCount = (bucketCount * largeBucketBondWinners) / largeBucketSize;
             }
 
-            (uint256 newEntropyState, uint256 ethDelta, uint256 bondSpent, uint256 bucketLiability, uint256 mapSpent) =
-                _resolveTraitWinners(
-                    jp.coinContract,
+            (
+                uint256 newEntropyState,
+                uint256 ethDelta,
+                uint256 bondSpent,
+                uint256 bucketLiability,
+                uint256 mapSpent
+            ) = _resolveTraitWinners(
                     false,
                     jp.lvl,
                     traitIds[traitIdx],
@@ -1442,11 +1395,9 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
                     share,
                     ctx.entropyState,
                     bucketCount,
-                    bondsAddr,
                     bucketBondBps,
                     bondWinnerCount,
-                    mapBps,
-                    bondPurchasesOpen
+                    mapBps
                 );
             ctx.entropyState = newEntropyState;
             ctx.totalPaidEth += ethDelta + bondSpent + mapSpent;
@@ -1482,8 +1433,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
             traitIds,
             shareBps,
             bucketCounts,
-            remainderIdx,
-            jp.coinContract
+            remainderIdx
         );
     }
 
@@ -1494,18 +1444,12 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
         uint8[4] memory traitIds,
         uint16[4] memory shareBps,
         uint16[4] memory bucketCounts,
-        IDegenerusCoinModule coinContract,
-        address bondsAddr,
         uint16 bondBps,
         uint16 mapBps
     ) private returns (uint256 totalPaidEth) {
         // Each trait bucket gets a slice; the solo bucket absorbs remainder to avoid dust. totalPaidEth counts ETH plus bond spend.
         JackpotEthCtx memory ctx;
         ctx.entropyState = entropy;
-        bool bondPurchasesOpen;
-        if (bondBps != 0 && bondsAddr != address(0)) {
-            bondPurchasesOpen = IDegenerusBondsJackpot(bondsAddr).purchasesEnabled();
-        }
         uint256 unit = uint256(price) / 4;
         uint8 remainderIdx = _soloBucketIndex(entropy);
         uint256[4] memory shares = _bucketShares(ethPool, shareBps, bucketCounts, remainderIdx, unit);
@@ -1515,25 +1459,27 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
             uint256 share = shares[traitIdx];
             uint16 bucketBondBps = bondBps;
             {
-            (uint256 newEntropyState, uint256 ethDelta, uint256 bondSpent, uint256 bucketLiability, uint256 mapSpent) =
-                _resolveTraitWinners(
-                    coinContract,
-                    false,
-                    lvl,
-                    traitIds[traitIdx],
-                    traitIdx,
-                    share,
-                    ctx.entropyState,
-                    bucketCount,
-                    bondsAddr,
-                    bucketBondBps,
-                    0,
-                    mapBps,
-                    bondPurchasesOpen
-                );
-            ctx.entropyState = newEntropyState;
-            ctx.totalPaidEth += ethDelta + bondSpent + mapSpent;
-            ctx.liabilityDelta += bucketLiability;
+                (
+                    uint256 newEntropyState,
+                    uint256 ethDelta,
+                    uint256 bondSpent,
+                    uint256 bucketLiability,
+                    uint256 mapSpent
+                ) = _resolveTraitWinners(
+                        false,
+                        lvl,
+                        traitIds[traitIdx],
+                        traitIdx,
+                        share,
+                        ctx.entropyState,
+                        bucketCount,
+                        bucketBondBps,
+                        0,
+                        mapBps
+                    );
+                ctx.entropyState = newEntropyState;
+                ctx.totalPaidEth += ethDelta + bondSpent + mapSpent;
+                ctx.liabilityDelta += bucketLiability;
             }
             unchecked {
                 ++traitIdx;
@@ -1556,8 +1502,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
         uint8[4] memory traitIds,
         uint16[4] memory shareBps,
         uint16[4] memory bucketCounts,
-        uint8 remainderIdx,
-        IDegenerusCoinModule coinContract
+        uint8 remainderIdx
     ) private {
         uint256 unit = PRICE_COIN_UNIT / 4;
         uint256[4] memory shares = _bucketShares(coinPool, shareBps, bucketCounts, remainderIdx, unit);
@@ -1566,7 +1511,6 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
             uint256 share = shares[traitIdx];
             uint8 traitId = traitIds[traitIdx];
             (entropy, , , , ) = _resolveTraitWinners(
-                coinContract,
                 true,
                 lvl,
                 traitId,
@@ -1574,11 +1518,9 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
                 share,
                 entropy,
                 bucketCount,
-                address(0),
                 0,
                 0,
-                0,
-                false
+                0
             );
             unchecked {
                 ++traitIdx;
@@ -1637,7 +1579,6 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
     ///      4. Solo winners may get a bond/ETH split; large buckets may have subset bond winners.
     ///      5. Credit remaining ETH to claimableWinnings.
     ///
-    /// @param coinContract Coin module for COIN credits.
     /// @param payCoin If true, pay COIN; if false, pay ETH.
     /// @param lvl Current level for ticket pool lookup.
     /// @param traitId Which trait's ticket pool to draw from.
@@ -1645,18 +1586,15 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
     /// @param traitShare Total ETH/COIN allocated to this bucket.
     /// @param entropy Current entropy state.
     /// @param winnerCount Number of winners to select.
-    /// @param bondsAddr Bonds contract address.
     /// @param bondBps Bond percentage for solo winners.
     /// @param bondWinnerCount Number of winners to receive bonds (large bucket mode).
     /// @param mapBps Basis points of ETH payout to convert into MAP tickets.
-    /// @param bondPurchasesOpen True if bond purchases are open; otherwise prizes mint DGNRS 1:1.
     /// @return entropyState Updated entropy after selection.
     /// @return ethDelta ETH credited to claimable balances.
     /// @return bondSpent ETH spent on bond purchases.
     /// @return liabilityDelta Total claimable liability added.
     /// @return mapSpent ETH converted to MAP tickets (added to nextPrizePool).
     function _resolveTraitWinners(
-        IDegenerusCoinModule coinContract,
         bool payCoin,
         uint24 lvl,
         uint8 traitId,
@@ -1664,20 +1602,12 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
         uint256 traitShare,
         uint256 entropy,
         uint16 winnerCount,
-        address bondsAddr,
         uint16 bondBps,
         uint16 bondWinnerCount,
-        uint16 mapBps,
-        bool bondPurchasesOpen
+        uint16 mapBps
     )
         private
-        returns (
-            uint256 entropyState,
-            uint256 ethDelta,
-            uint256 bondSpent,
-            uint256 liabilityDelta,
-            uint256 mapSpent
-        )
+        returns (uint256 entropyState, uint256 ethDelta, uint256 bondSpent, uint256 liabilityDelta, uint256 mapSpent)
     {
         entropyState = entropy;
 
@@ -1697,21 +1627,20 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
             entropyState,
             traitId,
             uint8(totalCount),
-            uint8(200 + traitIdx)  // Salt to differentiate trait buckets
+            uint8(200 + traitIdx) // Salt to differentiate trait buckets
         );
         if (winners.length == 0) return (entropyState, 0, 0, 0, 0);
 
         uint256 perWinner = traitShare / totalCount;
         if (perWinner == 0) return (entropyState, 0, bondSpent, liabilityDelta, 0);
 
-        bool bondsConfigured = bondsAddr != address(0);
-        if (!payCoin && bondBps != 0 && bondsConfigured && totalCount == 1) {
+        if (!payCoin && bondBps != 0 && totalCount == 1) {
             address winner = winners[0];
             if (winner == address(0)) return (entropyState, 0, 0, 0, 0);
             uint256 bondBudget = (perWinner * bondBps) / 10_000;
             uint256 cashPortion = perWinner;
             if (bondBudget != 0) {
-                _awardBondPrize(bondsAddr, winner, bondBudget, lvl, bondPurchasesOpen);
+                _awardBondPrize(winner, bondBudget, lvl);
                 cashPortion = perWinner - bondBudget;
                 bondSpent = bondBudget;
             }
@@ -1722,37 +1651,20 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
             return (entropyState, ethDelta, bondSpent, liabilityDelta, mapSpent);
         }
 
-        if (!payCoin && bondWinnerCount != 0 && bondsConfigured) {
+        if (!payCoin && bondWinnerCount != 0) {
             uint256 burnLiability;
-            (bondSpent, burnLiability) = _jackpotBondSpendCount(
-                bondsAddr,
-                winners,
-                perWinner,
-                entropyState,
-                bondWinnerCount,
-                lvl,
-                bondPurchasesOpen
-            );
+            (bondSpent, burnLiability) = _jackpotBondSpendCount(winners, perWinner, entropyState, bondWinnerCount, lvl);
             liabilityDelta += burnLiability;
-        } else if (!payCoin && bondBps != 0 && bondsConfigured) {
+        } else if (!payCoin && bondBps != 0) {
             uint256 burnLiability;
-            (bondSpent, burnLiability) = _jackpotBondSpend(
-                bondsAddr,
-                winners,
-                perWinner,
-                traitShare,
-                entropyState,
-                bondBps,
-                lvl,
-                bondPurchasesOpen
-            );
+            (bondSpent, burnLiability) = _jackpotBondSpend(winners, perWinner, traitShare, entropyState, bondBps, lvl);
             liabilityDelta += burnLiability;
         }
 
         uint256 len = winners.length;
         if (payCoin) {
             for (uint256 i; i < len; ) {
-                _creditJackpot(coinContract, true, winners[i], perWinner);
+                _creditJackpot(true, winners[i], perWinner);
 
                 unchecked {
                     ++i;
@@ -1790,14 +1702,12 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
     /// @dev Calculates how many winners should receive bonds based on bondBps skim.
     ///      Delegates to _jackpotBondSpendCount for actual distribution.
     function _jackpotBondSpend(
-        address bondsAddr,
         address[] memory winners,
         uint256 perWinner,
         uint256 traitShare,
         uint256 entropyState,
         uint16 bondBps,
-        uint24 lvl,
-        bool bondPurchasesOpen
+        uint24 lvl
     ) private returns (uint256 bondSpent, uint256 liabilityDelta) {
         uint256 winnersLen = winners.length;
 
@@ -1810,35 +1720,25 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
             targetBondWinners = winnersLen;
         }
 
-        return _jackpotBondSpendCount(
-            bondsAddr,
-            winners,
-            perWinner,
-            entropyState,
-            uint16(targetBondWinners),
-            lvl,
-            bondPurchasesOpen
-        );
+        return _jackpotBondSpendCount(winners, perWinner, entropyState, uint16(targetBondWinners), lvl);
     }
 
     /// @dev Awards bond prizes for a subset of winners, nullifying them in the array
     ///      so they don't also receive ETH payouts in the main distribution loop.
     ///
-    /// @param bondsAddr Bonds contract address.
     /// @param winners Mutable array of winner addresses (nullified after bond prize).
     /// @param perWinner ETH amount per bond prize.
     /// @param entropyState Used for random offset into winners array.
     /// @param targetBondWinners Number of winners to convert to bonds.
+    /// @param lvl Current level for bond routing.
     /// @return bondSpent Total ETH spent on bonds.
     /// @return liabilityDelta Always 0 (bonds don't create claimable liability).
     function _jackpotBondSpendCount(
-        address bondsAddr,
         address[] memory winners,
         uint256 perWinner,
         uint256 entropyState,
         uint16 targetBondWinners,
-        uint24 lvl,
-        bool bondPurchasesOpen
+        uint24 lvl
     ) private returns (uint256 bondSpent, uint256 liabilityDelta) {
         uint256 winnersLen = winners.length;
         if (targetBondWinners == 0 || winnersLen == 0) return (0, 0);
@@ -1859,7 +1759,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
             }
 
             // Award bond prize and null out the winner so they don't also get ETH.
-            _awardBondPrize(bondsAddr, recipient, perWinner, lvl, bondPurchasesOpen);
+            _awardBondPrize(recipient, perWinner, lvl);
             winners[(uint256(offset) + i) % winnersLen] = address(0);
             bondSpent += perWinner;
 
@@ -1888,33 +1788,14 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
         return state;
     }
 
-    /// @dev Award bond prizes for jackpot winners.
-    ///      When bond purchases are open, this records a bond purchase.
-    ///      When closed, mint/burn DGNRS 1:1 and fully fund the bond pool.
+    /// @dev Unified bond prize entry point for jackpot winners.
+    ///      Delegates routing logic to bonds contract via awardFromGame.
     ///
-    /// @param bondsAddr Bonds contract address.
     /// @param beneficiary Winner receiving the bond prize.
     /// @param amount ETH amount to convert into bonds.
-    /// @param lvl Current game level (used for auto-burn routing).
-    /// @param bondPurchasesOpen True if bond purchases are open.
-    function _awardBondPrize(
-        address bondsAddr,
-        address beneficiary,
-        uint256 amount,
-        uint24 lvl,
-        bool bondPurchasesOpen
-    ) private {
-        if (amount == 0 || beneficiary == address(0)) return;
-        if (bondPurchasesOpen) {
-            IDegenerusBondsJackpot(bondsAddr).depositFromGame(beneficiary, amount);
-            uint256 bondShare = amount / 2;
-            if (bondShare != 0) {
-                bondPool += bondShare;
-            }
-            return;
-        }
-
-        IDegenerusBondsJackpot(bondsAddr).mintJackpotDgnrs(beneficiary, amount, lvl);
+    /// @param lvl Current level for DGNRS mint routing (when purchases closed).
+    function _awardBondPrize(address beneficiary, uint256 amount, uint24 lvl) private {
+        IDegenerusBondsJackpot(ContractAddresses.BONDS).awardFromGame(beneficiary, amount, lvl);
         bondPool += amount;
     }
 
@@ -1923,12 +1804,8 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
     // =========================================================================
 
     /// @dev Triggers the daily quest roll after a jackpot. Level jackpots force ETH+Degenerus quests.
-    function _rollQuestForJackpot(
-        IDegenerusCoinModule coinContract,
-        uint256 entropySource,
-        bool forceMintEthAndDegenerus,
-        uint48 questDay
-    ) private {
+    function _rollQuestForJackpot(uint256 entropySource, bool forceMintEthAndDegenerus, uint48 questDay) private {
+        IDegenerusCoinModule coinContract = IDegenerusCoinModule(ContractAddresses.COIN);
         if (forceMintEthAndDegenerus) {
             coinContract.rollDailyQuestWithOverrides(questDay, entropySource, true, true);
         } else {
@@ -1937,15 +1814,10 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
     }
 
     /// @dev Credits a jackpot winner with COIN or ETH. Returns false if beneficiary is invalid.
-    function _creditJackpot(
-        IDegenerusCoinModule coinContract,
-        bool payInCoin,
-        address beneficiary,
-        uint256 amount
-    ) private returns (bool) {
+    function _creditJackpot(bool payInCoin, address beneficiary, uint256 amount) private returns (bool) {
         if (beneficiary == address(0) || amount == 0) return false;
         if (payInCoin) {
-            coinContract.creditFlip(beneficiary, amount);
+            IDegenerusCoinModule(ContractAddresses.COIN).creditFlip(beneficiary, amount);
         } else {
             // Liability is tracked by the caller to avoid per-winner SSTORE cost.
             _addClaimableEth(beneficiary, amount);
@@ -1986,10 +1858,10 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
     /// @dev Derives 4 random trait IDs from entropy. Each quadrant uses 6 bits (0-63 range).
     ///      Quadrant offsets: 0, 64, 128, 192.
     function _getRandomTraits(uint256 rw) private pure returns (uint8[4] memory w) {
-        w[0] = uint8(rw & 0x3F);                    // Quadrant 0: 0-63
-        w[1] = 64 + uint8((rw >> 6) & 0x3F);        // Quadrant 1: 64-127
-        w[2] = 128 + uint8((rw >> 12) & 0x3F);      // Quadrant 2: 128-191
-        w[3] = 192 + uint8((rw >> 18) & 0x3F);      // Quadrant 3: 192-255
+        w[0] = uint8(rw & 0x3F); // Quadrant 0: 0-63
+        w[1] = 64 + uint8((rw >> 6) & 0x3F); // Quadrant 1: 64-127
+        w[2] = 128 + uint8((rw >> 12) & 0x3F); // Quadrant 2: 128-191
+        w[3] = 192 + uint8((rw >> 18) & 0x3F); // Quadrant 3: 192-255
     }
 
     /// @dev Derives winning traits based on daily burn activity counters.
@@ -2004,19 +1876,19 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
         uint256 randomWord,
         uint32[80] storage counters
     ) private view returns (uint8[4] memory w) {
-        uint8 sym = _maxIdxInRange(counters, 0, 8);   // Most-burned symbol
+        uint8 sym = _maxIdxInRange(counters, 0, 8); // Most-burned symbol
 
-        uint8 col0 = uint8(randomWord & 7);           // Random color
+        uint8 col0 = uint8(randomWord & 7); // Random color
         w[0] = (col0 << 3) | sym;
 
-        uint8 maxColor = _maxIdxInRange(counters, 8, 8);  // Most-burned color
-        uint8 randSym = uint8((randomWord >> 3) & 7);     // Random symbol
+        uint8 maxColor = _maxIdxInRange(counters, 8, 8); // Most-burned color
+        uint8 randSym = uint8((randomWord >> 3) & 7); // Random symbol
         w[1] = 64 + ((maxColor << 3) | randSym);
 
         uint8 maxTrait = _maxIdxInRange(counters, 16, 64); // Most-burned overall
         w[2] = 128 + maxTrait;
 
-        w[3] = 192 + uint8((randomWord >> 6) & 63);        // Fully random
+        w[3] = 192 + uint8((randomWord >> 6) & 63); // Fully random
     }
 
     /// @dev Finds the index with maximum value in a slice of the counters array.
@@ -2197,7 +2069,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
             unchecked {
                 seed = (baseKey + groupIdx) ^ entropyWord;
             }
-            uint64 s = uint64(seed) | 1;  // Ensure odd for full LCG period
+            uint64 s = uint64(seed) | 1; // Ensure odd for full LCG period
             uint8 offset = uint8(i & 15);
             unchecked {
                 s = s * (MAP_LCG_MULT + uint64(offset)) + uint64(offset);
@@ -2205,7 +2077,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
 
             for (uint8 j = offset; j < 16 && i < endIndex; ) {
                 unchecked {
-                    s = s * MAP_LCG_MULT + 1;  // LCG step
+                    s = s * MAP_LCG_MULT + 1; // LCG step
 
                     // Generate trait using weighted distribution, add quadrant offset.
                     uint8 traitId = DegenerusTraitUtils.traitFromWord(s) + (uint8(i & 3) << 6);
@@ -2268,7 +2140,11 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
         assembly ("memory-safe") {
             let slot := dailyBurnCount.slot
             let end := add(slot, 10)
-            for { let s := slot } lt(s, end) { s := add(s, 1) } {
+            for {
+                let s := slot
+            } lt(s, end) {
+                s := add(s, 1)
+            } {
                 sstore(s, 0)
             }
         }
@@ -2311,5 +2187,4 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
             }
         }
     }
-
 }

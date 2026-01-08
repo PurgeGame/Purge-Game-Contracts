@@ -3,47 +3,9 @@ pragma solidity ^0.8.26;
 
 import {DegenerusGameStorage} from "../storage/DegenerusGameStorage.sol";
 import {ContractAddresses} from "../ContractAddresses.sol";
-
-/// @notice Minimal interface for the Bonds contract used by this module.
-interface IBonds {
-    /// @notice Send ETH/stETH/BURNIE to bonds for jackpot funding or vault sweep.
-    /// @param coinAmount BURNIE amount to credit (minted via vaultEscrow beforehand).
-    /// @param stEthAmount stETH amount to transfer from game to bonds.
-    /// @param rngWord VRF entropy for bond jackpot resolution (0 if not applicable).
-    function payBonds(uint256 coinAmount, uint256 stEthAmount, uint256 rngWord) external payable;
-
-    /// @notice Signal game-over to bonds, enabling shutdown resolution flow.
-    function notifyGameOver() external;
-
-    /// @notice Query the ETH cover required for upcoming bond maturities.
-    /// @param stopAt Maximum bondPool value to consider (optimization hint).
-    /// @return required ETH needed to cover next maturity obligations.
-    function requiredCoverNext(uint256 stopAt) external view returns (uint256 required);
-
-    /// @notice Get the admin-configured target ratio for stETH staking (basis points).
-    /// @return Target percentage of stakeable funds to hold as stETH (0-10000).
-    function rewardStakeTargetBps() external view returns (uint16);
-}
-
-/// @notice Minimal interface for BURNIE coin vault escrow.
-interface IVaultEscrowCoin {
-    /// @notice Mint BURNIE to vault escrow for bond jackpot rewards.
-    /// @param amount BURNIE amount to mint and escrow.
-    function vaultEscrow(uint256 amount) external;
-}
-
-/// @notice Minimal interface for Lido stETH interactions.
-interface IStETHLite {
-    /// @notice Get stETH balance of an account.
-    /// @param account Address to query.
-    /// @return Current stETH balance (rebases over time).
-    function balanceOf(address account) external view returns (uint256);
-
-    /// @notice Stake ETH to receive stETH.
-    /// @param referral Referral address for Lido rewards (unused, pass address(0)).
-    /// @return Amount of stETH shares minted.
-    function submit(address referral) external payable returns (uint256);
-}
+import {IDegenerusBonds} from "../interfaces/IDegenerusBonds.sol";
+import {IStETH} from "../interfaces/IStETH.sol";
+import {IVaultCoin} from "../interfaces/IVaultCoin.sol";
 
 /**
  * @title DegenerusGameBondModule
@@ -61,7 +23,6 @@ interface IStETHLite {
  * ## Functions
  *
  * - `bondUpkeep`: Called during setup (state 1) to distribute yield and fund bonds
- * - `yieldPool`: View helper to calculate untracked surplus (solvency buffer)
  * - `stakeForTargetRatio`: Stake excess ETH into Lido stETH for yield generation
  * - `drainToBonds`: Shutdown flow - transfer all assets to bonds for final resolution
  *
@@ -95,9 +56,6 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
      *      3. Mint BURNIE for bond jackpots
      *      4. Sweep excess bondPool to vault
      *
-     * @param bondsAddr Address of the DegenerusBonds contract.
-     * @param stethAddr Address of the Lido stETH contract.
-     * @param coinAddr Address of the DegenerusCoin contract.
      * @param rngWord VRF entropy word for bond jackpot resolution.
      *
      * ## Yield Distribution Flow
@@ -119,14 +77,15 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
      * If bondPool is under-funded, yield is used to fill the gap first.
      * If bondPool is over-funded, excess is swept to the vault.
      */
-    function bondUpkeep(address bondsAddr, address stethAddr, address coinAddr, uint256 rngWord) external {
-        IBonds bondContract = IBonds(bondsAddr);
+    function bondUpkeep(uint256 rngWord) external {
+        IDegenerusBonds bondContract = IDegenerusBonds(ContractAddresses.BONDS);
+        IStETH stethContract = IStETH(ContractAddresses.STETH_TOKEN);
 
         // ---------------------------------------------------------------------
         // Step 1: Snapshot current balances and calculate yield
         // ---------------------------------------------------------------------
 
-        uint256 stBal = IStETHLite(stethAddr).balanceOf(address(this));
+        uint256 stBal = stethContract.balanceOf(address(this));
         uint256 ethBal = address(this).balance;
 
         // Cache storage vars to minimize SLOADs
@@ -215,7 +174,7 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
 
         // Mint BURNIE to vault escrow (bonds will pull from escrow)
         if (coinSlice != 0) {
-            IVaultEscrowCoin(coinAddr).vaultEscrow(coinSlice);
+            IVaultCoin(ContractAddresses.COIN).vaultEscrow(coinSlice);
         }
 
         // Send to bonds: ETH (as value), BURNIE amount, stETH amount, RNG word
@@ -227,7 +186,7 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
         }
 
         // ---------------------------------------------------------------------
-        // Step 5: Sweep excess bondPool to vault
+        // Step 6: Sweep excess bondPool to vault
         // ---------------------------------------------------------------------
 
         // If bondPool exceeds required cover, send excess to vault via bonds.
@@ -236,7 +195,7 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
             uint256 excess = bondPoolLocal - required;
 
             // Re-read balances (may have changed from payBonds call above)
-            uint256 stBalLocal = IStETHLite(stethAddr).balanceOf(address(this));
+            uint256 stBalLocal = stethContract.balanceOf(address(this));
             uint256 ethBalLocal = address(this).balance;
 
             // Allocate excess: prefer stETH, then ETH
@@ -255,7 +214,7 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
         }
 
         // ---------------------------------------------------------------------
-        // Step 6: Commit storage updates (single SSTORE per changed var)
+        // Step 7: Commit storage updates (single SSTORE per changed var)
         // ---------------------------------------------------------------------
 
         if (bondPoolLocal != bondPool) {
@@ -264,46 +223,6 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
         if (rewardPoolLocal != rewardPool) {
             rewardPool = rewardPoolLocal;
         }
-    }
-
-    /**
-     * @notice Calculate untracked funds (the solvency buffer).
-     * @dev View function to compute: (ETH + stETH) - all tracked obligations.
-     *      This surplus exists because:
-     *      - stETH rebases upward from Lido yield
-     *      - Bond deposits with trackPool=false add assets without liabilities
-     *      - Rounding dust accumulates over time
-     *
-     *      The yield pool provides a safety margin ensuring the game can always
-     *      pay its obligations, even if individual pools are temporarily depleted.
-     *
-     * @param stethAddr Address of the Lido stETH contract.
-     * @return total Untracked balance (0 if obligations exceed assets).
-     */
-    function yieldPool(address stethAddr) public view returns (uint256 total) {
-        uint256 stBal = IStETHLite(stethAddr).balanceOf(address(this));
-        uint256 ethBal = address(this).balance;
-
-        // Sum all tracked obligations
-        uint256 obligations = currentPrizePool + nextPrizePool + rewardPool + claimablePool + bondPool;
-
-        // Include level-100 special pools (only non-zero during those windows)
-        uint256 bafPool = bafHundredPool;
-        if (bafPool != 0) {
-            unchecked {
-                obligations += bafPool;
-            }
-        }
-        uint256 decPool = decimatorHundredPool;
-        if (decPool != 0) {
-            unchecked {
-                obligations += decPool;
-            }
-        }
-
-        // Yield = assets - obligations (never negative)
-        uint256 combined = ethBal + stBal;
-        total = combined > obligations ? combined - obligations : 0;
     }
 
     /**
@@ -318,8 +237,6 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
      *      - Skips levels 99/0 to avoid 100-level boundary complications
      *      - Silently fails if Lido submission reverts (doesn't block game)
      *
-     * @param bondsAddr Address of bonds contract (to query target ratio).
-     * @param stethAddr Address of the Lido stETH contract.
      * @param lvl Current game level.
      *
      * ## Target Ratio
@@ -336,17 +253,20 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
      * - Increases solvency buffer over time
      * - Provides additional funding for jackpots via bondUpkeep distribution
      */
-    function stakeForTargetRatio(address bondsAddr, address stethAddr, uint24 lvl) external {
+    function stakeForTargetRatio(uint24 lvl) external {
         // Skip at 100-level cycle boundaries to avoid complications during special events
         uint24 cycle = lvl % 100;
         if (cycle == 99 || cycle == 0) return;
 
+        IDegenerusBonds bondContract = IDegenerusBonds(ContractAddresses.BONDS);
+        IStETH stethContract = IStETH(ContractAddresses.STETH_TOKEN);
+
         // Query admin-configured target ratio from bonds
-        uint16 targetBps = IBonds(bondsAddr).rewardStakeTargetBps();
+        uint16 targetBps = bondContract.rewardStakeTargetBps();
         if (targetBps == 0) return; // Staking disabled
         if (targetBps > 10_000) return; // Invalid config guard
 
-        uint256 stBal = IStETHLite(stethAddr).balanceOf(address(this));
+        uint256 stBal = stethContract.balanceOf(address(this));
         uint256 ethBal = address(this).balance;
         if (ethBal == 0) return; // Nothing to stake
 
@@ -378,7 +298,7 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
         // Submit to Lido (wrapped in try/catch to avoid blocking game)
         // ---------------------------------------------------------------------
 
-        try IStETHLite(stethAddr).submit{value: stakeAmt}(address(0)) returns (uint256) {
+        try stethContract.submit{value: stakeAmt}(address(0)) returns (uint256) {
             // Success - stETH balance increases, ETH balance decreases.
             // No explicit accounting needed: the game tracks obligations,
             // and stETH is treated as equivalent to ETH for solvency.
@@ -396,18 +316,16 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
      *      - ~2.5 years from deploy if game never started
      *
      *      This is a one-way operation that:
-     *      1. Notifies bonds of shutdown (enables their resolution flow)
+     *      1. Sets bondGameOver flag (prevents reentrancy)
      *      2. Zeros all game pools (prevents further credits)
-     *      3. Transfers ALL ETH + stETH to bonds for final distribution
+     *      3. Notifies bonds of shutdown (enables their resolution flow)
+     *      4. Transfers ALL ETH + stETH to bonds for final distribution
      *
      *      After this call:
      *      - Game enters state 86 (gameover)
      *      - Bonds resolves maturities oldest-first with available funds
      *      - Players have 1 year to claim from bonds
      *      - Remainder swept to vault after grace period
-     *
-     * @param bondsAddr Address of the DegenerusBonds contract.
-     * @param stethAddr Address of the Lido stETH contract.
      *
      * ## Important: Unclaimed Winnings
      *
@@ -430,8 +348,9 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
      * sweepExpiredPools() → (1 year later) sends remainder to vault
      * ```
      */
-    function drainToBonds(address bondsAddr, address stethAddr) external {
-        IBonds bondContract = IBonds(bondsAddr);
+    function drainToBonds() external {
+        IDegenerusBonds bondContract = IDegenerusBonds(ContractAddresses.BONDS);
+        IStETH stethContract = IStETH(ContractAddresses.STETH_TOKEN);
 
         // Signal shutdown to bonds (enables their resolution flow)
         bondContract.notifyGameOver();
@@ -457,7 +376,7 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
         // Transfer ALL remaining assets to bonds
         // ---------------------------------------------------------------------
 
-        uint256 stBal = IStETHLite(stethAddr).balanceOf(address(this));
+        uint256 stBal = stethContract.balanceOf(address(this));
         uint256 ethBal = address(this).balance;
 
         // payBonds receives all ETH (via value) and stETH (via parameter)

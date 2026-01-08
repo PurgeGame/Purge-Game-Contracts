@@ -6,16 +6,16 @@ Technical reference for the Degenerus quest mechanics.
 
 - `contracts/DegenerusQuests.sol`
 - `contracts/interfaces/IDegenerusQuests.sol`
-- `contracts/DegenerusCoin.sol`
+- `contracts/BurnieCoin.sol`
 
 ---
 
 ## Architecture
 
 - Quest state lives in `DegenerusQuests` (standalone contract, not delegatecall)
-- Coin-gated: only `DegenerusCoin` can call the `handle*` entry points
-- `normalizeActiveBurnQuests` can be called by `DegenerusCoin` or `DegenerusGame`
-- `DegenerusCoin` forwards gameplay events (mints, flips, burns, bonds, affiliates) to the quest contract
+- Coin-gated: only `BurnieCoin` can call the `handle*` entry points
+- `normalizeActiveBurnQuests` can be called by `BurnieCoin` or `DegenerusGame`
+- `BurnieCoin` forwards gameplay events (mints, flips, burns, bonds, affiliates) to the quest contract
 - Quest rewards are applied as BURNIE coinflip credit
 - Daily quests rolled during jackpot processing using VRF entropy
 
@@ -27,10 +27,10 @@ Technical reference for the Degenerus quest mechanics.
 |------|----|---------------|
 | MINT_BURNIE | 0 | Whole NFT units |
 | MINT_ETH | 1 | Whole NFT units |
-| FLIP | 2 | BURNIE base units (6 decimals) |
-| AFFILIATE | 3 | BURNIE base units |
+| FLIP | 2 | BURNIE base units (18 decimals) |
+| AFFILIATE | 3 | BURNIE base units (18 decimals) |
 | BURN | 4 | Whole NFT units |
-| DECIMATOR | 5 | BURNIE base units |
+| DECIMATOR | 5 | BURNIE base units (18 decimals) |
 | BOND | 6 | Wei |
 
 For MAPs: 4 MAP mints = 1 quest unit.

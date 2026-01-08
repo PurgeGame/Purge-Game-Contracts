@@ -2,6 +2,8 @@
 pragma solidity ^0.8.26;
 
 import {ContractAddresses} from "./ContractAddresses.sol";
+import {IStETH} from "./interfaces/IStETH.sol";
+import {IVaultCoin} from "./interfaces/IVaultCoin.sol";
 
 /*
 +========================================================================================================+
@@ -22,7 +24,7 @@ import {ContractAddresses} from "./ContractAddresses.sol";
 |  |   |  ETH            |----►|  ethShare       |  DGVE - Claims ETH + stETH proportionally           | |
 |  |   |  stETH          |----►|  (combined)     |                                                     | |
 |  |   +-----------------+     +-----------------+                                                     | |
-|  |   |  BURNIE (ContractAddresses.COIN)  |----►|  coinShare      |  DGVB - Claims BURNIE only (80% of deposits)        | |
+|  |   |  BURNIE         |----►|  coinShare      |  DGVB - Claims BURNIE only (80% of deposits)        | |
 |  |   +-----------------+     +-----------------+                                                     | |
 |  |   |  DGNRS          |----►|  dgnrsShare     |  DGVD - Claims DGNRS only (80% of deposits)         | |
 |  |   +-----------------+     +-----------------+                                                     | |
@@ -64,7 +66,7 @@ import {ContractAddresses} from "./ContractAddresses.sol";
 |  KEY INVARIANTS                                                                                        |
 |  --------------                                                                                        |
 |  • Share supply can never reach zero (refill mechanism)                                                |
-|  • Only ContractAddresses.BONDS can call deposit/depositDgnrs; ETH donations are open                                    |
+|  • Only BONDS can call deposit/depositDgnrs; ETH donations are open                                    |
 |  • Only this vault can mint/burn share tokens                                                          |
 |  • ETH and stETH are combined for DGVE/DGVA claims (ETH preferred, then stETH)                         |
 |  • DGVE claims exclude DGVA's reserved share of the combined pool                                      |
@@ -80,7 +82,7 @@ import {ContractAddresses} from "./ContractAddresses.sol";
 |     • address(this).balance decreases atomically with ETH send (before callback)                       |
 |                                                                                                        |
 |  2. ACCESS CONTROL                                                                                     |
-|     • deposits: onlyBonds modifier (constant ContractAddresses.BONDS address)                                            |
+|     • deposits: onlyBonds modifier (constant BONDS address)                                            |
 |     • share mint/burn: onlyVault modifier on DegenerusVaultShare                                       |
 |     • no admin functions, no upgrade path                                                              |
 |                                                                                                        |
@@ -103,10 +105,10 @@ import {ContractAddresses} from "./ContractAddresses.sol";
 |  -----------------                                                                                     |
 |                                                                                                        |
 |  1. Bonds contract is trusted to deposit correctly                                                     |
-|  2. BURNIE ContractAddresses.COIN implements vaultEscrow/vaultMintTo correctly                                           |
+|  2. BURNIE (COIN) implements vaultEscrow/vaultMintTo correctly                                         |
 |  3. DGNRS token implements vaultEscrow/vaultMintTo correctly                                           |
 |  4. stETH (Lido) behaves according to its specification                                                |
-|  5. Initial share holder (deployer) is trusted with initial 1B shares per class                        |
+|  5. Initial share holder (creator) is trusted with initial 1B shares per class                         |
 |                                                                                                        |
 +========================================================================================================+
 |  GAS OPTIMIZATIONS                                                                                     |
@@ -120,36 +122,6 @@ import {ContractAddresses} from "./ContractAddresses.sol";
 |  6. ETH preferred over stETH in claims (avoids stETH transfer gas when possible)                       |
 |                                                                                                        |
 +========================================================================================================+*/
-
-// -----------------------------------------------------------------------------
-// EXTERNAL INTERFACES
-// -----------------------------------------------------------------------------
-
-/// @notice Minimal ERC20 interface for token interactions
-interface IERC20Minimal {
-    function balanceOf(address account) external view returns (uint256);
-    function transfer(address to, uint256 amount) external returns (bool);
-    function transferFrom(address from, address to, uint256 amount) external returns (bool);
-}
-
-/// @notice stETH interface with Lido submit function
-interface IStETH {
-    /// @notice Stake ETH and receive stETH
-    function submit(address referral) external payable returns (uint256);
-    function balanceOf(address account) external view returns (uint256);
-    function transfer(address to, uint256 amount) external returns (bool);
-    function transferFrom(address from, address to, uint256 amount) external returns (bool);
-}
-
-/// @notice Interface for tokens with vault mint allowance (BURNIE, DGNRS)
-interface IVaultCoin {
-    /// @notice Increase the vault's mint allowance without transferring tokens
-    function vaultEscrow(uint256 amount) external;
-    /// @notice Mint tokens to recipient from vault's allowance
-    function vaultMintTo(address to, uint256 amount) external;
-    /// @notice View the vault's remaining mint allowance
-    function vaultMintAllowance() external view returns (uint256);
-}
 
 // -----------------------------------------------------------------------------
 // VAULT SHARE TOKEN
@@ -186,6 +158,8 @@ contract DegenerusVaultShare {
     string public symbol;
     /// @notice Token decimals (always 18)
     uint8 public constant decimals = 18;
+    /// @notice Initial share supply (1 billion tokens)
+    uint256 public constant INITIAL_SUPPLY = 1_000_000_000 * 1e18;
 
     /// @notice Total supply of shares
     uint256 public totalSupply;
@@ -194,15 +168,12 @@ contract DegenerusVaultShare {
     /// @notice Allowance mapping for transferFrom
     mapping(address => mapping(address => uint256)) public allowance;
 
-    /// @dev The vault contract authorized to mint/burn shares
-    address private immutable vault;
-
     // ---------------------------------------------------------------------
     // MODIFIERS
     // ---------------------------------------------------------------------
     /// @dev Restricts function to the parent vault contract
     modifier onlyVault() {
-        if (msg.sender != vault) revert Unauthorized();
+        if (msg.sender != ContractAddresses.VAULT) revert Unauthorized();
         _;
     }
 
@@ -212,23 +183,13 @@ contract DegenerusVaultShare {
     /// @notice Deploy a new share token with initial supply
     /// @param name_ Token name
     /// @param symbol_ Token symbol
-    /// @param vault_ Parent vault address (immutable, sole mint/burn authority)
-    /// @param initialSupply Initial supply to mint (typically 1B)
-    /// @param initialHolder Address to receive initial supply
-    constructor(
-        string memory name_,
-        string memory symbol_,
-        address vault_,
-        uint256 initialSupply,
-        address initialHolder
-    ) {
-        if (vault_ == address(0) || initialHolder == address(0)) revert ZeroAddress();
+    constructor(string memory name_, string memory symbol_) {
+        if (ContractAddresses.CREATOR == address(0) || ContractAddresses.VAULT == address(0)) revert ZeroAddress();
         name = name_;
         symbol = symbol_;
-        vault = vault_;
-        totalSupply = initialSupply;
-        balanceOf[initialHolder] = initialSupply;
-        emit Transfer(address(0), initialHolder, initialSupply);
+        totalSupply = INITIAL_SUPPLY;
+        balanceOf[ContractAddresses.CREATOR] = INITIAL_SUPPLY;
+        emit Transfer(address(0), ContractAddresses.CREATOR, INITIAL_SUPPLY);
     }
 
     // ---------------------------------------------------------------------
@@ -291,10 +252,10 @@ contract DegenerusVaultShare {
     /// @param amount Amount to burn
     function vaultBurn(address from, uint256 amount) external onlyVault {
         uint256 bal = balanceOf[from];
-        if (amount == 0 || amount > bal) revert Insufficient();
+        if (amount > bal) revert Insufficient();
         unchecked {
             balanceOf[from] = bal - amount; // Safe: amount <= bal verified above
-            totalSupply -= amount;          // Safe: sum(balances) == totalSupply invariant
+            totalSupply -= amount; // Safe: sum(balances) == totalSupply invariant
         }
         emit Transfer(from, address(0), amount);
     }
@@ -305,11 +266,12 @@ contract DegenerusVaultShare {
     /// @dev Internal transfer logic with balance checks
     function _transfer(address from, address to, uint256 amount) private {
         if (to == address(0)) revert ZeroAddress();
+        if (from == address(0)) revert ZeroAddress();
         uint256 bal = balanceOf[from];
-        if (amount == 0 || amount > bal) revert Insufficient();
+        if (amount > bal) revert Insufficient();
         unchecked {
             balanceOf[from] = bal - amount; // Safe: amount <= bal verified above
-            balanceOf[to] += amount;        // Safe: total supply is constant, can't overflow
+            balanceOf[to] += amount; // Safe: total supply is constant, can't overflow
         }
         emit Transfer(from, to, amount);
     }
@@ -328,8 +290,6 @@ contract DegenerusVault {
     // ---------------------------------------------------------------------
     /// @dev Caller is not authorized (not ContractAddresses.BONDS contract)
     error Unauthorized();
-    /// @dev Address parameter is zero when non-zero required
-    error ZeroAddress();
     /// @dev Insufficient balance, allowance, or reserve for operation
     error Insufficient();
     /// @dev ETH or token transfer failed
@@ -338,10 +298,6 @@ contract DegenerusVault {
     // ---------------------------------------------------------------------
     // EVENTS
     // ---------------------------------------------------------------------
-    /// @dev Legacy ERC20 Transfer event (vault itself is not ERC20, but kept for compatibility)
-    event Transfer(address indexed from, address indexed to, uint256 amount);
-    /// @dev Legacy ERC20 Approval event
-    event Approval(address indexed owner, address indexed spender, uint256 amount);
     /// @notice Emitted when assets are deposited into the vault
     /// @param from Depositor address (typically ContractAddresses.BONDS contract)
     /// @param ethAmount ETH deposited (via msg.value)
@@ -389,8 +345,6 @@ contract DegenerusVault {
     string public constant symbol = "DGV";
     /// @notice Vault metadata decimals
     uint8 public constant decimals = 18;
-    /// @dev Initial supply minted to deployer for each share class (1 billion tokens)
-    uint256 private constant INITIAL_SUPPLY = 1_000_000_000 * 1e18;
     /// @dev Supply minted when all shares are burned (keeps token alive)
     uint256 private constant REFILL_SUPPLY = 1_000_000_000 * 1e18;
     /// @dev DGVA share of deposits: 20% (amount / 5)
@@ -412,11 +366,11 @@ contract DegenerusVault {
     // WIRING (Constants)
     // ---------------------------------------------------------------------
     /// @dev BURNIE token address (implements IVaultCoin)
+    IVaultCoin private constant coinToken = IVaultCoin(ContractAddresses.COIN);
     /// @dev DGNRS token address (implements IVaultCoin)
+    IVaultCoin private constant dgnrsToken = IVaultCoin(ContractAddresses.DGNRS);
     /// @dev stETH token address (Lido)
     IStETH private constant steth = IStETH(ContractAddresses.STETH_TOKEN);
-    /// @dev Bonds contract - sole depositor authority
-
     // ---------------------------------------------------------------------
     // RESERVE TRACKING (DGVA SPLIT)
     // ---------------------------------------------------------------------
@@ -446,46 +400,19 @@ contract DegenerusVault {
     /// @notice Deploy the vault with all required addresses.
     /// @dev Deploys four share tokens and uses the precomputed DGNRS address from ContractAddresses.
     constructor() {
-        // Deploy share class tokens - deployer receives initial 1B supply of each
-        coinShare = new DegenerusVaultShare(
-            "Degenerus Vault Burnie",
-            "DGVB",
-            address(this),
-            INITIAL_SUPPLY,
-            msg.sender
-        );
-        dgnrsShare = new DegenerusVaultShare(
-            "Degenerus Vault DGNRS",
-            "DGVD",
-            address(this),
-            INITIAL_SUPPLY,
-            msg.sender
-        );
-        ethShare = new DegenerusVaultShare(
-            "Degenerus Vault Eth",
-            "DGVE",
-            address(this),
-            INITIAL_SUPPLY,
-            msg.sender
-        );
-        allShare = new DegenerusVaultShare(
-            "Degenerus Vault All",
-            "DGVA",
-            address(this),
-            INITIAL_SUPPLY,
-            msg.sender
-        );
+        // Deploy share class tokens - creator receives initial 1B supply of each
+        coinShare = new DegenerusVaultShare("Degenerus Vault Burnie", "DGVB");
+        dgnrsShare = new DegenerusVaultShare("Degenerus Vault DGNRS", "DGVD");
+        ethShare = new DegenerusVaultShare("Degenerus Vault Eth", "DGVE");
+        allShare = new DegenerusVaultShare("Degenerus Vault All", "DGVA");
 
-        uint256 coinAllowance = IVaultCoin(ContractAddresses.COIN).vaultMintAllowance();
+        uint256 coinAllowance = coinToken.vaultMintAllowance();
         coinTracked = coinAllowance;
         dgvaCoinReserve = coinAllowance / DGVA_SPLIT_DIVISOR;
 
-        uint256 dgnrsAllowance = IVaultCoin(ContractAddresses.DGNRS).vaultMintAllowance();
+        uint256 dgnrsAllowance = dgnrsToken.vaultMintAllowance();
         dgnrsTracked = dgnrsAllowance;
         dgvaDgnrsReserve = dgnrsAllowance / DGVA_SPLIT_DIVISOR;
-
-        uint256 combined = address(this).balance + _tokenBalance(address(steth));
-        dgvaEthReserve = combined / DGVA_SPLIT_DIVISOR;
     }
 
     // ---------------------------------------------------------------------
@@ -501,12 +428,12 @@ contract DegenerusVault {
     function deposit(uint256 coinAmount, uint256 stEthAmount) external payable onlyBonds {
         if (coinAmount != 0) {
             _syncCoinReserves();
-            IVaultCoin(ContractAddresses.COIN).vaultEscrow(coinAmount);
+            coinToken.vaultEscrow(coinAmount);
             uint256 dgvaShare = coinAmount / DGVA_SPLIT_DIVISOR;
             dgvaCoinReserve += dgvaShare;
             coinTracked += coinAmount;
         }
-        _pullToken(address(steth), msg.sender, stEthAmount);
+        _pullSteth(msg.sender, stEthAmount);
         uint256 combinedIn = msg.value + stEthAmount;
         if (combinedIn != 0) {
             dgvaEthReserve += combinedIn / DGVA_SPLIT_DIVISOR;
@@ -520,7 +447,7 @@ contract DegenerusVault {
     function depositDgnrs(uint256 dgnrsAmount) external onlyBonds {
         if (dgnrsAmount == 0) return;
         _syncDgnrsReserves();
-        IVaultCoin(ContractAddresses.DGNRS).vaultEscrow(dgnrsAmount);
+        dgnrsToken.vaultEscrow(dgnrsAmount);
         uint256 dgvaShare = dgnrsAmount / DGVA_SPLIT_DIVISOR;
         dgvaDgnrsReserve += dgvaShare;
         dgnrsTracked += dgnrsAmount;
@@ -542,8 +469,7 @@ contract DegenerusVault {
     ///      stEthForEth=false: Bonds sends ETH, receives freshly staked stETH back
     /// @param stEthForEth Direction of swap (true = stETH→ETH, false = ETH→stETH)
     /// @param amount Amount to swap
-    function swapWithBonds(bool stEthForEth, uint256 amount) external payable {
-        if (msg.sender != ContractAddresses.BONDS) revert Unauthorized();
+    function swapWithBonds(bool stEthForEth, uint256 amount) external payable onlyBonds {
         if (amount == 0) revert Insufficient();
 
         if (stEthForEth) {
@@ -597,7 +523,7 @@ contract DegenerusVault {
         }
 
         emit Claim(msg.sender, amount, 0, 0, coinOut);
-        if (coinOut != 0) IVaultCoin(ContractAddresses.COIN).vaultMintTo(msg.sender, coinOut);
+        if (coinOut != 0) coinToken.vaultMintTo(msg.sender, coinOut);
     }
 
     /// @notice Burn DGVD (dgnrsShare) tokens to redeem proportional DGNRS
@@ -627,7 +553,7 @@ contract DegenerusVault {
         }
 
         emit ClaimDgnrs(msg.sender, amount, dgnrsOut);
-        if (dgnrsOut != 0) IVaultCoin(ContractAddresses.DGNRS).vaultMintTo(msg.sender, dgnrsOut);
+        if (dgnrsOut != 0) dgnrsToken.vaultMintTo(msg.sender, dgnrsOut);
     }
 
     /// @notice Burn DGVE (ethShare) tokens to redeem proportional ETH and stETH
@@ -667,7 +593,7 @@ contract DegenerusVault {
 
         // External calls last (ETH balance already reduced atomically with send)
         if (ethOut != 0) _payEth(msg.sender, ethOut);
-        if (stEthOut != 0) _payToken(address(steth), msg.sender, stEthOut);
+        if (stEthOut != 0) _paySteth(msg.sender, stEthOut);
     }
 
     /// @notice Burn DGVA (allShare) tokens to redeem proportional ETH/stETH, BURNIE, and DGNRS
@@ -727,9 +653,9 @@ contract DegenerusVault {
         emit ClaimAll(msg.sender, amount, ethOut, stEthOut, coinOut, dgnrsOut);
 
         if (ethOut != 0) _payEth(msg.sender, ethOut);
-        if (stEthOut != 0) _payToken(address(steth), msg.sender, stEthOut);
-        if (coinOut != 0) IVaultCoin(ContractAddresses.COIN).vaultMintTo(msg.sender, coinOut);
-        if (dgnrsOut != 0) IVaultCoin(ContractAddresses.DGNRS).vaultMintTo(msg.sender, dgnrsOut);
+        if (stEthOut != 0) _paySteth(msg.sender, stEthOut);
+        if (coinOut != 0) coinToken.vaultMintTo(msg.sender, coinOut);
+        if (dgnrsOut != 0) dgnrsToken.vaultMintTo(msg.sender, dgnrsOut);
     }
 
     // ---------------------------------------------------------------------
@@ -841,8 +767,8 @@ contract DegenerusVault {
         uint256 supply = allShare.totalSupply();
         if (amount == 0 || amount > supply) revert Insufficient();
         (, uint256 ethReserve, uint256 ethBal) = _ethReservesView();
-        ( , uint256 coinBal) = _coinReservesView();
-        ( , uint256 dgnrsBal) = _dgnrsReservesView();
+        (, uint256 coinBal) = _coinReservesView();
+        (, uint256 dgnrsBal) = _dgnrsReservesView();
         uint256 claimValue = (ethReserve * amount) / supply;
         if (claimValue <= ethBal) {
             ethOut = claimValue;
@@ -861,7 +787,7 @@ contract DegenerusVault {
     /// @dev Clamp DGVA's ETH+stETH reserve to actual balance; returns balances to avoid re-reading
     function _syncEthReserves() private returns (uint256 ethBal, uint256 stBal, uint256 combined) {
         ethBal = address(this).balance;
-        stBal = _tokenBalance(address(steth));
+        stBal = _stethBalance();
         combined = ethBal + stBal;
         if (dgvaEthReserve > combined) {
             dgvaEthReserve = combined;
@@ -870,7 +796,7 @@ contract DegenerusVault {
 
     /// @dev Sync BURNIE reserve split with the actual allowance
     function _syncCoinReserves() private {
-        uint256 allowance = IVaultCoin(ContractAddresses.COIN).vaultMintAllowance();
+        uint256 allowance = coinToken.vaultMintAllowance();
         uint256 tracked = coinTracked;
         if (allowance > tracked) {
             uint256 delta = allowance - tracked;
@@ -887,7 +813,7 @@ contract DegenerusVault {
 
     /// @dev Sync DGNRS reserve split with the actual allowance
     function _syncDgnrsReserves() private {
-        uint256 allowance = IVaultCoin(ContractAddresses.DGNRS).vaultMintAllowance();
+        uint256 allowance = dgnrsToken.vaultMintAllowance();
         uint256 tracked = dgnrsTracked;
         if (allowance > tracked) {
             uint256 delta = allowance - tracked;
@@ -904,7 +830,7 @@ contract DegenerusVault {
 
     /// @dev View helper for BURNIE reserves with pending split delta applied
     function _coinReservesView() private view returns (uint256 mainReserve, uint256 dgvaReserve) {
-        uint256 allowance = IVaultCoin(ContractAddresses.COIN).vaultMintAllowance();
+        uint256 allowance = coinToken.vaultMintAllowance();
         uint256 tracked = coinTracked;
         dgvaReserve = dgvaCoinReserve;
         if (allowance > tracked) {
@@ -919,7 +845,7 @@ contract DegenerusVault {
 
     /// @dev View helper for DGNRS reserves with pending split delta applied
     function _dgnrsReservesView() private view returns (uint256 mainReserve, uint256 dgvaReserve) {
-        uint256 allowance = IVaultCoin(ContractAddresses.DGNRS).vaultMintAllowance();
+        uint256 allowance = dgnrsToken.vaultMintAllowance();
         uint256 tracked = dgnrsTracked;
         dgvaReserve = dgvaDgnrsReserve;
         if (allowance > tracked) {
@@ -933,13 +859,9 @@ contract DegenerusVault {
     }
 
     /// @dev View helper for ETH+stETH reserves (stETH rebase yield goes to DGVE)
-    function _ethReservesView()
-        private
-        view
-        returns (uint256 mainReserve, uint256 dgvaReserve, uint256 ethBal)
-    {
+    function _ethReservesView() private view returns (uint256 mainReserve, uint256 dgvaReserve, uint256 ethBal) {
         ethBal = address(this).balance;
-        uint256 stBal = _tokenBalance(address(steth));
+        uint256 stBal = _stethBalance();
         uint256 combined = ethBal + stBal;
         dgvaReserve = dgvaEthReserve;
         if (dgvaReserve > combined) {
@@ -948,9 +870,9 @@ contract DegenerusVault {
         mainReserve = combined - dgvaReserve;
     }
 
-    /// @dev Get token balance of this contract
-    function _tokenBalance(address token) private view returns (uint256) {
-        return IERC20Minimal(token).balanceOf(address(this));
+    /// @dev Get this contract's stETH balance
+    function _stethBalance() private view returns (uint256) {
+        return steth.balanceOf(address(this));
     }
 
     /// @dev Send ETH to recipient using low-level call
@@ -960,14 +882,14 @@ contract DegenerusVault {
         if (!ok) revert TransferFailed();
     }
 
-    /// @dev Transfer ERC20 token to recipient
-    function _payToken(address token, address to, uint256 amount) private {
-        if (!IERC20Minimal(token).transfer(to, amount)) revert TransferFailed();
+    /// @dev Transfer stETH to recipient
+    function _paySteth(address to, uint256 amount) private {
+        if (!steth.transfer(to, amount)) revert TransferFailed();
     }
 
-    /// @dev Pull ERC20 token from sender (requires prior approval)
-    function _pullToken(address token, address from, uint256 amount) private {
+    /// @dev Pull stETH from sender (requires prior approval)
+    function _pullSteth(address from, uint256 amount) private {
         if (amount == 0) return;
-        if (!IERC20Minimal(token).transferFrom(from, address(this), amount)) revert TransferFailed();
+        if (!steth.transferFrom(from, address(this), amount)) revert TransferFailed();
     }
 }

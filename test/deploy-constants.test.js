@@ -98,7 +98,7 @@ async function deployAll(ethers, deployer, expected) {
     } else if (name === "VAULT") {
       factory = await ethers.getContractFactory("contracts/DegenerusVault.sol:DegenerusVault", deployer);
     } else if (name === "COIN") {
-      factory = await ethers.getContractFactory("contracts/DegenerusCoin.sol:DegenerusCoin", deployer);
+      factory = await ethers.getContractFactory("contracts/BurnieCoin.sol:BurnieCoin", deployer);
     } else if (name === "AFFILIATE") {
       factory = await ethers.getContractFactory("contracts/DegenerusAffiliate.sol:DegenerusAffiliate", deployer);
     } else if (name === "JACKPOTS") {

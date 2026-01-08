@@ -16,7 +16,7 @@ pragma solidity ^0.8.26;
   |  +-------------------------------------------------------------------------+ |
   |  |                         TOKEN LIFECYCLE                                 | |
   |  |                                                                         | |
-  |  |  Purchase --► Queue --► Airdrop Mint --► Active Token --► Burn/Retire  | |
+  |  |  Purchase --► Queue --► Airdrop Mint --► Active Token --► Burn/Retire   | |
   |  |     |           |            |                |               |         | |
   |  |  ETH/BURNIE  _tokensOwed  processPending    Transfer      burnFromGame  | |
   |  |  payment     tracking     Mints()           /Trade        or advanceBase| |
@@ -32,7 +32,7 @@ pragma solidity ^0.8.26;
   |  |                                                                         | |
   |  |  _packedAddressData[address]: 256 bits                                  | |
   |  |  +----------------+----------------+----------------+-----------------+ | |
-  |  |  | balance (64)   | numMinted (64) | numBurned (64) | startTs (64)    | | |
+  |  |  | balance (64)   | numMinted (64) | numBurned (64) | epoch (64)      | | |
   |  |  +----------------+----------------+----------------+-----------------+ | |
   |  +-------------------------------------------------------------------------+ |
   |                                                                              |
@@ -100,7 +100,7 @@ pragma solidity ^0.8.26;
   |  TRUSTED CONTRACTS (constant after construction):                            |
   |  • game:            Core game contract (can burn tokens, process mints)      |
   |  • coin:            BURNIE token (burn/credit/notify operations)             |
-  |  • ContractAddresses.AFFILIATE: Affiliate payouts and bonus calculations                |
+  |  • affiliate:      Affiliate payouts and bonus calculations                  |
   |  • regularRenderer: Token metadata generation                                |
   |  • admin:           None (addresses fixed at deploy)                         |
   |                                                                              |
@@ -159,10 +159,9 @@ struct PurchaseParams {
     bytes32 affiliateCode;   // Affiliate/referral code (ETH purchases only)
 }
 
-/// @notice Minimal BURNIE token interface for marketplace operations.
-interface IBurnieToken {
+/// @notice Extended coin interface for marketplace transfers.
+interface IDegenerusCoinExtended is IDegenerusCoin {
     function transferFrom(address from, address to, uint256 amount) external returns (bool);
-    function burnCoin(address target, uint256 amount) external;
     function balanceOf(address account) external view returns (uint256);
 }
 
@@ -204,9 +203,6 @@ contract DegenerusGamepieces {
 
     /// @notice Generic validation failure.
     error E();
-
-    /// @notice Caller is not the coin contract.
-    error OnlyCoin();
 
     /// @notice Token ID is invalid (burned, out of range, or not minted).
     error InvalidToken();
@@ -328,10 +324,10 @@ contract DegenerusGamepieces {
       |  Bit masks and positions for packed ownership/address data.          |
       |                                                                      |
       |  _packedAddressData layout (per address):                            |
-      |  [0-63]   balance        - Current token balance                     |
+      |  [0-63]   balance        - Current level token balance               |
       |  [64-127] numberMinted   - Total minted to this address              |
       |  [128-191] numberBurned  - Total burned from this address            |
-      |  [160-223] startTimestamp - First interaction timestamp              |
+      |  [192-255] epoch         - Level balance epoch                       |
       |                                                                      |
       |  _packedOwnerships layout (per token):                               |
       |  [0-159]  owner address                                              |
@@ -361,6 +357,12 @@ contract DegenerusGamepieces {
     /// @dev Mask for 160-bit address extraction.
     uint256 private constant _BITMASK_ADDRESS = (1 << 160) - 1;
 
+    /// @dev Bit position for balance epoch in packed address data.
+    uint256 private constant _BITPOS_BALANCE_EPOCH = 192;
+
+    /// @dev Mask for balance epoch in packed address data.
+    uint256 private constant _BITMASK_BALANCE_EPOCH = _BITMASK_ADDRESS_DATA_ENTRY << _BITPOS_BALANCE_EPOCH;
+
     /// @dev Increment unit for burn counter (shifts to correct bit position).
     uint256 private constant _BURN_COUNT_INCREMENT_UNIT = (uint256(1) << _BITPOS_NUMBER_BURNED);
 
@@ -385,6 +387,9 @@ contract DegenerusGamepieces {
 
     /// @dev Total number of tokens burned.
     uint256 private _burnCounter;
+
+    /// @dev Balance epoch for current level.
+    uint64 private _balanceEpoch = 1;
 
     /// @dev Base token ID for current level. Tokens below this are "retired".
     uint256 private _baseTokenId = BASE_TOKEN_START;
@@ -420,14 +425,10 @@ contract DegenerusGamepieces {
     ITokenRenderer private constant regularRenderer = ITokenRenderer(ContractAddresses.GAMEPIECE_RENDERER_ROUTER);
 
     /// @dev BURNIE token contract for purchases/marketplace (constant).
-    IDegenerusCoin private constant coin = IDegenerusCoin(ContractAddresses.COIN);
-
-    /// @dev BURNIE token interface for marketplace transfers (constant).
-    IBurnieToken private constant burnie = IBurnieToken(ContractAddresses.COIN);
-
-    /// @dev Vault address receiving eternal token #0 (constant).
+    IDegenerusCoinExtended private constant coin = IDegenerusCoinExtended(ContractAddresses.COIN);
 
     /// @dev Affiliate program contract for referral payouts (constant).
+    IDegenerusAffiliate private constant affiliate = IDegenerusAffiliate(ContractAddresses.AFFILIATE);
 
     /*+======================================================================+
       |                    MINT QUEUE STATE                                  |
@@ -546,10 +547,14 @@ contract DegenerusGamepieces {
         return _baseTokenId;
     }
 
-    /// @notice Get the next token ID that will be minted.
-    /// @return The next sequential token ID.
-    function nextTokenId() external view returns (uint256) {
-        return _currentIndex;
+    /// @dev Refresh packed address data to the current epoch, zeroing balance if stale.
+    function _refreshAddressData(address owner) private returns (uint256 packed) {
+        packed = _packedAddressData[owner];
+        if (uint64(packed >> _BITPOS_BALANCE_EPOCH) != _balanceEpoch) {
+            packed &= ~_BITMASK_ADDRESS_DATA_ENTRY;
+            packed = (packed & ~_BITMASK_BALANCE_EPOCH) | (uint256(_balanceEpoch) << _BITPOS_BALANCE_EPOCH);
+            _packedAddressData[owner] = packed;
+        }
     }
 
     /*+======================================================================+
@@ -572,28 +577,39 @@ contract DegenerusGamepieces {
       +======================================================================+*/
 
     /// @notice Get total supply of tokens.
-    /// @dev Returns minted - burned. In non-live state, only token #0 exists.
+    /// @dev Outside burn phase, only the genesis token exists.
     /// @return Total number of existing tokens.
     function totalSupply() external view returns (uint256) {
         if (!_isLiveState()) {
             return 1;
         }
-        uint256 minted = _currentIndex;
-        uint256 burned = _burnCounter;
-        return minted - burned;
+        return _currentIndex - _burnCounter;
     }
 
     /// @notice Get token balance of an address.
-    /// @dev In non-live state, only ContractAddresses.VAULT has balance of 1.
+    /// @dev Balance reflects current-level tokens only; outside burn phase returns 0.
     /// @param owner Address to query.
     /// @return Number of tokens owned.
     function balanceOf(address owner) external view returns (uint256) {
         if (owner == address(0)) revert Zero();
-        if (!_isLiveState()) {
-            if (owner == ContractAddresses.VAULT) return 1;
-            return 0;
+        uint256 balance;
+        if (_isLiveState()) {
+            uint256 packed = _packedAddressData[owner];
+            if (uint64(packed >> _BITPOS_BALANCE_EPOCH) == _balanceEpoch) {
+                balance = packed & _BITMASK_ADDRESS_DATA_ENTRY;
+            }
         }
-        return _packedAddressData[owner] & _BITMASK_ADDRESS_DATA_ENTRY;
+
+        if (owner == ContractAddresses.VAULT) {
+            if (_balanceEpoch == 1) {
+                return _isLiveState() ? balance : 1;
+            }
+            unchecked {
+                balance += 1;
+            }
+        }
+
+        return balance;
     }
 
     /// @notice Check if contract supports an interface.
@@ -676,19 +692,6 @@ contract DegenerusGamepieces {
         _routePurchase(msg.sender, msg.sender, params);
     }
 
-    /// @notice MAP purchase for affiliate rewards.
-    /// @dev Access: affiliate program only. Bypasses payments, just enqueues maps.
-    ///      Used when affiliates redeem accumulated rewards for maps.
-    /// @param buyer Address to credit maps to.
-    /// @param quantity Number of maps to enqueue.
-    function purchaseMapForAffiliate(address buyer, uint256 quantity) external {
-        if (msg.sender != ContractAddresses.AFFILIATE) revert OnlyCoin();
-        if (game.rngLocked()) revert RngNotReady();
-        game.enqueueMap(buyer, uint32(quantity));
-
-        emit MapPurchase(buyer, uint32(quantity), true, true, 0, 0);
-    }
-
     /// @dev Route purchase to appropriate handler based on PurchaseKind.
     /// @param buyer Address to receive tokens/maps.
     /// @param payer Address paying for purchase.
@@ -745,7 +748,7 @@ contract DegenerusGamepieces {
         if (payInCoin) {
             if (msg.value != 0) revert E();
             _coinReceive(payer, coinCost, targetLevel, 0);
-            if (lastPurchaseDay) {
+            if (lastPurchaseDay && g.ethMintLevelCount(payer) != 0) {
                 coin.notifyQuestMint(payer, uint32(mintQuantity), false);
             }
             costAmount = coinCost;
@@ -855,7 +858,7 @@ contract DegenerusGamepieces {
         if (payInCoin) {
             if (msg.value != 0) revert E();
             _coinReceive(payer, coinCost, lvl, 0);
-            if (lastPurchaseDay) {
+            if (lastPurchaseDay && g.ethMintLevelCount(payer) != 0) {
                 uint32 questQuantity = uint32(mintQuantity / 4);
                 if (questQuantity != 0) {
                     coin.notifyQuestMint(payer, questQuantity, false);
@@ -981,7 +984,7 @@ contract DegenerusGamepieces {
         }
 
         // Flat affiliate payout baseline with claimable-specific rate.
-        uint256 rakebackMint = IDegenerusAffiliate(ContractAddresses.AFFILIATE).payAffiliate(
+        uint256 rakebackMint = affiliate.payAffiliate(
             _affiliateAmount(lvl, gameState, payKind, claimableUsed, costWei),
             affiliateCode,
             buyer,
@@ -1277,7 +1280,7 @@ contract DegenerusGamepieces {
     }
 
     function isApprovedForAll(address owner, address operator) public view returns (bool) {
-        if (operator == address(game)) return true;
+        if (operator == ContractAddresses.GAME) return true;
         return _operatorApprovals[owner][operator];
     }
 
@@ -1320,7 +1323,7 @@ contract DegenerusGamepieces {
     }
 
     /// @notice Transfer; clears per-token approvals.
-    function transferFrom(address from, address to, uint256 tokenId) public payable {
+    function transferFrom(address from, address to, uint256 tokenId) public {
         uint256 prevOwnershipPacked = _packedOwnershipOf(tokenId);
 
         if (address(uint160(prevOwnershipPacked)) != from) revert TransferFromIncorrectOwner();
@@ -1329,7 +1332,7 @@ contract DegenerusGamepieces {
         address approvedAddress = _tokenApprovals[tokenId];
 
         address sender = msg.sender;
-        if (sender == address(game)) {
+        if (sender == ContractAddresses.GAME) {
             approvedAddress = sender;
         }
         if (!_isSenderApprovedOrOwner(approvedAddress, from, sender))
@@ -1341,8 +1344,17 @@ contract DegenerusGamepieces {
         delete asks[tokenId];
 
         unchecked {
-            --_packedAddressData[from]; // Updates: `balance -= 1`.
-            ++_packedAddressData[to]; // Updates: `balance += 1`.
+            if (from != to) {
+                uint256 fromPacked = _refreshAddressData(from);
+                uint256 toPacked = _refreshAddressData(to);
+                uint256 fromBalance = fromPacked & _BITMASK_ADDRESS_DATA_ENTRY;
+                uint256 toBalance = toPacked & _BITMASK_ADDRESS_DATA_ENTRY;
+                if (fromBalance == 0) revert E();
+                _packedAddressData[from] = (fromPacked & ~_BITMASK_ADDRESS_DATA_ENTRY) | (fromBalance - 1);
+                _packedAddressData[to] = (toPacked & ~_BITMASK_ADDRESS_DATA_ENTRY) | (toBalance + 1);
+            } else {
+                _refreshAddressData(from);
+            }
 
             _packedOwnerships[tokenId] = _packOwnershipData(to, _BITMASK_NEXT_INITIALIZED);
 
@@ -1370,11 +1382,11 @@ contract DegenerusGamepieces {
         }
     }
 
-    function safeTransferFrom(address from, address to, uint256 tokenId) public payable {
+    function safeTransferFrom(address from, address to, uint256 tokenId) public {
         safeTransferFrom(from, to, tokenId, "");
     }
 
-    function safeTransferFrom(address from, address to, uint256 tokenId, bytes memory _data) public payable {
+    function safeTransferFrom(address from, address to, uint256 tokenId, bytes memory _data) public {
         transferFrom(from, to, tokenId);
         if (to.code.length != 0)
             if (!_checkContractOnERC721Received(from, to, tokenId, _data)) {
@@ -1391,8 +1403,17 @@ contract DegenerusGamepieces {
         delete asks[tokenId];
 
         unchecked {
-            --_packedAddressData[from];
-            ++_packedAddressData[to];
+            if (from != to) {
+                uint256 fromPacked = _refreshAddressData(from);
+                uint256 toPacked = _refreshAddressData(to);
+                uint256 fromBalance = fromPacked & _BITMASK_ADDRESS_DATA_ENTRY;
+                uint256 toBalance = toPacked & _BITMASK_ADDRESS_DATA_ENTRY;
+                if (fromBalance == 0) revert E();
+                _packedAddressData[from] = (fromPacked & ~_BITMASK_ADDRESS_DATA_ENTRY) | (fromBalance - 1);
+                _packedAddressData[to] = (toPacked & ~_BITMASK_ADDRESS_DATA_ENTRY) | (toBalance + 1);
+            } else {
+                _refreshAddressData(from);
+            }
 
             _packedOwnerships[tokenId] = _packOwnershipData(to, _BITMASK_NEXT_INITIALIZED);
 
@@ -1410,8 +1431,8 @@ contract DegenerusGamepieces {
     function _collectPayment(address payer, address seller, uint256 amount) private {
         uint256 burnCut = (amount * BURN_BPS) / BPS_DENOMINATOR;
         uint256 payout = amount - burnCut;
-        if (!burnie.transferFrom(payer, seller, payout)) revert PaymentFailed();
-        if (burnCut != 0) burnie.burnCoin(payer, burnCut);
+        if (!coin.transferFrom(payer, seller, payout)) revert PaymentFailed();
+        if (burnCut != 0) coin.burnCoin(payer, burnCut);
     }
 
     function _requireMarketplaceToken(uint256 tokenId) private view {
@@ -1445,7 +1466,7 @@ contract DegenerusGamepieces {
         unchecked {
             _packedOwnerships[startTokenId] = _packOwnershipData(to, quantity == 1 ? _BITMASK_NEXT_INITIALIZED : 0);
 
-            uint256 packedData = _packedAddressData[to];
+            uint256 packedData = _refreshAddressData(to);
             uint256 currentBalance = packedData & _BITMASK_ADDRESS_DATA_ENTRY; // Extract current balance
             uint256 currentNumberMinted = (packedData >> _BITPOS_NUMBER_MINTED) & _BITMASK_ADDRESS_DATA_ENTRY; // Extract current minted count
 
@@ -1470,7 +1491,7 @@ contract DegenerusGamepieces {
 
             _packedAddressData[to] = packedData;
 
-        uint256 toMasked = uint256(uint160(to));
+            uint256 toMasked = uint256(uint160(to));
 
             uint256 end = startTokenId + quantity;
             uint256 tokenId = startTokenId;
@@ -1492,7 +1513,7 @@ contract DegenerusGamepieces {
         }
     }
 
-    function approve(address to, uint256 tokenId) external payable {
+    function approve(address to, uint256 tokenId) external {
         address owner = address(uint160(_packedOwnershipOf(tokenId)));
 
         if (msg.sender != owner && !isApprovedForAll(owner, msg.sender)) {
@@ -1515,7 +1536,7 @@ contract DegenerusGamepieces {
 
     /// @dev Restricts function to game contract only.
     modifier onlyGame() {
-        if (msg.sender != address(game)) revert E();
+        if (msg.sender != ContractAddresses.GAME) revert E();
         _;
     }
 
@@ -1559,7 +1580,7 @@ contract DegenerusGamepieces {
         if (expiry < block.timestamp) revert Expired();
         address seller = msg.sender;
         if (address(uint160(_packedOwnershipOf(tokenId))) != seller) revert Unauthorized();
-        burnie.burnCoin(seller, ASK_FEE);
+        coin.burnCoin(seller, ASK_FEE);
         asks[tokenId] = Ask({seller: seller, expiry: expiry, price: price});
         emit AskPlaced(seller, tokenId, price, expiry);
     }
@@ -1599,9 +1620,9 @@ contract DegenerusGamepieces {
         _requireMarketplaceToken(tokenId);
         if (amount == 0) revert PriceZero();
         if (expiry < block.timestamp) revert Expired();
-        if (burnie.balanceOf(msg.sender) < amount) revert InsufficientBalance();
+        if (coin.balanceOf(msg.sender) < amount) revert InsufficientBalance();
 
-        burnie.burnCoin(msg.sender, OFFER_FEE);
+        coin.burnCoin(msg.sender, OFFER_FEE);
         offers[tokenId][msg.sender] = Offer({amount: amount, expiry: expiry});
         if (!offerSeen[tokenId][msg.sender]) {
             offerSeen[tokenId][msg.sender] = true;
@@ -1626,7 +1647,7 @@ contract DegenerusGamepieces {
         Offer memory offer = offers[tokenId][bidder];
         if (offer.amount == 0 || offer.amount != amount) revert Unauthorized();
         if (offer.expiry < block.timestamp) revert Expired();
-        if (burnie.balanceOf(bidder) < amount) revert InsufficientBalance();
+        if (coin.balanceOf(bidder) < amount) revert InsufficientBalance();
 
         uint256 prevOwnershipPacked = _packedOwnershipOf(tokenId);
         address seller = msg.sender;
@@ -1650,7 +1671,7 @@ contract DegenerusGamepieces {
             Offer memory offer = offers[tokenId][bidder];
             if (offer.amount == 0) continue;
             if (offer.expiry < block.timestamp) continue;
-            if (burnie.balanceOf(bidder) < offer.amount) continue;
+            if (coin.balanceOf(bidder) < offer.amount) continue;
             if (offer.amount > best.amount) {
                 best = BestOffer({bidder: bidder, amount: offer.amount, expiry: offer.expiry});
             }
@@ -1672,6 +1693,9 @@ contract DegenerusGamepieces {
 
         _baseTokenId = endTokenId;
         _burnCounter = endTokenId - 1;
+        unchecked {
+            ++_balanceEpoch;
+        }
     }
 
     /// @notice Burn a batch of player tokens
@@ -1724,7 +1748,7 @@ contract DegenerusGamepieces {
 
     /// @dev Applies burn deltas to address data.
     function _applyBurnAccounting(address owner, uint256 burnDelta) private {
-        uint256 currentPackedData = _packedAddressData[owner];
+        uint256 currentPackedData = _refreshAddressData(owner);
         uint256 currentNumberBurned = (currentPackedData >> _BITPOS_NUMBER_BURNED) & _BITMASK_ADDRESS_DATA_ENTRY;
         uint256 incrementAmount = burnDelta >> _BITPOS_NUMBER_BURNED;
 
@@ -1807,10 +1831,6 @@ contract DegenerusGamepieces {
 
     function currentBaseTokenId() external view returns (uint256) {
         return _currentBaseTokenId();
-    }
-
-    function tokenTraitsPacked(uint256 tokenId) external pure returns (uint32) {
-        return DegenerusTraitUtils.packedTraitsForToken(tokenId);
     }
 
     function purchaseCounts() external view returns (uint32 prePurchase, uint32 purchasePhase) {

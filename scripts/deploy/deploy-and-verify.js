@@ -246,7 +246,7 @@ async function main() {
       continue;
     }
     if (name === "COIN") {
-      const factory = await ethers.getContractFactory("contracts/DegenerusCoin.sol:DegenerusCoin", deployer);
+      const factory = await ethers.getContractFactory("contracts/BurnieCoin.sol:BurnieCoin", deployer);
       await deployWithCheck(factory, expected[name], name);
       continue;
     }

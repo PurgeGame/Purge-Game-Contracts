@@ -58,10 +58,9 @@ pragma solidity ^0.8.26;
  * | [18:19] exterminationInvertFlag  bool     Exterminator bonus inversion      |
  * | [19:20] bondMaintenancePending   bool     Bond maintenance needed flag      |
  * | [20:21] mapJackpotType          uint8    0=none, 1=daily, 2=purchase        |
- * | [21:22] presaleJackpotQueued    bool     Legacy presale queue flag         |
- * | [22:32] <padding>                         10 bytes unused                   |
+ * | [21:32] <padding>                         11 bytes unused                   |
  * +-----------------------------------------------------------------------------+
- *   Total: 4+4+1+1+1+1+1+1+1+1+1+1+1+1+1+1 = 21 bytes (11 bytes padding)
+ *   Total: 4+4+1+1+1+1+1+1+1+1+1+1+1+1+1 = 20 bytes (12 bytes padding)
  *
  * +-----------------------------------------------------------------------------+
  * | SLOT 2 (32 bytes) — Price                                                   |
@@ -199,12 +198,12 @@ abstract contract DegenerusGameStorage {
     ///
     ///      SECURITY: State transitions are guarded by modifiers in DegenerusGame.
     ///      Invalid state transitions revert, preventing exploitation.
-    uint8 public gameState = 0;
+    uint8 public gameState;
 
     // =========================================================================
     // SLOT 1: Cursors, Counters, and Boolean Flags
     // =========================================================================
-    // Boolean flags pack efficiently (1 byte each in EVM). Total: 20 bytes used.
+    // Boolean flags pack efficiently (1 byte each in EVM). Total: 20 bytes used (12 bytes padding).
 
     /// @dev Progress cursor for reseeding trait counts at level start.
     ///      Used in batched trait initialization to avoid gas limits.
@@ -285,10 +284,6 @@ abstract contract DegenerusGameStorage {
     ///      Timeout is computed on-the-fly from jackpotCounter >= JACKPOT_LEVEL_CAP.
     uint8 internal mapJackpotType;
 
-    /// @dev Legacy presale jackpot queue flag (unused).
-    ///      Kept for storage layout stability; do not repurpose or remove in-place.
-    bool internal presaleJackpotQueued;
-
     // =========================================================================
     // SLOT 2: Mint Price
     // =========================================================================
@@ -299,7 +294,7 @@ abstract contract DegenerusGameStorage {
     ///
     ///      Default 0.025 ether = 25 finney = initial launch price.
     ///
-    ///      SECURITY: Price updates are admin-controlled. uint128 prevents
+    ///      SECURITY: Price updates are game-controlled. uint128 prevents
     ///      overflow in multiplication with reasonable quantities.
     uint128 internal price = 0.025 ether;
 
@@ -372,16 +367,6 @@ abstract contract DegenerusGameStorage {
     ///
     ///      PUBLIC: Exposed for transparency and off-chain monitoring.
     uint48 public deployTimestamp;
-
-    /// @dev DEPRECATED: Address of the DegenerusBonds contract (now a constant in each contract).
-    ///      Kept for storage layout stability; do not repurpose or remove in-place.
-    ///      See ContractAddresses.BONDS instead.
-    address internal bonds;
-
-    /// @dev DEPRECATED: Address of the reward vault (now a constant in each contract).
-    ///      Kept for storage layout stability; do not repurpose or remove in-place.
-    ///      See ContractAddresses.VAULT instead.
-    address internal vault;
 
     /// @dev True once bondPool has been flushed to bonds contract.
     ///      Marks end-of-game state for bond obligations.
@@ -487,25 +472,6 @@ abstract contract DegenerusGameStorage {
     mapping(uint48 => uint256) internal rngWordByDay;
 
     // =========================================================================
-    // Cosmetic and Integration Modules
-    // =========================================================================
-
-    /// @dev DEPRECATED: Address of standalone trophy contract (now a constant in each contract).
-    ///      Kept for storage layout stability; do not repurpose or remove in-place.
-    ///      See ContractAddresses.TROPHIES instead.
-    address internal trophies;
-
-    /// @dev DEPRECATED: Cached affiliate program address (now a constant in each contract).
-    ///      Kept for storage layout stability; do not repurpose or remove in-place.
-    ///      See ContractAddresses.AFFILIATE instead.
-    address internal affiliateProgramAddr;
-
-    /// @dev DEPRECATED: Quest module address (now a constant in each contract).
-    ///      Kept for storage layout stability; do not repurpose or remove in-place.
-    ///      See ContractAddresses.QUESTS instead.
-    address internal questModule;
-
-    // =========================================================================
     // Coinflip Statistics (Last Purchase Day)
     // =========================================================================
 
@@ -531,5 +497,4 @@ abstract contract DegenerusGameStorage {
 
     /// @dev True if presale minting (tokens/maps) is enabled.
     bool internal presaleMintingEnabledFlag;
-
 }

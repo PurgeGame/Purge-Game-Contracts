@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import "./interfaces/IDegenerusQuests.sol";
 import "./interfaces/IDegenerusGame.sol";
+import "./interfaces/IDegenerusBondsJackpot.sol";
 import {ContractAddresses} from "./ContractAddresses.sol";
 
 /**
@@ -54,12 +55,6 @@ contract DegenerusQuests is IDegenerusQuests {
 
     /// @dev Thrown when caller is not the authorized ContractAddresses.COIN contract.
     error OnlyCoin();
-    /// @dev Thrown when quest day is invalid (unused in current impl but reserved).
-    error InvalidQuestDay();
-    /// @dev Thrown when entropy value is invalid (unused in current impl but reserved).
-    error InvalidEntropy();
-    /// @dev Thrown when a zero address is passed to constructor.
-    error ZeroAddress();
 
     // =========================================================================
     //                              CONSTANTS
@@ -136,15 +131,10 @@ contract DegenerusQuests is IDegenerusQuests {
     //                           IMMUTABLE ADDRESSES
     // =========================================================================
 
-    /// @notice The ContractAddresses.COIN contract authorized to drive quest logic.
-    /// @dev Constant; all handle* functions require msg.sender == ContractAddresses.COIN.
-
-    // =========================================================================
-    //                              STATE VARIABLES
-    // =========================================================================
-
     /// @dev Reference to the Degenerus game contract for state queries.
     IDegenerusGame private constant questGame = IDegenerusGame(ContractAddresses.GAME);
+    /// @dev Reference to the Degenerus bonds contract for purchase-window checks.
+    IDegenerusBondsJackpot private constant questBonds = IDegenerusBondsJackpot(ContractAddresses.BONDS);
 
     // =========================================================================
     //                                 STRUCTS
@@ -242,14 +232,6 @@ contract DegenerusQuests is IDegenerusQuests {
     uint32 private questVersionCounter = 1;
 
     // =========================================================================
-    //                              CONSTRUCTOR
-    // =========================================================================
-
-    /**
-     * @notice Deploys the quest contract with fixed ContractAddresses.COIN and game references.
-     * @dev All dependencies are provided via ContractAddresses.
-     */
-    // =========================================================================
     //                              MODIFIERS
     // =========================================================================
 
@@ -262,7 +244,7 @@ contract DegenerusQuests is IDegenerusQuests {
     /// @dev Restricts access to ContractAddresses.COIN or game contract (for quest normalization).
     modifier onlyCoinOrGame() {
         address sender = msg.sender;
-        if (sender != ContractAddresses.COIN && sender != address(questGame)) revert OnlyCoin();
+        if (sender != ContractAddresses.COIN && sender != ContractAddresses.GAME) revert OnlyCoin();
         _;
     }
 
@@ -321,7 +303,7 @@ contract DegenerusQuests is IDegenerusQuests {
      */
     function normalizeActiveBurnQuests() external onlyCoinOrGame {
         DailyQuest[QUEST_SLOT_COUNT] storage quests = activeQuests;
-        bool burnAllowed = _canRollBurnQuest(quests[0].day != 0 ? quests[0].day : quests[1].day);
+        bool burnAllowed = _canRollBurnQuest();
         if (burnAllowed) return;
         for (uint8 slot; slot < QUEST_SLOT_COUNT; ) {
             DailyQuest storage quest = quests[slot];
@@ -351,9 +333,10 @@ contract DegenerusQuests is IDegenerusQuests {
         bool forceBurn
     ) private returns (bool rolled, uint8[2] memory questTypes, bool highDifficulty) {
         DailyQuest[QUEST_SLOT_COUNT] storage quests = activeQuests;
-        bool burnAllowed = _canRollBurnQuest(day) || forceBurn;
+        bool burnAllowed = _canRollBurnQuest() || forceBurn;
         bool decAllowed = _canRollDecimatorQuest();
         bool mintBurnieAllowed = _canRollMintBurnieQuest();
+        bool bondAllowed = _canRollBondQuest();
 
         uint256 primaryEntropy = entropy;
         // Swap 128-bit halves to derive independent entropy for slot 1
@@ -361,10 +344,10 @@ contract DegenerusQuests is IDegenerusQuests {
 
         uint8 primaryType = forceMintEth
             ? QUEST_TYPE_MINT_ETH
-            : _primaryQuestType(primaryEntropy, burnAllowed, decAllowed, mintBurnieAllowed);
+            : _primaryQuestType(primaryEntropy, burnAllowed, decAllowed, mintBurnieAllowed, bondAllowed);
         uint8 bonusType = forceBurn
             ? QUEST_TYPE_BURN
-            : _bonusQuestType(bonusEntropy, primaryType, burnAllowed, decAllowed, mintBurnieAllowed);
+            : _bonusQuestType(bonusEntropy, primaryType, burnAllowed, decAllowed, mintBurnieAllowed, bondAllowed);
 
         // Single difficulty roll per day, shared by both slots for consistency
         uint8 flags = _difficultyFlags(uint16(primaryEntropy & 0x3FF));
@@ -416,7 +399,7 @@ contract DegenerusQuests is IDegenerusQuests {
         DailyQuest[QUEST_SLOT_COUNT] memory quests = activeQuests;
         uint48 currentDay = _currentQuestDay(quests);
         PlayerQuestState storage state = questPlayerState[player];
-        if (currentDay == 0) {
+        if (player == address(0) || quantity == 0 || currentDay == 0) {
             return (0, false, quests[0].questType, state.streak, false, false);
         }
 
@@ -505,7 +488,7 @@ contract DegenerusQuests is IDegenerusQuests {
         uint8 tier = _questTier(state.baseStreak);
         uint128 progressAfter = _clampedAdd128(state.progress[slotIndex], flipCredit);
         state.progress[slotIndex] = progressAfter;
-        uint256 target = uint256(_questFlipTargetTokens(tier, quest.flags, quest.entropy)) * 1 ether;
+        uint256 target = uint256(_questFlipTargetTokens(tier, quest.entropy)) * 1 ether;
         if (progressAfter < target) {
             return (0, false, quest.questType, state.streak, false, false);
         }
@@ -542,7 +525,7 @@ contract DegenerusQuests is IDegenerusQuests {
         }
         _questSyncProgress(state, slotIndex, currentDay, quest.version);
         state.progress[slotIndex] = _clampedAdd128(state.progress[slotIndex], burnAmount);
-        uint256 target = uint256(_questDecimatorTargetTokens(tier, quest.flags, quest.entropy)) * 1 ether;
+        uint256 target = uint256(_questDecimatorTargetTokens(tier, quest.entropy)) * 1 ether;
         if (state.progress[slotIndex] < target) {
             return (0, false, quest.questType, state.streak, false, false);
         }
@@ -591,7 +574,7 @@ contract DegenerusQuests is IDegenerusQuests {
         }
 
         state.progress[slotIndex] = _clampedAdd128(state.progress[slotIndex], basePerBondWei);
-        uint256 target = _questBondTargetWei(tier, quest.flags, quest.entropy, priceWei);
+        uint256 target = _questBondTargetWei(tier, quest.entropy, priceWei);
         if (state.progress[slotIndex] < target) {
             return (0, false, quest.questType, state.streak, false, false);
         }
@@ -626,7 +609,7 @@ contract DegenerusQuests is IDegenerusQuests {
         }
         _questSyncProgress(state, slotIndex, currentDay, quest.version);
         state.progress[slotIndex] = _clampedAdd128(state.progress[slotIndex], amount);
-        uint256 target = uint256(_questAffiliateTargetTokens(tier, quest.flags, quest.entropy)) * 1 ether;
+        uint256 target = uint256(_questAffiliateTargetTokens(tier, quest.entropy)) * 1 ether;
         if (state.progress[slotIndex] < target) {
             return (0, false, quest.questType, state.streak, false, false);
         }
@@ -671,7 +654,7 @@ contract DegenerusQuests is IDegenerusQuests {
             fallbackType = quest.questType;
             _questSyncProgress(state, slot, currentDay, quest.version);
             state.progress[slot] = _clampedAdd128(state.progress[slot], quantity);
-            uint32 target = _questMintTarget(tier, quest.flags, quest.entropy);
+            uint32 target = _questMintTarget(tier, quest.entropy);
             if (state.progress[slot] >= target) {
                 return _questCompleteWithPair(state, quests, slot, quest, currentDay, tier, 0);
             }
@@ -721,7 +704,7 @@ contract DegenerusQuests is IDegenerusQuests {
      */
     function _materializeActiveQuestsForView() private view returns (DailyQuest[QUEST_SLOT_COUNT] memory local) {
         local = activeQuests;
-        bool burnAllowed = _canRollBurnQuest(_currentQuestDay(local));
+        bool burnAllowed = _canRollBurnQuest();
         if (burnAllowed) return local;
         for (uint8 slot; slot < QUEST_SLOT_COUNT; ) {
             if (local[slot].questType == QUEST_TYPE_BURN) {
@@ -863,20 +846,20 @@ contract DegenerusQuests is IDegenerusQuests {
     ) private view returns (QuestRequirements memory req) {
         uint8 qType = quest.questType;
         if (qType == QUEST_TYPE_MINT_BURNIE) {
-            req.mints = _questMintTarget(tier, quest.flags, quest.entropy);
+            req.mints = _questMintTarget(tier, quest.entropy);
         } else if (qType == QUEST_TYPE_MINT_ETH) {
-            req.mints = _questMintTarget(tier, quest.flags, quest.entropy);
+            req.mints = _questMintTarget(tier, quest.entropy);
         } else if (qType == QUEST_TYPE_BURN) {
-            req.mints = _questMintTarget(tier, quest.flags, quest.entropy);
+            req.mints = _questMintTarget(tier, quest.entropy);
         } else if (qType == QUEST_TYPE_FLIP) {
-            req.tokenAmount = uint256(_questFlipTargetTokens(tier, quest.flags, quest.entropy)) * 1 ether;
+            req.tokenAmount = uint256(_questFlipTargetTokens(tier, quest.entropy)) * 1 ether;
         } else if (qType == QUEST_TYPE_DECIMATOR) {
-            req.tokenAmount = uint256(_questDecimatorTargetTokens(tier, quest.flags, quest.entropy)) * 1 ether;
+            req.tokenAmount = uint256(_questDecimatorTargetTokens(tier, quest.entropy)) * 1 ether;
         } else if (qType == QUEST_TYPE_AFFILIATE) {
-            req.tokenAmount = uint256(_questAffiliateTargetTokens(tier, quest.flags, quest.entropy)) * 1 ether;
+            req.tokenAmount = uint256(_questAffiliateTargetTokens(tier, quest.entropy)) * 1 ether;
         } else if (qType == QUEST_TYPE_BOND) {
             uint256 priceWei = questGame.mintPrice();
-            req.tokenAmount = _questBondTargetWei(tier, quest.flags, quest.entropy, priceWei);
+            req.tokenAmount = _questBondTargetWei(tier, quest.entropy, priceWei);
         }
     }
 
@@ -938,7 +921,7 @@ contract DegenerusQuests is IDegenerusQuests {
      * @dev Burn quests are only enabled when the core game is in burn state.
      * @return True if gameState == 3 (burn window open).
      */
-    function _canRollBurnQuest(uint48 /*questDay*/) private view returns (bool) {
+    function _canRollBurnQuest() private view returns (bool) {
         IDegenerusGame game_ = questGame;
         return game_.gameState() == 3;
     }
@@ -968,9 +951,17 @@ contract DegenerusQuests is IDegenerusQuests {
         uint24 lvl = game_.level();
         // Always available at 100-level milestones
         if (lvl != 0 && (lvl % DECIMATOR_SPECIAL_LEVEL) == 0) return true;
-        // Available at X5 levels (15, 25, 35...) except X95
-        if (lvl < 15) return false;
+        // Available at X5 levels (5, 15, 25, 35...) except X95
+        if (lvl < 5) return false;
         return (lvl % 10) == 5 && (lvl % 100) != 95;
+    }
+
+    /**
+     * @dev Bond quests are only enabled when bond purchases are open.
+     * @return True if bond quests can be rolled.
+     */
+    function _canRollBondQuest() private view returns (bool) {
+        return questBonds.purchasesEnabled();
     }
 
     /**
@@ -1049,7 +1040,7 @@ contract DegenerusQuests is IDegenerusQuests {
     ) private returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed, bool completedBoth) {
         _questSyncProgress(state, slot, quest.day, quest.version);
         state.progress[slot] = _clampedAdd128(state.progress[slot], quantity);
-        uint32 target = _questMintTarget(tier, quest.flags, quest.entropy);
+        uint32 target = _questMintTarget(tier, quest.entropy);
         if (state.progress[slot] >= target) {
             return _questCompleteWithPair(state, quests, slot, quest, currentDay, tier, 0);
         }
@@ -1208,14 +1199,13 @@ contract DegenerusQuests is IDegenerusQuests {
      * @param entropy The quest entropy.
      * @return 10-bit difficulty (0-1023).
      */
-    function _difficultyForTarget(uint8 /*questFlags*/, uint256 entropy) private pure returns (uint16) {
+    function _difficultyForTarget(uint256 entropy) private pure returns (uint16) {
         return uint16(entropy & 0x3FF);
     }
 
     /**
      * @dev Calculate mint/burn target (small integer: 1-3).
      * @param tier Player's tier.
-     * @param flags Quest difficulty flags (unused, reserved).
      * @param entropy Quest entropy for target derivation.
      * @return Target number of mints/burns required.
      *
@@ -1224,8 +1214,8 @@ contract DegenerusQuests is IDegenerusQuests {
      * - difficulty > 500: target = 2 (capped by tier+1)
      * - otherwise: target = 1
      */
-    function _questMintTarget(uint8 tier, uint8 flags, uint256 entropy) private pure returns (uint32) {
-        uint16 difficulty = _difficultyForTarget(flags, entropy);
+    function _questMintTarget(uint8 tier, uint256 entropy) private pure returns (uint32) {
+        uint16 difficulty = _difficultyForTarget(entropy);
         uint32 target = 1;
         if (difficulty > 750) {
             target = 3;
@@ -1243,27 +1233,25 @@ contract DegenerusQuests is IDegenerusQuests {
     /**
      * @dev Calculate flip stake target in BURNIE tokens (not base units).
      * @param tier Player's tier.
-     * @param flags Quest difficulty flags.
      * @param entropy Quest entropy.
      * @return Target in BURNIE tokens (multiply by 1 ether for base units).
      */
-    function _questFlipTargetTokens(uint8 tier, uint8 flags, uint256 entropy) private pure returns (uint32) {
+    function _questFlipTargetTokens(uint8 tier, uint256 entropy) private pure returns (uint32) {
         uint16 maxVal = _questPackedValue(QUEST_FLIP_PACKED, tier);
-        uint16 difficulty = _difficultyForTarget(flags, entropy);
+        uint16 difficulty = _difficultyForTarget(entropy);
         return _questLinearTarget(QUEST_MIN_FLIP_STAKE_TOKEN, uint32(maxVal), difficulty);
     }
 
     /**
      * @dev Calculate decimator target (2x flip target).
      * @param tier Player's tier.
-     * @param flags Quest difficulty flags.
      * @param entropy Quest entropy.
      * @return Target in BURNIE tokens.
      *
      * Note: Includes overflow protection (returns max uint32 if doubled overflows).
      */
-    function _questDecimatorTargetTokens(uint8 tier, uint8 flags, uint256 entropy) private pure returns (uint32) {
-        uint32 base = _questFlipTargetTokens(tier, flags, entropy);
+    function _questDecimatorTargetTokens(uint8 tier, uint256 entropy) private pure returns (uint32) {
+        uint32 base = _questFlipTargetTokens(tier, entropy);
         uint32 doubled = base * 2;
         if (doubled < base) {
             return type(uint32).max; // Overflow protection
@@ -1274,20 +1262,18 @@ contract DegenerusQuests is IDegenerusQuests {
     /**
      * @dev Calculate affiliate earnings target in BURNIE tokens.
      * @param tier Player's tier.
-     * @param flags Quest difficulty flags.
      * @param entropy Quest entropy.
      * @return Target in BURNIE tokens.
      */
-    function _questAffiliateTargetTokens(uint8 tier, uint8 flags, uint256 entropy) private pure returns (uint32) {
+    function _questAffiliateTargetTokens(uint8 tier, uint256 entropy) private pure returns (uint32) {
         uint16 maxVal = _questPackedValue(QUEST_AFFILIATE_PACKED, tier);
-        uint16 difficulty = _difficultyForTarget(flags, entropy);
+        uint16 difficulty = _difficultyForTarget(entropy);
         return _questLinearTarget(QUEST_MIN_TOKEN, uint32(maxVal), difficulty);
     }
 
     /**
      * @dev Calculate bond purchase target in wei.
      * @param tier Player's tier.
-     * @param flags Quest difficulty flags.
      * @param entropy Quest entropy.
      * @param priceWei Current mint price in wei.
      * @return Target in wei.
@@ -1296,14 +1282,14 @@ contract DegenerusQuests is IDegenerusQuests {
      * - Minimum: 0.5x mint price
      * - Maximum: 1.0x mint price at tier 2
      */
-    function _questBondTargetWei(uint8 tier, uint8 flags, uint256 entropy, uint256 priceWei) private pure returns (uint256) {
+    function _questBondTargetWei(uint8 tier, uint256 entropy, uint256 priceWei) private pure returns (uint256) {
         if (priceWei == 0) return 0;
         uint256 minWei = priceWei >> 1; // 0.5x mint price
         uint256 span = priceWei / 2;    // Additional 0.5x range
         uint256 tierMax = minWei + (span * tier) / QUEST_TIER_MAX_INDEX;
         if (tierMax <= minWei) return minWei;
 
-        uint16 difficulty = _difficultyForTarget(flags, entropy);
+        uint16 difficulty = _difficultyForTarget(entropy);
         uint256 target = minWei + (uint256(difficulty) * (tierMax - minWei)) / 1024;
         if (target > tierMax) target = tierMax;
         return target;
@@ -1343,7 +1329,7 @@ contract DegenerusQuests is IDegenerusQuests {
      * Weight Distribution:
      * - MINT_ETH: 5 (most common)
      * - DECIMATOR: 4 (when allowed)
-     * - BOND: 2
+     * - BOND: 2 (when allowed)
      * - BURN: 2 (when allowed)
      * - MINT_BURNIE: 10 (when allowed)
      * - AFFILIATE: 1
@@ -1353,7 +1339,8 @@ contract DegenerusQuests is IDegenerusQuests {
         uint256 entropy,
         bool burnAllowed,
         bool decAllowed,
-        bool mintBurnieAllowed
+        bool mintBurnieAllowed,
+        bool bondAllowed
     ) private pure returns (uint8) {
         uint16[QUEST_TYPE_COUNT] memory weights;
         uint16 total;
@@ -1365,7 +1352,9 @@ contract DegenerusQuests is IDegenerusQuests {
         if (burnAllowed) {
             weights[QUEST_TYPE_BURN] = 2;
         }
-        weights[QUEST_TYPE_BOND] = 2;
+        if (bondAllowed) {
+            weights[QUEST_TYPE_BOND] = 2;
+        }
         weights[QUEST_TYPE_AFFILIATE] = 1;
         if (decAllowed) {
             weights[QUEST_TYPE_DECIMATOR] = 4;
@@ -1421,7 +1410,8 @@ contract DegenerusQuests is IDegenerusQuests {
         uint8 primaryType,
         bool burnAllowed,
         bool decAllowed,
-        bool mintBurnieAllowed
+        bool mintBurnieAllowed,
+        bool bondAllowed
     ) private pure returns (uint8) {
         uint16[QUEST_TYPE_COUNT] memory weights;
         uint16 total;
@@ -1448,6 +1438,12 @@ contract DegenerusQuests is IDegenerusQuests {
                 continue;
             }
             if (!mintBurnieAllowed && candidate == QUEST_TYPE_MINT_BURNIE) {
+                unchecked {
+                    ++candidate;
+                }
+                continue;
+            }
+            if (!bondAllowed && candidate == QUEST_TYPE_BOND) {
                 unchecked {
                     ++candidate;
                 }
@@ -1683,26 +1679,26 @@ contract DegenerusQuests is IDegenerusQuests {
         uint256 progress = state.progress[slot];
 
         if (quest.questType == QUEST_TYPE_MINT_BURNIE) {
-            return progress >= _questMintTarget(tier, quest.flags, quest.entropy);
+            return progress >= _questMintTarget(tier, quest.entropy);
         }
         if (quest.questType == QUEST_TYPE_MINT_ETH) {
-            return progress >= _questMintTarget(tier, quest.flags, quest.entropy);
+            return progress >= _questMintTarget(tier, quest.entropy);
         }
         if (quest.questType == QUEST_TYPE_BURN) {
-            return progress >= _questMintTarget(tier, quest.flags, quest.entropy);
+            return progress >= _questMintTarget(tier, quest.entropy);
         }
         if (quest.questType == QUEST_TYPE_FLIP) {
-            return progress >= uint256(_questFlipTargetTokens(tier, quest.flags, quest.entropy)) * 1 ether;
+            return progress >= uint256(_questFlipTargetTokens(tier, quest.entropy)) * 1 ether;
         }
         if (quest.questType == QUEST_TYPE_DECIMATOR) {
-            return progress >= uint256(_questDecimatorTargetTokens(tier, quest.flags, quest.entropy)) * 1 ether;
+            return progress >= uint256(_questDecimatorTargetTokens(tier, quest.entropy)) * 1 ether;
         }
         if (quest.questType == QUEST_TYPE_AFFILIATE) {
-            return progress >= uint256(_questAffiliateTargetTokens(tier, quest.flags, quest.entropy)) * 1 ether;
+            return progress >= uint256(_questAffiliateTargetTokens(tier, quest.entropy)) * 1 ether;
         }
         if (quest.questType == QUEST_TYPE_BOND) {
             uint256 weiPrice = priceWei != 0 ? priceWei : questGame.mintPrice();
-            return progress >= _questBondTargetWei(tier, quest.flags, quest.entropy, weiPrice);
+            return progress >= _questBondTargetWei(tier, quest.entropy, weiPrice);
         }
         return false;
     }
