@@ -165,6 +165,11 @@ interface IDegenerusCoinExtended is IDegenerusCoin {
     function balanceOf(address account) external view returns (uint256);
 }
 
+/// @notice Minimal bonds interface for purchase gating.
+interface IDegenerusBondsLite {
+    function nftPurchasesEnabled() external view returns (bool);
+}
+
 // ===========================================================================
 // Contract
 // ===========================================================================
@@ -203,6 +208,27 @@ contract DegenerusGamepieces {
 
     /// @notice Generic validation failure.
     error E();
+
+    /// @notice Invalid purchase kind specified.
+    error InvalidPurchaseKind();
+
+    /// @notice Payment value mismatch (ETH sent when paying in BURNIE, or incorrect amount).
+    error PaymentValueMismatch();
+
+    /// @notice Invalid payment kind specified.
+    error InvalidPaymentKind();
+
+    /// @notice Purchases are disabled (presale hasn't raised 40 ETH yet).
+    error PurchasesDisabled();
+
+    /// @notice Balance underflow (attempting to transfer/burn more than owned).
+    error BalanceUnderflow();
+
+    /// @notice Data field overflow (balance, mint count, or burn count exceeds packed field capacity).
+    error DataFieldOverflow();
+
+    /// @notice Caller is not the authorized game contract.
+    error OnlyGameContract();
 
     /// @notice Token ID is invalid (burned, out of range, or not minted).
     error InvalidToken();
@@ -376,6 +402,9 @@ contract DegenerusGamepieces {
     bytes32 private constant _TRANSFER_EVENT_SIGNATURE =
         0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef;
 
+    /// @dev ERC721Receiver.onERC721Received selector (0x150b7a02).
+    bytes4 private constant _ERC721_RECEIVED = 0x150b7a02;
+
     /*+======================================================================+
       |                    ERC721 STATE VARIABLES                            |
       +======================================================================+
@@ -419,16 +448,19 @@ contract DegenerusGamepieces {
       +======================================================================+*/
 
     /// @dev Core game contract (constant).
-    IDegenerusGame private constant game = IDegenerusGame(ContractAddresses.GAME);
+    IDegenerusGame internal constant game = IDegenerusGame(ContractAddresses.GAME);
 
     /// @dev Token metadata renderer (constant). Use a router for upgradeable visuals.
-    ITokenRenderer private constant regularRenderer = ITokenRenderer(ContractAddresses.GAMEPIECE_RENDERER_ROUTER);
+    ITokenRenderer internal constant regularRenderer = ITokenRenderer(ContractAddresses.GAMEPIECE_RENDERER_ROUTER);
 
     /// @dev BURNIE token contract for purchases/marketplace (constant).
-    IDegenerusCoinExtended private constant coin = IDegenerusCoinExtended(ContractAddresses.COIN);
+    IDegenerusCoinExtended internal constant coin = IDegenerusCoinExtended(ContractAddresses.COIN);
 
     /// @dev Affiliate program contract for referral payouts (constant).
-    IDegenerusAffiliate private constant affiliate = IDegenerusAffiliate(ContractAddresses.AFFILIATE);
+    IDegenerusAffiliate internal constant affiliate = IDegenerusAffiliate(ContractAddresses.AFFILIATE);
+
+    /// @dev Bonds contract for purchase gating (constant).
+    IDegenerusBondsLite internal constant bonds = IDegenerusBondsLite(ContractAddresses.BONDS);
 
     /*+======================================================================+
       |                    MINT QUEUE STATE                                  |
@@ -697,13 +729,16 @@ contract DegenerusGamepieces {
     /// @param payer Address paying for purchase.
     /// @param params Purchase parameters.
     function _routePurchase(address buyer, address payer, PurchaseParams memory params) private {
+        // Block purchases until presale raised > 40 ETH OR presale ended
+        if (!bonds.nftPurchasesEnabled()) revert PurchasesDisabled();
+
         bytes32 affiliateCode = params.payInCoin ? bytes32(0) : params.affiliateCode;
         if (params.kind == PurchaseKind.Player) {
             _purchase(buyer, payer, params.quantity, params.payInCoin, affiliateCode, params.payKind);
         } else if (params.kind == PurchaseKind.Map) {
             _mintAndBurn(buyer, payer, params.quantity, params.payInCoin, affiliateCode, params.payKind);
         } else {
-            revert E();
+            revert InvalidPurchaseKind();
         }
     }
 
@@ -746,7 +781,7 @@ contract DegenerusGamepieces {
         uint256 costAmount;
 
         if (payInCoin) {
-            if (msg.value != 0) revert E();
+            if (msg.value != 0) revert PaymentValueMismatch();
             _coinReceive(payer, coinCost, targetLevel, 0);
             if (lastPurchaseDay && g.ethMintLevelCount(payer) != 0) {
                 coin.notifyQuestMint(payer, uint32(mintQuantity), false);
@@ -765,7 +800,6 @@ contract DegenerusGamepieces {
                 affiliateCode,
                 targetLevel,
                 state,
-                rngLocked_,
                 false,
                 payKind,
                 expectedWei
@@ -856,7 +890,7 @@ contract DegenerusGamepieces {
         uint256 costAmount;
 
         if (payInCoin) {
-            if (msg.value != 0) revert E();
+            if (msg.value != 0) revert PaymentValueMismatch();
             _coinReceive(payer, coinCost, lvl, 0);
             if (lastPurchaseDay && g.ethMintLevelCount(payer) != 0) {
                 uint32 questQuantity = uint32(mintQuantity / 4);
@@ -883,7 +917,6 @@ contract DegenerusGamepieces {
                 affiliateCode,
                 lvl,
                 state,
-                rngLocked_,
                 true,
                 payKind,
                 expectedWei
@@ -942,7 +975,6 @@ contract DegenerusGamepieces {
         bytes32 affiliateCode,
         uint24 lvl,
         uint8 gameState,
-        bool rngLocked,
         bool mapPurchase,
         MintPaymentKind payKind,
         uint256 costWei
@@ -950,20 +982,20 @@ contract DegenerusGamepieces {
         // ETH purchases optionally bypass payment when in-game credit is used; all flows are forwarded to game logic.
         uint256 valueToSend = msg.value;
         if (payKind == MintPaymentKind.DirectEth) {
-            if (valueToSend != costWei) revert E();
+            if (valueToSend != costWei) revert PaymentValueMismatch();
         } else if (payKind == MintPaymentKind.Claimable) {
-            if (valueToSend != 0) revert E();
+            if (valueToSend != 0) revert PaymentValueMismatch();
             claimableUsed = costWei;
             valueToSend = 0;
         } else if (payKind == MintPaymentKind.Combined) {
-            if (valueToSend > costWei) revert E();
+            if (valueToSend > costWei) revert PaymentValueMismatch();
             if (valueToSend < costWei) {
                 unchecked {
                     claimableUsed = costWei - valueToSend;
                 }
             }
         } else {
-            revert E();
+            revert InvalidPaymentKind();
         }
 
         // Quest progress tracks full-price equivalents (4 map mints = 1 unit).
@@ -988,9 +1020,7 @@ contract DegenerusGamepieces {
             _affiliateAmount(lvl, gameState, payKind, claimableUsed, costWei),
             affiliateCode,
             buyer,
-            lvl,
-            gameState,
-            rngLocked
+            lvl
         );
         unchecked {
             bonusMint = rakebackMint + streakBonus;
@@ -1023,6 +1053,7 @@ contract DegenerusGamepieces {
                 _proRate(amount, ethUsed, costWei) +
                 _proRate(AFFILIATE_CLAIMABLE_REWARD, claimableUsed, costWei);
         }
+        return amount;
     }
 
     function _applyLevel100BonusCap(
@@ -1280,7 +1311,7 @@ contract DegenerusGamepieces {
     }
 
     function isApprovedForAll(address owner, address operator) public view returns (bool) {
-        if (operator == ContractAddresses.GAME) return true;
+        if (operator == address(game)) return true;
         return _operatorApprovals[owner][operator];
     }
 
@@ -1332,7 +1363,7 @@ contract DegenerusGamepieces {
         address approvedAddress = _tokenApprovals[tokenId];
 
         address sender = msg.sender;
-        if (sender == ContractAddresses.GAME) {
+        if (sender == address(game)) {
             approvedAddress = sender;
         }
         if (!_isSenderApprovedOrOwner(approvedAddress, from, sender))
@@ -1349,7 +1380,7 @@ contract DegenerusGamepieces {
                 uint256 toPacked = _refreshAddressData(to);
                 uint256 fromBalance = fromPacked & _BITMASK_ADDRESS_DATA_ENTRY;
                 uint256 toBalance = toPacked & _BITMASK_ADDRESS_DATA_ENTRY;
-                if (fromBalance == 0) revert E();
+                if (fromBalance == 0) revert BalanceUnderflow();
                 _packedAddressData[from] = (fromPacked & ~_BITMASK_ADDRESS_DATA_ENTRY) | (fromBalance - 1);
                 _packedAddressData[to] = (toPacked & ~_BITMASK_ADDRESS_DATA_ENTRY) | (toBalance + 1);
             } else {
@@ -1408,7 +1439,7 @@ contract DegenerusGamepieces {
                 uint256 toPacked = _refreshAddressData(to);
                 uint256 fromBalance = fromPacked & _BITMASK_ADDRESS_DATA_ENTRY;
                 uint256 toBalance = toPacked & _BITMASK_ADDRESS_DATA_ENTRY;
-                if (fromBalance == 0) revert E();
+                if (fromBalance == 0) revert BalanceUnderflow();
                 _packedAddressData[from] = (fromPacked & ~_BITMASK_ADDRESS_DATA_ENTRY) | (fromBalance - 1);
                 _packedAddressData[to] = (toPacked & ~_BITMASK_ADDRESS_DATA_ENTRY) | (toBalance + 1);
             } else {
@@ -1448,7 +1479,7 @@ contract DegenerusGamepieces {
     ) private returns (bool) {
         address sender = msg.sender;
         try IERC721Receiver(to).onERC721Received(sender, from, tokenId, _data) returns (bytes4 retval) {
-            return retval == IERC721Receiver(to).onERC721Received.selector;
+            return retval == _ERC721_RECEIVED;
         } catch (bytes memory reason) {
             if (reason.length == 0) {
                 revert TransferToNonERC721ReceiverImplementer();
@@ -1474,14 +1505,14 @@ contract DegenerusGamepieces {
             uint256 newBalance = currentBalance + quantity;
             if (newBalance < currentBalance || newBalance > _BITMASK_ADDRESS_DATA_ENTRY) {
                 // Check for overflow or exceeding field capacity
-                revert E(); // Or a more specific error
+                revert DataFieldOverflow();
             }
 
             // Safely increment minted count
             uint256 newNumberMinted = currentNumberMinted + quantity;
             if (newNumberMinted < currentNumberMinted || newNumberMinted > _BITMASK_ADDRESS_DATA_ENTRY) {
                 // Check for overflow or exceeding field capacity
-                revert E(); // Or a more specific error
+                revert DataFieldOverflow();
             }
 
             // Clear old values and set new ones
@@ -1536,7 +1567,7 @@ contract DegenerusGamepieces {
 
     /// @dev Restricts function to game contract only.
     modifier onlyGame() {
-        if (msg.sender != ContractAddresses.GAME) revert E();
+        if (msg.sender != ContractAddresses.GAME) revert OnlyGameContract();
         _;
     }
 
@@ -1753,12 +1784,12 @@ contract DegenerusGamepieces {
         uint256 incrementAmount = burnDelta >> _BITPOS_NUMBER_BURNED;
 
         uint256 currentBalance = currentPackedData & _BITMASK_ADDRESS_DATA_ENTRY;
-        if (incrementAmount > currentBalance) revert E();
+        if (incrementAmount > currentBalance) revert BalanceUnderflow();
         uint256 newBalance = currentBalance - incrementAmount;
 
         uint256 newNumberBurned = currentNumberBurned + incrementAmount;
         if (newNumberBurned < currentNumberBurned || newNumberBurned > _BITMASK_ADDRESS_DATA_ENTRY) {
-            revert E(); // Or a more specific error
+            revert DataFieldOverflow();
         }
 
         currentPackedData =

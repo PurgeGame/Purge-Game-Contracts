@@ -6,9 +6,7 @@ interface IDegenerusAffiliate {
         uint256 amount,
         bytes32 code,
         address sender,
-        uint24 lvl,
-        uint8 gameState,
-        bool rngLocked
+        uint24 lvl
     ) external returns (uint256);
 
     function affiliateTop(uint24 lvl) external view returns (address player, uint96 score);

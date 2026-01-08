@@ -251,13 +251,13 @@ contract DegenerusJackpots is IDegenerusJackpots {
       +======================================================================+*/
 
     /// @notice Coin contract for coinflip stats queries (constant).
-    IDegenerusCoinJackpotView private constant coin = IDegenerusCoinJackpotView(ContractAddresses.COIN);
+    IDegenerusCoinJackpotView internal constant coin = IDegenerusCoinJackpotView(ContractAddresses.COIN);
 
     /// @notice Core game contract for jackpot resolution and player queries (constant).
-    IDegenerusGame private constant degenerusGame = IDegenerusGame(ContractAddresses.GAME);
+    IDegenerusGame internal constant degenerusGame = IDegenerusGame(ContractAddresses.GAME);
 
     /// @notice Affiliate program contract for referrer queries (constant).
-    IDegenerusAffiliate private constant affiliate = IDegenerusAffiliate(ContractAddresses.AFFILIATE);
+    IDegenerusAffiliate internal constant affiliate = IDegenerusAffiliate(ContractAddresses.AFFILIATE);
 
     /*+======================================================================+
       |                            CONSTANTS                                 |

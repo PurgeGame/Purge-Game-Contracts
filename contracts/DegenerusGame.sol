@@ -7,8 +7,8 @@ pragma solidity ^0.8.26;
  * @notice Core NFT game contract managing state machine, VRF integration, ContractAddresses.JACKPOTS, and prize pools.
  *
  * @dev ARCHITECTURE:
- *      - 4-state FSM: PRESALE(0) → SETUP(1) → PURCHASE(2) → DEGENERUS(3) → (cycle)
- *      - GAMEOVER(86) is terminal
+ *      - 3-state FSM: PURCHASE(2) → BURN(3) → SETUP(1) → (cycle)
+ *      - GAMEOVER(86) is terminal, presale gated by checks (not state)
  *      - Chainlink VRF for randomness with RNG lock to prevent manipulation
  *      - Delegatecall modules: endgame, jackpot, mint, bond (must inherit DegenerusGameStorage)
  *      - Prize pool flow: nextPrizePool → currentPrizePool → ContractAddresses.JACKPOTS/rewardPool → claimableWinnings
@@ -16,7 +16,7 @@ pragma solidity ^0.8.26;
  * @dev CRITICAL INVARIANTS:
  *      - address(this).balance + steth.balanceOf(this) >= claimablePool + bondPool
  *      - rngLockedFlag blocks bond operations during VRF pending
- *      - gameState transitions: 1→2→3→1 (0 = presale, 86 = terminal)
+ *      - gameState transitions: 2→3→1→2 (starts at 2, 86 = terminal)
  *
  * @dev SECURITY:
  *      - Pull pattern for ETH/stETH withdrawals (claimWinnings)
@@ -59,21 +59,15 @@ interface IDegenerusBonds {
     /// @notice Run daily presale payouts using game-supplied entropy.
     /// @param rngWord RNG word from advanceGame.
     /// @param day Day index being processed.
-    /// @param ticketsEnabled True to pay mint ticket ContractAddresses.JACKPOTS during presale.
+    /// @param purchasesEnabled True if NFT/MAP purchases are enabled.
+    /// @param lastPurchaseDay True if prize pool target was met today.
     /// @return advanced True if the presale payout advanced.
-    function runPresaleDailyFromGame(uint256 rngWord, uint48 day, bool ticketsEnabled) external returns (bool advanced);
-
-    /// @notice Run daily ticket coin jackpot after sales open.
-    /// @param rngWord RNG word from advanceGame.
-    /// @param day Day index being processed.
-    /// @return advanced True if the ticket jackpot advanced.
-    function runTicketJackpotFromGame(uint256 rngWord, uint48 day) external returns (bool advanced);
-
-    /// @notice Record a mint ticket entry for daily coin ContractAddresses.JACKPOTS.
-    /// @param player Ticket owner.
-    /// @param mintUnits Ticket weight (1 MAP = 1, 1 NFT = 4).
-    /// @param day Day index when the mint occurred.
-    function recordTicketFromGame(address player, uint32 mintUnits, uint48 day) external;
+    function runPresaleDailyFromGame(
+        uint256 rngWord,
+        uint48 day,
+        bool purchasesEnabled,
+        bool lastPurchaseDay
+    ) external returns (bool advanced);
 
     /// @notice Resolve ContractAddresses.BONDS game-over with supplied entropy.
     /// @param rngWord RNG word from advanceGame.
@@ -82,14 +76,17 @@ interface IDegenerusBonds {
     /// @notice True once ContractAddresses.BONDS has attempted game-over entropy.
     function gameOverEntropyAttempted() external view returns (bool);
 
-    /// @notice Set or clear the RNG lock on bond operations.
-    /// @param locked True to block bond operations during VRF pending window.
-    function setRngLock(bool locked) external;
+    /// @notice Check if NFT/MAP purchases are enabled (presale gating).
+    /// @dev Purchases enabled when presale raised > 40 ETH OR presale ended.
+    /// @return True if NFT/MAP purchases are enabled, false otherwise.
+    function nftPurchasesEnabled() external view returns (bool);
 }
 
 /// @notice Interface for affiliate presale status checks.
 interface IAffiliatePresaleStatus {
-    function presaleActive() external view returns (bool);
+    /// @notice Check presale status.
+    /// @return 0 = ended, 1 = active (no minting), 2 = active (minting enabled).
+    function presaleActive() external view returns (uint8);
 }
 
 /// @notice Interface for reading player quest states.
@@ -227,34 +224,33 @@ contract DegenerusGame is DegenerusGameStorage {
 
     /// @notice The BURNIE ERC20 token contract.
     /// @dev Trusted for creditFlip, burnCoin, processCoinflipPayouts, etc.
-    IDegenerusCoin private constant coin = IDegenerusCoin(ContractAddresses.COIN);
+    IDegenerusCoin internal constant coin = IDegenerusCoin(ContractAddresses.COIN);
 
     /// @notice The gamepieces NFT contract (ERC721).
     /// @dev Trusted for mint/burn/metadata operations.
-    IDegenerusGamepieces private constant nft = IDegenerusGamepieces(ContractAddresses.GAMEPIECES);
+    IDegenerusGamepieces internal constant nft = IDegenerusGamepieces(ContractAddresses.GAMEPIECES);
 
     /// @notice Lido stETH token contract.
     /// @dev Used for staking ETH and managing yield.
-    IStETH private constant steth = IStETH(ContractAddresses.STETH_TOKEN);
+    IStETH internal constant steth = IStETH(ContractAddresses.STETH_TOKEN);
 
     /// @notice DegenerusJackpots contract for decimator/BAF jackpots.
-    IDegenerusJackpots private constant jackpots = IDegenerusJackpots(ContractAddresses.JACKPOTS);
+    IDegenerusJackpots internal constant jackpots = IDegenerusJackpots(ContractAddresses.JACKPOTS);
 
     /// @notice DegenerusBonds contract for bond upkeep and RNG lock.
-    IDegenerusBonds private constant bonds = IDegenerusBonds(ContractAddresses.BONDS);
+    IDegenerusBonds internal constant bonds = IDegenerusBonds(ContractAddresses.BONDS);
 
     /// @notice Affiliate program contract for bonus points and referrers.
-    IDegenerusAffiliate private constant affiliate = IDegenerusAffiliate(ContractAddresses.AFFILIATE);
+    IDegenerusAffiliate internal constant affiliate = IDegenerusAffiliate(ContractAddresses.AFFILIATE);
 
     /// @notice Quest module view interface for streak lookups.
-    IDegenerusQuestView private constant questView = IDegenerusQuestView(ContractAddresses.QUESTS);
+    IDegenerusQuestView internal constant questView = IDegenerusQuestView(ContractAddresses.QUESTS);
 
     /// @notice Quest module interface for burn quest normalization.
-    IDegenerusQuestNormalize private constant questNormalize = IDegenerusQuestNormalize(ContractAddresses.QUESTS);
+    IDegenerusQuestNormalize internal constant questNormalize = IDegenerusQuestNormalize(ContractAddresses.QUESTS);
 
     /// @notice Trophy contract for balance checks.
-    IERC721BalanceOf private constant trophies = IERC721BalanceOf(ContractAddresses.TROPHIES);
-
+    IERC721BalanceOf internal constant trophies = IERC721BalanceOf(ContractAddresses.TROPHIES);
 
     /*+======================================================================+
       |                        VRF CONFIGURATION                             |
@@ -365,8 +361,9 @@ contract DegenerusGame is DegenerusGameStorage {
         // Grant infinite stETH approval to ContractAddresses.BONDS for staking operations.
         if (!steth.approve(ContractAddresses.BONDS, type(uint256).max)) revert E();
 
-        // Record deployment time for liveness checks
-        deployTimestamp = uint48(block.timestamp);
+        // Initialize game in PURCHASE state (presale gated by presaleActive() checks)
+        gameState = GAME_STATE_PURCHASE;
+        levelStartTime = uint48(block.timestamp);
     }
 
     /*+======================================================================+
@@ -539,12 +536,8 @@ contract DegenerusGame is DegenerusGameStorage {
         return true;
     }
 
-    function _presaleActive() private view returns (bool active) {
-        try IAffiliatePresaleStatus(ContractAddresses.AFFILIATE).presaleActive() returns (bool ok) {
-            return ok;
-        } catch {
-            return false;
-        }
+    function _presaleActive() private view returns (uint8 status) {
+        return IAffiliatePresaleStatus(ContractAddresses.AFFILIATE).presaleActive();
     }
 
     /// @notice Check if VRF has stalled for 3 consecutive days.
@@ -808,7 +801,7 @@ contract DegenerusGame is DegenerusGameStorage {
     ) external payable returns (uint256 coinReward, uint256 newClaimableBalance) {
         if (msg.sender != ContractAddresses.GAMEPIECES) revert E();
         uint8 state = gameState;
-        if (state == GAME_STATE_PRESALE && !presaleMintingEnabledFlag) revert E();
+        if (!presaleMintingEnabledFlag) revert E();
         uint256 prizeContribution;
         (prizeContribution, newClaimableBalance) = _processMintPayment(player, costWei, payKind);
         if (prizeContribution != 0) {
@@ -816,12 +809,6 @@ contract DegenerusGame is DegenerusGameStorage {
         }
 
         coinReward = _recordMintDataModule(player, lvl, mintUnits);
-
-        if (mintUnits != 0) {
-            if (state == GAME_STATE_PRESALE || state == GAME_STATE_PURCHASE || state == GAME_STATE_BURN) {
-                bonds.recordTicketFromGame(player, mintUnits, _currentDayIndex());
-            }
-        }
     }
 
     /// @notice Track coinflip deposits for prize pool tuning on last purchase day.
@@ -966,12 +953,9 @@ contract DegenerusGame is DegenerusGameStorage {
 
         // === LIVENESS GUARDS ===
         // Prevent permanent lockup if game is abandoned
-        if (lst == LEVEL_START_SENTINEL) {
-            // Game never started - check deploy timeout (2.5 years)
-            uint48 deployTs = deployTimestamp;
-            if (deployTs != 0 && uint256(ts) >= uint256(deployTs) + DEPLOY_IDLE_TIMEOUT) {
-                gameOver = true;
-            }
+        if (lvl == 1 && uint256(ts) >= uint256(lst) + DEPLOY_IDLE_TIMEOUT) {
+            // Still at level 1 after 2.5 years - game abandoned
+            gameOver = true;
         } else if (ts - 365 days > lst && _gameState != GAME_STATE_GAMEOVER) {
             // Game inactive for 365 days - trigger game over
             gameOver = true;
@@ -988,18 +972,18 @@ contract DegenerusGame is DegenerusGameStorage {
             return;
         }
 
-        if (_gameState == GAME_STATE_PRESALE && !_presaleActive()) {
-            gameState = GAME_STATE_SETUP;
-            _gameState = GAME_STATE_SETUP;
-        }
-
         bool lastPurchase = (_gameState == GAME_STATE_PURCHASE) && lastPurchaseDay;
 
         // Single-iteration do-while pattern allows structured breaks for early exit
         do {
             // === DAILY GATE ===
             // Standard flow requires caller to have minted today (prevents gaming by non-participants)
-            if (cap == 0 && _gameState != GAME_STATE_PRESALE) {
+            // Skip gate check if presale is active and purchases not yet enabled
+            bool presaleActiveNoMinting = false;
+            if (lvl == 1) {
+                presaleActiveNoMinting = _presaleActive() == 1; // state 1 = presale active, no minting
+            }
+            if (cap == 0 && !presaleActiveNoMinting) {
                 uint32 gateIdx = uint32(dailyIdx);
                 if (gateIdx != 0) {
                     uint256 mintData = mintPacked_[caller];
@@ -1026,14 +1010,13 @@ contract DegenerusGame is DegenerusGameStorage {
             }
 
             // === PRESALE/TICKET JACKPOTS ===
-            if (_gameState == GAME_STATE_PRESALE) {
-                bool mintingEnabled = presaleMintingEnabledFlag;
-                bonds.runPresaleDailyFromGame(rngWord, day, mintingEnabled);
-                if (mintingEnabled) {
-                    bonds.runTicketJackpotFromGame(rngWord, day);
+            if (lvl == 1 && _gameState == GAME_STATE_PURCHASE) {
+                // Run presale jackpots only during level 1.
+                uint8 presaleState = _presaleActive();
+                if (presaleState > 0) {
+                    bool nftPurchasesEnabled = bonds.nftPurchasesEnabled();
+                    bonds.runPresaleDailyFromGame(rngWord, day, nftPurchasesEnabled, lastPurchaseDay);
                 }
-            } else if (_gameState == GAME_STATE_PURCHASE || _gameState == GAME_STATE_BURN) {
-                bonds.runTicketJackpotFromGame(rngWord, day);
             }
 
             // === MAP BATCH PROCESSING ===
@@ -1046,15 +1029,6 @@ contract DegenerusGame is DegenerusGameStorage {
             // If bond maintenance is pending, run it before state-specific logic
             if (bondMaintenancePending) {
                 _runBondMaintenance(rngWord, cap, day);
-                break;
-            }
-
-            // +================================================================+
-            // |                    STATE 0: PRESALE                            |
-            // |  RNG + coinflips + daily presale payouts; no progression.      |
-            // +================================================================+
-            if (_gameState == GAME_STATE_PRESALE) {
-                _unlockRng(day);
                 break;
             }
 
@@ -1494,6 +1468,7 @@ contract DegenerusGame is DegenerusGameStorage {
 
         traitRebuildCursor = 0;
         uint8 jackpotCounterSnapshot = jackpotCounter;
+        lastLevelJackpotCount = jackpotCounterSnapshot;
         jackpotCounter = 0;
         // Reset daily burn counters so the next level's ContractAddresses.JACKPOTS start fresh.
         if (jackpotCounterSnapshot < JACKPOT_LEVEL_CAP) {
@@ -2049,10 +2024,10 @@ contract DegenerusGame is DegenerusGameStorage {
         // Record the word once per day; using a zero sentinel since VRF returning 0 is effectively impossible.
         if (rngWordByDay[day] == 0) {
             rngWordByDay[day] = currentWord;
-            bool bonusFlip = isMapJackpotDay || gameState == GAME_STATE_PRESALE;
-            if (lvl != 0 || gameState == GAME_STATE_PRESALE) {
-                coin.processCoinflipPayouts(lvl, bonusFlip, currentWord, day);
-            }
+            uint8 presaleState = _presaleActive();
+            bool bonusFlip = isMapJackpotDay || presaleState > 0;
+            // Always run coinflip payouts once game has started (lvl always >= 1)
+            coin.processCoinflipPayouts(lvl, bonusFlip, currentWord, day);
         }
         return currentWord;
     }
@@ -2095,7 +2070,6 @@ contract DegenerusGame is DegenerusGameStorage {
         rngFulfilled = false;
         rngWordCurrent = 0;
         rngRequestTime = uint48(block.timestamp);
-        bonds.setRngLock(true);
         return 0;
     }
 
@@ -2154,9 +2128,6 @@ contract DegenerusGame is DegenerusGameStorage {
     /// @param isMapJackpotDay True if this is the last purchase day.
     /// @param lvl Current level.
     function _requestRng(uint8 gameState_, bool isMapJackpotDay, uint24 lvl) private {
-        // Lock manual bond purchases/burns for the full RNG window to prevent post-request manipulation.
-        bonds.setRngLock(true);
-
         // Hard revert if Chainlink request fails; this intentionally halts game progress until VRF funding/config is fixed.
         uint256 id = vrfCoordinator.requestRandomWords(
             VRFRandomWordsRequest({
@@ -2175,9 +2146,6 @@ contract DegenerusGame is DegenerusGameStorage {
             return false;
         }
 
-        // Lock manual bond purchases/burns for the full RNG window to prevent post-request manipulation.
-        bonds.setRngLock(true);
-
         try
             vrfCoordinator.requestRandomWords(
                 VRFRandomWordsRequest({
@@ -2191,9 +2159,7 @@ contract DegenerusGame is DegenerusGameStorage {
         returns (uint256 id) {
             _finalizeRngRequest(gameState_, isMapJackpotDay, lvl, id);
             requested = true;
-        } catch {
-            bonds.setRngLock(false);
-        }
+        } catch {}
     }
 
     function _finalizeRngRequest(uint8 gameState_, bool isMapJackpotDay, uint24 lvl, uint256 requestId) private {
@@ -2240,8 +2206,6 @@ contract DegenerusGame is DegenerusGameStorage {
         vrfRequestId = 0;
         rngRequestTime = 0;
         rngWordCurrent = 0;
-        // In case ContractAddresses.BONDS were locked during a stuck RNG window, attempt to release the lock during recovery.
-        try bonds.setRngLock(false) {} catch {}
         emit VrfCoordinatorUpdated(current, newCoordinator);
     }
 
@@ -2253,8 +2217,6 @@ contract DegenerusGame is DegenerusGameStorage {
         rngLockedFlag = false;
         vrfRequestId = 0;
         rngRequestTime = 0;
-        // If ContractAddresses.BONDS were locked for an RNG window, release the lock once this RNG window is over.
-        bonds.setRngLock(false);
     }
 
     /// @notice Pay BURNIE to nudge the next RNG word by +1.

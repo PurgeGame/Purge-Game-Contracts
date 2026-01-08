@@ -36,7 +36,7 @@ pragma solidity ^0.8.26;
  * | [22:26] airdropIndex             uint32   Index into pendingMapMints        |
  * | [26:29] level                    uint24   Current game level (1-indexed)    |
  * | [29:31] lastExterminatedTrait    uint16   Last cleared trait (420=sentinel) |
- * | [31:32] gameState                uint8    FSM: 0=presale,1=setup,2=mint,3=burn (86=gameover) |
+ * | [31:32] gameState                uint8    FSM: 0-3,86 (pre/setup/purc/burn) |
  * +-----------------------------------------------------------------------------+
  *   Total: 6+6+6+4+4+3+2+1 = 32 bytes ✓ (perfectly packed)
  *
@@ -50,17 +50,19 @@ pragma solidity ^0.8.26;
  * | [10:11] levelJackpotPaid         bool     Level jackpot executed flag       |
  * | [11:12] lastPurchaseDay          bool     Prize target met flag             |
  * | [12:13] decWindowOpen            bool     Decimator window latch            |
- * | [13:14] earlyBurnBoostArmed      bool     Boost armed for next jackpot      |
- * | [14:15] rngLockedFlag            bool     Waiting for VRF fulfillment       |
- * | [15:16] rngFulfilled             bool     VRF lifecycle tracker             |
- * | [16:17] traitCountsSeedQueued    bool     Initial traits staged flag        |
- * | [17:18] decimatorHundredReady    bool     Level %100 special primed         |
- * | [18:19] exterminationInvertFlag  bool     Exterminator bonus inversion      |
- * | [19:20] bondMaintenancePending   bool     Bond maintenance needed flag      |
- * | [20:21] mapJackpotType          uint8    0=none, 1=daily, 2=purchase        |
- * | [21:32] <padding>                         11 bytes unused                   |
+ * | [13:14] rngLockedFlag            bool     Waiting for VRF fulfillment       |
+ * | [14:15] rngFulfilled             bool     VRF lifecycle tracker             |
+ * | [15:16] traitCountsSeedQueued    bool     Initial traits staged flag        |
+ * | [16:17] decimatorHundredReady    bool     Level %100 special primed         |
+ * | [17:18] exterminationInvertFlag  bool     Exterminator bonus inversion      |
+ * | [18:19] bondMaintenancePending   bool     Bond maintenance needed flag      |
+ * | [19:20] mapJackpotType           uint8    0=none, 1=daily, 2=purchase       |
+ * | [20:21] lastLevelJackpotCount    uint8    Jackpots processed last level     |
+ * | [21:22] bondGameOver             bool     Bond pool flushed to bonds        |
+ * | [22:23] presaleMintingEnabledFlag bool    Presale minting enabled           |
+ * | [23:32] <padding>                         9 bytes unused                    |
  * +-----------------------------------------------------------------------------+
- *   Total: 4+4+1+1+1+1+1+1+1+1+1+1+1+1+1 = 20 bytes (12 bytes padding)
+ *   Total: 4+4+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1 = 23 bytes (9 bytes padding)
  *
  * +-----------------------------------------------------------------------------+
  * | SLOT 2 (32 bytes) — Price                                                   |
@@ -90,7 +92,7 @@ pragma solidity ^0.8.26;
  * 4. INITIALIZATION: Default values are set inline. For critical variables:
  *    - levelStartTime = type(uint48).max (sentinel: game not started)
  *    - lastExterminatedTrait = 420 (sentinel: no trait exterminated)
- *    - gameState = 0 (presale state)
+ *    - gameState = 2 (initialized to PURCHASE state, presale gated by checks)
  *    - decWindowOpen = true (decimator window starts open)
  *    - rngFulfilled = true (no pending request at deploy)
  *    - price = 0.025 ether (initial mint price)
@@ -122,7 +124,6 @@ abstract contract DegenerusGameStorage {
     ///      BURNIE uses 18 decimals, so 1000 BURNIE = 1e21 base units.
     ///      Used in price calculations: price / PRICE_COIN_UNIT = BURNIE per mint.
     uint256 internal constant PRICE_COIN_UNIT = 1000 ether;
-    uint8 internal constant GAME_STATE_PRESALE = 0;
     uint8 internal constant GAME_STATE_SETUP = 1;
     uint8 internal constant GAME_STATE_PURCHASE = 2;
     uint8 internal constant GAME_STATE_BURN = 3;
@@ -188,9 +189,9 @@ abstract contract DegenerusGameStorage {
     uint16 internal lastExterminatedTrait = 420;
 
     /// @dev Finite State Machine for game phases:
-    ///      0 = presale (RNG + flips only)
+    ///      0 = presale (gated by checks; game initializes to purchase)
     ///      1 = setup (awaiting start or between major phases)
-    ///      2 = airdrop/mint phase (purchases open)
+    ///      2 = purchase (mint/airdrop phase; initialized state, presale gated by checks)
     ///      3 = burn window (extermination phase)
     ///      86 = game over (terminal)
     ///
@@ -203,7 +204,7 @@ abstract contract DegenerusGameStorage {
     // =========================================================================
     // SLOT 1: Cursors, Counters, and Boolean Flags
     // =========================================================================
-    // Boolean flags pack efficiently (1 byte each in EVM). Total: 20 bytes used (12 bytes padding).
+    // Boolean flags pack efficiently (1 byte each in EVM). Total: 23 bytes used (9 bytes padding).
 
     /// @dev Progress cursor for reseeding trait counts at level start.
     ///      Used in batched trait initialization to avoid gas limits.
@@ -240,11 +241,6 @@ abstract contract DegenerusGameStorage {
     ///      Set true at level start; cleared when decimator phase begins.
     ///      Default true ensures first decimator window is properly gated.
     bool internal decWindowOpen = true;
-
-    /// @dev True if the next jackpot should apply an ETH boost.
-    ///      Armed when early burn percentage exceeds 60% threshold.
-    ///      Consumed (set false) when the boosted jackpot is paid.
-    bool internal earlyBurnBoostArmed;
 
     /// @dev True while waiting for VRF (Chainlink) fulfillment.
     ///      Prevents duplicate RNG requests and gates state transitions
@@ -283,6 +279,18 @@ abstract contract DegenerusGameStorage {
     ///      0 = none, 1 = daily, 2 = purchase.
     ///      Timeout is computed on-the-fly from jackpotCounter >= JACKPOT_LEVEL_CAP.
     uint8 internal mapJackpotType;
+
+    /// @dev Snapshot of how many daily jackpots ran in the level that just ended.
+    ///      Used to scale the carryover extermination jackpot when the level ended early.
+    uint8 internal lastLevelJackpotCount;
+
+    /// @dev True once bondPool has been flushed to bonds contract.
+    ///      Marks end-of-game state for bond obligations.
+    ///      Once true, bond claims go directly to bonds contract.
+    bool internal bondGameOver;
+
+    /// @dev True if presale minting (tokens/maps) is enabled.
+    bool internal presaleMintingEnabledFlag;
 
     // =========================================================================
     // SLOT 2: Mint Price
@@ -356,22 +364,6 @@ abstract contract DegenerusGameStorage {
     /// @dev Number of reverse flips purchased against current RNG word.
     ///      Tracks flip activity for jackpot sizing adjustments.
     uint256 internal totalFlipReversals;
-
-    // =========================================================================
-    // External Contract References and Lifecycle
-    // =========================================================================
-
-    /// @dev Deployment timestamp for long-tail inactivity guard.
-    ///      If game is inactive for extended period after deploy, certain
-    ///      recovery mechanisms may activate.
-    ///
-    ///      PUBLIC: Exposed for transparency and off-chain monitoring.
-    uint48 public deployTimestamp;
-
-    /// @dev True once bondPool has been flushed to bonds contract.
-    ///      Marks end-of-game state for bond obligations.
-    ///      Once true, bond claims go directly to bonds contract.
-    bool internal bondGameOver;
 
     // =========================================================================
     // Minting and Airdrop Queues
@@ -495,6 +487,4 @@ abstract contract DegenerusGameStorage {
     ///      For purchase: unused (remains 0).
     uint256 internal mapJackpotUnits2;
 
-    /// @dev True if presale minting (tokens/maps) is enabled.
-    bool internal presaleMintingEnabledFlag;
 }

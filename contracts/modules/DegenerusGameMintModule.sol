@@ -35,10 +35,10 @@ import {DegenerusGameStorage} from "../storage/DegenerusGameStorage.sol";
  *
  * ## BURNIE Reward Structure
  *
- * | Reward Type | Trigger | Amount |
- * |-------------|---------|--------|
- * | 400-unit bonus | First mint ≥400 units in level | 2,500 BURNIE |
- * | Streak bonus | Every 5th consecutive level (5, 10, 15...) | 500-2,000 BURNIE (increases by 250, caps at 2,000) |
+ * | Reward Type    | Trigger                        | Amount                |
+ * |----------------|--------------------------------|-----------------------|
+ * | 400-unit bonus | First mint ≥400 units in level | 2,500 BURNIE          |
+ * | Streak bonus   | Every 5th level (5,10,15...)   | 500-2K BURNIE (+250)  |
  *
  * ## Trait Generation
  *
@@ -133,7 +133,7 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
      * - Same level: Just update units and check bonus
      * - New level with <4 units: Only track units, don't count as "minted"
      * - New level with ≥4 units: Update streak, total, and award rewards
- * - Century boundary (level 100, 200...): Total continues to accumulate
+     * - Century boundary (level 100, 200...): Total continues to accumulate
      */
     function recordMintData(
         address player,
@@ -143,10 +143,6 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
         // Load previous packed data
         uint256 prevData = mintPacked_[player];
         uint256 data;
-
-        // Calculate current day index
-        uint32 day = _currentMintDay();
-        uint256 priceCoinLocal = PRICE_COIN_UNIT;
 
         // ---------------------------------------------------------------------
         // Unpack previous state
@@ -179,7 +175,7 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
         // Award 400-unit bonus if threshold crossed for first time
         bool awardBonus = (!bonusPaid) && levelUnitsAfter >= 400;
         if (awardBonus) {
-            coinReward += (priceCoinLocal * 5) / 2; // 2,500 BURNIE
+            coinReward += (PRICE_COIN_UNIT * 5) / 2; // 2,500 BURNIE
             bonusPaid = true;
         }
 
@@ -202,6 +198,7 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
         // Update mint day
         // ---------------------------------------------------------------------
 
+        uint32 day = _currentMintDay();
         data = _setMintDay(prevData, day, ETH_DAY_SHIFT, MINT_MASK_32);
 
         // ---------------------------------------------------------------------
@@ -262,7 +259,7 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
                 streakBonus = 2000;
             }
             unchecked {
-                coinReward += streakBonus;
+                coinReward += streakBonus * 1 ether;
             }
         }
 
@@ -300,10 +297,10 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
      *
      * | Purchases | Level %10 | Target | Multiplier |
      * |-----------|-----------|--------|------------|
-     * | 100 | 0-7,9 | 5,000 | 50x |
-     * | 500 | 0-7,9 | 5,000 | 10x |
-     * | 1,000 | 8 | 10,000 | 10x |
-     * | 5,000+ | any | - | 1x |
+     * | 100       | 0-7,9     | 5,000  | 50x        |
+     * | 500       | 0-7,9     | 5,000  | 10x        |
+     * | 1,000     | 8         | 10,000 | 10x        |
+     * | 5,000+    | any       | -      | 1x         |
      */
     function calculateAirdropMultiplier(
         uint32 prePurchaseCount,
@@ -341,7 +338,7 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
      *
      * @param prePurchaseCount Raw count before purchase phase (eligible for multiplier).
      * @param purchasePhaseCount Raw count during purchase phase (not multiplied).
-     * @return Scaled count (pre × airdropMultiplier + purchase phase).
+     * @return Scaled count (pre × airdropMultiplier + purchase phase; if prePurchaseCount==0, purchasePhaseCount is multiplied).
      */
     function purchaseTargetCountFromRaw(
         uint32 prePurchaseCount,

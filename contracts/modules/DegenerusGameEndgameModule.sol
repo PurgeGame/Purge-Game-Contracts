@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {IDegenerusCoinModule} from "../interfaces/DegenerusGameModuleInterfaces.sol";
 import {IDegenerusGameJackpotModule} from "../interfaces/IDegenerusGameModules.sol";
 import {IDegenerusBondsJackpot} from "../interfaces/IDegenerusBondsJackpot.sol";
 import {IDegenerusJackpots} from "../interfaces/IDegenerusJackpots.sol";
@@ -67,6 +66,16 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
     /// @param recipient Address credited (same as player).
     /// @param amount ETH amount credited.
     event PlayerCredited(address indexed player, address indexed recipient, uint256 amount);
+
+    // -------------------------------------------------------------------------
+    // External Contract References (compile-time constants)
+    // -------------------------------------------------------------------------
+
+    IDegenerusAffiliate internal constant affiliate = IDegenerusAffiliate(ContractAddresses.AFFILIATE);
+    IDegenerusBondsJackpot internal constant bonds = IDegenerusBondsJackpot(ContractAddresses.BONDS);
+    IDegenerusGamepieces internal constant gamepieces = IDegenerusGamepieces(ContractAddresses.GAMEPIECES);
+    IDegenerusJackpots internal constant jackpots = IDegenerusJackpots(ContractAddresses.JACKPOTS);
+    IDegenerusTrophies internal constant trophies = IDegenerusTrophies(ContractAddresses.TROPHIES);
 
     // -------------------------------------------------------------------------
     // Constants
@@ -142,7 +151,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
             uint96 exterminatorWinnings =
                 exterminatorShare > type(uint96).max ? type(uint96).max : uint96(exterminatorShare);
 
-            IDegenerusTrophies(ContractAddresses.TROPHIES).mintExterminator(
+            trophies.mintExterminator(
                 ex,
                 prevLevel,
                 traitId,
@@ -176,8 +185,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
                         prevLevel,
                         traitId,
                         rngWord,
-                        exterminationPool,
-                        IDegenerusCoinModule(ContractAddresses.COIN)
+                        exterminationPool
                     )
                 );
                 if (!ok) _revertDelegate(data);
@@ -228,11 +236,11 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
      *
      * ## BAF (Big-Ass Flip) Trigger Schedule
      *
-     * | Level | Pool Source | Pool Size |
-     * |-------|-------------|-----------|
-     * | 10, 20, 30... | rewardPool | 10% |
-     * | 50 | rewardPool | 25% |
-     * | 100 | bafHundredPool | reserved amount |
+     * | Level         | Pool Source    | Pool Size       |
+     * |---------------|----------------|-----------------|
+     * | 10, 20, 30... | rewardPool     | 10%             |
+     * | 50            | rewardPool     | 25%             |
+     * | 100           | bafHundredPool | reserved amount |
      *
      * ## Decimator Trigger Schedule
      *
@@ -300,10 +308,10 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
      * @param prevLevel The level that just completed.
      */
     function _maybeMintAffiliateTop(uint24 prevLevel) private {
-        (address top, uint96 score) = IDegenerusAffiliate(ContractAddresses.AFFILIATE).affiliateTop(prevLevel);
+        (address top, uint96 score) = affiliate.affiliateTop(prevLevel);
         if (top == address(0)) return;
 
-        IDegenerusTrophies(ContractAddresses.TROPHIES).mintAffiliate(top, prevLevel, score);
+        trophies.mintAffiliate(top, prevLevel, score);
     }
 
     // -------------------------------------------------------------------------
@@ -334,15 +342,11 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
         if (exterminatorShare == 0) return 0;
 
         // Split between ETH and bonds
-        (uint256 ethPortion, uint256 splitClaimable) = _splitEthWithBond(
-            ex,
-            exterminatorShare,
-            BOND_BPS_EX,
-            lvl
-        );
+        uint256 ethPortion = _splitEthWithBond(ex, exterminatorShare, BOND_BPS_EX, lvl);
 
         // Credit ETH portion to claimable
-        claimableDelta = splitClaimable + _addClaimableEth(ex, ethPortion);
+        _addClaimableEth(ex, ethPortion);
+        claimableDelta = ethPortion;
     }
 
     /**
@@ -354,28 +358,27 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
      * @param bondBps Basis points to route to bonds (e.g., 2500 = 25%).
      * @param lvl Current level for bond routing.
      * @return ethPortion Amount to credit as claimable ETH.
-     * @return claimableDelta Additional claimable from bond operations (currently 0).
      */
     function _splitEthWithBond(
         address winner,
         uint256 amount,
         uint16 bondBps,
         uint24 lvl
-    ) private returns (uint256 ethPortion, uint256 claimableDelta) {
+    ) private returns (uint256 ethPortion) {
         uint256 bondBudget = (amount * bondBps) / 10_000;
 
         ethPortion = amount;
 
         // If zero budget, return full amount as ETH
         if (bondBudget == 0) {
-            return (ethPortion, claimableDelta);
+            return ethPortion;
         }
 
         // Award bonds and reduce ETH portion
         _awardBondPrize(winner, bondBudget, lvl);
         ethPortion -= bondBudget;
 
-        return (ethPortion, claimableDelta);
+        return ethPortion;
     }
 
     /**
@@ -391,7 +394,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
         uint256 amount,
         uint24 lvl
     ) private {
-        IDegenerusBondsJackpot(ContractAddresses.BONDS).awardFromGame(beneficiary, amount, lvl);
+        bonds.awardFromGame(beneficiary, amount, lvl);
         bondPool += amount;
     }
 
@@ -399,16 +402,13 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
      * @notice Credit ETH to a player's claimable balance.
      * @param beneficiary Address to credit.
      * @param weiAmount ETH amount to credit.
-     * @return The amount credited (same as input).
      */
-    function _addClaimableEth(address beneficiary, uint256 weiAmount) private returns (uint256) {
-        address recipient = beneficiary;
+    function _addClaimableEth(address beneficiary, uint256 weiAmount) private {
         unchecked {
             // Safe: would require ~10^77 wei to overflow
-            claimableWinnings[recipient] += weiAmount;
+            claimableWinnings[beneficiary] += weiAmount;
         }
-        emit PlayerCredited(beneficiary, recipient, weiAmount);
-        return weiAmount;
+        emit PlayerCredited(beneficiary, beneficiary, weiAmount);
     }
 
     // -------------------------------------------------------------------------
@@ -559,7 +559,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
                     qty = type(uint32).max;
                 }
                 if (qty != 0) {
-                    IDegenerusGamepieces(ContractAddresses.GAMEPIECES).queueRewardMints(winners[idx], uint32(qty));
+                    gamepieces.queueRewardMints(winners[idx], uint32(qty));
                 }
 
                 unchecked {
@@ -671,7 +671,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
         }
         if (kind == 1) {
             // Decimator: jackpots contract handles distribution
-            uint256 returnWei = IDegenerusJackpots(ContractAddresses.JACKPOTS).runDecimatorJackpot(poolWei, lvl, rngWord);
+            uint256 returnWei = jackpots.runDecimatorJackpot(poolWei, lvl, rngWord);
             // Decimator pool is reserved in claimablePool; per-player credits happen on claim
             uint256 spend = poolWei - returnWei;
             return (spend, spend);
@@ -695,11 +695,11 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
      *
      * ## Winner Categories (via bondMask)
      *
-     * | Category | Bond Split | Special Handling |
-     * |----------|------------|------------------|
-     * | Top winners (low bits) | 20% → bonds | Direct ETH + bond |
-     * | Scatter winners (high bits) | 100% → bonds | 50% → MAPs first |
-     * | Regular winners | 0% | Direct ETH |
+     * | Category                   | Bond Split  | Special Handling  |
+     * |----------------------------|-------------|-------------------|
+     * | Top winners (low bits)     | 20% → bonds | Direct ETH + bond |
+     * | Scatter winners (high bits)| 100% → bonds| 50% → MAPs first  |
+     * | Regular winners            | 0%          | Direct ETH        |
      *
      * ## Scatter Winner Flow
      *
@@ -728,7 +728,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
             uint256[] memory amountsArr,
             uint256 bondMask,
             uint256 refund
-        ) = IDegenerusJackpots(ContractAddresses.JACKPOTS).runBafJackpot(poolWei, lvl, rngWord);
+        ) = jackpots.runBafJackpot(poolWei, lvl, rngWord);
 
         // Parse bondMask: low bits = top winners, high bits = scatter winners
         uint256 topMask = bondMask & ((uint256(1) << BAF_BOND_MASK_OFFSET) - 1);
@@ -757,7 +757,6 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
         for (uint256 i; i < winnersArr.length; ) {
             uint256 amount = amountsArr[i];
             uint256 ethPortion = amount;
-            uint256 tmpClaimable;
 
             bool scatterSpecial = (scatterMask & (uint256(1) << i)) != 0;
             bool topBond = (topMask & (uint256(1) << i)) != 0;
@@ -780,7 +779,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
                         // Remainder goes to bonds
                         uint256 remainder = amount - mapCost;
                         if (remainder != 0) {
-                            (ethPortion, tmpClaimable) = _splitEthWithBond(
+                            ethPortion = _splitEthWithBond(
                                 winnersArr[i],
                                 remainder,
                                 BAF_SCATTER_BOND_BPS, // 100% to bonds
@@ -792,7 +791,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
                         mapSpent += mapCost;
                     } else {
                         // Amount too small for MAPs - all to bonds
-                        (ethPortion, tmpClaimable) = _splitEthWithBond(
+                        ethPortion = _splitEthWithBond(
                             winnersArr[i],
                             amount,
                             BAF_SCATTER_BOND_BPS,
@@ -801,7 +800,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
                     }
                 } else {
                     // MAP budget exhausted - all to bonds
-                    (ethPortion, tmpClaimable) = _splitEthWithBond(
+                    ethPortion = _splitEthWithBond(
                         winnersArr[i],
                         amount,
                         BAF_SCATTER_BOND_BPS,
@@ -813,7 +812,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
                 // Top winner: 20% to bonds, 80% to claimable
                 // -------------------------------------------------------------
 
-                (ethPortion, tmpClaimable) = _splitEthWithBond(
+                ethPortion = _splitEthWithBond(
                     winnersArr[i],
                     amount,
                     BAF_TOP_BOND_BPS,
@@ -822,9 +821,9 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
             }
             // Else: regular winner - full amount as claimable ETH (no split)
 
-            claimableDelta += tmpClaimable;
             if (ethPortion != 0) {
-                claimableDelta += _addClaimableEth(winnersArr[i], ethPortion);
+                _addClaimableEth(winnersArr[i], ethPortion);
+                claimableDelta += ethPortion;
             }
 
             unchecked {
@@ -841,7 +840,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
         }
 
         if (winnersArr.length != 0) {
-            try IDegenerusTrophies(ContractAddresses.TROPHIES).mintBaf(winnersArr[0], lvl) {} catch {}
+            try trophies.mintBaf(winnersArr[0], lvl) {} catch {}
         }
 
         netSpend = poolWei - refund;

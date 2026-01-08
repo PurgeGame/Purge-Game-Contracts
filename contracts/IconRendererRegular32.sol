@@ -81,43 +81,6 @@ pragma solidity ^0.8.26;
 |  |   • Creates visual variety across levels while maintaining recognizability                      |  |
 |  +--------------------------------------------------------------------------------------------------+ |
 |                                                                                                       |
-+=======================================================================================================+
-|  SECURITY CONSIDERATIONS                                                                              |
-|  -----------------------                                                                              |
-|                                                                                                       |
-|  1. VIEW-ONLY RENDERING                                                                               |
-|     • tokenURI() is a view function - no state changes                                                |
-|     • Safe for off-chain metadata generation                                                          |
-|                                                                                                       |
-|  2. ACCESS CONTROL                                                                                    |
-|     • Constructor wiring via ContractAddresses (no admin setters)                                       |
-|     • setMyColors() proxies to registry with msg.sender                                               |
-|     • setCustomColorsForMany() proxies with ownership verification                                    |
-|                                                                                                       |
-|  3. EXTERNAL CALLS                                                                                    |
-|     • All external calls to trusted, constant addresses                                               |
-|     • No value transfers, no callbacks                                                                |
-|                                                                                                       |
-+=======================================================================================================+
-|  TRUST ASSUMPTIONS                                                                                    |
-|  -----------------                                                                                    |
-|                                                                                                       |
-|  1. DegenerusGame provides accurate startTraitRemaining values                                        |
-|  2. DegenerusGamepieces provides valid packed trait data                                              |
-|  3. Icons32Data provides safe SVG path data                                                           |
-|  4. IconColorRegistry returns validated hex colors                                                    |
-|  5. DegenerusAffiliate correctly reports referrer relationships                                       |
-|                                                                                                       |
-+=======================================================================================================+
-|  GAS OPTIMIZATIONS                                                                                    |
-|  -----------------                                                                                    |
-|                                                                                                       |
-|  1. All rendering is view-only (free for off-chain calls)                                             |
-|  2. Immutable addresses for dependencies (no SLOAD for contracts)                                     |
-|  3. 1e6 fixed-point math avoids floating point overhead                                               |
-|  4. String concatenation via abi.encodePacked                                                         |
-|  5. unchecked blocks for safe arithmetic in loops                                                     |
-|                                                                                                       |
 +=======================================================================================================+*/
 
 import "@openzeppelin/contracts/utils/Base64.sol";
@@ -155,13 +118,13 @@ contract IconRendererRegular32 is ColorResolver {
     // ---------------------------------------------------------------------
 
     /// @dev Icon path and symbol name data source
-    IIcons32 private constant icons = IIcons32(ContractAddresses.ICONS_32);
+    IIcons32 internal constant icons = IIcons32(ContractAddresses.ICONS_32);
 
     /// @dev Game contract for initial trait counts
-    IDegenerusGameStartRemaining private constant game = IDegenerusGameStartRemaining(ContractAddresses.GAME);
+    IDegenerusGameStartRemaining internal constant game = IDegenerusGameStartRemaining(ContractAddresses.GAME);
 
     /// @dev Gamepiece ERC721 contract
-    IERC721Lite private constant nft = IERC721Lite(ContractAddresses.GAMEPIECES);
+    IERC721Lite internal constant nft = IERC721Lite(ContractAddresses.GAMEPIECES);
 
     // ---------------------------------------------------------------------
     // User defaults

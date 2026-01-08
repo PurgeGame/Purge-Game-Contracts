@@ -71,47 +71,6 @@ pragma solidity ^0.8.26;
 |  |   </svg>                                                                                         | |
 |  +--------------------------------------------------------------------------------------------------+ |
 |                                                                                                       |
-+=======================================================================================================+
-|  SECURITY CONSIDERATIONS                                                                              |
-|  -----------------------                                                                              |
-|                                                                                                       |
-|  1. VIEW-ONLY                                                                                         |
-|     • trophySvg() is a view function - no state changes                                               |
-|     • Safe to call externally for off-chain metadata generation                                       |
-|                                                                                                       |
-|  2. EXTERNAL CALL SAFETY                                                                              |
-|     • All external calls are to trusted, constant addresses                                           |
-|     • ownerOf call wrapped in try/catch to handle burned tokens                                       |
-|     • No value transfers, no callbacks                                                                |
-|                                                                                                       |
-|  3. ACCESS CONTROL                                                                                    |
-|     • Constructor wiring via ContractAddresses (no admin setters)                                       |
-|     • All other functions are view-only                                                               |
-|                                                                                                       |
-|  4. INPUT HANDLING                                                                                    |
-|     • SvgParams validated by caller (IconRendererTrophy32)                                            |
-|     • Sentinel values (0xFFFE, 0xFFFA) handled explicitly                                             |
-|                                                                                                       |
-+=======================================================================================================+
-|  TRUST ASSUMPTIONS                                                                                    |
-|  -----------------                                                                                    |
-|                                                                                                       |
-|  1. Icons32Data provides valid, safe SVG path data                                                    |
-|  2. TrophySvgAssets provides safe SVG animation markup                                                |
-|  3. IconColorRegistry returns validated hex color strings                                             |
-|  4. DegenerusAffiliate correctly reports referrer relationships                                       |
-|  5. ContractAddresses provides correct NFT address at deployment                                        |
-|                                                                                                       |
-+=======================================================================================================+
-|  GAS OPTIMIZATIONS                                                                                    |
-|  -----------------                                                                                    |
-|                                                                                                       |
-|  1. All rendering is view-only (free for off-chain calls)                                             |
-|  2. Immutable addresses for dependencies (no SLOAD)                                                   |
-|  3. String concatenation via abi.encodePacked                                                         |
-|  4. Fixed-point math (1e6 scale) avoids floating point                                                |
-|  5. try/catch only where necessary (ownerOf for burned tokens)                                        |
-|                                                                                                       |
 +=======================================================================================================+*/
 
 import "@openzeppelin/contracts/utils/Strings.sol";
@@ -160,13 +119,13 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg, ColorResolver {
     // ---------------------------------------------------------------------
 
     /// @dev Icon path data source
-    IIcons32 private constant icons = IIcons32(ContractAddresses.ICONS_32);
+    IIcons32 internal constant icons = IIcons32(ContractAddresses.ICONS_32);
 
     /// @dev Trophy SVG assets (BAF animation)
-    ITrophySvgAssets private constant assets = ITrophySvgAssets(ContractAddresses.TROPHY_SVG_ASSETS);
+    ITrophySvgAssets internal constant assets = ITrophySvgAssets(ContractAddresses.TROPHY_SVG_ASSETS);
 
     /// @dev Trophy NFT contract
-    IERC721Lite private constant nft = IERC721Lite(ContractAddresses.TROPHIES);
+    IERC721Lite internal constant nft = IERC721Lite(ContractAddresses.TROPHIES);
 
     // ---------------------------------------------------------------------
     // CONSTANTS

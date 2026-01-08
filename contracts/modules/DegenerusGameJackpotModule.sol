@@ -53,6 +53,14 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
     error MapJackpotPending();
 
     // -------------------------------------------------------------------------
+    // External Contract References (compile-time constants)
+    // -------------------------------------------------------------------------
+
+    IDegenerusBondsJackpot internal constant bonds = IDegenerusBondsJackpot(ContractAddresses.BONDS);
+    IDegenerusCoinModule internal constant coin = IDegenerusCoinModule(ContractAddresses.COIN);
+    IStETH internal constant steth = IStETH(ContractAddresses.STETH_TOKEN);
+
+    // -------------------------------------------------------------------------
     // Constants — MAP Jackpot Type (unified pending state)
     // -------------------------------------------------------------------------
 
@@ -407,7 +415,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
             uint48 startDay = uint48((uint256(startTime) - JACKPOT_RESET_TIME) / 1 days);
             if (questDay > startDay) {
                 uint48 daysSince = questDay - startDay;
-                isEthDay = (daysSince % 7) == 0;
+                isEthDay = (daysSince % 7) == 0 && lvl != 1;  // Skip every-7th-day ETH jackpot at level 1
             }
         }
         uint256 rewardPoolSlice;
@@ -594,7 +602,8 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
 
     /// @notice Pays a post-extermination carryover jackpot for the NEXT level's ticket holders.
     /// @dev After a trait is exterminated, this rewards players who already hold tickets for the
-    ///      upcoming level. Funded from rewardPool at 1% (scaled by level position in 100-level band).
+    ///      upcoming level. Funded from rewardPool; if the level ended before any daily jackpots
+    ///      ran, use the larger 2-4% slice based on nextPrizePool funding (otherwise 1%).
     ///      Also triggers a quest roll for the jackpot day.
     ///
     /// @param lvl Target level for ticket lookup (typically current level + 1).
@@ -607,8 +616,24 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
         uint256 randWord
     ) external returns (uint256 paidEth) {
         uint48 questDay = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
-        // 1% of rewardPool, scaled down as level progresses through 100-level band.
-        uint256 ethPool = (rewardPool * 100 * _rewardJackpotScaleBps(lvl)) / 100_000_000;
+        uint256 poolBps = 100;
+        if (lastLevelJackpotCount == 0) {
+            // Mirror the first daily jackpot rewardPool slice (2-4%) based on nextPrizePool funding.
+            uint256 targetPool = lastPrizePool;
+            uint256 fundedBps = 0;
+            if (targetPool != 0) {
+                fundedBps = (nextPrizePool * 10_000) / targetPool;
+            }
+            if (fundedBps >= 3500) {
+                poolBps = 400;
+            } else if (fundedBps >= 2500) {
+                poolBps = 300;
+            } else {
+                poolBps = 200;
+            }
+        }
+        // RewardPool slice scaled down as level progresses through 100-level band.
+        uint256 ethPool = (rewardPool * poolBps * _rewardJackpotScaleBps(lvl)) / 100_000_000;
 
         if (ethPool != 0) {
             uint32 packedTrait = uint32(traitId);
@@ -741,7 +766,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
         effectiveWei = levelJackpotWei;
 
         if ((lvl % 100) == 0) {
-            uint256 stBal = IStETH(ContractAddresses.STETH_TOKEN).balanceOf(address(this));
+            uint256 stBal = steth.balanceOf(address(this));
             uint256 totalBal = address(this).balance + stBal;
             uint256 obligations = currentPrizePool + nextPrizePool + rewardPool + claimablePool + bondPool;
             uint256 bafPool = bafHundredPool;
@@ -773,12 +798,11 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
     /// @param beneficiary Address to credit.
     /// @param weiAmount Wei to add to their claimable balance.
     function _addClaimableEth(address beneficiary, uint256 weiAmount) private {
-        address recipient = beneficiary;
         // SAFETY: uint256 max is ~10^77 wei; overflow impossible in practice.
         unchecked {
-            claimableWinnings[recipient] += weiAmount;
+            claimableWinnings[beneficiary] += weiAmount;
         }
-        emit PlayerCredited(beneficiary, recipient, weiAmount);
+        emit PlayerCredited(beneficiary, beneficiary, weiAmount);
     }
 
     /// @dev Queue MAP tickets for batch processing.
@@ -1216,14 +1240,14 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
         total += ((rngWord >> 32) % 11);
     }
 
-    /// @dev Computes a random bonus for reward pool retention (2d4 + 1d14 + 3 = 6-24 range).
+    /// @dev Computes a random bonus for reward pool retention (2d4 + 1d14 + 3 = 3-22 range).
     ///      Adds variance to prevent predictable jackpot sizing.
     function _rewardPoolBonus(uint256 rngWord) private pure returns (uint256) {
         uint256 seed = uint256(keccak256(abi.encodePacked(rngWord, CARRYOVER_BONUS_TAG)));
         uint256 d4a = (seed & 0xF) % 4; // 0-3
         uint256 d4b = ((seed >> 8) & 0xF) % 4; // 0-3
         uint256 d14 = ((seed >> 16) & 0xFF) % 14; // 0-13
-        return d4a + d4b + d14 + 3; // 3-23
+        return d4a + d4b + d14 + 3; // 3-22
     }
 
     /// @dev Legacy fallback for reward pool calculation on levels outside the main formula.
@@ -1795,7 +1819,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
     /// @param amount ETH amount to convert into bonds.
     /// @param lvl Current level for DGNRS mint routing (when purchases closed).
     function _awardBondPrize(address beneficiary, uint256 amount, uint24 lvl) private {
-        IDegenerusBondsJackpot(ContractAddresses.BONDS).awardFromGame(beneficiary, amount, lvl);
+        bonds.awardFromGame(beneficiary, amount, lvl);
         bondPool += amount;
     }
 
@@ -1805,24 +1829,22 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
 
     /// @dev Triggers the daily quest roll after a jackpot. Level jackpots force ETH+Degenerus quests.
     function _rollQuestForJackpot(uint256 entropySource, bool forceMintEthAndDegenerus, uint48 questDay) private {
-        IDegenerusCoinModule coinContract = IDegenerusCoinModule(ContractAddresses.COIN);
         if (forceMintEthAndDegenerus) {
-            coinContract.rollDailyQuestWithOverrides(questDay, entropySource, true, true);
+            coin.rollDailyQuestWithOverrides(questDay, entropySource, true, true);
         } else {
-            coinContract.rollDailyQuest(questDay, entropySource);
+            coin.rollDailyQuest(questDay, entropySource);
         }
     }
 
-    /// @dev Credits a jackpot winner with COIN or ETH. Returns false if beneficiary is invalid.
-    function _creditJackpot(bool payInCoin, address beneficiary, uint256 amount) private returns (bool) {
-        if (beneficiary == address(0) || amount == 0) return false;
+    /// @dev Credits a jackpot winner with COIN or ETH; no-op if beneficiary is invalid.
+    function _creditJackpot(bool payInCoin, address beneficiary, uint256 amount) private {
+        if (beneficiary == address(0) || amount == 0) return;
         if (payInCoin) {
-            IDegenerusCoinModule(ContractAddresses.COIN).creditFlip(beneficiary, amount);
+            coin.creditFlip(beneficiary, amount);
         } else {
             // Liability is tracked by the caller to avoid per-winner SSTORE cost.
             _addClaimableEth(beneficiary, amount);
         }
-        return true;
     }
 
     // =========================================================================

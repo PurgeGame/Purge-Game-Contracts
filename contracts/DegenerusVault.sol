@@ -72,55 +72,6 @@ import {IVaultCoin} from "./interfaces/IVaultCoin.sol";
 |  • DGVE claims exclude DGVA's reserved share of the combined pool                                      |
 |  • All wiring is constant after construction                                                           |
 |                                                                                                        |
-+========================================================================================================+
-|  SECURITY CONSIDERATIONS                                                                               |
-|  -----------------------                                                                               |
-|                                                                                                        |
-|  1. REENTRANCY PROTECTION                                                                              |
-|     • Burn functions follow CEI: state changes (burn/mint) before external calls (payouts)             |
-|     • ETH transfer via .call{} happens after balance is calculated from current state                  |
-|     • address(this).balance decreases atomically with ETH send (before callback)                       |
-|                                                                                                        |
-|  2. ACCESS CONTROL                                                                                     |
-|     • deposits: onlyBonds modifier (constant BONDS address)                                            |
-|     • share mint/burn: onlyVault modifier on DegenerusVaultShare                                       |
-|     • no admin functions, no upgrade path                                                              |
-|                                                                                                        |
-|  3. OVERFLOW SAFETY                                                                                    |
-|     • Solidity 0.8+ automatic checks on most operations                                                |
-|     • unchecked blocks only where underflow is impossible (balance >= amount verified)                 |
-|     • Share supply bounded by refill mechanism (min 1B after full burn)                                |
-|                                                                                                        |
-|  4. ROUNDING                                                                                           |
-|     • Claims use floor division - small dust may remain in vault                                       |
-|     • Preview functions use ceiling for "burn required" calculations                                   |
-|     • stETH has known 1-2 wei rounding on transfers (Lido limitation)                                  |
-|                                                                                                        |
-|  5. stETH REBASE                                                                                       |
-|     • stETH is a rebasing token - balances increase over time                                          |
-|     • Yield is attributed to DGVE only (DGVA only earns explicit deposits)                             |
-|                                                                                                        |
-+========================================================================================================+
-|  TRUST ASSUMPTIONS                                                                                     |
-|  -----------------                                                                                     |
-|                                                                                                        |
-|  1. Bonds contract is trusted to deposit correctly                                                     |
-|  2. BURNIE (COIN) implements vaultEscrow/vaultMintTo correctly                                         |
-|  3. DGNRS token implements vaultEscrow/vaultMintTo correctly                                           |
-|  4. stETH (Lido) behaves according to its specification                                                |
-|  5. Initial share holder (creator) is trusted with initial 1B shares per class                         |
-|                                                                                                        |
-+========================================================================================================+
-|  GAS OPTIMIZATIONS                                                                                     |
-|  -----------------                                                                                     |
-|                                                                                                        |
-|  1. Share classes are separate contracts (avoids complex accounting in one contract)                   |
-|  2. Virtual deposits for BURNIE/DGNRS (no token transfers, just mint allowance bumps)                  |
-|  3. Custom errors instead of require strings                                                           |
-|  4. unchecked blocks for safe arithmetic                                                               |
-|  5. Immutable for all wiring addresses                                                                 |
-|  6. ETH preferred over stETH in claims (avoids stETH transfer gas when possible)                       |
-|                                                                                                        |
 +========================================================================================================+*/
 
 // -----------------------------------------------------------------------------
@@ -366,11 +317,11 @@ contract DegenerusVault {
     // WIRING (Constants)
     // ---------------------------------------------------------------------
     /// @dev BURNIE token address (implements IVaultCoin)
-    IVaultCoin private constant coinToken = IVaultCoin(ContractAddresses.COIN);
+    IVaultCoin internal constant coinToken = IVaultCoin(ContractAddresses.COIN);
     /// @dev DGNRS token address (implements IVaultCoin)
-    IVaultCoin private constant dgnrsToken = IVaultCoin(ContractAddresses.DGNRS);
+    IVaultCoin internal constant dgnrsToken = IVaultCoin(ContractAddresses.DGNRS);
     /// @dev stETH token address (Lido)
-    IStETH private constant steth = IStETH(ContractAddresses.STETH_TOKEN);
+    IStETH internal constant steth = IStETH(ContractAddresses.STETH_TOKEN);
     // ---------------------------------------------------------------------
     // RESERVE TRACKING (DGVA SPLIT)
     // ---------------------------------------------------------------------

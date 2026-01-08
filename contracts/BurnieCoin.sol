@@ -100,6 +100,11 @@ contract BurnieCoin {
     /// @param amount The amount minted (18 decimals).
     event LinkCredit(address indexed player, uint256 amount);
 
+    /// @notice Emitted when virtual coin is escrowed to the vault reserve.
+    /// @param sender The contract that escrowed the funds (VAULT, BONDS, or GAME).
+    /// @param amount The amount added to vault mint allowance (18 decimals).
+    event VaultEscrowRecorded(address indexed sender, uint256 amount);
+
     /*+======================================================================+
       |                              ERRORS                                  |
       +======================================================================+
@@ -139,6 +144,15 @@ contract BurnieCoin {
 
     /// @notice Coinflip deposits are locked during level jackpot resolution.
     error CoinflipLocked();
+
+    /// @notice Caller is not authorized (trusted contracts: GAME, GAMEPIECES, AFFILIATE, ICON_COLOR_REGISTRY).
+    error OnlyTrustedContracts();
+
+    /// @notice Caller is not authorized (flip creditors: GAME, GAMEPIECES, AFFILIATE, BONDS).
+    error OnlyFlipCreditors();
+
+    /// @notice Caller is not authorized (vault operations: VAULT, BONDS, or GAME).
+    error OnlyVaultOrBondsOrGame();
 
     /*+======================================================================+
       |                         ERC20 STATE                                  |
@@ -185,16 +199,16 @@ contract BurnieCoin {
     /// @dev Packed into single slot: address (20 bytes) + uint96 (12 bytes) = 32 bytes.
     ///      Score is stored in whole BURNIE tokens (divided by 1 ether) to fit uint96.
     struct PlayerScore {
-        address player;  // 20 bytes - the leading player's address
-        uint96 score;    // 12 bytes - score in whole tokens (max ~79 billion)
+        address player; // 20 bytes - the leading player's address
+        uint96 score; // 12 bytes - score in whole tokens (max ~7.9e28)
     }
 
     /// @notice Outcome record for a single coinflip day window.
     /// @dev Packed into single slot: uint16 (2 bytes) + bool (1 byte) = 3 bytes.
     ///      rewardPercent is already in percent units (not basis points), e.g., 150 = 150% = 1.5x.
     struct CoinflipDayResult {
-        uint16 rewardPercent;  // 2 bytes - payout multiplier percentage [50-150]
-        bool win;              // 1 byte  - true = players won, false = house won
+        uint16 rewardPercent; // 2 bytes - payout multiplier percentage [50-150]
+        bool win; // 1 byte  - true = players won, false = house won
     }
 
     /*+======================================================================+
@@ -216,7 +230,7 @@ contract BurnieCoin {
     IDegenerusQuests internal constant questModule = IDegenerusQuests(ContractAddresses.QUESTS);
 
     /// @notice The jackpots module for decimator burns and BAF flip tracking.
-    IDegenerusJackpots private constant jackpots = IDegenerusJackpots(ContractAddresses.JACKPOTS);
+    IDegenerusJackpots internal constant jackpots = IDegenerusJackpots(ContractAddresses.JACKPOTS);
 
     /*+======================================================================+
       |                       COINFLIP ACCOUNTING                            |
@@ -516,8 +530,8 @@ contract BurnieCoin {
       |  +------------------------+----------------------------------------+ |
       |  |  onlyDegenerusGame     | degenerusGame only                     | |
       |  |  onlyTrustedContracts  | game, NFT, affiliate, color registry   | |
-      |  |  onlyFlipCreditors     | game, NFT, affiliate, ContractAddresses.BONDS            | |
-      |  |  onlyVault             | ContractAddresses.VAULT only                             | |
+      |  |  onlyFlipCreditors     | game, NFT, affiliate, BONDS            | |
+      |  |  onlyVault             | VAULT only                             | |
       |  +-----------------------------------------------------------------+ |
       +======================================================================+*/
 
@@ -537,7 +551,7 @@ contract BurnieCoin {
             sender != ContractAddresses.GAMEPIECES &&
             sender != ContractAddresses.AFFILIATE &&
             sender != ContractAddresses.ICON_COLOR_REGISTRY
-        ) revert OnlyGame();
+        ) revert OnlyTrustedContracts();
         _;
     }
 
@@ -551,7 +565,7 @@ contract BurnieCoin {
             sender != ContractAddresses.GAMEPIECES &&
             sender != ContractAddresses.AFFILIATE &&
             sender != ContractAddresses.BONDS
-        ) revert OnlyGame();
+        ) revert OnlyFlipCreditors();
         _;
     }
 
@@ -601,17 +615,8 @@ contract BurnieCoin {
         // Quests can layer on bonus flip credit when the quest is active/completed.
         IDegenerusQuests module = questModule;
         uint256 questReward;
-        (
-            uint256 reward,
-            bool hardMode,
-            uint8 questType,
-            uint32 streak,
-            bool completed,
-            bool completedBoth
-        ) = module.handleFlip(
-            caller,
-            amount
-        );
+        (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed, bool completedBoth) = module
+            .handleFlip(caller, amount);
         questReward = _questApplyReward(caller, reward, hardMode, questType, streak, completed, completedBoth);
 
         // Principal + quest bonus become the pending flip stake.
@@ -720,13 +725,7 @@ contract BurnieCoin {
         }
 
         // Record the burn with the ContractAddresses.JACKPOTS module
-        uint8 bucketUsed = jackpots.recordDecBurn(
-            caller,
-            lvl,
-            bucket,
-            baseAmount,
-            multBps
-        );
+        uint8 bucketUsed = jackpots.recordDecBurn(caller, lvl, bucket, baseAmount, multBps);
 
         emit DecimatorBurn(caller, amount, bucketUsed);
     }
@@ -783,8 +782,10 @@ contract BurnieCoin {
     function vaultEscrow(uint256 amount) external {
         if (amount == 0) return;
         address sender = msg.sender;
-        if (sender != ContractAddresses.VAULT && sender != ContractAddresses.BONDS && sender != ContractAddresses.GAME) revert OnlyVault();
+        if (sender != ContractAddresses.VAULT && sender != ContractAddresses.BONDS && sender != ContractAddresses.GAME)
+            revert OnlyVaultOrBondsOrGame();
         _vaultMintAllowance += amount;
+        emit VaultEscrowRecorded(sender, amount);
     }
 
     /// @notice Mint coin out of the ContractAddresses.VAULT allowance to a recipient.
@@ -856,14 +857,8 @@ contract BurnieCoin {
         if (msg.sender != ContractAddresses.AFFILIATE) revert OnlyAffiliate();
         IDegenerusQuests module = questModule;
         if (player == address(0) || amount == 0) return 0;
-        (
-            uint256 reward,
-            bool hardMode,
-            uint8 questType,
-            uint32 streak,
-            bool completed,
-            bool completedBoth
-        ) = module.handleAffiliate(player, amount);
+        (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed, bool completedBoth) = module
+            .handleAffiliate(player, amount);
         return _questApplyReward(player, reward, hardMode, questType, streak, completed, completedBoth);
     }
 
@@ -936,14 +931,8 @@ contract BurnieCoin {
     function notifyQuestMint(address player, uint32 quantity, bool paidWithEth) external {
         if (msg.sender != ContractAddresses.GAMEPIECES) revert OnlyNft();
         IDegenerusQuests module = questModule;
-        (
-            uint256 reward,
-            bool hardMode,
-            uint8 questType,
-            uint32 streak,
-            bool completed,
-            bool completedBoth
-        ) = module.handleMint(player, quantity, paidWithEth);
+        (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed, bool completedBoth) = module
+            .handleMint(player, quantity, paidWithEth);
         uint256 questReward = _questApplyReward(player, reward, hardMode, questType, streak, completed, completedBoth);
         if (questReward != 0) {
             addFlip(player, questReward, false, false, false);
@@ -958,14 +947,8 @@ contract BurnieCoin {
         if (msg.sender != ContractAddresses.BONDS) revert OnlyBonds();
         IDegenerusQuests module = questModule;
         if (player == address(0) || basePerBondWei == 0) return;
-        (
-            uint256 reward,
-            bool hardMode,
-            uint8 questType,
-            uint32 streak,
-            bool completed,
-            bool completedBoth
-        ) = module.handleBondPurchase(player, basePerBondWei);
+        (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed, bool completedBoth) = module
+            .handleBondPurchase(player, basePerBondWei);
         uint256 questReward = _questApplyReward(player, reward, hardMode, questType, streak, completed, completedBoth);
         if (questReward != 0) {
             addFlip(player, questReward, false, false, false);
@@ -979,14 +962,8 @@ contract BurnieCoin {
     function notifyQuestBurn(address player, uint32 quantity) external {
         if (msg.sender != ContractAddresses.GAME) revert OnlyGame();
         IDegenerusQuests module = questModule;
-        (
-            uint256 reward,
-            bool hardMode,
-            uint8 questType,
-            uint32 streak,
-            bool completed,
-            bool completedBoth
-        ) = module.handleBurn(player, quantity);
+        (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed, bool completedBoth) = module
+            .handleBurn(player, quantity);
         uint256 questReward = _questApplyReward(player, reward, hardMode, questType, streak, completed, completedBoth);
         if (questReward != 0) {
             addFlip(player, questReward, false, false, false);
@@ -1154,9 +1131,9 @@ contract BurnieCoin {
         uint256 roll = seedWord % 20;
         uint16 rewardPercent;
         if (roll == 0) {
-            rewardPercent = 50;   // Unlucky: 50% bonus (1.5x total)
+            rewardPercent = 50; // Unlucky: 50% bonus (1.5x total)
         } else if (roll == 1) {
-            rewardPercent = 150;  // Lucky: 150% bonus (2.5x total)
+            rewardPercent = 150; // Lucky: 150% bonus (2.5x total)
         } else {
             // Normal bonus range: [78%, 115%]
             rewardPercent = uint16((seedWord % COINFLIP_EXTRA_RANGE) + COINFLIP_EXTRA_MIN_PERCENT);
@@ -1325,12 +1302,19 @@ contract BurnieCoin {
         if (!rngLocked) {
             uint256 record = biggestFlipEver;
             if (newStake > record) {
+                // Guard against overflow: cap at uint128.max for record tracking
+                if (newStake > type(uint128).max) revert Insufficient();
                 biggestFlipEver = uint128(newStake);
 
                 if (canArmBounty && bountyEligible) {
                     // Bounty arms when setting a new record with an eligible stake.
-                    // If bounty already armed, must exceed by 1% to steal it.
-                    uint256 threshold = (bountyOwedTo != address(0)) ? (record + record / 100) : record;
+                    // If bounty already armed, must exceed by 1% (min +1) to steal it.
+                    uint256 threshold = record;
+                    if (bountyOwedTo != address(0)) {
+                        uint256 onePercent = record / 100;
+                        // Ensure minimum 1 wei increase if 1% rounds to 0
+                        threshold = record + (onePercent == 0 ? 1 : onePercent);
+                    }
                     if (newStake >= threshold) {
                         bountyOwedTo = player;
                         emit BountyOwed(player, currentBounty, newStake);

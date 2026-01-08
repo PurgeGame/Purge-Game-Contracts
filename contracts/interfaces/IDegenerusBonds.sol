@@ -30,25 +30,15 @@ interface IDegenerusBonds {
     /// @notice Run daily presale payouts using game-supplied entropy.
     /// @param rngWord RNG word from advanceGame.
     /// @param day Day index being processed.
-    /// @param ticketsEnabled True to pay mint ticket jackpots during presale.
+    /// @param purchasesEnabled True if NFT/MAP purchases are enabled.
+    /// @param lastPurchaseDay True if prize pool target was met today.
     /// @return advanced True if the presale payout advanced.
     function runPresaleDailyFromGame(
         uint256 rngWord,
         uint48 day,
-        bool ticketsEnabled
+        bool purchasesEnabled,
+        bool lastPurchaseDay
     ) external returns (bool advanced);
-
-    /// @notice Run daily ticket coin jackpot after sales open.
-    /// @param rngWord RNG word from advanceGame.
-    /// @param day Day index being processed.
-    /// @return advanced True if the ticket jackpot advanced.
-    function runTicketJackpotFromGame(uint256 rngWord, uint48 day) external returns (bool advanced);
-
-    /// @notice Record a mint ticket entry for daily coin jackpots.
-    /// @param player Ticket owner.
-    /// @param mintUnits Ticket weight (1 MAP = 1, 1 NFT = 4).
-    /// @param day Day index when the mint occurred.
-    function recordTicketFromGame(address player, uint32 mintUnits, uint48 day) external;
 
     /// @notice Resolve bonds game-over with supplied entropy.
     /// @param rngWord RNG word from advanceGame.
@@ -57,7 +47,8 @@ interface IDegenerusBonds {
     /// @notice True once bonds has attempted game-over entropy.
     function gameOverEntropyAttempted() external view returns (bool);
 
-    /// @notice Set or clear the RNG lock on bond operations.
-    /// @param locked True to block bond operations during VRF pending window.
-    function setRngLock(bool locked) external;
+    /// @notice Check if NFT/MAP purchases are enabled (presale gating).
+    /// @dev Purchases enabled when presale raised > 40 ETH OR presale ended.
+    /// @return True if NFT/MAP purchases are enabled, false otherwise.
+    function nftPurchasesEnabled() external view returns (bool);
 }

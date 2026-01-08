@@ -23,7 +23,7 @@ pragma solidity ^0.8.26;
 |  |                              TROPHY DATA BIT LAYOUT (uint256)                                   |  |
 |  |                                                                                                 |  |
 |  |   +-----------------------------------------------------------------------------------------+   |  |
-|  |   |  Bit 229        | TROPHY_FLAG_INVERT    | Visual inversion flag                           | |  |
+|  |   |  Bit 229        | TROPHY_FLAG_INVERT    | Visual inversion flag                         |   |  |
 |  |   |  Bit 203        | BAF_TROPHY_FLAG       | Identifies BAF trophy type                    |   |  |
 |  |   |  Bit 201        | AFFILIATE_TROPHY_FLAG | Identifies Affiliate trophy type              |   |  |
 |  |   |  Bits 152-167   | trait (uint16)        | Exterminator trait (low 8) or sentinel value  |   |  |
@@ -58,48 +58,6 @@ pragma solidity ^0.8.26;
 |  • GAME address is a compile-time constant from ContractAddresses                                     |
 |                                                                                                       |
 +=======================================================================================================+
-|  SECURITY CONSIDERATIONS                                                                              |
-|  -----------------------                                                                              |
-|                                                                                                       |
-|  1. SOULBOUND ENFORCEMENT                                                                             |
-|     • All 5 transfer vectors blocked: transferFrom, safeTransferFrom (x2), approve, setApprovalForAll |
-|     • getApproved returns address(0), isApprovedForAll returns false                                  |
-|     • No internal _transfer function exists                                                           |
-|                                                                                                       |
-|  2. ACCESS CONTROL                                                                                    |
-|     • admin: none (addresses fixed at compile time)                                                   |
-|     • GAME/TROPHY_RENDERER_ROUTER are compile-time constants                                          |
-|                                                                                                       |
-|  3. REENTRANCY                                                                                        |
-|     • No ETH handling (no payable functions, no withdrawals)                                          |
-|     • External call to renderer router is view-only in tokenURI()                                     |
-|     • _mint follows checks-effects-interactions pattern                                               |
-|                                                                                                       |
-|  4. OVERFLOW SAFETY                                                                                   |
-|     • Token ID increment uses unchecked (safe: requires 2^256 mints to overflow)                      |
-|     • Balance increment uses unchecked (safe: same reasoning)                                         |
-|     • All bit operations are within uint256 bounds                                                    |
-|                                                                                                       |
-+=======================================================================================================+
-|  TRUST ASSUMPTIONS                                                                                    |
-|  -----------------                                                                                    |
-|                                                                                                       |
-|  1. Build config is trusted to set the correct GAME address                                           |
-|  2. Game contract is trusted to mint trophies fairly and correctly                                    |
-|  3. Renderer contract is trusted to return valid tokenURI data                                        |
-|  4. Renderer will not revert maliciously (would block tokenURI for all tokens)                        |
-|                                                                                                       |
-+=======================================================================================================+
-|  GAS OPTIMIZATIONS                                                                                    |
-|  -----------------                                                                                    |
-|                                                                                                       |
-|  1. Affiliate score / exterminator winnings packed into bits 0-95 (saves 1 SSTORE per mint)           |
-|  2. Custom errors instead of require strings (~200 gas saved per revert)                              |
-|  3. unchecked blocks for safe arithmetic (~30 gas saved per operation)                                |
-|  4. No enumeration (ERC721Enumerable) - tokens tracked via events only                                |
-|  5. Minimal storage: only _owners, _balances, _trophyData mappings                                    |
-|                                                                                                       |
-+=======================================================================================================+
 */
 
 import "./interfaces/IDegenerusTrophies.sol";
@@ -128,8 +86,8 @@ contract DegenerusTrophies is IDegenerusTrophies {
     /// @notice Trophy categories awarded for different achievements
     enum TrophyKind {
         Exterminator, // Awarded for eliminating the final trait
-        Baf,          // "Burn and Flip" strategic coinflip winner
-        Affiliate     // Top affiliate performer for a level
+        Baf, // "Burn and Flip" strategic coinflip winner
+        Affiliate // Top affiliate performer for a level
     }
 
     // ---------------------------------------------------------------------
@@ -177,7 +135,7 @@ contract DegenerusTrophies is IDegenerusTrophies {
     // CONSTANTS & WIRING
     // ---------------------------------------------------------------------
     /// @notice The trophy renderer router for tokenURI metadata (constant).
-    ITrophyRenderer private constant trophyRenderer = ITrophyRenderer(ContractAddresses.TROPHY_RENDERER_ROUTER);
+    ITrophyRenderer internal constant trophyRenderer = ITrophyRenderer(ContractAddresses.TROPHY_RENDERER_ROUTER);
 
     // ---------------------------------------------------------------------
     // STORAGE
@@ -242,10 +200,17 @@ contract DegenerusTrophies is IDegenerusTrophies {
     /// @param level Game level when the affiliate achievement occurred
     /// @param score The affiliate's score (packed into bits 0-95)
     /// @return tokenId The newly minted token ID
-    function mintAffiliate(address to, uint24 level, uint96 score) external override onlyGame returns (uint256 tokenId) {
+    function mintAffiliate(
+        address to,
+        uint24 level,
+        uint96 score
+    ) external override onlyGame returns (uint256 tokenId) {
         tokenId = _mint(to);
         // Pack score into bits 0-95, level into bits 128-151, trait sentinel into bits 152+, flag at bit 201
-        uint256 data = uint256(score) | (uint256(level) << 128) | (AFFILIATE_TRAIT_SENTINEL << 152) | AFFILIATE_TROPHY_FLAG;
+        uint256 data = uint256(score) |
+            (uint256(level) << 128) |
+            (AFFILIATE_TRAIT_SENTINEL << 152) |
+            AFFILIATE_TROPHY_FLAG;
         _trophyData[tokenId] = data;
         emit TrophyMinted(tokenId, to, TrophyKind.Affiliate, level, 0);
     }
@@ -278,7 +243,7 @@ contract DegenerusTrophies is IDegenerusTrophies {
     /// @notice Collection symbol for ERC721 metadata
     /// @return The collection symbol "PGTROPHY"
     function symbol() external pure returns (string memory) {
-        return "PGTROPHY";
+        return "DGTROPHY";
     }
 
     /// @notice Total number of trophies minted
@@ -313,7 +278,7 @@ contract DegenerusTrophies is IDegenerusTrophies {
         return
             interfaceId == 0x01ffc9a7 || // ERC165
             interfaceId == 0x80ac58cd || // ERC721
-            interfaceId == 0x5b5e139f;   // ERC721Metadata
+            interfaceId == 0x5b5e139f; // ERC721Metadata
     }
 
     /// @notice Get the metadata URI for a token

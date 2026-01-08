@@ -14,7 +14,7 @@ interface IDegenerusBondsJackpot {
     /// @param beneficiary Address receiving the bond prize.
     /// @param amount ETH amount to convert into bonds.
     /// @param lvl Current game level for DGNRS mint routing (when purchases closed).
-    /// @return bondPoolShare Amount game should add to bondPool (half for deposits, full for mints).
+    /// @return bondPoolShare Amount game should add to bondPool (full amount in current flow).
     function awardFromGame(
         address beneficiary,
         uint256 amount,

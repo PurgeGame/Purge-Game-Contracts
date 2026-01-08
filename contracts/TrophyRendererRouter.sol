@@ -16,11 +16,11 @@ interface ITrophyRenderer {
 /// @notice Safe upgrade router for trophy tokenURI rendering.
 /// @dev Uses staticcall and a fallback renderer to prevent tokenURI reverts.
 contract TrophyRendererRouter is RendererRouterBase {
-    function fallbackRenderer() internal pure override returns (address) {
+    function fallbackRenderer() internal view override returns (address) {
         return ContractAddresses.RENDERER_TROPHY;
     }
 
-    function tokenURISelector() internal pure override returns (bytes4) {
+    function tokenURISelector() internal view override returns (bytes4) {
         return ITrophyRenderer.tokenURI.selector;
     }
 

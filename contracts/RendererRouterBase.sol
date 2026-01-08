@@ -22,7 +22,7 @@ abstract contract RendererRouterBase {
 
     /// @notice Get the function selector for tokenURI calls
     /// @dev Must be implemented by child contract (e.g., ITokenRenderer.tokenURI.selector)
-    function tokenURISelector() internal pure virtual returns (bytes4);
+    function tokenURISelector() internal view virtual returns (bytes4);
 
     /// @notice Update the primary renderer address
     /// @dev Only callable by admin

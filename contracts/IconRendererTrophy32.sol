@@ -64,31 +64,6 @@ pragma solidity ^0.8.26;
 |  |   }                                                                                              | |
 |  +--------------------------------------------------------------------------------------------------+ |
 |                                                                                                       |
-+=======================================================================================================+
-|  SECURITY CONSIDERATIONS                                                                              |
-|  -----------------------                                                                              |
-|                                                                                                       |
-|  1. VIEW-ONLY                                                                                         |
-|     • tokenURI() is a view function - no state changes                                                |
-|     • Safe to call externally for metadata generation                                                 |
-|                                                                                                       |
-|  2. ACCESS CONTROL                                                                                    |
-|     • Constructor wiring via ContractAddresses (no admin setters)                                       |
-|     • Color customization proxied to registry with msg.sender verification                            |
-|                                                                                                       |
-|  3. INPUT VALIDATION                                                                                  |
-|     • Reverts if data indicates non-trophy (bits 128+ must be set)                                    |
-|     • Handles all sentinel values explicitly                                                          |
-|                                                                                                       |
-+=======================================================================================================+
-|  TRUST ASSUMPTIONS                                                                                    |
-|  -----------------                                                                                    |
-|                                                                                                       |
-|  1. DegenerusTrophies provides valid packed trophy data                                               |
-|  2. IconRendererTrophy32Svg generates safe SVG content                                                |
-|  3. IconColorRegistry validates hex colors correctly                                                  |
-|  4. Icons32Data provides valid symbol names                                                           |
-|                                                                                                       |
 +=======================================================================================================+*/
 
 import "@openzeppelin/contracts/utils/Base64.sol";
@@ -125,17 +100,17 @@ contract IconRendererTrophy32 {
     // ---------------------------------------------------------------------
 
     /// @dev Icon data source for symbol names
-    IIcons32 private constant icons = IIcons32(ContractAddresses.ICONS_32);
+    IIcons32 internal constant icons = IIcons32(ContractAddresses.ICONS_32);
 
     /// @dev Color customization registry
-    IColorRegistry private constant registry = IColorRegistry(ContractAddresses.ICON_COLOR_REGISTRY);
+    IColorRegistry internal constant registry = IColorRegistry(ContractAddresses.ICON_COLOR_REGISTRY);
 
     /// @dev SVG generation engine
-    IIconRendererTrophy32Svg private constant svgRenderer =
+    IIconRendererTrophy32Svg internal constant svgRenderer =
         IIconRendererTrophy32Svg(ContractAddresses.RENDERER_TROPHY_SVG);
 
     /// @dev Trophy NFT contract
-    IERC721Lite private constant nft = IERC721Lite(ContractAddresses.TROPHIES);
+    IERC721Lite internal constant nft = IERC721Lite(ContractAddresses.TROPHIES);
 
     function setMyColors(
         string calldata outlineHex,

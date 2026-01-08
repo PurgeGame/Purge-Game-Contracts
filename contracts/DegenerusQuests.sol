@@ -132,9 +132,9 @@ contract DegenerusQuests is IDegenerusQuests {
     // =========================================================================
 
     /// @dev Reference to the Degenerus game contract for state queries.
-    IDegenerusGame private constant questGame = IDegenerusGame(ContractAddresses.GAME);
+    IDegenerusGame internal constant questGame = IDegenerusGame(ContractAddresses.GAME);
     /// @dev Reference to the Degenerus bonds contract for purchase-window checks.
-    IDegenerusBondsJackpot private constant questBonds = IDegenerusBondsJackpot(ContractAddresses.BONDS);
+    IDegenerusBondsJackpot internal constant questBonds = IDegenerusBondsJackpot(ContractAddresses.BONDS);
 
     // =========================================================================
     //                                 STRUCTS
