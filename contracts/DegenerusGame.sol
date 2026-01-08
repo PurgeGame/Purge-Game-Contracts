@@ -4,7 +4,7 @@ pragma solidity ^0.8.26;
 /**
  * @title DegenerusGame
  * @author Burnie Degenerus
- * @notice Core NFT game contract managing state machine, VRF integration, ContractAddresses.JACKPOTS, and prize pools.
+ * @notice Core gamepiece game contract managing state machine, VRF integration, ContractAddresses.JACKPOTS, and prize pools.
  *
  * @dev ARCHITECTURE:
  *      - 3-state FSM: PURCHASE(2) → BURN(3) → SETUP(1) → (cycle)
@@ -59,13 +59,11 @@ interface IDegenerusBonds {
     /// @notice Run daily presale payouts using game-supplied entropy.
     /// @param rngWord RNG word from advanceGame.
     /// @param day Day index being processed.
-    /// @param purchasesEnabled True if NFT/MAP purchases are enabled.
     /// @param lastPurchaseDay True if prize pool target was met today.
     /// @return advanced True if the presale payout advanced.
     function runPresaleDailyFromGame(
         uint256 rngWord,
         uint48 day,
-        bool purchasesEnabled,
         bool lastPurchaseDay
     ) external returns (bool advanced);
 
@@ -76,10 +74,10 @@ interface IDegenerusBonds {
     /// @notice True once ContractAddresses.BONDS has attempted game-over entropy.
     function gameOverEntropyAttempted() external view returns (bool);
 
-    /// @notice Check if NFT/MAP purchases are enabled (presale gating).
+    /// @notice Check if gamepiece/MAP purchases are enabled (presale gating).
     /// @dev Purchases enabled when presale raised > 40 ETH OR presale ended.
-    /// @return True if NFT/MAP purchases are enabled, false otherwise.
-    function nftPurchasesEnabled() external view returns (bool);
+    /// @return True if gamepiece/MAP purchases are enabled, false otherwise.
+    function gamepiecePurchasesEnabled() external view returns (bool);
 }
 
 /// @notice Interface for affiliate presale status checks.
@@ -108,7 +106,7 @@ interface IDegenerusQuestNormalize {
 
 /// @notice Minimal ERC721 interface for trophy balance checks.
 interface IERC721BalanceOf {
-    /// @notice Get NFT count for an owner.
+    /// @notice Get gamepiece count for an owner.
     function balanceOf(address owner) external view returns (uint256);
 }
 
@@ -140,7 +138,7 @@ interface IVRFCoordinator {
 /**
  * @title DegenerusGame
  * @author Burnie Degenerus
- * @notice Core NFT game contract implementing the game state machine, VRF integration,
+ * @notice Core gamepiece game contract implementing the game state machine, VRF integration,
  *         and orchestration of all gameplay mechanics.
  * @dev Inherits DegenerusGameStorage for shared storage layout with delegate modules.
  *      Uses delegatecall pattern for complex logic (endgame, jackpot, mint, bond modules).
@@ -226,7 +224,7 @@ contract DegenerusGame is DegenerusGameStorage {
     /// @dev Trusted for creditFlip, burnCoin, processCoinflipPayouts, etc.
     IDegenerusCoin internal constant coin = IDegenerusCoin(ContractAddresses.COIN);
 
-    /// @notice The gamepieces NFT contract (ERC721).
+    /// @notice The gamepieces gamepiece contract (ERC721).
     /// @dev Trusted for mint/burn/metadata operations.
     IDegenerusGamepieces internal constant nft = IDegenerusGamepieces(ContractAddresses.GAMEPIECES);
 
@@ -737,41 +735,38 @@ contract DegenerusGame is DegenerusGameStorage {
         multiplierBps = 10000 + bonusBps;
     }
 
-    /// @dev Calculate mint count bonus points, scaled by 100-level cycles and cycle position.
-    ///      Mint count is normalized by cycle index to keep requirements rising each century.
-    ///      After level 100, mint count scales linearly to full credit at 75% of current level.
-    ///      Points are 1:1 with mintCount early in cycle, then scale down as cycle progresses.
-    ///      This prevents late-cycle minters from catching up to consistent players.
+    /// @dev Calculate mint count bonus points based on level participation.
+    ///      Rewards players who have minted on more levels with up to 25 bonus points (25% multiplier).
+    ///      Requirement scales with game progress but caps at 75 level mints for reachability.
     /// @param mintCount Player's total level mint count.
     /// @param currLevel Current game level.
     /// @return Bonus points (0-25) for multiplier calculation.
     function _mintCountBonusPoints(uint24 mintCount, uint24 currLevel) private pure returns (uint256) {
-        unchecked {
-            if (currLevel > 100) {
-                uint256 maxCount = (uint256(currLevel) * 75) / 100;
-                if (maxCount == 0) return 0;
-                uint256 scaled = (uint256(mintCount) * 25) / maxCount;
-                return scaled > 25 ? 25 : scaled;
-            }
+        // Calculate required mints for max bonus (25 points)
+        uint256 requiredForMax;
 
-            uint24 cyclePos = currLevel % 100;
-            uint24 cycleIndex = currLevel == 0 ? 1 : uint24((uint256(currLevel) + 99) / 100);
-            uint24 scaledCount = mintCount / cycleIndex;
-            // Early cycle (levels 1-25): direct 1:1 mapping, capped at 25
-            if (cyclePos == 0 || cyclePos <= 25) {
-                return scaledCount > 25 ? 25 : uint256(scaledCount);
-            }
-
-            // Later cycle: scale down proportionally to prevent late-cycle advantage
-            uint256 scaled = (uint256(scaledCount) * 25) / uint256(cyclePos);
-            return scaled > 25 ? 25 : scaled;
+        if (currLevel <= 25) {
+            // Early game: 1:1 ratio, need 25 mints for max
+            requiredForMax = 25;
+        } else if (currLevel <= 100) {
+            // Mid game: scale up to 50 mints needed by level 100
+            // Linear progression: 25 at level 25, 50 at level 100
+            requiredForMax = 25 + ((uint256(currLevel) - 25) / 3);
+        } else {
+            // Late game: cap at 75 mints to keep it achievable
+            // Players need to have minted on 75 different levels for max bonus
+            requiredForMax = 75;
         }
+
+        // Calculate bonus points: linear scale from 0 to 25
+        uint256 points = (uint256(mintCount) * 25) / requiredForMax;
+        return points > 25 ? 25 : points;
     }
 
     /*+======================================================================+
       |                       MINT RECORDING                                 |
       +======================================================================+
-      |  Functions called by the NFT contract to record mints and process    |
+      |  Functions called by the gamepiece contract to record mints and process    |
       |  payments. ETH and claimable winnings can both fund purchases.       |
       +======================================================================+*/
 
@@ -800,7 +795,6 @@ contract DegenerusGame is DegenerusGameStorage {
         MintPaymentKind payKind
     ) external payable returns (uint256 coinReward, uint256 newClaimableBalance) {
         if (msg.sender != ContractAddresses.GAMEPIECES) revert E();
-        uint8 state = gameState;
         if (!presaleMintingEnabledFlag) revert E();
         uint256 prizeContribution;
         (prizeContribution, newClaimableBalance) = _processMintPayment(player, costWei, payKind);
@@ -1014,8 +1008,7 @@ contract DegenerusGame is DegenerusGameStorage {
                 // Run presale jackpots only during level 1.
                 uint8 presaleState = _presaleActive();
                 if (presaleState > 0) {
-                    bool nftPurchasesEnabled = bonds.nftPurchasesEnabled();
-                    bonds.runPresaleDailyFromGame(rngWord, day, nftPurchasesEnabled, lastPurchaseDay);
+                    bonds.runPresaleDailyFromGame(rngWord, day, lastPurchaseDay);
                 }
             }
 
@@ -1066,7 +1059,7 @@ contract DegenerusGame is DegenerusGameStorage {
 
             // +================================================================+
             // |                    STATE 2: PURCHASE / AIRDROP                 |
-            // |  Mint phase where players purchase NFTs and receive airdrops.  |
+            // |  Mint phase where players purchase gamepieces and receive airdrops.  |
             // |  • Pay daily jackpot until prize pool target is met            |
             // |  • Pay level jackpot once target is met                        |
             // |  • Process pending mint batches                                |
@@ -1117,7 +1110,7 @@ contract DegenerusGame is DegenerusGameStorage {
                     break;
                 }
 
-                // --- Process pending NFT mints ---
+                // --- Process pending gamepiece mints ---
                 (uint32 purchaseCountPre, uint32 purchaseCountPhase) = nft.purchaseCounts();
                 uint256 purchaseCountTotal = uint256(purchaseCountPre) + uint256(purchaseCountPhase);
                 if (purchaseCountTotal > type(uint32).max) revert E();
@@ -1162,7 +1155,7 @@ contract DegenerusGame is DegenerusGameStorage {
 
             // +================================================================+
             // |                    STATE 3: DEGENERUS (BURN)                   |
-            // |  Active burn phase where players burn NFTs for jackpot tickets.|
+            // |  Active burn phase where players burn gamepieces for jackpot tickets.|
             // |  • Pay daily jackpot each day                                  |
             // |  • Level ends via trait extermination OR jackpot cap (10 days) |
             // |  • Transition to State 1 on level end                          |
@@ -1220,7 +1213,7 @@ contract DegenerusGame is DegenerusGameStorage {
       |  This prevents gas exhaustion from large purchases.                  |
       +======================================================================+*/
 
-    /// @notice Queue map mints owed after NFT-side processing.
+    /// @notice Queue map mints owed after gamepiece-side processing.
     /// @dev Access: nft contract only.
     ///      Maps are processed in batches during advanceGame to prevent DoS.
     ///      If player already has maps owed, they're not re-added to pendingMapMints array.
@@ -1240,9 +1233,9 @@ contract DegenerusGame is DegenerusGameStorage {
     }
 
     /*+======================================================================+
-      |                       NFT BURNING (DEGENERUS)                        |
+      |                       gamepiece BURNING (DEGENERUS)                        |
       +======================================================================+
-      |  Players burn NFTs to earn jackpot tickets and potentially trigger   |
+      |  Players burn gamepieces to earn jackpot tickets and potentially trigger   |
       |  trait extermination, ending the current level.                      |
       |                                                                      |
       |  Each burned token:                                                  |
@@ -1257,7 +1250,7 @@ contract DegenerusGame is DegenerusGameStorage {
       |  • Max 75 tokens per call (gas limit protection)                     |
       +======================================================================+*/
 
-    /// @notice Burn NFTs for jackpot tickets, potentially ending the level.
+    /// @notice Burn gamepieces for jackpot tickets, potentially ending the level.
     /// @dev Access: any player during State 3 (DEGENERUS) when RNG is not locked.
     ///
     ///      For each token burned:
@@ -1396,7 +1389,7 @@ contract DegenerusGame is DegenerusGameStorage {
       |  • Transition to State 1 (SETUP)                                                       |
       |  • Reset per-level state (jackpot counter, trait cursor)                               |
       |  • Update price schedule at 100-level boundaries                                       |
-      |  • Advance NFT base token ID                                                           |
+      |  • Advance gamepiece base token ID                                                           |
       +========================================================================================+*/
 
     /// @notice Finalize the current level (extermination or timeout).
@@ -1487,7 +1480,7 @@ contract DegenerusGame is DegenerusGameStorage {
             price = 0.25 ether;
         }
 
-        nft.advanceBase(); // let NFT pull its own nextTokenId to avoid redundant calls here
+        nft.advanceBase(); // let gamepiece pull its own nextTokenId to avoid redundant calls here
     }
 
     /*+================================================================================================================+
@@ -1544,7 +1537,7 @@ contract DegenerusGame is DegenerusGameStorage {
     }
 
     /// @dev Calculate airdrop multiplier via mint module delegatecall.
-    ///      Multiplier determines bonus NFTs in airdrops.
+    ///      Multiplier determines bonus gamepieces in airdrops.
     /// @param prePurchaseCount Raw count before purchase phase (eligible for multiplier).
     /// @param purchasePhaseCount Raw count during purchase phase (not multiplied).
     /// @param lvl Current level.
@@ -2092,7 +2085,7 @@ contract DegenerusGame is DegenerusGameStorage {
     }
 
     /*+======================================================================+
-      |                    MAP / NFT AIRDROP BATCHING                        |
+      |                    MAP / gamepiece AIRDROP BATCHING                        |
       +======================================================================+
       |  Map mints are processed in batches to prevent gas exhaustion.       |
       |  Large purchases are queued and processed across multiple txs.       |
@@ -2320,7 +2313,7 @@ contract DegenerusGame is DegenerusGameStorage {
       |  Internal functions for burn credit calculation and trait management.|
       +======================================================================+*/
 
-    /// @dev Credit BURNIE coinflip balance for burning NFTs.
+    /// @dev Credit BURNIE coinflip balance for burning gamepieces.
     ///      Bonus is calculated from count + bonus tenths.
     /// @param caller The player who burned tokens.
     /// @param count Number of tokens burned.
@@ -2395,7 +2388,7 @@ contract DegenerusGame is DegenerusGameStorage {
     /// @dev Derive all 4 traits for a token deterministically.
     ///      Uses keccak256(tokenId) and splits into 4 x 64-bit segments.
     ///      Each trait is offset by 64 to place in correct slot.
-    /// @param tokenId The NFT token ID.
+    /// @param tokenId The gamepiece token ID.
     /// @return packed 4 x 8-bit trait IDs packed into uint32.
     function _traitsForToken(uint256 tokenId) private pure returns (uint32 packed) {
         uint256 rand = uint256(keccak256(abi.encodePacked(tokenId)));
@@ -2519,7 +2512,7 @@ contract DegenerusGame is DegenerusGameStorage {
 
     /// @notice Get pending mints and maps owed to a player.
     /// @param player The player address.
-    /// @return mints Number of NFT mints owed.
+    /// @return mints Number of gamepiece mints owed.
     /// @return maps Number of map entries owed.
     function getPlayerPurchases(address player) external view returns (uint32 mints, uint32 maps) {
         mints = nft.tokensOwed(player);

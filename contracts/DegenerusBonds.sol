@@ -837,8 +837,8 @@ abstract contract DegenerusBondsStorage {
     /// @notice True after gameOver() attempts to fetch entropy.
     bool public gameOverEntropyAttempted;
 
-    /// @notice True once NFT/MAP purchases have been enabled (gated by jackpot timing).
-    bool internal nftPurchasesEnabledFlag;
+    /// @notice True once gamepiece/MAP purchases have been enabled (gated by jackpot timing).
+    bool internal gamepiecePurchasesEnabledFlag;
 
     // ---------------------------------------------------------------------
     // Configuration
@@ -918,12 +918,12 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
     }
 
     /**
-     * @notice Check if NFT/MAP purchases are enabled (presale gating).
+     * @notice Check if gamepiece/MAP purchases are enabled (presale gating).
      * @dev Purchases enabled at first jackpot time after presale raised > 40 ETH OR presale ended.
-     * @return True if NFT/MAP purchases are enabled, false otherwise.
+     * @return True if gamepiece/MAP purchases are enabled, false otherwise.
      */
-    function nftPurchasesEnabled() external view returns (bool) {
-        return nftPurchasesEnabledFlag;
+    function gamepiecePurchasesEnabled() external view returns (bool) {
+        return gamepiecePurchasesEnabledFlag;
     }
 
     function presaleDeposit(address beneficiary) external payable returns (uint256 scoreAwarded) {
@@ -988,12 +988,10 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
     /// @dev Access: game only. Pays buyer lane BURNIE, burn-lane BURNIE, and DGNRS lane.
     /// @param rngWord VRF entropy for jackpot selection.
     /// @param day Current day index.
-    /// @param purchasesEnabled True if NFT/MAP purchases are enabled.
     /// @param lastPurchaseDay True if prize pool target was met today.
     function runPresaleDailyFromGame(
         uint256 rngWord,
         uint48 day,
-        bool purchasesEnabled,
         bool lastPurchaseDay
     ) external onlyGame returns (bool advanced) {
         if (rngWord == 0) return false;
@@ -1089,9 +1087,9 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
             }
         }
 
-        // Enable NFT/MAP purchases at first jackpot time after 40 ETH raised or presale ending
-        if (!nftPurchasesEnabledFlag && (p.raised > 40 ether || finalDay)) {
-            nftPurchasesEnabledFlag = true;
+        // Enable gamepiece/MAP purchases at first jackpot time after 40 ETH raised or presale ending
+        if (!gamepiecePurchasesEnabledFlag && (p.raised > 40 ether || finalDay)) {
+            gamepiecePurchasesEnabledFlag = true;
         }
 
         emit PresaleDailyPayout(

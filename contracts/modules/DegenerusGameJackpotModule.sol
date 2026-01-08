@@ -852,7 +852,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
     }
 
     /// @dev Derives MAP ticket units and total cost from an ETH pool slice.
-    ///      Uses the current MAP price (25% of the NFT price) and floors to whole units.
+    ///      Uses the current MAP price (25% of the gamepiece price) and floors to whole units.
     function _mapUnitsAndCost(uint256 ethPool, uint16 mapBps) private view returns (uint256 mapUnits, uint256 mapCost) {
         if (ethPool == 0 || mapBps == 0) return (0, 0);
         uint256 mapPrice = uint256(price) / 4;

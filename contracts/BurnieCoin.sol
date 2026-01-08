@@ -139,7 +139,7 @@ contract BurnieCoin {
     /// @notice Caller is not the authorized affiliate contract.
     error OnlyAffiliate();
 
-    /// @notice Caller is not the authorized NFT (gamepieces) contract.
+    /// @notice Caller is not the authorized gamepiece (gamepieces) contract.
     error OnlyNft();
 
     /// @notice Coinflip deposits are locked during level jackpot resolution.
@@ -529,8 +529,8 @@ contract BurnieCoin {
       |  |  Modifier              | Allowed Callers                        | |
       |  +------------------------+----------------------------------------+ |
       |  |  onlyDegenerusGame     | degenerusGame only                     | |
-      |  |  onlyTrustedContracts  | game, NFT, affiliate, color registry   | |
-      |  |  onlyFlipCreditors     | game, NFT, affiliate, BONDS            | |
+      |  |  onlyTrustedContracts  | game, gamepiece, affiliate, color registry   | |
+      |  |  onlyFlipCreditors     | game, gamepiece, affiliate, BONDS            | |
       |  |  onlyVault             | VAULT only                             | |
       |  +-----------------------------------------------------------------+ |
       +======================================================================+*/
@@ -542,7 +542,7 @@ contract BurnieCoin {
         _;
     }
 
-    /// @dev Restricts access to game, NFT, affiliate, or color registry contracts.
+    /// @dev Restricts access to game, gamepiece, affiliate, or color registry contracts.
     ///      Used for: burnCoin (gameplay burns).
     modifier onlyTrustedContracts() {
         address sender = msg.sender;
@@ -808,7 +808,7 @@ contract BurnieCoin {
       |  without requiring them to burn BURNIE directly.                     |
       +======================================================================+*/
 
-    /// @notice Credit a coinflip stake from authorized contracts (game, NFT, affiliate, ContractAddresses.BONDS).
+    /// @notice Credit a coinflip stake from authorized contracts (game, gamepiece, affiliate, ContractAddresses.BONDS).
     /// @dev Zero address or zero amount is a no-op.
     ///      Does NOT arm bounty (canArmBounty=false) - only direct deposits can set records.
     /// @param player The player to credit.
@@ -924,9 +924,9 @@ contract BurnieCoin {
     }
 
     /// @notice Notify quest module of a mint action.
-    /// @dev Access: NFT contract only. Credits quest rewards as flip stakes.
+    /// @dev Access: gamepiece contract only. Credits quest rewards as flip stakes.
     /// @param player The player who minted.
-    /// @param quantity Number of NFTs minted.
+    /// @param quantity Number of gamepieces minted.
     /// @param paidWithEth Whether the mint was paid with ETH (vs BURNIE).
     function notifyQuestMint(address player, uint32 quantity, bool paidWithEth) external {
         if (msg.sender != ContractAddresses.GAMEPIECES) revert OnlyNft();
@@ -955,10 +955,10 @@ contract BurnieCoin {
         }
     }
 
-    /// @notice Notify quest module of an NFT burn.
+    /// @notice Notify quest module of an gamepiece burn.
     /// @dev Access: game contract only. Credits quest rewards as flip stakes.
-    /// @param player The player who burned NFTs.
-    /// @param quantity Number of NFTs burned.
+    /// @param player The player who burned gamepieces.
+    /// @param quantity Number of gamepieces burned.
     function notifyQuestBurn(address player, uint32 quantity) external {
         if (msg.sender != ContractAddresses.GAME) revert OnlyGame();
         IDegenerusQuests module = questModule;
@@ -971,7 +971,7 @@ contract BurnieCoin {
     }
 
     /// @notice Burn BURNIE from `target` during gameplay/affiliate flows.
-    /// @dev Access: DegenerusGame, NFT, or affiliate.
+    /// @dev Access: DegenerusGame, gamepiece, or affiliate.
     ///      Used for purchases, fees, and affiliate utilities.
     ///      Reverts on zero address or insufficient balance.
     /// @param target The address to burn from.

@@ -45,7 +45,7 @@ interface IDegenerusCoinAffiliate {
 
 /// @notice Minimal interface to check purchase status from bonds.
 interface IBondsPresaleView {
-    function nftPurchasesEnabled() external view returns (bool);
+    function gamepiecePurchasesEnabled() external view returns (bool);
 }
 
 /**
@@ -255,7 +255,7 @@ contract DegenerusAffiliate {
     }
 
     /**
-     * @notice Check presale status including NFT/MAP purchase availability.
+     * @notice Check presale status including gamepiece/MAP purchase availability.
      * @dev Returns:
      *      0 = Presale ended
      *      1 = Presale active, purchases not yet enabled (< 40 ETH raised)
@@ -265,8 +265,8 @@ contract DegenerusAffiliate {
     function presaleActive() external view returns (uint8) {
         if (presaleShutdown) return 0;
 
-        // Check if NFT/MAP purchases are enabled
-        try IBondsPresaleView(ContractAddresses.BONDS).nftPurchasesEnabled() returns (bool enabled) {
+        // Check if gamepiece/MAP purchases are enabled
+        try IBondsPresaleView(ContractAddresses.BONDS).gamepiecePurchasesEnabled() returns (bool enabled) {
             return enabled ? 2 : 1;
         } catch {
             return 1; // Fallback: presale active but purchases status unknown

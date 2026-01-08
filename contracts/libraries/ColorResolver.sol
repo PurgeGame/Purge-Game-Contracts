@@ -13,7 +13,7 @@ abstract contract ColorResolver {
     IDegenerusAffiliate private constant affiliate = IDegenerusAffiliate(ContractAddresses.AFFILIATE);
 
     /// @notice Resolve color with full cascade: token → owner → referrer → upline → default
-    /// @param nftContract The NFT contract address
+    /// @param nftContract The gamepiece contract address
     /// @param tokenId The token ID
     /// @param channel Color channel (0=outline, 1=flame, 2=diamond, 3=square)
     /// @param defColor Fallback color if no overrides found
@@ -50,7 +50,7 @@ abstract contract ColorResolver {
     }
 
     /// @notice Resolve color with try/catch on ownerOf (for trophies that may be burned)
-    /// @param nftContract The NFT contract address
+    /// @param nftContract The gamepiece contract address
     /// @param tokenId The token ID
     /// @param channel Color channel (0=outline, 1=flame, 2=diamond, 3=square)
     /// @param defColor Fallback color if no overrides found

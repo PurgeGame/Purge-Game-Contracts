@@ -77,15 +77,15 @@ contract DegenerusQuests is IDegenerusQuests {
     /// @dev Base per-slot reward (20% of mint price split across slots = 100 BURNIE).
     uint256 private constant QUEST_BASE_REWARD = (PRICE_COIN_UNIT / 5) / QUEST_SLOT_COUNT;
 
-    /// @dev Quest type: mint NFTs using BURNIE tokens.
+    /// @dev Quest type: mint gamepieces using BURNIE tokens.
     uint8 private constant QUEST_TYPE_MINT_BURNIE = 0;
-    /// @dev Quest type: mint NFTs using ETH.
+    /// @dev Quest type: mint gamepieces using ETH.
     uint8 private constant QUEST_TYPE_MINT_ETH = 1;
     /// @dev Quest type: stake BURNIE in the coinflip mechanism.
     uint8 private constant QUEST_TYPE_FLIP = 2;
     /// @dev Quest type: earn affiliate commissions.
     uint8 private constant QUEST_TYPE_AFFILIATE = 3;
-    /// @dev Quest type: burn NFTs (only available in burn game state).
+    /// @dev Quest type: burn gamepieces (only available in burn game state).
     uint8 private constant QUEST_TYPE_BURN = 4;
     /// @dev Quest type: participate in decimator burns.
     uint8 private constant QUEST_TYPE_DECIMATOR = 5;
@@ -382,7 +382,7 @@ contract DegenerusQuests is IDegenerusQuests {
     /**
      * @notice Handle mint progress for a player; covers both BURNIE and ETH paid mints.
      * @param player The player who performed the mint.
-     * @param quantity Number of NFTs minted.
+     * @param quantity Number of gamepieces minted.
      * @param paidWithEth True if ETH was used (MINT_ETH quest), false for BURNIE (MINT_BURNIE).
      * @dev Iterates both slots since both could theoretically match (though in practice
      *      the rolling logic ensures only one slot has each mint type).
@@ -617,9 +617,9 @@ contract DegenerusQuests is IDegenerusQuests {
     }
 
     /**
-     * @notice Handle burn quest progress in whole NFTs.
-     * @param player The player who burned NFTs.
-     * @param quantity Number of NFTs burned.
+     * @notice Handle burn quest progress in whole gamepieces.
+     * @param player The player who burned gamepieces.
+     * @param quantity Number of gamepieces burned.
      * @dev Burn quests are only available when game is in burn state (gameState == 3).
      *      Uses the same target calculation as mint quests (small integer targets).
      */
@@ -1025,7 +1025,7 @@ contract DegenerusQuests is IDegenerusQuests {
      * @param quests Memory copy of active quests (for pair completion check).
      * @param quest The specific quest being processed.
      * @param slot The slot index (0 or 1).
-     * @param quantity Number of NFTs minted.
+     * @param quantity Number of gamepieces minted.
      * @param tier Player's current tier for target calculation.
      * @param currentDay Current quest day (for paired completion checks).
      */

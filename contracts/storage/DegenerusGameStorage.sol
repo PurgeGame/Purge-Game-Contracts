@@ -296,7 +296,7 @@ abstract contract DegenerusGameStorage {
     // SLOT 2: Mint Price
     // =========================================================================
 
-    /// @dev Current price to mint one NFT, in wei.
+    /// @dev Current price to mint one gamepiece, in wei.
     ///      uint128 supports up to ~340 undecillion wei (~3.4e20 ETH) — far
     ///      beyond any realistic price point.
     ///
@@ -369,7 +369,7 @@ abstract contract DegenerusGameStorage {
     // Minting and Airdrop Queues
     // =========================================================================
 
-    /// @dev Queue of player addresses awaiting map NFT mints.
+    /// @dev Queue of player addresses awaiting map gamepiece mints.
     ///      Processed in batches via airdropIndex cursor.
     ///      Dynamic array: length at slot N, data at keccak256(N).
     ///
@@ -377,7 +377,7 @@ abstract contract DegenerusGameStorage {
     ///      Array growth is bounded by game mechanics (mint limits).
     address[] internal pendingMapMints;
 
-    /// @dev Map NFT count owed per player, consumed during batch processing.
+    /// @dev Map gamepiece count owed per player, consumed during batch processing.
     ///      Decremented as airdrops are processed; reaches 0 when complete.
     ///
     ///      DESIGN: Separate from pendingMapMints to allow partial batching
@@ -418,7 +418,7 @@ abstract contract DegenerusGameStorage {
     ///        - keccak256(level . slot) gives the 256-element array of arrays
     ///        - Each inner array has length at its slot, data at keccak256(slot)
     ///
-    ///      SECURITY: Array growth bounded by total NFT supply per level.
+    ///      SECURITY: Array growth bounded by total gamepiece supply per level.
     mapping(uint24 => address[][256]) internal traitBurnTicket;
 
     /// @dev Per-day trait hit counters used for jackpot trait selection.

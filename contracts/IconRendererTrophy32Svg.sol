@@ -124,7 +124,7 @@ contract IconRendererTrophy32Svg is IIconRendererTrophy32Svg, ColorResolver {
     /// @dev Trophy SVG assets (BAF animation)
     ITrophySvgAssets internal constant assets = ITrophySvgAssets(ContractAddresses.TROPHY_SVG_ASSETS);
 
-    /// @dev Trophy NFT contract
+    /// @dev Trophy gamepiece contract
     IERC721Lite internal constant nft = IERC721Lite(ContractAddresses.TROPHIES);
 
     // ---------------------------------------------------------------------

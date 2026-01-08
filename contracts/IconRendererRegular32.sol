@@ -193,7 +193,7 @@ contract IconRendererRegular32 is ColorResolver {
     // ---------------------------------------------------------------------
 
     /// @notice Render metadata + image for a Degenerus token.
-    /// @param tokenId   NFT id.
+    /// @param tokenId   gamepiece id.
     /// @param data      Packed game data:
     ///                  - Regular: bits [63:48] last exterminated trait (0..255 or 420 sentinel),
     ///                             bits [47:24] level, bits [23:00] packed traits.
@@ -282,7 +282,7 @@ contract IconRendererRegular32 is ColorResolver {
     }
 
     /// @dev Compose the full SVG for a regular token.
-    /// @param tokenId      NFT id.
+    /// @param tokenId      gamepiece id.
     /// @param traitsPacked Packed 4×6‑bit traits (low→high).
     /// @param col          Color indices per quadrant (0..7).
     /// @param sym          Symbol indices per quadrant (0..7).
@@ -570,7 +570,7 @@ contract IconRendererRegular32 is ColorResolver {
      * @dev Maximum outer ring radius for a quadrant “pos” given fixed square bounds (±50),
      *      clamped to 24 to preserve spacing relative to guides and center glyph.
      */
-    function _rMaxAt(uint256 pos) private view returns (uint32) {
+    function _rMaxAt(uint256 pos) private pure returns (uint32) {
         int32 cx = int32(_cx(pos));
         int32 cy = int32(_cy(pos));
 
@@ -631,7 +631,7 @@ contract IconRendererRegular32 is ColorResolver {
         uint32 traits,
         uint8[4] memory used,
         uint24 level
-    ) private view returns (string memory) {
+    ) private pure returns (string memory) {
         uint8 initial = uint8(uint256(keccak256(abi.encodePacked(tokenId, traits))) % 8);
 
         for (uint8 i; i < 8; ) {

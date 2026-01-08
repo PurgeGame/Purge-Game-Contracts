@@ -75,7 +75,7 @@ import {RendererLibrary} from "./libraries/RendererLibrary.sol";
 
 /// @title IconRendererTrophy32
 /// @notice ERC721 metadata renderer for Degenerus trophy tokens
-/// @dev Generates JSON metadata with base64-encoded SVG images for trophy NFTs
+/// @dev Generates JSON metadata with base64-encoded SVG images for trophy gamepieces
 contract IconRendererTrophy32 {
     using Strings for uint256;
 
@@ -109,7 +109,7 @@ contract IconRendererTrophy32 {
     IIconRendererTrophy32Svg internal constant svgRenderer =
         IIconRendererTrophy32Svg(ContractAddresses.RENDERER_TROPHY_SVG);
 
-    /// @dev Trophy NFT contract
+    /// @dev Trophy gamepiece contract
     IERC721Lite internal constant nft = IERC721Lite(ContractAddresses.TROPHIES);
 
     function setMyColors(

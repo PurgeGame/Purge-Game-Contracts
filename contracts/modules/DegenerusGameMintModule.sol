@@ -29,7 +29,7 @@ import {DegenerusGameStorage} from "../storage/DegenerusGameStorage.sol";
  * Bits 72-103:  lastMintDay   - Day index of last mint
  * Bits 104-127: unitsLevel    - Level index for levelUnits tracking
  * Bits 128-227: (reserved)    - Future use
- * Bits 228-243: levelUnits    - Units minted this level (1 NFT = 4 units)
+ * Bits 228-243: levelUnits    - Units minted this level (1 gamepiece = 4 units)
  * Bit 244:      bonusPaid     - Whether 400-unit bonus was paid this level
  * ```
  *
@@ -113,7 +113,7 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
      *
      * @param player Address of the player making the purchase.
      * @param lvl Current game level.
-     * @param mintUnits Units purchased (1 NFT = 4 units, 1 MAP = 1 unit).
+     * @param mintUnits Units purchased (1 gamepiece = 4 units, 1 MAP = 1 unit).
      * @return coinReward BURNIE amount to credit as coinflip stake.
      *
      * ## Reward Calculation

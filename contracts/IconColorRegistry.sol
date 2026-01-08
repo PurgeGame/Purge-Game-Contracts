@@ -6,12 +6,12 @@ import {ContractAddresses} from "./ContractAddresses.sol";
 /*
 +=======================================================================================================+
 |                                       IconColorRegistry                                               |
-|                         Color Customization Storage for Degenerus NFT Renders                         |
+|                         Color Customization Storage for Degenerus gamepiece Renders                         |
 +=======================================================================================================+
 |                                                                                                       |
 |  ARCHITECTURE OVERVIEW                                                                                |
 |  ---------------------                                                                                |
-|  IconColorRegistry stores color customization preferences for Degenerus NFT metadata.                 |
+|  IconColorRegistry stores color customization preferences for Degenerus gamepiece metadata.                 |
 |  Colors are stored as validated "#rrggbb" hex strings and used by renderers during SVG generation.   |
 |  Per-token recoloring requires burning 50 BURNIE per token as a deflationary fee.                    |
 |                                                                                                       |
@@ -144,7 +144,7 @@ interface IDegenerusCoinBurn {
 }
 
 /// @title IconColorRegistry
-/// @notice Storage for per-token and per-address color customization in Degenerus NFT renders
+/// @notice Storage for per-token and per-address color customization in Degenerus gamepiece renders
 /// @dev Accessed via renderer contracts; validates and stores "#rrggbb" hex color strings
 contract IconColorRegistry {
     // ---------------------------------------------------------------------

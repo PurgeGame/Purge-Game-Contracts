@@ -191,10 +191,10 @@ contract DegenerusGameBondModule is DegenerusGameStorage {
             // Allocate excess: prefer stETH, then ETH
             uint256 stSend;
             uint256 ethSend;
-            uint256 remaining = excess;
-            stSend = stBalLocal < remaining ? stBalLocal : remaining;
-            remaining -= stSend;
-            ethSend = ethBalLocal < remaining ? ethBalLocal : remaining;
+            uint256 remainingExcess = excess;
+            stSend = stBalLocal < remainingExcess ? stBalLocal : remainingExcess;
+            remainingExcess -= stSend;
+            ethSend = ethBalLocal < remainingExcess ? ethBalLocal : remainingExcess;
 
             if (stSend != 0 || ethSend != 0) {
                 // payBonds with coinAmount=0 and rngWord=0 routes to vault sweep

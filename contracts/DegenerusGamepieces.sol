@@ -5,7 +5,7 @@ pragma solidity ^0.8.26;
   |                                                                              |
   |                        DEGENERUS GAMEPIECES CONTRACT                         |
   |                                                                              |
-  |  ERC721 NFT contract for the Degenerus game. Implements gas-optimized        |
+  |  ERC721 gamepiece contract for the Degenerus game. Implements gas-optimized        |
   |  batch minting inspired by ERC721A, with integrated marketplace and          |
   |  game-specific mechanics.                                                    |
   |                                                                              |
@@ -48,7 +48,7 @@ pragma solidity ^0.8.26;
   |  |  Map Purchase (PurchaseKind.Map):                                       | |
   |  |  • Pay in ETH or BURNIE (25% of player price)                           | |
   |  |  • Enqueue maps directly (4:1 scaled quantity)                          | |
-  |  |  • No actual NFT minted; maps = jackpot tickets                         | |
+  |  |  • No actual gamepiece minted; maps = jackpot tickets                         | |
   |  +-------------------------------------------------------------------------+ |
   |                                                                              |
   |  +-------------------------------------------------------------------------+ |
@@ -123,7 +123,7 @@ import {ContractAddresses} from "./ContractAddresses.sol";
 // ===========================================================================
 
 /// @notice Purchase type for token/map acquisition.
-/// @dev Player = NFT mint, Map = jackpot ticket (no NFT minted).
+/// @dev Player = gamepiece mint, Map = jackpot ticket (no gamepiece minted).
 enum PurchaseKind {
     Player,
     Map
@@ -153,7 +153,7 @@ interface ITokenRenderer {
 /// @dev Bundles all purchase options into single struct for gas efficiency.
 struct PurchaseParams {
     uint256 quantity;        // Number of tokens/maps to purchase
-    PurchaseKind kind;       // Player (NFT) or Map (jackpot ticket)
+    PurchaseKind kind;       // Player (gamepiece) or Map (jackpot ticket)
     MintPaymentKind payKind; // DirectEth, Claimable, or Combined
     bool payInCoin;          // True = pay in BURNIE, False = pay in ETH
     bytes32 affiliateCode;   // Affiliate/referral code (ETH purchases only)
@@ -167,7 +167,7 @@ interface IDegenerusCoinExtended is IDegenerusCoin {
 
 /// @notice Minimal bonds interface for purchase gating.
 interface IDegenerusBondsLite {
-    function nftPurchasesEnabled() external view returns (bool);
+    function gamepiecePurchasesEnabled() external view returns (bool);
 }
 
 // ===========================================================================
@@ -177,7 +177,7 @@ interface IDegenerusBondsLite {
 /**
  * @title DegenerusGamepieces
  * @author Burnie Degenerus
- * @notice ERC721 NFT contract for Degenerus player tokens with integrated marketplace.
+ * @notice ERC721 gamepiece contract for Degenerus player tokens with integrated marketplace.
  * @dev Implements ERC721A-style packed ownership for gas-efficient batch minting.
  *      Key features:
  *      - Batch minting with deferred ownership resolution
@@ -701,7 +701,7 @@ contract DegenerusGamepieces {
       |  Main entry points for purchasing tokens and maps.                   |
       |                                                                      |
       |  Purchase Types:                                                     |
-      |  • Player (PurchaseKind.Player): Queue NFT mints                     |
+      |  • Player (PurchaseKind.Player): Queue gamepiece mints                     |
       |  • Map (PurchaseKind.Map): Queue jackpot tickets                     |
       |                                                                      |
       |  Payment Methods:                                                    |
@@ -730,7 +730,7 @@ contract DegenerusGamepieces {
     /// @param params Purchase parameters.
     function _routePurchase(address buyer, address payer, PurchaseParams memory params) private {
         // Block purchases until presale raised > 40 ETH OR presale ended
-        if (!bonds.nftPurchasesEnabled()) revert PurchasesDisabled();
+        if (!bonds.gamepiecePurchasesEnabled()) revert PurchasesDisabled();
 
         bytes32 affiliateCode = params.payInCoin ? bytes32(0) : params.affiliateCode;
         if (params.kind == PurchaseKind.Player) {
@@ -1005,7 +1005,7 @@ contract DegenerusGamepieces {
             mintUnits = mintQuantity; // 1 MAP = 1 unit
         } else {
             if (mintQuantity > type(uint32).max / 4) revert InvalidQuantity();
-            mintUnits = mintQuantity << 2; // 1 NFT = 4 units
+            mintUnits = mintQuantity << 2; // 1 gamepiece = 4 units
         }
 
         uint256 streakBonus;

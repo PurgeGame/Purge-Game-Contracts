@@ -9,7 +9,7 @@ pragma solidity ^0.8.26;
 |                                                                                                       |
 |  ARCHITECTURE OVERVIEW                                                                                |
 |  ---------------------                                                                                |
-|  DegenerusTrophies is a minimal, gas-optimized soulbound NFT for GAME achievements.                   |
+|  DegenerusTrophies is a minimal, gas-optimized soulbound gamepiece for GAME achievements.                   |
 |  GAME + renderer addresses are compile-time constants via ContractAddresses.                          |
 |  Implements the ERC721 interface surface but permanently disables all transfer/approval flows.        |
 |                                                                                                       |

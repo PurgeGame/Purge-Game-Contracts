@@ -30,13 +30,11 @@ interface IDegenerusBonds {
     /// @notice Run daily presale payouts using game-supplied entropy.
     /// @param rngWord RNG word from advanceGame.
     /// @param day Day index being processed.
-    /// @param purchasesEnabled True if NFT/MAP purchases are enabled.
     /// @param lastPurchaseDay True if prize pool target was met today.
     /// @return advanced True if the presale payout advanced.
     function runPresaleDailyFromGame(
         uint256 rngWord,
         uint48 day,
-        bool purchasesEnabled,
         bool lastPurchaseDay
     ) external returns (bool advanced);
 
@@ -47,8 +45,8 @@ interface IDegenerusBonds {
     /// @notice True once bonds has attempted game-over entropy.
     function gameOverEntropyAttempted() external view returns (bool);
 
-    /// @notice Check if NFT/MAP purchases are enabled (presale gating).
+    /// @notice Check if gamepiece/MAP purchases are enabled (presale gating).
     /// @dev Purchases enabled when presale raised > 40 ETH OR presale ended.
-    /// @return True if NFT/MAP purchases are enabled, false otherwise.
-    function nftPurchasesEnabled() external view returns (bool);
+    /// @return True if gamepiece/MAP purchases are enabled, false otherwise.
+    function gamepiecePurchasesEnabled() external view returns (bool);
 }

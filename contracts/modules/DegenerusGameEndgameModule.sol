@@ -33,7 +33,7 @@ import {ContractAddresses} from "../ContractAddresses.sol";
  *     |   +- Pay exterminator (20-40% of prize pool)
  *     |   |   +- 25% of their share → bonds (if enabled)
  *     |   +- Pay extermination jackpot (trait ticket holders)
- *     |   +- Pay purchase rewards (20% → NFT/MAP rewards for winners)
+ *     |   +- Pay purchase rewards (20% → gamepiece/MAP rewards for winners)
  *     |
  *     +- IF previous level > 0:
  *         +- Mint affiliate trophy for top affiliate
@@ -190,7 +190,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
                 );
                 if (!ok) _revertDelegate(data);
 
-                // Run purchase rewards (NFT/MAP distribution to winners)
+                // Run purchase rewards (gamepiece/MAP distribution to winners)
                 if (purchasePool != 0) {
                     _runExterminationPurchaseRewards(prevLevel, traitId, rngWord, purchasePool);
                 }
@@ -416,8 +416,8 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
     // -------------------------------------------------------------------------
 
     /**
-     * @notice Distribute NFT/MAP purchase rewards to extermination jackpot winners.
-     * @dev 20% of non-exterminator prize pool is converted to NFT/MAP rewards
+     * @notice Distribute gamepiece/MAP purchase rewards to extermination jackpot winners.
+     * @dev 20% of non-exterminator prize pool is converted to gamepiece/MAP rewards
      *      and distributed to up to 20 random trait ticket holders.
      *
      * @param prevLevel The level that just completed.
@@ -433,7 +433,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
      * ## Reward Distribution
      *
      * Winners are categorized by ticket type:
-     * - Burn-phase tickets (idx >= burnStart): receive full NFTs (4 MAPs = 1 NFT)
+     * - Burn-phase tickets (idx >= burnStart): receive full gamepieces (4 MAPs = 1 gamepiece)
      * - MAP tickets (idx < burnStart): receive MAPs
      *
      * Leftover units (< 4 MAPs worth) go to MAP winners.
@@ -441,7 +441,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
      * ## Pool Handling
      *
      * The `poolWei` is added to `nextPrizePool`, effectively funding the next
-     * level's prize pool while distributing NFT/MAP ownership to winners.
+     * level's prize pool while distributing gamepiece/MAP ownership to winners.
      */
     function _runExterminationPurchaseRewards(
         uint24 prevLevel,
@@ -451,7 +451,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
     ) private {
         if (poolWei == 0) return;
 
-        // Add to next level's prize pool (rewards are NFT/MAPs, not ETH)
+        // Add to next level's prize pool (rewards are gamepiece/MAPs, not ETH)
         nextPrizePool += poolWei;
 
         // Get trait ticket holders
@@ -521,7 +521,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
             // Store winner and categorize by ticket type
             winners[i] = winner;
             if (idx >= burnStart) {
-                // Burn-phase ticket holder -> gets NFTs
+                // Burn-phase ticket holder -> gets gamepieces
                 burnIdx[burnWinners++] = i;
                 totalBurnUnits += unitBudget;
             } else {
@@ -536,7 +536,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
         }
 
         // ---------------------------------------------------------------------
-        // Convert burn units to NFTs (4 MAP units = 1 NFT)
+        // Convert burn units to gamepieces (4 MAP units = 1 gamepiece)
         // ---------------------------------------------------------------------
 
         uint256 leftoverUnits = totalBurnUnits % 4;
@@ -544,7 +544,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
         totalMapUnits += leftoverUnits; // Remainder goes to MAP pool
 
         if (burnWinners != 0 && totalTokenQty != 0) {
-            // Distribute NFTs among burn-ticket winners
+            // Distribute gamepieces among burn-ticket winners
             uint256 baseTokens = totalTokenQty / burnWinners;
             uint256 extraTokens = totalTokenQty % burnWinners;
             entropy = _entropyStep(entropy);

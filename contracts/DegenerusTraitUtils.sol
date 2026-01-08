@@ -6,7 +6,7 @@ pragma solidity ^0.8.26;
   |                      DEGENERUS TRAIT UTILS LIBRARY                           |
   |                                                                              |
   |  Pure utility library for deterministic trait generation from random seeds.  |
-  |  Used by DegenerusGamepieces to assign visual traits to NFTs.                |
+  |  Used by DegenerusGamepieces to assign visual traits to gamepieces.                |
   |                                                                              |
   +==============================================================================+
   |                           TRAIT SYSTEM OVERVIEW                              |
@@ -84,7 +84,7 @@ pragma solidity ^0.8.26;
 /// @title DegenerusTraitUtils
 /// @author Burnie Degenerus
 /// @notice Pure library for deterministic trait generation from random seeds.
-/// @dev Used by DegenerusGamepieces to derive NFT visual traits.
+/// @dev Used by DegenerusGamepieces to derive gamepiece visual traits.
 ///      All functions are internal pure - no state, no external calls.
 /// @custom:security-contact burnie@degener.us
 library DegenerusTraitUtils {
