@@ -5,123 +5,8 @@ import {IDegenerusCoin} from "./interfaces/IDegenerusCoin.sol";
 import {IStETH} from "./interfaces/IStETH.sol";
 import {ContractAddresses} from "./ContractAddresses.sol";
 
-// ===================================================================================================
-// @title DegenerusBonds
-// @author Burnie Degenerus
-// @notice Bond system with 10-level maturity cycles, DGNRS token jackpots, and two-lane resolution.
-//
-// +-------------------------------------------------------------------------------------------------+
-// | ARCHITECTURE OVERVIEW                                                                           |
-// +-------------------------------------------------------------------------------------------------+
-// |                                                                                                 |
-// |  1. BOND SERIES LIFECYCLE                                                                       |
-// |     +-----------------------------------------------------------------------------------------+ |
-// |     | Level:    [1-5]    [6-9]   [10-14]  [15-19]  [20-24]  [25-29]  [30] ...                 | |
-// |     | Series:   Mat=10   ---     Mat=20   ---      Mat=30   ---      Resolve                  | |
-// |     | Phase:    SALE     WAIT    SALE     WAIT     SALE     WAIT     PAYOUT                   | |
-// |     +-----------------------------------------------------------------------------------------+ |
-// |     • Maturities occur every 10 levels (10, 20, 30, ...)                                        |
-// |     • Sale windows: 5 levels each (1-5, 10-14, 20-24, ...)                                      |
-// |     • Resolution: At maturity level, if bondPool is funded                                      |
-// |                                                                                                 |
-// |  2. TOKEN FLOW                                                                                  |
-// |     Deposit ETH → Score recorded → DGNRS minted via jackpots → Burn DGNRS → Enter lane →        |
-// |     → At maturity: Winning lane splits pool (50% pro-rata, 50% draw prizes)                     |
-// |                                                                                                 |
-// |  3. DGNRS TOKEN MECHANICS                                                                       |
-// |     • Single shared token across all series (not per-maturity)                                  |
-// |     • Jackpot emissions: 10%+10%+10%+10%+60% of raised over 5 runs (before maturity-5)          |
-// |     • Final emission uses growth multiplier based on raise vs previous series                   |
-// |     • Burning enters a two-lane system; lane determined by hash(maturity, player)               |
-// |                                                                                                 |
-// |  4. TWO-LANE RESOLUTION                                                                         |
-// |     +----------------------------------------------------------------------------+              |
-// |     | Lane 0 (burns)     Lane 1 (burns)                                          |              |
-// |     |      ↓                  ↓                                                  |              |
-// |     | [RNG picks winning lane at maturity]                                       |              |
-// |     |      ↓                                                                     |              |
-// |     | Winning Lane:                                                              |              |
-// |     |   50% → Decimator (pro-rata to burned amount, pull pattern)                |              |
-// |     |   50% → Draw prizes (20%, 10%, 5%, 5%, 1%×10)                              |              |
-// |     +----------------------------------------------------------------------------+              |
-// |                                                                                                 |
-// |  5. PRESALE PHASE                                                                               |
-// |     • Before game wiring, bonds sold go to maturity=0 (presale series)                          |
-// |     • ETH split: 30% vault, 50% reward pool, 20% yield pool                                     |
-// |     • 5 manual jackpot runs via admin; final run applies growth multiplier                      |
-// |     • Coin rewards distributed: 5% run1, 10% runs2-4, 65% shutdown                              |
-// |                                                                                                 |
-// |  6. ETH ROUTING (normal deposits)                                                               |
-// |     • External: 40% vault (stETH preferred), 20% bondPool, 10% reward, 30% yield                |
-// |     • From game: Already split in-game; score recorded only                                     |
-// |                                                                                                 |
-// |  7. GROWTH MULTIPLIER                                                                           |
-// |     Piecewise linear based on (raised / prevRaise):                                             |
-// |     +-----------------------------------------------------------------------------+             |
-// |     | Ratio       | Multiplier | Effect                                           |             |
-// |     +-----------------------------------------------------------------------------+             |
-// |     | ≤0.5x       | 3.0x       | Declining participation → generous payout        |             |
-// |     | 0.5x-1.0x   | 3.0→2.0x   | Linear interpolation                             |             |
-// |     | 1.0x-2.0x   | 2.0→1.0x   | Linear interpolation                             |             |
-// |     | ≥2.0x       | 1.0x       | Strong growth → standard payout                  |             |
-// |     +-----------------------------------------------------------------------------+             |
-// |                                                                                                 |
-// +-------------------------------------------------------------------------------------------------+
-//
-// +-------------------------------------------------------------------------------------------------+
-// | SECURITY CONSIDERATIONS                                                                         |
-// +-------------------------------------------------------------------------------------------------+
-// |                                                                                                 |
-// |  1. ACCESS CONTROL                                                                              |
-// |     • onlyAdmin: setRewardStakeTargetBps(), shutdownPresale()                                   |
-// |     • onlyGame: runPresaleDailyFromGame(), depositFromGame(), mintJackpotDgnrs(),               |
-// |                 awardFromGame(), payBonds(), bondMaintenance(), notifyGameOver(),               |
-// |                 gameOver(), gameOverWithEntropy()                                               |
-// |     • Public: depositCurrentFor(), presaleDeposit(), burnDGNRS(), claim(),                      |
-// |               sweepExpiredPools(), setAutoBurnDgnrs()                                           |
-// |                                                                                                 |
-// |  2. ADDRESS IMMUTABILITY                                                                        |
-// |     • All external contract addresses are compile-time constants (ContractAddresses)            |
-// |                                                                                                 |
-// |  3. RNG SOURCE                                                                                  |
-// |     • RNG is sourced from the game; bonds never request VRF directly                            |
-// |                                                                                                 |
-// |  4. RNG LOCK                                                                                    |
-// |     • Game can lock RNG during jackpot windows to prevent manipulation                          |
-// |     • Bonds reads the lock from the game and blocks deposits/burns while locked                 |
-// |                                                                                                 |
-// |  5. PULL PATTERN FOR CLAIMS                                                                     |
-// |     • Decimator payouts use claim() (pull) instead of push                                      |
-// |     • Prevents DoS via revert in recipient                                                      |
-// |     • unclaimedBudget tracked per series for accounting                                         |
-// |                                                                                                 |
-// |  6. GAME OVER HANDLING                                                                          |
-// |     • Resolves series in order (oldest first)                                                   |
-// |     • Partial payouts if funds insufficient                                                     |
-// |     • 1-year expiry for unclaimed funds → vault sweep                                           |
-// |                                                                                                 |
-// |  7. REENTRANCY PROTECTION                                                                       |
-// |     • No callback-based reentrancy vectors (ETH transfers use call with failure handling)       |
-// |     • State updates before external calls where applicable                                      |
-// |                                                                                                 |
-// +-------------------------------------------------------------------------------------------------+
-//
-// +-------------------------------------------------------------------------------------------------+
-// | TRUST ASSUMPTIONS                                                                               |
-// +-------------------------------------------------------------------------------------------------+
-// |                                                                                                 |
-// |  • admin (DegenerusAdmin): Trusted for presale operations and staking config                    |
-// |  • game: Trusted for RNG locking, bondMaintenance calls, ETH deposits                           |
-// |  • vrfCoordinator: Chainlink VRF (trusted dependency used by the game)                          |
-// |  • vault: Trusted to receive and manage ETH/stETH deposits                                      |
-// |  • steth: Lido stETH token - trusted external dependency                                        |
-// |                                                                                                 |
-// +-------------------------------------------------------------------------------------------------+
-// ===================================================================================================
-
-// =====================================================================
-//                      EXTERNAL INTERFACES
-// =====================================================================
+/// @title DegenerusBonds - Bond system with 10-level maturity cycles and two-lane resolution
+/// @author Burnie Degenerus
 
 /// @notice Minimal view into the core game to read the current level.
 /// @dev Used by bonds to determine which series is active and player multipliers.
@@ -199,7 +84,7 @@ interface IAffiliatePresaleShutdown {
 
 /// @notice Affiliate interface for checking presale status.
 interface IAffiliatePresaleStatus {
-    function presaleActive() external view returns (bool);
+    function presaleActive() external view returns (uint8);
 }
 
 // ===================================================================================================
@@ -666,17 +551,17 @@ abstract contract DegenerusBondsStorage {
     uint8 internal constant TOP_PCT_3 = 5;
     uint8 internal constant TOP_PCT_4 = 5;
 
-    /// @notice Minimum bond deposit (0.01 ETH).
-    uint256 internal constant MIN_DEPOSIT = 0.01 ether;
+    /// @notice Minimum bond deposit (0.01 ETH on mainnet, divided by COST_DIVISOR on testnet).
+    uint256 internal constant MIN_DEPOSIT = 0.01 ether / ContractAddresses.COST_DIVISOR;
 
     /// @notice Day index anchor (matches game/coin).
     uint48 internal constant JACKPOT_RESET_TIME = 82620;
 
-    /// @notice Presale ETH threshold to auto-schedule shutdown (100 ETH).
-    uint256 internal constant PRESALE_AUTO_STOP_THRESHOLD = 100 ether;
+    /// @notice Presale ETH threshold to auto-schedule shutdown (100 ETH on mainnet, divided by COST_DIVISOR on testnet).
+    uint256 internal constant PRESALE_AUTO_STOP_THRESHOLD = 100 ether / ContractAddresses.COST_DIVISOR;
 
-    /// @notice Presale ETH cap for DGNRS budget (200 ETH).
-    uint256 internal constant PRESALE_DGNRS_CAP = 200 ether;
+    /// @notice Presale ETH cap for DGNRS budget (200 ETH on mainnet, divided by COST_DIVISOR on testnet).
+    uint256 internal constant PRESALE_DGNRS_CAP = 200 ether / ContractAddresses.COST_DIVISOR;
 
     /// @notice Total presale DGNRS budget multiplier (1.2x = 12000 bps).
     uint16 internal constant PRESALE_DGNRS_BPS = 12_000;
@@ -784,11 +669,12 @@ abstract contract DegenerusBondsStorage {
         uint256 payoutBudget; // Target DGNRS to mint
         uint256 mintedBudget; // DGNRS already minted
         uint256 raised; // Total ETH deposited
-        uint48 lastPaidDay; // Last day index processed for presale jackpots
-        uint48 stopDay; // Day index when presale should end (after jackpot)
+        uint48 lastPaidDay; // Last presale day processed (RNG cycle counter)
+        uint48 stopDay; // Presale day index when presale should end (after jackpot)
         uint256 coinPaid; // Total presale BURNIE paid out
         Lane[2] buyerLanes; // Two-lane presale buyer tracking
         uint48 startDayPlusOne; // Presale start day index + 1 (0 = unset)
+        bool stopPending; // Stop queued; finalize on next RNG-driven advance
     }
 
 
@@ -899,7 +785,7 @@ abstract contract DegenerusBondsStorage {
     // ---------------------------------------------------------------------
 
 
-    /// @notice ETH raised per presale day (by day index).
+    /// @notice ETH raised per presale day (RNG cycle index).
     mapping(uint48 => uint256) internal presaleDailyRaised;
 
     /// @notice Presale series data.
@@ -933,10 +819,12 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
         if (amount < MIN_DEPOSIT) revert MinimumDeposit();
         if (_gameRngLocked()) revert PurchasesDisabled();
 
-        if (!affiliatePresaleStatus.presaleActive()) revert PresaleClosed();
-
-        uint48 day = _currentDayIndex();
         _getOrCreateSeries(0);
+        PresaleSeries storage p = presale;
+        uint48 day;
+        unchecked {
+            day = p.lastPaidDay + 1;
+        }
 
         uint256 vaultShare = (amount * 30) / 100;
         uint256 rewardShare = (amount * 50) / 100;
@@ -952,7 +840,6 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
         _payAffiliateReward(ben, amount, AFFILIATE_PRESALE_BPS);
         scoreAwarded = amount;
 
-        PresaleSeries storage p = presale;
         p.raised += amount;
         presaleDailyRaised[day] += amount;
         if (p.startDayPlusOne == 0) {
@@ -981,24 +868,34 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
     /// @notice Queue presale shutdown after the next jackpot time.
     /// @dev Manual flag; does not end presale until the next daily run.
     function shutdownPresale() external onlyAdmin {
-        _queuePresaleStop(_currentDayIndex());
+        PresaleSeries storage p = presale;
+        uint48 day;
+        unchecked {
+            day = p.lastPaidDay + 1;
+        }
+        _queuePresaleStop(day);
     }
 
     /// @notice Run daily presale payouts using game-supplied entropy.
     /// @dev Access: game only. Pays buyer lane BURNIE, burn-lane BURNIE, and DGNRS lane.
     /// @param rngWord VRF entropy for jackpot selection.
-    /// @param day Current day index.
+    /// @param ignoredDay Ignored; presale day is tracked internally for testnet day simulation.
     /// @param lastPurchaseDay True if prize pool target was met today.
     function runPresaleDailyFromGame(
         uint256 rngWord,
-        uint48 day,
+        uint48 ignoredDay,
         bool lastPurchaseDay
     ) external onlyGame returns (bool advanced) {
         if (rngWord == 0) return false;
         if (presaleFinalized) return false;
 
+        ignoredDay;
         PresaleSeries storage p = presale;
-        if (day <= p.lastPaidDay) return false;
+        // Track presale days by RNG cycles so testnets can advance without timestamp changes.
+        uint48 day;
+        unchecked {
+            day = p.lastPaidDay + 1;
+        }
         p.lastPaidDay = day;
 
         if (p.startDayPlusOne == 0) {
@@ -1008,8 +905,8 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
         }
         _maybeQueuePresaleStop(day, p);
 
-        // Final day triggers: stopDay reached, 100 ETH hit (day before), admin shutdown, or lastPurchaseDay
-        bool finalDay = (p.stopDay != 0 && day >= p.stopDay) || lastPurchaseDay;
+        // Final day triggers: lastPurchaseDay (prize pool target met) OR reaching stop day.
+        bool finalDay = lastPurchaseDay || (p.stopDay != 0 && day >= p.stopDay);
         uint256 prevRaised;
         if (day != 0) {
             prevRaised = presaleDailyRaised[day - 1];
@@ -1035,15 +932,27 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
 
         uint256 minted;
         if (dgnrsToMint != 0) {
-            minted = _runPresaleDgnrsLaneJackpot(
-                p.buyerLanes[dgnrsLane],
-                dgnrsToMint,
-                _nextEntropy(entropy, 1),
-                0,
-                finalDay
-            );
-            if (minted != 0) {
-                p.mintedBudget += minted;
+            // Try selected lane first, fall back to other lane if empty
+            Lane storage selectedLane = p.buyerLanes[dgnrsLane];
+            if (selectedLane.total == 0) {
+                // Selected lane empty, try the other lane
+                dgnrsLane = burnieLane;
+                burnieLane = 1 - dgnrsLane;
+                selectedLane = p.buyerLanes[dgnrsLane];
+            }
+
+            // Only attempt distribution if lane has entries
+            if (selectedLane.total != 0) {
+                minted = _runPresaleDgnrsLaneJackpot(
+                    selectedLane,
+                    dgnrsToMint,
+                    _nextEntropy(entropy, 1),
+                    0,
+                    finalDay
+                );
+                if (minted != 0) {
+                    p.mintedBudget += minted;
+                }
             }
         }
 
@@ -1088,7 +997,7 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
         }
 
         // Enable gamepiece/MAP purchases at first jackpot time after 40 ETH raised or presale ending
-        if (!gamepiecePurchasesEnabledFlag && (p.raised > 40 ether || finalDay)) {
+        if (!gamepiecePurchasesEnabledFlag && (p.raised > (40 ether / ContractAddresses.COST_DIVISOR) || finalDay)) {
             gamepiecePurchasesEnabledFlag = true;
         }
 
@@ -1105,6 +1014,7 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
         );
 
         if (finalDay) {
+            p.stopPending = false;
             presaleFinalized = true;
             try IAffiliatePresaleShutdown(ContractAddresses.AFFILIATE).shutdownPresale() {} catch {}
         }
@@ -1641,10 +1551,6 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
         return gameBondBank.level();
     }
 
-    function _currentDayIndex() private view returns (uint48 day) {
-        return uint48((uint48(block.timestamp) - JACKPOT_RESET_TIME) / 1 days);
-    }
-
     function _maybeQueuePresaleStop(uint48 day, PresaleSeries storage p) private {
         if (p.raised < PRESALE_AUTO_STOP_THRESHOLD) {
             uint48 startDayPlusOne = p.startDayPlusOne;
@@ -1660,13 +1566,14 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
             }
         }
 
-        uint256 targetPool = gameBondBank.prizePoolTargetView();
-        if (targetPool != 0) {
-            uint256 nextPool = gameBondBank.nextPrizePoolView();
-            if (nextPool >= targetPool) {
-                _queuePresaleStop(day);
-            }
-        }
+        // DISABLED: Let presale continue to 100 ETH regardless of bond pool target
+        // uint256 targetPool = gameBondBank.prizePoolTargetView();
+        // if (targetPool != 0) {
+        //     uint256 nextPool = gameBondBank.nextPrizePoolView();
+        //     if (nextPool >= targetPool) {
+        //         _queuePresaleStop(day);
+        //     }
+        // }
     }
 
     function _queuePresaleStop(uint48 day) private {
@@ -1679,13 +1586,14 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
         uint48 existing = p.stopDay;
         if (existing == 0 || stopDay < existing) {
             p.stopDay = stopDay;
+            p.stopPending = true;
             emit PresaleStopQueued(day, stopDay);
         }
     }
 
     function _presaleActive() internal view returns (bool active) {
-        try affiliatePresaleStatus.presaleActive() returns (bool ok) {
-            return ok;
+        try affiliatePresaleStatus.presaleActive() returns (uint8 ok) {
+            return ok != 0;
         } catch {
             return false;
         }
@@ -2053,7 +1961,6 @@ abstract contract DegenerusBondsModule is DegenerusBondsStorage {
         uint256 entropy = rngWord;
         bool presaleActive = _presaleActive();
         bool canAutoBurn = currLevel != 0 || presaleActive;
-
         for (uint256 i; i < 4; ) {
             uint256 amount = payouts[i];
             if (amount != 0) {
@@ -2555,7 +2462,7 @@ contract DegenerusBonds is DegenerusBondsModule {
         if (!fromGame && _gameRngLocked()) revert PurchasesDisabled();
 
         uint24 currLevel = gameBondBank.level();
-        if (!_bondPurchasesOpen(currLevel)) revert PurchasesDisabled();
+        if (!fromGame && !_bondPurchasesOpen(currLevel)) revert PurchasesDisabled();
         uint24 maturityLevel = _activeMaturityAt(currLevel);
         BondSeries storage s = _getOrCreateSeries(maturityLevel);
 
@@ -2664,6 +2571,50 @@ contract DegenerusBonds is DegenerusBondsModule {
     /// @return required Total ETH required to cover all bond obligations
     function requiredCoverNext(uint256 stopAt) external view returns (uint256 required) {
         return _requiredCoverNext(stopAt);
+    }
+
+    /// @notice Get bond lane info for a specific maturity and lane.
+    /// @param maturityLevel The maturity level to query.
+    /// @param laneIndex The lane index (0 or 1).
+    /// @return total Total DGNRS burned in this lane.
+    /// @return entryCount Number of burn entries in this lane.
+    function getBondLaneInfo(uint24 maturityLevel, uint8 laneIndex)
+        external
+        view
+        returns (uint256 total, uint256 entryCount)
+    {
+        require(laneIndex < 2, "Invalid lane index");
+        BondSeries storage s = series[maturityLevel];
+        Lane storage lane = s.lanes[laneIndex];
+        return (lane.total, lane.entries.length);
+    }
+
+    /// @notice Get maturity info for a bond series.
+    /// @param maturityLevel The maturity level to query.
+    /// @return maturity The maturity level.
+    /// @return saleStartLevel The level when sales opened.
+    /// @return raised Total ETH deposited.
+    /// @return resolved Whether the series has been resolved.
+    /// @return winningLane The winning lane (0 or 1, only valid if resolved).
+    function getMaturityInfo(uint24 maturityLevel)
+        external
+        view
+        returns (
+            uint24 maturity,
+            uint24 saleStartLevel,
+            uint256 raised,
+            bool resolved,
+            uint8 winningLane
+        )
+    {
+        BondSeries storage s = series[maturityLevel];
+        return (
+            s.maturityLevel,
+            s.saleStartLevel,
+            s.raised,
+            s.resolved,
+            s.winningLane
+        );
     }
 
     // ---------------------------------------------------------------------

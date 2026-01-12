@@ -114,14 +114,15 @@ interface IERC721BalanceOf {
   |                         VRF (CHAINLINK) TYPES                                |
   +==============================================================================+*/
 
-/// @notice Request structure for Chainlink VRF V2.5.
-/// @dev Packed struct for gas-efficient VRF requests.
+/// @notice Request structure for Chainlink VRF V2.5 Plus.
+/// @dev Matches VRFV2PlusClient.RandomWordsRequest for real Chainlink VRF V2.5 Plus coordinator.
 struct VRFRandomWordsRequest {
     bytes32 keyHash; // VRF key hash (identifies the oracle)
     uint256 subId; // Subscription ID for billing
     uint16 requestConfirmations; // Blocks before VRF is considered final
     uint32 callbackGasLimit; // Gas limit for fulfillment callback
     uint32 numWords; // Number of random words requested (always 1 here)
+    bytes extraArgs; // Additional arguments (empty for LINK payment, or encoded ExtraArgsV1 for native payment)
 }
 
 /// @notice Interface for Chainlink VRF Coordinator.
@@ -480,6 +481,34 @@ contract DegenerusGame is DegenerusGameStorage {
     /// @return The nextPrizePool value (ETH wei).
     function nextPrizePoolView() external view returns (uint256) {
         return nextPrizePool;
+    }
+
+    /// @notice Get the current prize pool (jackpots are paid from this).
+    /// @return The currentPrizePool value (ETH wei).
+    function currentPrizePoolView() external view returns (uint256) {
+        return currentPrizePool;
+    }
+
+    /// @notice Get the reward pool (accumulates exterminator keeps and feeds decimator/BAF jackpots).
+    /// @return The rewardPool value (ETH wei).
+    function rewardPoolView() external view returns (uint256) {
+        return rewardPool;
+    }
+
+    /// @notice Get the claimable pool (reserved for player winnings claims).
+    /// @return The claimablePool value (ETH wei).
+    function claimablePoolView() external view returns (uint256) {
+        return claimablePool;
+    }
+
+    /// @notice Get the untracked yield pool (excess ETH+stETH available for operations).
+    /// @dev Calculated as: (ETH balance + stETH balance) - (claimablePool + bondPool)
+    /// @return The yieldPool value (ETH wei).
+    function yieldPoolView() external view returns (uint256) {
+        uint256 totalBalance = address(this).balance + steth.balanceOf(address(this));
+        uint256 tracked = claimablePool + bondPool;
+        if (totalBalance <= tracked) return 0;
+        return totalBalance - tracked;
     }
 
     /// @notice Get the current mint price in wei.
@@ -973,16 +1002,18 @@ contract DegenerusGame is DegenerusGameStorage {
             // === DAILY GATE ===
             // Standard flow requires caller to have minted today (prevents gaming by non-participants)
             // Skip gate check if presale is active and purchases not yet enabled
+            // Also skip for CREATOR address to allow contract owner to advance game for maintenance
             bool presaleActiveNoMinting = false;
             if (lvl == 1) {
                 presaleActiveNoMinting = _presaleActive() == 1; // state 1 = presale active, no minting
             }
-            if (cap == 0 && !presaleActiveNoMinting) {
+            if (cap == 0 && !presaleActiveNoMinting && caller != ContractAddresses.CREATOR) {
                 uint32 gateIdx = uint32(dailyIdx);
                 if (gateIdx != 0) {
                     uint256 mintData = mintPacked_[caller];
                     uint32 lastEthDay = uint32((mintData >> ETH_DAY_SHIFT) & MINT_MASK_32);
-                    if (lastEthDay < gateIdx) revert MustMintToday();
+                    // Allow mints from current day or previous day
+                    if (lastEthDay + 1 < gateIdx) revert MustMintToday();
                 }
             }
 
@@ -2128,7 +2159,8 @@ contract DegenerusGame is DegenerusGameStorage {
                 subId: vrfSubscriptionId,
                 requestConfirmations: VRF_REQUEST_CONFIRMATIONS,
                 callbackGasLimit: VRF_CALLBACK_GAS_LIMIT,
-                numWords: 1
+                numWords: 1,
+                extraArgs: hex"" // Empty for LINK payment (default)
             })
         );
         _finalizeRngRequest(gameState_, isMapJackpotDay, lvl, id);
@@ -2146,7 +2178,8 @@ contract DegenerusGame is DegenerusGameStorage {
                     subId: vrfSubscriptionId,
                     requestConfirmations: VRF_REQUEST_CONFIRMATIONS,
                     callbackGasLimit: VRF_CALLBACK_GAS_LIMIT,
-                    numWords: 1
+                    numWords: 1,
+                    extraArgs: hex"" // Empty for LINK payment (default)
                 })
             )
         returns (uint256 id) {

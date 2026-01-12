@@ -1006,6 +1006,57 @@ contract BurnieCoin {
         }
     }
 
+    /// @notice Get comprehensive flip credit info for a player.
+    /// @dev Shows current stake, yesterday's stake, and claimable amount without processing claims.
+    /// @param player The player's address.
+    /// @return currentDayStake Stake in the current active betting day.
+    /// @return lastDayStake Stake in yesterday's day window.
+    /// @return flipsClaimable Total BURNIE claimable from won flips (preview, doesn't modify state).
+    /// @return currentDay The current active betting day index.
+    function getFlipCreditInfo(address player)
+        external
+        view
+        returns (
+            uint256 currentDayStake,
+            uint256 lastDayStake,
+            uint256 flipsClaimable,
+            uint48 currentDay
+        )
+    {
+        currentDay = _targetFlipDay();
+        currentDayStake = coinflipBalance[currentDay][player];
+        unchecked {
+            lastDayStake = currentDay > 0 ? coinflipBalance[currentDay - 1][player] : 0;
+        }
+
+        // Calculate claimable without modifying state (similar to _claimCoinflipsInternal but view-only)
+        uint48 latestDay = flipsClaimableDay;
+        uint48 startDay = lastCoinflipClaim[player];
+
+        if (startDay < latestDay) {
+            uint48 claimableCount = latestDay - startDay;
+            if (claimableCount > 30) {
+                claimableCount = 30; // Cap at 30 days
+            }
+
+            uint48 cursor = startDay;
+            for (uint256 i; i < claimableCount; ) {
+                CoinflipDayResult storage result = coinflipDayResult[cursor];
+                uint256 flipStake = coinflipBalance[cursor][player];
+
+                if (flipStake != 0 && result.win) {
+                    uint256 bonus = (flipStake * result.rewardPercent) / 100;
+                    flipsClaimable += flipStake + bonus;
+                }
+
+                unchecked {
+                    ++cursor;
+                    ++i;
+                }
+            }
+        }
+    }
+
     /*+======================================================================+
       |                    INTERNAL CLAIM FUNCTIONS                          |
       +======================================================================+

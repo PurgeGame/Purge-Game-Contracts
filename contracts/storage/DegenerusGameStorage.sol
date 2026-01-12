@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+import {ContractAddresses} from "../ContractAddresses.sol";
+
 /**
  * @title DegenerusGameStorage
  * @author Burnie Degenerus
@@ -199,7 +201,7 @@ abstract contract DegenerusGameStorage {
     ///
     ///      SECURITY: State transitions are guarded by modifiers in DegenerusGame.
     ///      Invalid state transitions revert, preventing exploitation.
-    uint8 public gameState;
+    uint8 public gameState = GAME_STATE_PURCHASE;
 
     // =========================================================================
     // SLOT 1: Cursors, Counters, and Boolean Flags
@@ -304,7 +306,7 @@ abstract contract DegenerusGameStorage {
     ///
     ///      SECURITY: Price updates are game-controlled. uint128 prevents
     ///      overflow in multiplication with reasonable quantities.
-    uint128 internal price = 0.025 ether;
+    uint128 internal price = uint128(0.025 ether / ContractAddresses.COST_DIVISOR);
 
     // =========================================================================
     // SLOTS 3+: Full-Width Balances and Pools
@@ -313,10 +315,10 @@ abstract contract DegenerusGameStorage {
 
     /// @dev Prize pool snapshot from the previous level.
     ///      Used as denominator for early burn percentage calculations.
-    ///      Bootstrap value of 125 ether ensures non-zero denominator at launch.
+    ///      Bootstrap value of 125 ether (divided by COST_DIVISOR on testnet) ensures non-zero denominator at launch.
     ///
     ///      SECURITY: Never zero after initialization, preventing division by zero.
-    uint256 internal lastPrizePool = 125 ether;
+    uint256 internal lastPrizePool = 125 ether / ContractAddresses.COST_DIVISOR;
 
     /// @dev Active prize pool for the current level.
     ///      Accumulated from mint fees and distributed via jackpots.
@@ -486,5 +488,4 @@ abstract contract DegenerusGameStorage {
     ///      For daily: units for carryover (next-level) draw.
     ///      For purchase: unused (remains 0).
     uint256 internal mapJackpotUnits2;
-
 }

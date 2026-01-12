@@ -47,6 +47,11 @@ interface IVRFCoordinatorV2_5Owner {
     /// @param consumer The address of the consumer contract.
     function addConsumer(uint256 subId, address consumer) external;
 
+    /// @notice Remove a consumer contract from a VRF subscription.
+    /// @param subId The subscription ID to remove the consumer from.
+    /// @param consumer The address of the consumer contract to remove.
+    function removeConsumer(uint256 subId, address consumer) external;
+
     /// @notice Cancel a VRF subscription and refund remaining LINK.
     /// @param subId The subscription ID to cancel.
     /// @param to The address to receive the LINK refund.
@@ -96,6 +101,7 @@ interface IDegenerusGameAdmin {
     /// @notice Stake GAME-held ETH into stETH via Lido.
     /// @param amount Amount of ETH to stake.
     function adminStakeEthForStEth(uint256 amount) external;
+
 }
 
 /// @dev Bonds contract admin interface (presale + staking + game-over flags).
@@ -105,6 +111,7 @@ interface IDegenerusBondsAdmin {
 
     /// @notice Queue presale shutdown after the next jackpot time.
     function shutdownPresale() external;
+
 
     /// @notice True if final entropy request has been attempted.
     function gameOverEntropyAttempted() external view returns (bool);

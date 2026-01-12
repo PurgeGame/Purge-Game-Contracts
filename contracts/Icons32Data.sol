@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+import {ContractAddresses} from "./ContractAddresses.sol";
+
 /*
 +=======================================================================================================+
 |                                         Icons32Data                                                   |
@@ -78,6 +80,16 @@ pragma solidity ^0.8.26;
 /// @dev Immutable after construction; implements IIcons32 interface
 contract Icons32Data {
     // ---------------------------------------------------------------------
+    // ERRORS
+    // ---------------------------------------------------------------------
+
+    error OnlyCreator();
+    error AlreadyFinalized();
+    error MaxBatch();
+    error IndexOutOfBounds();
+    error InvalidQuadrant();
+
+    // ---------------------------------------------------------------------
     // STORAGE
     // ---------------------------------------------------------------------
 
@@ -102,40 +114,78 @@ contract Icons32Data {
     ///      Examples: "Horseshoe", "King", "Cashsack", "Club", "Diamond", "Heart", "Spade", "Ace"
     string[8] private _symQ3;
 
+    /// @dev Flag to lock data after initialization
+    bool private _finalized;
+
     // Note: Quadrant 3 (Dice) names are generated dynamically as "1" through "8"
 
     // ---------------------------------------------------------------------
     // CONSTRUCTOR
     // ---------------------------------------------------------------------
 
-    /// @notice Deploy with all icon data (immutable after construction)
-    /// @dev All arrays must be fully populated. Data cannot be changed post-deployment.
-    /// @param paths_ Array of 33 SVG path strings (indices 0-31 for symbols, 32 for affiliate)
-    /// @param diamond_ The center flame icon path string
-    /// @param symQ1_ Array of 8 symbol names for Quadrant 0 (Crypto)
-    /// @param symQ2_ Array of 8 symbol names for Quadrant 1 (Zodiac)
-    /// @param symQ3_ Array of 8 symbol names for Quadrant 2 (Cards)
-    constructor(
-        string[33] memory paths_,
-        string memory diamond_,
-        string[8] memory symQ1_,
-        string[8] memory symQ2_,
-        string[8] memory symQ3_
-    ) {
-        // Copy path data to storage (33 icons total)
-        for (uint256 i; i < 33; ++i) {
-            _paths[i] = paths_[i];
-        }
+    /// @notice Deploy contract for batch initialization by CREATOR
+    /// @dev Data must be populated via setter functions before finalization
+    constructor() {}
 
-        // Store the central flame/diamond icon
+    // ---------------------------------------------------------------------
+    // INITIALIZATION FUNCTIONS (ONLY BEFORE FINALIZATION)
+    // ---------------------------------------------------------------------
+
+    /// @notice Set a batch of icon paths (max 10 per call to stay under gas limits)
+    /// @dev Only callable by owner before finalization
+    /// @param startIndex Starting index in _paths array (0-32)
+    /// @param paths Array of path strings to set
+    function setPaths(uint256 startIndex, string[] memory paths) external {
+        if (msg.sender != ContractAddresses.CREATOR) revert OnlyCreator();
+        if (_finalized) revert AlreadyFinalized();
+        if (paths.length > 10) revert MaxBatch();
+        if (startIndex + paths.length > 33) revert IndexOutOfBounds();
+
+        for (uint256 i = 0; i < paths.length; ++i) {
+            _paths[startIndex + i] = paths[i];
+        }
+    }
+
+    /// @notice Set the diamond/flame icon
+    /// @dev Only callable by owner before finalization
+    /// @param diamond_ The diamond icon path
+    function setDiamond(string memory diamond_) external {
+        if (msg.sender != ContractAddresses.CREATOR) revert OnlyCreator();
+        if (_finalized) revert AlreadyFinalized();
         _diamond = diamond_;
+    }
 
-        // Copy symbol names for each quadrant (8 symbols per quadrant)
-        for (uint256 i; i < 8; ++i) {
-            _symQ1[i] = symQ1_[i];
-            _symQ2[i] = symQ2_[i];
-            _symQ3[i] = symQ3_[i];
+    /// @notice Set symbol names for a quadrant
+    /// @dev Only callable by owner before finalization
+    /// @param quadrant Quadrant number (1, 2, or 3)
+    /// @param symbols Array of 8 symbol names
+    function setSymbols(uint256 quadrant, string[8] memory symbols) external {
+        if (msg.sender != ContractAddresses.CREATOR) revert OnlyCreator();
+        if (_finalized) revert AlreadyFinalized();
+
+        if (quadrant == 1) {
+            for (uint256 i = 0; i < 8; ++i) {
+                _symQ1[i] = symbols[i];
+            }
+        } else if (quadrant == 2) {
+            for (uint256 i = 0; i < 8; ++i) {
+                _symQ2[i] = symbols[i];
+            }
+        } else if (quadrant == 3) {
+            for (uint256 i = 0; i < 8; ++i) {
+                _symQ3[i] = symbols[i];
+            }
+        } else {
+            revert InvalidQuadrant();
         }
+    }
+
+    /// @notice Finalize the contract, locking all data permanently
+    /// @dev Only callable by owner once. After this, no data can be changed.
+    function finalize() external {
+        if (msg.sender != ContractAddresses.CREATOR) revert OnlyCreator();
+        if (_finalized) revert AlreadyFinalized();
+        _finalized = true;
     }
 
     // ---------------------------------------------------------------------
