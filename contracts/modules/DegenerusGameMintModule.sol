@@ -483,14 +483,17 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
 
     /**
      * @notice Get current day index for mint tracking.
-     * @dev Matches the JACKPOT_RESET_TIME-offset day index used in advanceGame.
-     * @return Day index (days since epoch, offset by JACKPOT_RESET_TIME).
+     * @dev Returns day index relative to deploy time (day 1 = deploy day).
+     *      Days reset at JACKPOT_RESET_TIME (22:57 UTC), not midnight.
+     * @return Day index (1-indexed from deploy day).
      */
     function _currentMintDay() private view returns (uint32) {
         uint48 day = dailyIdx;
         if (day == 0) {
             // Calculate from timestamp if not yet set
-            day = uint48((uint48(block.timestamp) - JACKPOT_RESET_TIME) / 1 days);
+            uint48 deployDayBoundary = uint48((deployTime - JACKPOT_RESET_TIME) / 1 days);
+            uint48 currentDayBoundary = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
+            day = currentDayBoundary - deployDayBoundary + 1;
         }
         return uint32(day);
     }

@@ -37,7 +37,7 @@ import {ContractAddresses} from "../ContractAddresses.sol";
  * | [22:26] airdropIndex             uint32   Index into pendingMapMints        |
  * | [26:29] level                    uint24   Current game level (1-indexed)    |
  * | [29:31] lastExterminatedTrait    uint16   Last cleared trait (420=sentinel) |
- * | [31:32] gameState                uint8    FSM: 0-3,86 (pre/setup/purc/burn) |
+ * | [31:32] gameState                uint8    FSM: 1-3,86 (setup/purc/burn/gameover) |
  * +-----------------------------------------------------------------------------+
  *   Total: 6+6+6+4+4+3+2+1 = 32 bytes ✓ (perfectly packed)
  *
@@ -90,7 +90,7 @@ import {ContractAddresses} from "../ContractAddresses.sol";
  * 4. INITIALIZATION: Default values are set inline. For critical variables:
  *    - levelStartTime = type(uint48).max (sentinel: game not started)
  *    - lastExterminatedTrait = 420 (sentinel: no trait exterminated)
-*    - gameState = 2 (initialized to PURCHASE state)
+ *    - gameState = 1 (initialized to SETUP state)
  *    - decWindowOpen = true (decimator window starts open)
  *    - rngFulfilled = true (no pending request at deploy)
  *    - price = 0.025 ether (initial mint price)
@@ -187,9 +187,8 @@ abstract contract DegenerusGameStorage {
     uint16 internal lastExterminatedTrait = 420;
 
     /// @dev Finite State Machine for game phases:
-    ///      0 = reserved (unused)
     ///      1 = setup (awaiting start or between major phases)
-    ///      2 = purchase (mint/airdrop phase; initialized state)
+    ///      2 = purchase (mint/airdrop phase; purchases always allowed)
     ///      3 = burn window (extermination phase)
     ///      86 = game over (terminal)
     ///
@@ -197,7 +196,7 @@ abstract contract DegenerusGameStorage {
     ///
     ///      SECURITY: State transitions are guarded by modifiers in DegenerusGame.
     ///      Invalid state transitions revert, preventing exploitation.
-    uint8 public gameState = GAME_STATE_PURCHASE;
+    uint8 public gameState = GAME_STATE_SETUP;
 
     // =========================================================================
     // SLOT 1: Cursors, Counters, and Boolean Flags
@@ -329,6 +328,11 @@ abstract contract DegenerusGameStorage {
     /// @dev Reserved pool for the BAF (Burn and Flip?) 100-level special.
     ///      Similar to decimatorHundredPool for a different milestone reward.
     uint256 internal bafHundredPool;
+
+    /// @dev Reserve pool for loot box ticket/gamepiece funding awaiting level allocation.
+    ///      ETH held here until loot box is opened and target level is rolled.
+    ///      Prevents pre-allocation to a specific level, enabling dynamic level selection.
+    uint256 internal lootboxReservePool;
 
     /// @dev Latest VRF random word, or 0 if a request is pending.
     ///      Written by VRF callback; consumed by game logic for randomness.
@@ -469,4 +473,61 @@ abstract contract DegenerusGameStorage {
     ///      For daily: units for carryover (next-level) draw.
     ///      For purchase: unused (remains 0).
     uint256 internal mapJackpotUnits2;
+
+    // =========================================================================
+    // Future Mint Awards
+    // =========================================================================
+
+    /// @dev Prize pool contributions reserved for future levels (keyed by level).
+    mapping(uint24 => uint256) internal futurePrizePool;
+
+    /// @dev Aggregate future prize pool across all levels (for solvency checks).
+    uint256 internal futurePrizePoolTotal;
+
+    /// @dev Queue of players with future reward mints per level.
+    mapping(uint24 => address[]) internal futureMintQueue;
+
+    /// @dev Owed future reward mints per level per player.
+    mapping(uint24 => mapping(address => uint32)) internal futureMintsOwed;
+
+    /// @dev Cursor and level for processing future mint queues.
+    uint32 internal futureMintCursor;
+    uint24 internal futureMintLevel;
+
+    // =========================================================================
+    // Loot Box State & Presale Toggle
+    // =========================================================================
+
+    /// @dev Loot box ETH per day per player (one box per day; amount may accumulate).
+    mapping(uint48 => mapping(address => uint256)) internal lootboxEth;
+
+    // REMOVED: lootboxFutureLevel - target level now rolled at opening time instead of purchase time
+
+    /// @dev True if the loot box for a given day was purchased during presale mode.
+    ///      Loot boxes opened from presale purchases give 2x BURNIE rewards.
+    mapping(uint48 => mapping(address => bool)) internal lootboxPresale;
+
+    /// @dev Presale mode toggle (one-way: can be turned off but never back on).
+    ///      When true: loot boxes give 2x BURNIE, bonusFlip mode is active.
+    ///      When false: normal loot box rewards, bonusFlip mode disabled.
+    bool internal lootboxPresaleActive;
+
+    /// @dev True if presale was ever ended (prevents re-enabling).
+    bool internal lootboxPresaleEnded;
+
+    // =========================================================================
+    // Game Over State
+    // =========================================================================
+
+    /// @dev Timestamp when game over was triggered (0 if game is still active).
+    ///      Used to enforce 1-month delay before final vault sweep.
+    uint48 internal gameOverTime;
+
+    /// @dev True once the final gameover jackpot has been paid out.
+    ///      Prevents duplicate payouts of the gameover prize pool.
+    bool internal gameOverFinalJackpotPaid;
+
+    /// @dev Timestamp when the contract was deployed.
+    ///      Used to calculate day index relative to deploy (day 1 = deploy day).
+    uint48 internal deployTime;
 }

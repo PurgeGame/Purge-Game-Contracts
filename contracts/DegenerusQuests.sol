@@ -88,8 +88,10 @@ contract DegenerusQuests is IDegenerusQuests {
     uint8 private constant QUEST_TYPE_BURN = 4;
     /// @dev Quest type: participate in decimator burns.
     uint8 private constant QUEST_TYPE_DECIMATOR = 5;
+    /// @dev Quest type: purchase loot boxes.
+    uint8 private constant QUEST_TYPE_LOOTBOX = 6;
     /// @dev Total number of quest types for iteration bounds.
-    uint8 private constant QUEST_TYPE_COUNT = 6;
+    uint8 private constant QUEST_TYPE_COUNT = 7;
 
     // -------------------------------------------------------------------------
     // Difficulty Flags (packed into quest.flags)
@@ -610,6 +612,45 @@ contract DegenerusQuests is IDegenerusQuests {
         return (0, false, matched ? fallbackType : QUEST_TYPE_BURN, state.streak, false, false);
     }
 
+    /**
+     * @notice Handle loot box purchase progress in ETH value (wei).
+     * @param player The player who purchased the loot box.
+     * @param amountWei ETH amount spent on the loot box (in wei).
+     * @dev Loot box quests track cumulative ETH spent on loot boxes.
+     *      Target is calculated as 1-3× current gamepiece price (scales with game economy).
+     */
+    function handleLootBox(
+        address player,
+        uint256 amountWei
+    )
+        external
+        onlyCoin
+        returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed, bool completedBoth)
+    {
+        DailyQuest[QUEST_SLOT_COUNT] memory quests = activeQuests;
+        uint48 currentDay = _currentQuestDay(quests);
+        PlayerQuestState storage state = questPlayerState[player];
+        if (player == address(0) || amountWei == 0 || currentDay == 0) {
+            return (0, false, quests[0].questType, state.streak, false, false);
+        }
+        _questSyncState(state, currentDay);
+        uint8 tier = _questTier(state.baseStreak);
+
+        (DailyQuest memory quest, uint8 slotIndex) = _currentDayQuestOfType(quests, currentDay, QUEST_TYPE_LOOTBOX);
+        if (slotIndex == type(uint8).max) {
+            return (0, false, QUEST_TYPE_LOOTBOX, state.streak, false, false);
+        }
+        _questSyncProgress(state, slotIndex, currentDay, quest.version);
+        state.progress[slotIndex] = _clampedAdd128(state.progress[slotIndex], amountWei);
+        // Target scales with current gamepiece price (1-3× price based on tier/difficulty)
+        uint256 currentPrice = questGame.mintPrice();
+        uint256 target = uint256(_questMintTarget(tier, quest.entropy)) * currentPrice;
+        if (state.progress[slotIndex] < target) {
+            return (0, false, quest.questType, state.streak, false, false);
+        }
+        return _questCompleteWithPair(state, quests, slotIndex, quest, currentDay, tier, 0);
+    }
+
     // =========================================================================
     //                            VIEW FUNCTIONS
     // =========================================================================
@@ -795,6 +836,10 @@ contract DegenerusQuests is IDegenerusQuests {
             req.mints = _questMintTarget(tier, quest.entropy);
         } else if (qType == QUEST_TYPE_BURN) {
             req.mints = _questMintTarget(tier, quest.entropy);
+        } else if (qType == QUEST_TYPE_LOOTBOX) {
+            // Loot box target scales with current gamepiece price (1-3× price)
+            uint256 currentPrice = questGame.mintPrice();
+            req.tokenAmount = uint256(_questMintTarget(tier, quest.entropy)) * currentPrice;
         } else if (qType == QUEST_TYPE_FLIP) {
             req.tokenAmount = uint256(_questFlipTargetTokens(tier, quest.entropy)) * 1 ether;
         } else if (qType == QUEST_TYPE_DECIMATOR) {
@@ -1242,6 +1287,7 @@ contract DegenerusQuests is IDegenerusQuests {
         if (burnAllowed) {
             weights[QUEST_TYPE_BURN] = 2;
         }
+        weights[QUEST_TYPE_LOOTBOX] = 3;
         weights[QUEST_TYPE_AFFILIATE] = 1;
         if (decAllowed) {
             weights[QUEST_TYPE_DECIMATOR] = 4;
@@ -1335,6 +1381,8 @@ contract DegenerusQuests is IDegenerusQuests {
                 weight = 10;
             } else if (candidate == QUEST_TYPE_DECIMATOR && decAllowed) {
                 weight = 4;
+            } else if (candidate == QUEST_TYPE_LOOTBOX) {
+                weight = 3;
             } else if (candidate == QUEST_TYPE_BURN && burnAllowed) {
                 weight = 2;
             }
@@ -1565,6 +1613,10 @@ contract DegenerusQuests is IDegenerusQuests {
         }
         if (quest.questType == QUEST_TYPE_BURN) {
             return progress >= _questMintTarget(tier, quest.entropy);
+        }
+        if (quest.questType == QUEST_TYPE_LOOTBOX) {
+            uint256 currentPrice = questGame.mintPrice();
+            return progress >= uint256(_questMintTarget(tier, quest.entropy)) * currentPrice;
         }
         if (quest.questType == QUEST_TYPE_FLIP) {
             return progress >= uint256(_questFlipTargetTokens(tier, quest.entropy)) * 1 ether;

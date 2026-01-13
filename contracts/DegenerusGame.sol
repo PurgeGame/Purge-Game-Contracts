@@ -7,15 +7,17 @@ pragma solidity ^0.8.26;
  * @notice Core gamepiece game contract managing state machine, VRF integration, ContractAddresses.JACKPOTS, and prize pools.
  *
  * @dev ARCHITECTURE:
- *      - 3-state FSM: PURCHASE(2) → BURN(3) → SETUP(1) → (cycle)
+ *      - 3-state FSM: SETUP(1) → PURCHASE(2) → BURN(3) → SETUP(1) → (cycle)
  *      - GAMEOVER(86) is terminal
+ *      - Presale is a toggle (lootboxPresaleActive), not a state
  *      - Chainlink VRF for randomness with RNG lock to prevent manipulation
  *      - Delegatecall modules: endgame, jackpot, mint (must inherit DegenerusGameStorage)
- *      - Prize pool flow: nextPrizePool → currentPrizePool → ContractAddresses.JACKPOTS/rewardPool → claimableWinnings
+ *      - Prize pool flow: futurePrizePool → nextPrizePool → currentPrizePool → ContractAddresses.JACKPOTS/rewardPool → claimableWinnings
  *
  * @dev CRITICAL INVARIANTS:
  *      - address(this).balance + steth.balanceOf(this) >= claimablePool
- *      - gameState transitions: 2→3→1→2 (starts at 2, 86 = terminal)
+ *      - gameState transitions: 1→2→3→1→2 (starts at 1, 86 = terminal)
+ *      - lootboxPresaleActive is one-way (true→false, never false→true)
  *
  * @dev SECURITY:
  *      - Pull pattern for ETH/stETH withdrawals (claimWinnings)
@@ -173,6 +175,50 @@ contract DegenerusGame is DegenerusGameStorage {
     /// @param current The new coordinator address.
     event VrfCoordinatorUpdated(address indexed previous, address indexed current);
 
+    /// @notice Emitted when a loot box purchase is recorded.
+    /// @param buyer Loot box purchaser.
+    /// @param day Purchase day index.
+    /// @param amount Total ETH contributed.
+    /// @param presale True if purchased during loot box presale mode.
+    /// @param futureShare ETH reserved for future prize pool funding.
+    /// @param nextPrizeShare ETH added to nextPrizePool.
+    /// @param vaultShare ETH forwarded to the vault (presale only).
+    /// @param rewardShare ETH added to rewardPool.
+    event LootBoxPurchased(
+        address indexed buyer,
+        uint48 indexed day,
+        uint256 amount,
+        bool presale,
+        uint256 futureShare,
+        uint256 nextPrizeShare,
+        uint256 vaultShare,
+        uint256 rewardShare
+    );
+
+    /// @notice Emitted when a loot box is opened.
+    /// @param player Loot box owner.
+    /// @param day Purchase day index.
+    /// @param amount ETH amount resolved.
+    /// @param futureLevel Base future level (level+1 at purchase).
+    /// @param futureTickets Total future tickets awarded across futureLevel..futureLevel+4.
+    /// @param currentTickets Current-level tickets awarded (always 0 for loot box rolls).
+    /// @param burnie BURNIE credited for loot box EV.
+    /// @param bonusBurnie Bonus BURNIE from presale pool (if any).
+    event LootBoxOpened(
+        address indexed player,
+        uint48 indexed day,
+        uint256 amount,
+        uint24 futureLevel,
+        uint32 futureTickets,
+        uint32 currentTickets,
+        uint256 burnie,
+        uint256 bonusBurnie
+    );
+
+    /// @notice Emitted when loot box presale mode is toggled.
+    /// @param active True if presale mode is active.
+    event LootBoxPresaleStatus(bool active);
+
     /*+=======================================================================+
       |                   PRECOMPUTED ADDRESSES (CONSTANT)                    |
       +=======================================================================+
@@ -266,6 +312,50 @@ contract DegenerusGame is DegenerusGameStorage {
     ///      Compounds +50% per queued nudge.
     uint256 private constant RNG_NUDGE_BASE_COST = 100 ether;
 
+    /// @dev Max players processed per future-mint activation batch.
+    uint32 private constant FUTURE_MINT_PLAYER_BATCH_SIZE = 96;
+
+    /// @dev Loot box minimum purchase amount (0.01 ETH).
+    ///      Allows flexible amounts so players can spend exact claimable balances.
+    uint256 private constant LOOTBOX_MIN = 0.01 ether;
+
+    /// @dev Loot box EV configuration (basis points of total ETH).
+    ///      Both modes: 60% tickets/gamepieces, 20% small BURNIE, 20% large BURNIE (d20 roll).
+    ///      Within the 60% ticket outcome, there's a 1/6 chance for a gamepiece if budget allows.
+    uint16 private constant LOOTBOX_TICKET_EV_BPS = 6000;
+    uint16 private constant LOOTBOX_SMALL_BURNIE_EV_BPS = 2000;
+    uint16 private constant LOOTBOX_LARGE_BURNIE_EV_BPS = 2000;
+
+    /// @dev Loot box per-roll payouts (same for both modes, presale applies 2x multiplier to BURNIE).
+    ///      Normal mode:
+    ///      - Tickets/Gamepieces: 60% × 116.67% = 70% (1/6 chance gamepiece if budget >= 4 MAP price)
+    ///      - Small BURNIE: 20% × 5% = 1%
+    ///      - Large BURNIE: 20% × 195% = 39%
+    ///      - Total EV: 110%
+    ///      Presale mode (2x BURNIE multiplier applied after roll):
+    ///      - Tickets/Gamepieces: 60% × 116.67% = 70%
+    ///      - Small BURNIE: 20% × 5% × 2 = 2%
+    ///      - Large BURNIE: 20% × 195% × 2 = 78%
+    ///      - Total EV: 150%
+    ///
+    ///      Note: If ticket budget < 1 MAP price, fallback converts to BURNIE at 80% value (20% penalty).
+    uint16 private constant LOOTBOX_TICKET_ROLL_BPS = 11667; // 116.67%
+    uint16 private constant LOOTBOX_SMALL_BURNIE_ROLL_BPS = 500; // 5%
+    uint16 private constant LOOTBOX_LARGE_BURNIE_ROLL_BPS = 19500; // 195%
+
+    /// @dev Loot box amount split threshold (two rolls when exceeded).
+    uint256 private constant LOOTBOX_SPLIT_THRESHOLD = 1 ether;
+
+    /// @dev Loot box pool split (basis points of total ETH).
+    uint16 private constant LOOTBOX_SPLIT_FUTURE_BPS = 6000;
+    uint16 private constant LOOTBOX_SPLIT_NEXT_BPS = 2000;
+
+    /// @dev Loot box presale pool split (basis points of total ETH).
+    uint16 private constant LOOTBOX_PRESALE_SPLIT_FUTURE_BPS = 1000;
+    uint16 private constant LOOTBOX_PRESALE_SPLIT_NEXT_BPS = 1000;
+    uint16 private constant LOOTBOX_PRESALE_SPLIT_VAULT_BPS = 3000;
+
+
     /*+======================================================================+
       |                    MINT PACKED BIT LAYOUT                            |
       +======================================================================+
@@ -310,11 +400,18 @@ contract DegenerusGame is DegenerusGameStorage {
     /**
      * @notice Initialize the game with precomputed contract references.
      * @dev All addresses are compile-time constants from ContractAddresses for gas optimization.
+     *      Records deploy timestamp to make day 1 = deploy day.
      */
     constructor() {
-        // Initialize game in PURCHASE state
-        gameState = GAME_STATE_PURCHASE;
-        levelStartTime = uint48(block.timestamp);
+        // Initialize game in setup state (purchase phase starts via admin control).
+        gameState = GAME_STATE_SETUP;
+        levelStartTime = LEVEL_START_SENTINEL;
+
+        // Record deploy time for relative day calculation (day 1 = deploy day)
+        deployTime = uint48(block.timestamp);
+
+        // Set deploy time on BurnieCoin contract for synchronized day calculations
+        coin.setDeployTime(deployTime);
     }
 
     /*+======================================================================+
@@ -340,6 +437,37 @@ contract DegenerusGame is DegenerusGameStorage {
     /// @return The nextPrizePool value (ETH wei).
     function nextPrizePoolView() external view returns (uint256) {
         return nextPrizePool;
+    }
+
+    /// @notice Get the prize pool reserved for a future level.
+    /// @param lvl Target level for the reserved pool.
+    /// @return The futurePrizePool value (ETH wei).
+    function futurePrizePoolView(uint24 lvl) external view returns (uint256) {
+        return futurePrizePool[lvl];
+    }
+
+    /// @notice Get the aggregate future prize pool across all levels.
+    /// @return The futurePrizePoolTotal value (ETH wei).
+    function futurePrizePoolTotalView() external view returns (uint256) {
+        return futurePrizePoolTotal;
+    }
+
+    /// @notice Get queued future reward mints owed for a level.
+    /// @param lvl Target level for the queued mints.
+    /// @param player Player address to query.
+    /// @return The number of reward mints owed.
+    function futureMintsOwedView(uint24 lvl, address player) external view returns (uint32) {
+        return futureMintsOwed[lvl][player];
+    }
+
+    /// @notice Get loot box status for a player/day.
+    /// @param player Player address to query.
+    /// @param day Day index of the loot box purchase.
+    /// @return amount ETH amount recorded for the loot box (wei).
+    /// @return presale True if the loot box was purchased during presale mode.
+    function lootboxStatus(address player, uint48 day) external view returns (uint256 amount, bool presale) {
+        amount = lootboxEth[day][player];
+        presale = lootboxPresale[day][player];
     }
 
     /// @notice Get the current prize pool (jackpots are paid from this).
@@ -378,7 +506,7 @@ contract DegenerusGame is DegenerusGameStorage {
     }
 
     /// @notice Get the VRF random word recorded for a specific day.
-    /// @dev Days are indexed from JACKPOT_RESET_TIME offset.
+    /// @dev Days are indexed from deploy time (day 1 = deploy day).
     /// @param day The day index to query.
     /// @return The random word (0 if no word recorded for that day).
     function rngWordForDay(uint48 day) external view returns (uint256) {
@@ -405,10 +533,27 @@ contract DegenerusGame is DegenerusGameStorage {
     }
 
     /// @dev Calculate current day index from block timestamp.
-    ///      Day boundaries are offset by JACKPOT_RESET_TIME (~23 hours from midnight).
-    /// @return Current day index since epoch.
+    ///      Day 1 = deploy day. Days reset at JACKPOT_RESET_TIME (22:57 UTC), not midnight.
+    /// @return Current day index since deploy (1-indexed).
     function _currentDayIndex() private view returns (uint48) {
-        return uint48((uint48(block.timestamp) - JACKPOT_RESET_TIME) / 1 days);
+        // Calculate day boundaries with JACKPOT_RESET_TIME offset
+        uint48 deployDayBoundary = uint48((deployTime - JACKPOT_RESET_TIME) / 1 days);
+        uint48 currentDayBoundary = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
+        return currentDayBoundary - deployDayBoundary + 1;
+    }
+
+    /// @dev Record loot box purchase as an ETH mint day for daily gate eligibility.
+    ///      Updates the lastEthDay field in mintPacked_ storage.
+    /// @param player Address of the loot box buyer.
+    /// @param day Current day index.
+    function _recordLootboxMintDay(address player, uint32 day) private {
+        uint256 prevData = mintPacked_[player];
+        uint32 prevDay = uint32((prevData >> ETH_DAY_SHIFT) & MINT_MASK_32);
+        if (prevDay == day) {
+            return; // Already recorded for today
+        }
+        uint256 clearedDay = prevData & ~(MINT_MASK_32 << ETH_DAY_SHIFT);
+        mintPacked_[player] = clearedDay | (uint256(day) << ETH_DAY_SHIFT);
     }
 
     /// @dev Check if there's a 3-consecutive-day gap in VRF words.
@@ -672,6 +817,46 @@ contract DegenerusGame is DegenerusGameStorage {
         coinReward = _recordMintDataModule(player, lvl, mintUnits);
     }
 
+    /// @notice Queue reward mints and prize funding for a future level.
+    /// @dev Access: ContractAddresses.ADMIN or this contract (delegatecall modules).
+    ///      Pool funding is accounting-only; caller is responsible for debiting source pools.
+    /// @param player Recipient of future reward mints.
+    /// @param targetLevel Level at which the queued mints should activate.
+    /// @param quantity Number of reward mints to queue (0 allowed).
+    /// @param poolWei Amount to reserve in futurePrizePool for the target level.
+    function queueFutureRewardMints(
+        address player,
+        uint24 targetLevel,
+        uint32 quantity,
+        uint256 poolWei
+    ) external {
+        if (msg.sender != ContractAddresses.ADMIN && msg.sender != address(this)) revert E();
+        _queueFutureRewardMints(player, targetLevel, quantity, poolWei);
+    }
+
+    function _queueFutureRewardMints(
+        address player,
+        uint24 targetLevel,
+        uint32 quantity,
+        uint256 poolWei
+    ) private {
+        if (targetLevel <= level) revert E();
+        if (quantity != 0 && player == address(0)) revert E();
+
+        if (poolWei != 0) {
+            futurePrizePool[targetLevel] += poolWei;
+            futurePrizePoolTotal += poolWei;
+        }
+
+        if (quantity == 0) return;
+
+        uint32 owed = futureMintsOwed[targetLevel][player];
+        if (owed == 0) {
+            futureMintQueue[targetLevel].push(player);
+        }
+        futureMintsOwed[targetLevel][player] = owed + quantity;
+    }
+
     /// @notice Track coinflip deposits for prize pool tuning on last purchase day.
     /// @dev Access: coin contract only.
     ///      Coinflip activity on last purchase day affects jackpot calculations.
@@ -681,6 +866,351 @@ contract DegenerusGame is DegenerusGameStorage {
         if (gameState == GAME_STATE_PURCHASE && lastPurchaseDay) {
             lastPurchaseDayFlipTotal += amount;
         }
+    }
+
+    /*+======================================================================+
+      |                       LOOT BOX CONTROLS                             |
+      +======================================================================+*/
+
+    /// @notice Start loot box presale mode (2x BURNIE rewards + bonusFlip active).
+    /// @dev Access: ContractAddresses.ADMIN only. Can only be started once (one-way toggle).
+    function startLootboxPresale() external {
+        if (msg.sender != ContractAddresses.ADMIN) revert E();
+        if (lootboxPresaleActive) revert E();
+        if (lootboxPresaleEnded) revert E(); // Cannot restart after ending
+
+        lootboxPresaleActive = true;
+        emit LootBoxPresaleStatus(true);
+    }
+
+    /// @notice End loot box presale mode (one-way: cannot be re-enabled).
+    /// @dev Access: ContractAddresses.ADMIN only.
+    function endLootboxPresale() external {
+        if (msg.sender != ContractAddresses.ADMIN) revert E();
+        if (!lootboxPresaleActive) revert E();
+
+        lootboxPresaleActive = false;
+        lootboxPresaleEnded = true; // Mark as permanently ended
+        emit LootBoxPresaleStatus(false);
+    }
+
+    /// @notice Start the normal purchase phase.
+    /// @dev Access: ContractAddresses.ADMIN only. Must be in SETUP state.
+    function startPurchasing() external {
+        if (msg.sender != ContractAddresses.ADMIN) revert E();
+        if (gameState != GAME_STATE_SETUP) revert E();
+
+        gameState = GAME_STATE_PURCHASE;
+        levelStartTime = uint48(block.timestamp);
+        lastPurchaseDay = false;
+        levelJackpotPaid = false;
+    }
+
+    /// @notice Purchase any combination of gamepieces, MAPs, and loot boxes with ETH or claimable.
+    /// @dev Main entry point for all ETH/claimable purchases. For BURNIE purchases, use DegenerusGamepieces.purchase().
+    ///      Spending all claimable winnings earns a 10% bonus across the combined purchase.
+    ///      Adds affiliate support for loot box purchases.
+    ///      SECURITY: Blocked when RNG is locked.
+    /// @param gamepieceQuantity Number of gamepieces to purchase (0 to skip).
+    /// @param mapQuantity Number of MAP tickets to purchase (0 to skip).
+    /// @param lootBoxAmount ETH amount for loot boxes, minimum 0.01 ETH (0 to skip).
+    /// @param affiliateCode Affiliate/referral code for all purchases.
+    /// @param payKind Payment method (DirectEth, Claimable, or Combined).
+    function purchase(
+        uint256 gamepieceQuantity,
+        uint256 mapQuantity,
+        uint256 lootBoxAmount,
+        bytes32 affiliateCode,
+        MintPaymentKind payKind
+    ) external payable {
+        if (rngLockedFlag) revert RngNotReady();
+
+        address buyer = msg.sender;
+        uint24 currentLevel = level;
+        uint8 currentState = gameState;
+        uint256 priceWei = price;
+
+        // Validate loot box amount (must be at least minimum)
+        if (lootBoxAmount != 0 && lootBoxAmount < LOOTBOX_MIN) revert E();
+
+        // Calculate total cost
+        uint256 gamepieceCost = 0;
+        uint256 mapCost = 0;
+
+        if (gamepieceQuantity > 0) {
+            if (gamepieceQuantity > type(uint32).max) revert E();
+            gamepieceCost = priceWei * gamepieceQuantity;
+        }
+
+        if (mapQuantity > 0) {
+            if (mapQuantity > type(uint32).max) revert E();
+            mapCost = (priceWei * mapQuantity) / 4; // MAPs cost 1/4 of gamepiece price
+        }
+
+        uint256 totalCost = gamepieceCost + mapCost + lootBoxAmount;
+        if (totalCost == 0) revert E(); // Must purchase something
+
+        // Track initial claimable balance for full-spend bonus detection
+        uint256 initialClaimable = claimableWinnings[buyer];
+
+        // Calculate how much ETH to allocate to each purchase type
+        uint256 ethForGamepieces = 0;
+        uint256 ethForMaps = 0;
+
+        // Loot boxes always paid with ETH, deduct from total first
+        uint256 remainingEth = msg.value;
+        if (remainingEth < lootBoxAmount) revert E();
+        unchecked {
+            remainingEth -= lootBoxAmount;
+        }
+
+        // Allocate remaining ETH to gamepieces and MAPs proportionally
+        if (remainingEth > 0 && (gamepieceCost + mapCost) > 0) {
+            ethForGamepieces = (remainingEth * gamepieceCost) / (gamepieceCost + mapCost);
+            ethForMaps = remainingEth - ethForGamepieces;
+        }
+
+        // Execute gamepiece purchases if requested
+        if (gamepieceCost > 0 && gamepieceQuantity > 0) {
+            // Build PurchaseParams struct and call
+            (bool success, ) = ContractAddresses.GAMEPIECES.call{value: ethForGamepieces}(
+                abi.encodeWithSignature(
+                    "purchase((uint256,uint8,uint8,bool,bytes32))",
+                    gamepieceQuantity,
+                    uint8(0), // PurchaseKind.Player
+                    uint8(payKind),
+                    false, // payInCoin
+                    affiliateCode
+                )
+            );
+            if (!success) revert E();
+        }
+
+        // Execute MAP purchases if requested
+        if (mapCost > 0 && mapQuantity > 0) {
+            // Build PurchaseParams struct and call
+            (bool success, ) = ContractAddresses.GAMEPIECES.call{value: ethForMaps}(
+                abi.encodeWithSignature(
+                    "purchase((uint256,uint8,uint8,bool,bytes32))",
+                    mapQuantity,
+                    uint8(1), // PurchaseKind.Map
+                    uint8(payKind),
+                    false, // payInCoin
+                    affiliateCode
+                )
+            );
+            if (!success) revert E();
+        }
+
+        // Execute loot box purchase
+        if (lootBoxAmount > 0) {
+            uint48 day = _currentDayIndex();
+            bool presale = lootboxPresaleActive;
+
+            // Record this as an ETH mint for daily gate eligibility
+            _recordLootboxMintDay(buyer, uint32(day));
+
+            uint256 existing = lootboxEth[day][buyer];
+            if (existing != 0 && lootboxPresale[day][buyer] != presale) revert E();
+
+            if (existing == 0) {
+                // Target level will be rolled at opening time, not locked at purchase
+                if (presale) {
+                    lootboxPresale[day][buyer] = true;
+                }
+            }
+            lootboxEth[day][buyer] = existing + lootBoxAmount;
+
+            // Split loot box ETH into pools
+            uint256 futureBps = presale ? LOOTBOX_PRESALE_SPLIT_FUTURE_BPS : LOOTBOX_SPLIT_FUTURE_BPS;
+            uint256 nextBps = presale ? LOOTBOX_PRESALE_SPLIT_NEXT_BPS : LOOTBOX_SPLIT_NEXT_BPS;
+            uint256 vaultBps = presale ? LOOTBOX_PRESALE_SPLIT_VAULT_BPS : 0;
+
+            uint256 futureShare = (lootBoxAmount * futureBps) / 10_000;
+            uint256 nextShare = (lootBoxAmount * nextBps) / 10_000;
+            uint256 vaultShare = (lootBoxAmount * vaultBps) / 10_000;
+            uint256 rewardShare;
+            unchecked {
+                rewardShare = lootBoxAmount - futureShare - nextShare - vaultShare;
+            }
+
+            if (futureShare != 0) {
+                // Hold in reserve pool until opening, when target level is rolled
+                lootboxReservePool += futureShare;
+            }
+            if (nextShare != 0) {
+                nextPrizePool += nextShare;
+            }
+            if (vaultShare != 0) {
+                (bool ok, ) = payable(ContractAddresses.VAULT).call{value: vaultShare}("");
+                if (!ok) revert E();
+            }
+            if (rewardShare != 0) {
+                rewardPool += rewardShare;
+            }
+
+            // Add affiliate support for loot box purchases
+            if (affiliateCode != bytes32(0)) {
+                uint256 affiliateAmount = _calculateLootboxAffiliateAmount(currentLevel, currentState, lootBoxAmount, priceWei);
+                affiliate.payAffiliate(affiliateAmount, affiliateCode, buyer, currentLevel);
+            }
+
+            emit LootBoxPurchased(buyer, day, lootBoxAmount, presale, futureShare, nextShare, vaultShare, rewardShare);
+
+            // Notify quest module of loot box purchase
+            coin.notifyQuestLootBox(buyer, lootBoxAmount);
+        }
+
+        // Check if player spent all claimable across all purchases
+        uint256 finalClaimable = claimableWinnings[buyer];
+        uint256 totalClaimableUsed = initialClaimable > finalClaimable ? initialClaimable - finalClaimable : 0;
+        bool spentAllClaimable = (finalClaimable <= 1 && totalClaimableUsed > 0);
+
+        // Apply combined full-spend bonus if player spent all claimable (minimum 3 gamepiece-equivalents)
+        if (spentAllClaimable && totalClaimableUsed >= priceWei * 3) {
+            // Award 10% bonus on total claimable spent as BURNIE
+            uint256 bonusAmount = (totalClaimableUsed * PRICE_COIN_UNIT * 10) / (priceWei * 100);
+            if (bonusAmount > 0) {
+                coin.creditFlip(buyer, bonusAmount);
+            }
+        }
+    }
+
+    /// @dev Calculate affiliate amount for loot box purchases.
+    /// @param lvl Current game level.
+    /// @param gameState Current game state.
+    /// @param lootBoxAmount Loot box purchase amount in wei.
+    /// @param priceWei Current gamepiece price.
+    /// @return Affiliate reward amount.
+    function _calculateLootboxAffiliateAmount(
+        uint24 lvl,
+        uint8 gameState,
+        uint256 lootBoxAmount,
+        uint256 priceWei
+    ) private pure returns (uint256) {
+        // Calculate loot box purchase as gamepiece-equivalents
+        // Loot boxes have ~110-150% EV, so use a conservative 50% affiliate rate of a gamepiece
+        uint256 gamepieceEquivalent = lootBoxAmount / priceWei;
+        if (gamepieceEquivalent == 0) return 0;
+
+        // Use similar logic to gamepiece affiliate rewards but at 50% rate
+        uint256 baseAmount;
+        if (lvl > 40) {
+            uint256 pct = gameState != 3 ? 30 : 5;
+            baseAmount = (PRICE_COIN_UNIT * pct) / 100;
+        } else {
+            baseAmount = PRICE_COIN_UNIT / 10;
+            if (lvl <= 3 || gameState != 3) {
+                baseAmount = (baseAmount * 250) / 100;
+            }
+        }
+
+        // Apply 50% rate for loot boxes and scale by equivalent gamepieces
+        return (baseAmount * gamepieceEquivalent) / 2;
+    }
+
+    /// @notice Open a loot box from a previous day once next-day RNG is available.
+    /// @param day Day index when the loot box was purchased.
+    function openLootBox(uint48 day) external {
+        uint256 amount = lootboxEth[day][msg.sender];
+        if (amount == 0) revert E();
+
+        uint48 rngDay = day + 1;
+        uint256 rngWord = rngWordByDay[rngDay];
+        if (rngWord == 0) revert RngNotReady();
+
+        lootboxEth[day][msg.sender] = 0;
+        bool presale = lootboxPresale[day][msg.sender];
+        if (presale) {
+            lootboxPresale[day][msg.sender] = false;
+        }
+
+        uint256 entropy = uint256(keccak256(abi.encode(rngWord, msg.sender, day, amount)));
+
+        // Roll target level: current level + 0 to 5 (6 possibilities)
+        uint24 currentLevel = level;
+        uint256 levelOffset = entropy % 6;
+        uint24 targetLevel = currentLevel + uint24(levelOffset);
+
+        // Calculate price for the rolled target level
+        uint256 targetPrice = _priceForLevel(targetLevel);
+        if (targetPrice == 0) revert E();
+
+        // Transfer the future prize pool share from reserve to the rolled target level
+        // Recalculate the futureShare using the same formula as purchase
+        uint256 futureBps = presale ? LOOTBOX_PRESALE_SPLIT_FUTURE_BPS : LOOTBOX_SPLIT_FUTURE_BPS;
+        uint256 futureShare = (amount * futureBps) / 10_000;
+        if (futureShare != 0) {
+            lootboxReservePool -= futureShare;
+            _queueFutureRewardMints(address(0), targetLevel, 0, futureShare);
+        }
+
+        uint256 amountFirst = amount;
+        uint256 amountSecond = 0;
+        if (amount > LOOTBOX_SPLIT_THRESHOLD) {
+            amountFirst = amount / 2;
+            amountSecond = amount - amountFirst;
+        }
+
+        uint256 burniePresale; // BURNIE eligible for 2x multiplier
+        uint256 burnieNoMultiplier; // BURNIE from ticket conversions (no multiplier)
+        uint32 futureTickets;
+        (uint256 burnieOut, uint32 ticketsOut, uint256 nextEntropy, bool applyMultiplier) =
+            _resolveLootboxRoll(msg.sender, amountFirst, targetLevel, targetPrice, entropy, presale);
+        if (burnieOut != 0) {
+            if (applyMultiplier) {
+                burniePresale += burnieOut;
+            } else {
+                burnieNoMultiplier += burnieOut;
+            }
+        }
+        if (ticketsOut != 0) {
+            uint256 totalTickets = uint256(futureTickets) + ticketsOut;
+            if (totalTickets > type(uint32).max) revert E();
+            futureTickets = uint32(totalTickets);
+        }
+        entropy = nextEntropy;
+
+        if (amountSecond != 0) {
+            (burnieOut, ticketsOut, nextEntropy, applyMultiplier) =
+                _resolveLootboxRoll(msg.sender, amountSecond, targetLevel, targetPrice, entropy, presale);
+            if (burnieOut != 0) {
+                if (applyMultiplier) {
+                    burniePresale += burnieOut;
+                } else {
+                    burnieNoMultiplier += burnieOut;
+                }
+            }
+            if (ticketsOut != 0) {
+                uint256 totalTickets = uint256(futureTickets) + ticketsOut;
+                if (totalTickets > type(uint32).max) revert E();
+                futureTickets = uint32(totalTickets);
+            }
+            entropy = nextEntropy;
+        }
+
+        // Presale loot boxes give 2x BURNIE rewards (only for actual BURNIE rolls, not conversions)
+        uint256 burnieAmount = burnieNoMultiplier;
+        if (presale && burniePresale != 0) {
+            burnieAmount += burniePresale * 2;
+        } else {
+            burnieAmount += burniePresale;
+        }
+
+        if (burnieAmount != 0) {
+            coin.creditFlip(msg.sender, burnieAmount);
+        }
+
+        emit LootBoxOpened(
+            msg.sender,
+            day,
+            amount,
+            targetLevel,
+            futureTickets,
+            0,
+            burnieAmount,
+            0
+        );
     }
 
     /// @dev Process mint payment and return amount contributed to prize pool.
@@ -754,21 +1284,23 @@ contract DegenerusGame is DegenerusGameStorage {
       |                    CORE STATE MACHINE: advanceGame()                                   |
       +========================================================================================+
       |  The heart of the game. This function progresses the state machine                     |
-      |  through its 4 states: PRESALE(0), SETUP(1), PURCHASE(2),                              |
-      |  DEGENERUS(3). Each call performs one "tick" of work.                                  |
-      |  GAMEOVER(86) is terminal.                                                             |
+      |  through its 3 states: SETUP(1), PURCHASE(2), DEGENERUS(3).                            |
+      |  Each call performs one "tick" of work. GAMEOVER(86) is terminal.                      |
       |                                                                                        |
       |  State Transitions:                                                                    |
       |  • State 1 (SETUP): Run endgame settlement, then → 2                                   |
       |  • State 2 (PURCHASE): Process airdrops until target met, then → 3                     |
       |  • State 3 (DEGENERUS): Pay daily ContractAddresses.JACKPOTS, wait for burns, then → 1 |
-      |  • State 0 (PRESALE): RNG + coinflips                                                  |
       |  • State 86 (GAMEOVER): Terminal state, no transitions                                 |
       |                                                                                        |
       |  Gating:                                                                               |
       |  • Standard calls require caller to have minted today (skin-in-game)                   |
       |  • cap != 0 bypasses gate but forfeits BURNIE reward                                   |
       |  • RNG must be ready (not locked) or recently stale (18h timeout)                      |
+      |                                                                                        |
+      |  Presale: lootboxPresaleActive toggle (orthogonal to state machine)                    |
+      |  • When true: 2x BURNIE from loot boxes, bonusFlip active                              |
+      |  • Creator can end presale (one-way, cannot re-enable)                                 |
       +========================================================================================+*/
 
     /// @notice Advance the game state machine by one tick.
@@ -797,7 +1329,7 @@ contract DegenerusGame is DegenerusGameStorage {
     function advanceGame(uint32 cap) external {
         address caller = msg.sender;
         uint48 ts = uint48(block.timestamp);
-        // Day index uses JACKPOT_RESET_TIME offset instead of unix midnight to align ContractAddresses.JACKPOTS/quests.
+        // Day index is relative to deploy time (day 1 = deploy day).
         uint48 day = _currentDayIndex();
         IDegenerusCoin coinContract = coin;
         uint48 lst = levelStartTime;
@@ -807,6 +1339,8 @@ contract DegenerusGame is DegenerusGameStorage {
 
         // === GAMEOVER CHECK ===
         if (_gameState == GAME_STATE_GAMEOVER) {
+            // Check for final sweep (1 month after gameover)
+            _gameOverFinalSweep();
             return;
         }
 
@@ -827,7 +1361,7 @@ contract DegenerusGame is DegenerusGameStorage {
                 _unlockRng(day);
             }
             // Sweep all funds to the vault for final distribution
-            gameOverDrainToVault();
+            gameOverDrainToVault(dailyIdx);
             return;
         }
 
@@ -837,7 +1371,7 @@ contract DegenerusGame is DegenerusGameStorage {
         do {
             // === DAILY GATE ===
             // Standard flow requires caller to have minted today (prevents gaming by non-participants)
-            // Also skip for CREATOR address to allow contract owner to advance game for maintenance
+            // Skip for CREATOR address to allow maintenance advances
             if (cap == 0 && caller != ContractAddresses.CREATOR) {
                 uint32 gateIdx = uint32(dailyIdx);
                 if (gateIdx != 0) {
@@ -863,6 +1397,13 @@ contract DegenerusGame is DegenerusGameStorage {
             uint256 rngWord = rngAndTimeGate(day, lvl, lastPurchase);
             if (rngWord == 1) {
                 break; // VRF requested - must wait for fulfillment
+            }
+
+            // === FUTURE MINT ACTIVATION (State 2 only) ===
+            // Process queued future mints before other purchase-phase work.
+            if (_gameState == GAME_STATE_PURCHASE) {
+                (bool futureWorked, bool futureFinished) = _processFutureMintBatch(cap, lvl);
+                if (futureWorked || !futureFinished) break;
             }
 
             // === MAP BATCH PROCESSING ===
@@ -917,6 +1458,7 @@ contract DegenerusGame is DegenerusGameStorage {
                 // --- Pre-target: daily ContractAddresses.JACKPOTS while building up prize pool ---
                 if (!lastPurchaseDay) {
                     payDailyJackpot(false, lvl, rngWord);
+                    _payFutureTicketJackpot(lvl, rngWord); // Award future ticket holders
                     // Check if prize pool target is now met
                     if (nextPrizePool >= lastPrizePool) {
                         lastPurchaseDay = true;
@@ -1015,6 +1557,7 @@ contract DegenerusGame is DegenerusGameStorage {
                 }
 
                 payDailyJackpot(true, lvl, rngWord);
+                _payFutureTicketJackpot(lvl, rngWord); // Award future ticket holders
                 if (mapJackpotType != MAP_JACKPOT_NONE) {
                     break; // MAP jackpot queued, will process next tick
                 }
@@ -1031,8 +1574,10 @@ contract DegenerusGame is DegenerusGameStorage {
         // Emit state change event for indexers
         emit Advance(gameState);
 
-        // Credit caller with BURNIE reward for advancing (unless emergency cap mode)
-        if (cap == 0) coinContract.creditFlip(caller, PRICE_COIN_UNIT >> 1);
+        // Credit caller with BURNIE reward for advancing (skip emergency cap mode)
+        if (cap == 0) {
+            coinContract.creditFlip(caller, PRICE_COIN_UNIT >> 1);
+        }
     }
 
     /*+======================================================================+
@@ -1678,6 +2223,47 @@ contract DegenerusGame is DegenerusGameStorage {
         if (!ok) _revertDelegate(data);
     }
 
+    /// @dev Pay daily future ticket jackpot: 500 BURNIE flip credit to 20 random future ticket holders.
+    ///      Samples 5 players from each of levels +2, +3, +4, +5 (loot box exclusive levels).
+    ///      Gas-efficient: unweighted sampling, no duplicates within a level.
+    /// @param lvl Current level.
+    /// @param randWord VRF random word for winner selection.
+    function _payFutureTicketJackpot(uint24 lvl, uint256 randWord) private {
+        uint256 entropy = randWord;
+        uint256 totalAwarded;
+
+        // Sample from levels +2, +3, +4, +5 (can only get these from loot boxes)
+        for (uint256 offset = 2; offset <= 5; offset++) {
+            uint24 targetLevel = lvl + uint24(offset);
+            address[] storage players = futureMintQueue[targetLevel];
+            uint256 playerCount = players.length;
+
+            if (playerCount == 0) continue;
+
+            // Award up to 5 players from this level
+            uint256 winnersFromLevel = playerCount < 5 ? playerCount : 5;
+
+            for (uint256 i; i < winnersFromLevel; i++) {
+                entropy = _entropyStep(entropy);
+                uint256 idx = entropy % playerCount;
+                address winner = players[idx];
+
+                // Only award if they still have tickets (could have been consumed)
+                if (futureMintsOwed[targetLevel][winner] > 0) {
+                    coin.creditFlip(winner, 500 ether); // 500 BURNIE flip credit
+                    totalAwarded++;
+                }
+
+                // Swap selected player to end and reduce pool size (avoid duplicates)
+                players[idx] = players[playerCount - 1];
+                playerCount--;
+            }
+        }
+
+        // Emit event for tracking (optional, can be added later)
+        // emit FutureTicketJackpot(lvl, totalAwarded, totalAwarded * 500 ether);
+    }
+
     /// @dev Pay carryover extermination jackpot for the previously exterminated trait.
     ///      Called during setup if a trait was exterminated last level.
     /// @param lvl Current level.
@@ -1695,20 +2281,193 @@ contract DegenerusGame is DegenerusGameStorage {
         if (!ok) _revertDelegate(data);
     }
 
-    /// @dev Sweep all game funds to ContractAddresses.VAULT on game over.
+    /// @dev Sweep game funds on gameover - distributes remaining funds via jackpot or vault sweep.
     ///      Called when liveness guards trigger (2.5yr deploy or 365-day inactivity).
     ///      Transitions game to GAMEOVER (86).
-    function gameOverDrainToVault() private {
+    ///
+    ///      LEVEL 1 TIMEOUT (2.5 years): Award all remaining funds via daily jackpot.
+    ///      OTHER TIMEOUTS (365 days): Split 50/50 - half to vault, half to cross-level jackpot.
+    ///      Final sweep of all remaining funds occurs 1 month after gameover.
+    ///
+    ///      VRF FALLBACK: Uses rngWordByDay which is set by _gameOverEntropy. If Chainlink VRF
+    ///      is broken, waits 3 days then uses earliest historical VRF word as secure fallback.
+    ///      This prevents manipulation since historical VRF was already verified on-chain.
+    /// @param day Day index for RNG word lookup.
+    function gameOverDrainToVault(uint48 day) private {
+        if (gameOverFinalJackpotPaid) return; // Already processed
+
         uint256 ethBal = address(this).balance;
         uint256 stBal = steth.balanceOf(address(this));
+        uint256 totalFunds = ethBal + stBal;
+
+        // Calculate available funds (excluding claimable winnings reserve)
+        uint256 available = totalFunds > claimablePool ? totalFunds - claimablePool : 0;
 
         gameState = GAME_STATE_GAMEOVER; // Terminal state
+        gameOverTime = uint48(block.timestamp);
+        gameOverFinalJackpotPaid = true;
 
-        if (ethBal != 0) {
-            (bool ok, ) = payable(ContractAddresses.VAULT).call{value: ethBal}("");
+        if (available == 0) return; // Nothing to distribute
+
+        // Get RNG word for jackpot selection (includes VRF fallback after 3 days)
+        uint256 rngWord = rngWordByDay[day];
+        if (rngWord == 0) return; // RNG not ready yet (wait for fallback)
+
+        // LEVEL 1 TIMEOUT: Award all remaining funds via daily jackpot
+        if (level == 1) {
+            // Convert stETH to ETH if needed for jackpot pool
+            if (stBal > 0) {
+                rewardPool += stBal;
+            }
+            // Award all available funds via daily jackpot mechanism
+            payDailyJackpot(true, level, rngWord);
+            return;
+        }
+
+        // OTHER TIMEOUTS: Split 50/50 between vault and cross-level jackpot
+        uint256 halfToVault = available / 2;
+        uint256 halfToJackpot = available - halfToVault;
+
+        // Send half to vault (prioritize ETH, then stETH)
+        if (halfToVault > 0) {
+            if (ethBal >= halfToVault) {
+                (bool ok, ) = payable(ContractAddresses.VAULT).call{value: halfToVault}("");
+                if (!ok) revert E();
+            } else {
+                // Send all ETH to vault
+                if (ethBal > 0) {
+                    (bool ok, ) = payable(ContractAddresses.VAULT).call{value: ethBal}("");
+                    if (!ok) revert E();
+                }
+                // Send remaining from stETH
+                uint256 stethToVault = halfToVault - ethBal;
+                if (!steth.transfer(ContractAddresses.VAULT, stethToVault)) revert E();
+            }
+        }
+
+        // Award other half via cross-level jackpot
+        if (halfToJackpot > 0) {
+            _payGameOverCrossLevelJackpot(halfToJackpot, rngWord);
+        }
+    }
+
+    /// @dev Distributes gameover jackpot to one random ticket from each level.
+    ///      Selects one ticket from each level before the current level, splits pot evenly.
+    /// @param amount Total ETH amount to distribute.
+    /// @param rngWord VRF random word for winner selection.
+    function _payGameOverCrossLevelJackpot(uint256 amount, uint256 rngWord) private {
+        if (amount == 0) return;
+
+        uint24 currentLevel = level;
+        if (currentLevel <= 1) return; // No previous levels to award
+
+        // First pass: count eligible levels (levels with at least one ticket)
+        uint24 eligibleLevels = 0;
+        for (uint24 lvl = 1; lvl < currentLevel; ) {
+            bool hasTickets = false;
+            for (uint16 traitId = 0; traitId < 256; ) {
+                if (traitBurnTicket[lvl][uint8(traitId)].length > 0) {
+                    hasTickets = true;
+                    break;
+                }
+                unchecked { ++traitId; }
+            }
+            if (hasTickets) {
+                unchecked { ++eligibleLevels; }
+            }
+            unchecked { ++lvl; }
+        }
+
+        if (eligibleLevels == 0) {
+            // No tickets found - send all to vault instead
+            if (amount <= address(this).balance) {
+                (bool ok, ) = payable(ContractAddresses.VAULT).call{value: amount}("");
+                if (!ok) revert E();
+            } else {
+                uint256 ethAvailable = address(this).balance;
+                if (ethAvailable > 0) {
+                    (bool ok, ) = payable(ContractAddresses.VAULT).call{value: ethAvailable}("");
+                    if (!ok) revert E();
+                }
+                uint256 stethAmount = amount - ethAvailable;
+                if (!steth.transfer(ContractAddresses.VAULT, stethAmount)) revert E();
+            }
+            return;
+        }
+
+        // Calculate payout per winner
+        uint256 payoutPerWinner = amount / eligibleLevels;
+        if (payoutPerWinner == 0) return;
+
+        // Second pass: select winners and distribute
+        uint256 entropyState = rngWord;
+        for (uint24 lvl = 1; lvl < currentLevel; ) {
+            // Count total tickets for this level
+            uint256 totalTickets = 0;
+            for (uint16 traitId = 0; traitId < 256; ) {
+                totalTickets += traitBurnTicket[lvl][uint8(traitId)].length;
+                unchecked { ++traitId; }
+            }
+
+            if (totalTickets == 0) {
+                unchecked { ++lvl; }
+                continue;
+            }
+
+            // Select a random ticket index
+            entropyState = _entropyStep(entropyState);
+            uint256 targetTicketIdx = entropyState % totalTickets;
+
+            // Find the winner
+            address winner;
+            uint256 ticketCount = 0;
+            for (uint16 traitId = 0; traitId < 256; ) {
+                address[] storage holders = traitBurnTicket[lvl][uint8(traitId)];
+                uint256 len = holders.length;
+                if (ticketCount + len > targetTicketIdx) {
+                    // Winner is in this trait's ticket array
+                    winner = holders[targetTicketIdx - ticketCount];
+                    break;
+                }
+                ticketCount += len;
+                unchecked { ++traitId; }
+            }
+
+            // Credit the winner
+            if (winner != address(0)) {
+                claimableWinnings[winner] += payoutPerWinner;
+                claimablePool += payoutPerWinner;
+            }
+
+            unchecked { ++lvl; }
+        }
+    }
+
+    /// @dev Final sweep of all remaining funds to vault after 1 month post-gameover.
+    ///      Called automatically by advanceGame when appropriate time has passed.
+    ///      Only sweeps funds beyond claimablePool (preserves player winnings).
+    function _gameOverFinalSweep() private {
+        if (gameOverTime == 0) return; // Game not over yet
+        if (block.timestamp < uint256(gameOverTime) + 30 days) return; // Too early
+
+        uint256 ethBal = address(this).balance;
+        uint256 stBal = steth.balanceOf(address(this));
+        uint256 totalFunds = ethBal + stBal;
+
+        // Calculate available funds (excluding claimable winnings reserve)
+        uint256 available = totalFunds > claimablePool ? totalFunds - claimablePool : 0;
+
+        if (available == 0) return; // Nothing to sweep
+
+        // Send all available funds to vault
+        if (ethBal > claimablePool) {
+            uint256 ethToVault = ethBal - claimablePool;
+            (bool ok, ) = payable(ContractAddresses.VAULT).call{value: ethToVault}("");
             if (!ok) revert E();
         }
-        if (stBal != 0) {
+
+        // Sweep any remaining stETH
+        if (stBal > 0) {
             if (!steth.transfer(ContractAddresses.VAULT, stBal)) revert E();
         }
     }
@@ -1815,7 +2574,7 @@ contract DegenerusGame is DegenerusGameStorage {
         // Record the word once per day; using a zero sentinel since VRF returning 0 is effectively impossible.
         if (rngWordByDay[day] == 0) {
             rngWordByDay[day] = currentWord;
-            bool bonusFlip = isMapJackpotDay;
+            bool bonusFlip = isMapJackpotDay || lootboxPresaleActive;
             // Always run coinflip payouts once game has started (lvl always >= 1)
             coin.processCoinflipPayouts(lvl, bonusFlip, currentWord, day);
         }
@@ -1823,6 +2582,8 @@ contract DegenerusGame is DegenerusGameStorage {
     }
 
     /// @dev Game-over RNG gate with fallback for stalled VRF.
+    ///      After 3-day timeout, uses earliest historical VRF word as fallback (more secure
+    ///      than blockhash since it's already verified on-chain and cannot be manipulated).
     /// @return word RNG word, 1 if request sent, or 0 if waiting on fallback.
     function _gameOverEntropy(uint48 day, uint24 lvl, bool isMapJackpotDay) private returns (uint256 word) {
         if (rngWordByDay[day] != 0) return rngWordByDay[day];
@@ -1840,7 +2601,8 @@ contract DegenerusGame is DegenerusGameStorage {
             if (rngRequestTime != 0) {
                 uint48 elapsed = uint48(block.timestamp) - rngRequestTime;
                 if (elapsed >= GAMEOVER_RNG_FALLBACK_DELAY) {
-                    uint256 fallbackWord = _fallbackRng(day, lvl);
+                    // Use earliest historical VRF word as fallback (more secure than blockhash)
+                    uint256 fallbackWord = _getHistoricalRngFallback(day);
                     rngWordByDay[day] = fallbackWord;
                     if (lvl != 0) {
                         coin.processCoinflipPayouts(lvl, isMapJackpotDay, fallbackWord, day);
@@ -1863,6 +2625,27 @@ contract DegenerusGame is DegenerusGameStorage {
         return 0;
     }
 
+    /// @dev Get historical VRF word as fallback for gameover RNG.
+    ///      Searches backwards from current day to find earliest available RNG word.
+    ///      Only uses blockhash-based fallback if no historical words exist.
+    /// @param currentDay Current day index.
+    /// @return word Historical RNG word or blockhash-based fallback.
+    function _getHistoricalRngFallback(uint48 currentDay) private view returns (uint256 word) {
+        // Search for earliest available historical RNG word
+        // Start from day 1 (day 0 might not exist if game started at different time)
+        for (uint48 searchDay = 1; searchDay < currentDay; ) {
+            word = rngWordByDay[searchDay];
+            if (word != 0) {
+                // Found a historical VRF word - use it (XOR with current day for uniqueness)
+                return uint256(keccak256(abi.encodePacked(word, currentDay)));
+            }
+            unchecked { ++searchDay; }
+        }
+
+        // No historical words found - use blockhash fallback (shouldn't happen in practice)
+        word = _fallbackRng(currentDay, level);
+    }
+
     function _fallbackRng(uint48 day, uint24 lvl) private view returns (uint256 word) {
         uint256 prevWord = day == 0 ? 0 : rngWordByDay[day - 1];
         word = uint256(
@@ -1879,6 +2662,234 @@ contract DegenerusGame is DegenerusGameStorage {
             )
         );
         if (word == 0) word = 1;
+    }
+
+    /*+======================================================================+
+      |                    FUTURE MINT ACTIVATION                           |
+      +======================================================================+
+      |  Future reward mints are staged per level and activated at the       |
+      |  start of that level's purchase phase.                               |
+      +======================================================================+*/
+
+    /// @dev Process a batch of future reward mints for the current level.
+    ///      Also pulls any reserved pool into nextPrizePool once per level.
+    /// @param playersToProcess Max players to process this call (0 = default batch size).
+    /// @param lvl Current level.
+    /// @return worked True if any queued entries were processed.
+    /// @return finished True if all queued entries for this level are processed.
+    function _processFutureMintBatch(
+        uint32 playersToProcess,
+        uint24 lvl
+    ) private returns (bool worked, bool finished) {
+        uint256 reserved = futurePrizePool[lvl];
+        if (reserved != 0) {
+            nextPrizePool += reserved;
+            futurePrizePool[lvl] = 0;
+            futurePrizePoolTotal -= reserved;
+        }
+
+        address[] storage queue = futureMintQueue[lvl];
+        uint256 total = queue.length;
+        if (total > type(uint32).max) revert E();
+        if (total == 0) {
+            futureMintCursor = 0;
+            futureMintLevel = 0;
+            return (false, true);
+        }
+
+        if (futureMintLevel != lvl) {
+            futureMintLevel = lvl;
+            futureMintCursor = 0;
+        }
+
+        uint256 idx = futureMintCursor;
+        if (idx >= total) {
+            delete futureMintQueue[lvl];
+            futureMintCursor = 0;
+            futureMintLevel = 0;
+            return (false, true);
+        }
+
+        uint32 batch = playersToProcess == 0 ? FUTURE_MINT_PLAYER_BATCH_SIZE : playersToProcess;
+        uint256 end = idx + batch;
+        if (end > total) {
+            end = total;
+        }
+
+        while (idx < end) {
+            address player = queue[idx];
+            uint32 owed = futureMintsOwed[lvl][player];
+            if (owed != 0) {
+                futureMintsOwed[lvl][player] = 0;
+                nft.queueRewardMints(player, owed);
+            }
+            unchecked {
+                ++idx;
+            }
+        }
+
+        worked = end != futureMintCursor;
+        futureMintCursor = uint32(idx);
+        finished = idx >= total;
+        if (finished) {
+            delete futureMintQueue[lvl];
+            futureMintCursor = 0;
+            futureMintLevel = 0;
+        }
+    }
+
+    /// @dev Deterministic price lookup by level (independent of claim time).
+    function _priceForLevel(uint24 targetLevel) private pure returns (uint256) {
+        if (targetLevel == 0) return 0;
+        if (targetLevel < 10) {
+            return 0.025 ether / ContractAddresses.COST_DIVISOR;
+        }
+        uint24 offset = targetLevel % 100;
+        if (offset == 0 || offset < 10) {
+            return 0.25 ether;
+        }
+        if (offset < 30) {
+            return 0.05 ether;
+        }
+        if (offset < 80) {
+            return 0.1 ether;
+        }
+        return 0.15 ether;
+    }
+
+    /// @dev Xorshift PRNG step for deterministic entropy progression.
+    function _entropyStep(uint256 state) private pure returns (uint256) {
+        unchecked {
+            state ^= state << 7;
+            state ^= state >> 9;
+            state ^= state << 8;
+        }
+        return state;
+    }
+
+    function _lootboxTicketCount(
+        uint256 budgetWei,
+        uint256 priceWei,
+        uint256 entropy
+    ) private pure returns (uint32 count, uint256 nextEntropy) {
+        if (budgetWei == 0 || priceWei == 0) {
+            return (0, entropy);
+        }
+
+        // Apply jackpot variance: 20% chance for 3x tickets, 80% chance for 0.6x tickets
+        // Maintains 1.08x EV: (0.2 × 3) + (0.8 × 0.6) = 1.08
+        nextEntropy = _entropyStep(entropy);
+        uint256 multiplierRoll = nextEntropy % 10;
+        uint256 adjustedBudget;
+        if (multiplierRoll < 2) {
+            // Jackpot! 3x tickets
+            adjustedBudget = (budgetWei * 3);
+        } else {
+            // Below average: 0.6x tickets
+            adjustedBudget = (budgetWei * 6) / 10;
+        }
+
+        uint256 base = adjustedBudget / priceWei;
+        uint256 remainder = adjustedBudget - (base * priceWei);
+        if (remainder != 0) {
+            nextEntropy = _entropyStep(nextEntropy);
+            if (nextEntropy % priceWei < remainder) {
+                unchecked {
+                    ++base;
+                }
+            }
+        }
+
+        if (base > type(uint32).max) revert E();
+        count = uint32(base);
+    }
+
+    function _resolveLootboxRoll(
+        address player,
+        uint256 amount,
+        uint24 targetLevel,
+        uint256 targetPrice,
+        uint256 entropy,
+        bool /* isPresale - unused after removing level distribution logic */
+    ) private returns (uint256 burnieOut, uint32 ticketsOut, uint256 nextEntropy, bool applyPresaleMultiplier) {
+        nextEntropy = entropy;
+        if (amount == 0) return (0, 0, nextEntropy, false);
+
+        nextEntropy = _entropyStep(nextEntropy);
+
+        // Both modes: 60% tickets/gamepieces (0-11), 20% small BURNIE (12-15), 20% large BURNIE (16-19) using d20 roll
+        // Target level is rolled by caller (current level + 0-5)
+        // Within ticket outcome: 1/6 chance for gamepiece (if budget >= 4× MAP price), else tickets
+        uint256 rollMax = 20;
+        uint256 ticketThreshold = 12; // rolls 0-11 = tickets
+        uint256 largeBurnieThreshold = 16; // rolls 16-19 = large BURNIE
+        uint16 ticketBps = LOOTBOX_TICKET_ROLL_BPS;
+        uint16 smallBurnieBps = LOOTBOX_SMALL_BURNIE_ROLL_BPS;
+        uint16 largeBurnieBps = LOOTBOX_LARGE_BURNIE_ROLL_BPS;
+
+        uint256 roll = nextEntropy % rollMax;
+
+        if (roll < ticketThreshold) {
+            // Target level already rolled by caller, use its price for ticket calculations
+            uint256 price = targetPrice;
+
+            uint256 ticketBudget = (amount * ticketBps) / 10_000;
+
+            // If budget would give less than 1 ticket, convert to BURNIE at 80% value (20% penalty)
+            if (ticketBudget < price) {
+                uint256 burnieValue = (ticketBudget * PRICE_COIN_UNIT) / targetPrice;
+                burnieOut = (burnieValue * 80) / 100; // 20% penalty for insufficient budget
+                applyPresaleMultiplier = false;
+            } else {
+                // Check if budget allows for a gamepiece (4 MAP tickets = 1 gamepiece)
+                uint256 gamepiecePrice = price * 4;
+                bool canAffordGamepiece = ticketBudget >= gamepiecePrice;
+
+                // If can afford gamepiece, do 1/6 roll for gamepiece vs tickets
+                bool awardGamepiece = false;
+                if (canAffordGamepiece) {
+                    nextEntropy = _entropyStep(nextEntropy);
+                    uint256 gamepieceRoll = nextEntropy % 6;
+                    awardGamepiece = (gamepieceRoll == 0);
+                }
+
+                if (awardGamepiece) {
+                    // Award 1 gamepiece for target level
+                    if (targetLevel <= level) {
+                        // Current level: convert to BURNIE equivalent
+                        burnieOut = 4 * PRICE_COIN_UNIT;
+                    } else {
+                        // Future level: queue gamepiece mint
+                        _queueFutureRewardMints(player, targetLevel, 4, 0);
+                        ticketsOut = 4;
+                    }
+                    applyPresaleMultiplier = false;
+                } else {
+                    // Award tickets as normal
+                    (uint32 tickets, uint256 entropyAfter) = _lootboxTicketCount(ticketBudget, price, nextEntropy);
+                    nextEntropy = entropyAfter;
+                    if (tickets == 0) return (0, 0, nextEntropy, false);
+
+                    if (targetLevel <= level) {
+                        burnieOut = uint256(tickets) * PRICE_COIN_UNIT;
+                    } else {
+                        _queueFutureRewardMints(player, targetLevel, tickets, 0);
+                        ticketsOut = tickets;
+                    }
+                    applyPresaleMultiplier = false;
+                }
+            }
+        } else if (roll < largeBurnieThreshold) {
+            // Small BURNIE (rolls 12-15): 5% of amount as BURNIE
+            uint256 burnieBudget = (amount * smallBurnieBps) / 10_000;
+            burnieOut = (burnieBudget * PRICE_COIN_UNIT) / targetPrice;
+            applyPresaleMultiplier = true;
+        } else {
+            // Large BURNIE (rolls 16-19): 195% of amount as BURNIE
+            uint256 burnieBudget = (amount * largeBurnieBps) / 10_000;
+            burnieOut = (burnieBudget * PRICE_COIN_UNIT) / targetPrice;
+            applyPresaleMultiplier = true;
+        }
     }
 
     /*+======================================================================+

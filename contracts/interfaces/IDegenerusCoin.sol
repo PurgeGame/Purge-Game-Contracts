@@ -18,4 +18,8 @@ interface IDegenerusCoin is IDegenerusCoinModule {
     function notifyQuestMint(address player, uint32 quantity, bool paidWithEth) external;
 
     function notifyQuestBurn(address player, uint32 quantity) external;
+
+    function notifyQuestLootBox(address player, uint256 amountWei) external;
+
+    function setDeployTime(uint48 timestamp) external;
 }

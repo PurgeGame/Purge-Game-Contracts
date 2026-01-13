@@ -75,7 +75,7 @@ contract BurnieCoin {
     event BountyPaid(address indexed to, uint256 amount);
 
     /// @notice Emitted when the daily quest is rolled for a new day.
-    /// @param day The day index (0-indexed from JACKPOT_RESET_TIME anchor).
+    /// @param day The day index (0-indexed from deployTime anchor).
     /// @param questType The type of quest rolled (see IDegenerusQuests).
     /// @param highDifficulty Whether hard mode is active for this quest.
     event DailyQuestRolled(uint48 indexed day, uint8 questType, bool highDifficulty);
@@ -254,7 +254,7 @@ contract BurnieCoin {
       +======================================================================+*/
 
     /// @notice Per-day, per-player coinflip stake amounts.
-    /// @dev Key: day index (from JACKPOT_RESET_TIME anchor) => player => stake.
+    /// @dev Key: day index (day 1 = deploy day, resets at JACKPOT_RESET_TIME) => player => stake.
     ///      Cleared on claim. Cannot be modified once day <= flipsClaimableDay.
     mapping(uint48 => mapping(address => uint256)) internal coinflipBalance;
 
@@ -270,6 +270,11 @@ contract BurnieCoin {
     /// @dev Advances each time processCoinflipPayouts() is called.
     ///      Active betting day = flipsClaimableDay + 1 (via _targetFlipDay).
     uint48 internal flipsClaimableDay;
+
+    /// @notice Timestamp when the game contract was deployed.
+    /// @dev Used to calculate day index relative to deploy (day 1 = deploy day).
+    ///      Set by the game contract via setDeployTime().
+    uint48 internal deployTime;
 
     /*+======================================================================+
       |                         VAULT ESCROW                                 |
@@ -479,7 +484,7 @@ contract BurnieCoin {
       |  • COINFLIP_EXTRA [78-115] - Payout multiplier range for normal      |
       |  • BPS_DENOMINATOR (10000) - Basis points conversion                 |
       |  • DECIMATOR_BUCKET (10)   - Base bucket for decimator weighting     |
-      |  • JACKPOT_RESET_TIME      - Epoch anchor for day indexing           |
+      |  • JACKPOT_RESET_TIME      - Daily reset boundary (22:57 UTC)        |
       |  • COIN_CLAIM_DAYS (30)    - Max days to claim past winnings         |
       +======================================================================+*/
 
@@ -504,8 +509,7 @@ contract BurnieCoin {
     ///      Lower bucket = more valuable. Adjusted based on level and streak.
     uint8 private constant DECIMATOR_BUCKET = 10;
 
-    /// @dev Unix timestamp anchor for day indexing (defines day 0 boundary).
-    ///      All coinflip days are calculated relative to this anchor.
+    /// @dev Seconds offset from midnight UTC for daily coinflip reset boundary (22:57 UTC).
     uint48 private constant JACKPOT_RESET_TIME = 82620;
 
     /// @dev Maximum number of past days a player can claim coinflip winnings.
@@ -825,6 +829,17 @@ contract BurnieCoin {
         emit LinkCredit(player, amount);
     }
 
+    /// @notice Set the deploy timestamp for day index calculations.
+    /// @dev Admin-only. Can only be set once (when deployTime is 0).
+    ///      Called by game contract during initialization.
+    /// @param timestamp The deploy timestamp from the game contract.
+    function setDeployTime(uint48 timestamp) external {
+        if (msg.sender != ContractAddresses.ADMIN) revert OnlyAdmin();
+        if (deployTime != 0) revert(); // Can only set once
+        if (timestamp == 0) revert();
+        deployTime = timestamp;
+    }
+
     /// @notice Batch credit up to three flip stakes in a single call.
     /// @dev Gas optimization for crediting multiple players in one transaction.
     ///      Zero addresses or amounts are skipped.
@@ -943,6 +958,21 @@ contract BurnieCoin {
         IDegenerusQuests module = questModule;
         (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed, bool completedBoth) = module
             .handleBurn(player, quantity);
+        uint256 questReward = _questApplyReward(player, reward, hardMode, questType, streak, completed, completedBoth);
+        if (questReward != 0) {
+            addFlip(player, questReward, false, false, false);
+        }
+    }
+
+    /// @notice Notify quest module of a loot box purchase.
+    /// @dev Access: game contract only. Credits quest rewards as flip stakes.
+    /// @param player The player who purchased the loot box.
+    /// @param amountWei ETH amount spent on the loot box (in wei).
+    function notifyQuestLootBox(address player, uint256 amountWei) external {
+        if (msg.sender != ContractAddresses.GAME) revert OnlyGame();
+        IDegenerusQuests module = questModule;
+        (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed, bool completedBoth) = module
+            .handleLootBox(player, amountWei);
         uint256 questReward = _questApplyReward(player, reward, hardMode, questType, streak, completed, completedBoth);
         if (questReward != 0) {
             addFlip(player, questReward, false, false, false);
@@ -1104,12 +1134,15 @@ contract BurnieCoin {
     }
 
     /// @dev Calculate the target day for new coinflip deposits.
-    ///      Day 0 starts after JACKPOT_RESET_TIME anchor, increments every 24h.
+    ///      Day 1 = deploy day. Days reset at JACKPOT_RESET_TIME (22:57 UTC).
     ///      Stakes always target the NEXT day (current + 1).
     /// @return The day index for new deposits.
     function _targetFlipDay() internal view returns (uint48) {
-        // Day 0 starts after JACKPOT_RESET_TIME, then increments every 24h; target is always the next day.
-        return uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days) + 1;
+        // Calculate current day with jackpot reset time offset, then target next day
+        uint48 deployDayBoundary = uint48((deployTime - JACKPOT_RESET_TIME) / 1 days);
+        uint48 currentDayBoundary = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
+        uint48 currentDay = currentDayBoundary - deployDayBoundary + 1;
+        return currentDay + 1;
     }
 
     /// @dev Round a level up to the nearest bracket of 10 for BAF tracking.

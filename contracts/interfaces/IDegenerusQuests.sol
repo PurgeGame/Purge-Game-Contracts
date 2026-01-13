@@ -51,6 +51,10 @@ interface IDegenerusQuests {
         external
         returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed, bool completedBoth);
 
+    function handleLootBox(address player, uint256 amountWei)
+        external
+        returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed, bool completedBoth);
+
     function getActiveQuests() external view returns (QuestInfo[2] memory quests);
 
     function playerQuestStates(address player)
