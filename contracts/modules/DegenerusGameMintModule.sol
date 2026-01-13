@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+import {IDegenerusAffiliate} from "../interfaces/IDegenerusAffiliate.sol";
+import {IDegenerusCoin} from "../interfaces/IDegenerusCoin.sol";
+import {IDegenerusGamepieces} from "../interfaces/IDegenerusGamepieces.sol";
+import {MintPaymentKind} from "../interfaces/IDegenerusGame.sol";
+import {ContractAddresses} from "../ContractAddresses.sol";
 import {DegenerusGameStorage} from "../storage/DegenerusGameStorage.sol";
 
 /**
@@ -54,6 +59,16 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
 
     /// @notice Generic revert for overflow conditions.
     error E();
+    /// @notice VRF word not ready for loot box reveal.
+    error RngNotReady();
+
+    // -------------------------------------------------------------------------
+    // External Contract References (compile-time constants)
+    // -------------------------------------------------------------------------
+
+    IDegenerusCoin internal constant coin = IDegenerusCoin(ContractAddresses.COIN);
+    IDegenerusGamepieces internal constant nft = IDegenerusGamepieces(ContractAddresses.GAMEPIECES);
+    IDegenerusAffiliate internal constant affiliate = IDegenerusAffiliate(ContractAddresses.AFFILIATE);
 
     // -------------------------------------------------------------------------
     // Constants
@@ -67,6 +82,55 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
 
     /// @notice Reduced batch size for level 1 (smaller initial supply).
     uint32 private constant TRAIT_REBUILD_TOKENS_LEVEL1 = 1800;
+
+    /// @dev Max players processed per future-mint activation batch.
+    uint32 private constant FUTURE_MINT_PLAYER_BATCH_SIZE = 96;
+
+    /// @dev Loot box minimum purchase amount (0.01 ETH).
+    uint256 private constant LOOTBOX_MIN = 0.01 ether;
+
+    /// @dev Loot box per-roll payouts (basis points).
+    uint16 private constant LOOTBOX_TICKET_ROLL_BPS = 11667; // 116.67%
+    uint16 private constant LOOTBOX_SMALL_BURNIE_ROLL_BPS = 500; // 5%
+    uint16 private constant LOOTBOX_LARGE_BURNIE_ROLL_BPS = 19500; // 195%
+
+    /// @dev Loot box amount split threshold (two rolls when exceeded).
+    uint256 private constant LOOTBOX_SPLIT_THRESHOLD = 1 ether;
+
+    /// @dev Loot box pool split (basis points of total ETH).
+    uint16 private constant LOOTBOX_SPLIT_FUTURE_BPS = 6000;
+    uint16 private constant LOOTBOX_SPLIT_NEXT_BPS = 2000;
+
+    /// @dev Loot box presale pool split (basis points of total ETH).
+    uint16 private constant LOOTBOX_PRESALE_SPLIT_FUTURE_BPS = 1000;
+    uint16 private constant LOOTBOX_PRESALE_SPLIT_NEXT_BPS = 1000;
+    uint16 private constant LOOTBOX_PRESALE_SPLIT_VAULT_BPS = 3000;
+
+    // -------------------------------------------------------------------------
+    // Events
+    // -------------------------------------------------------------------------
+
+    event LootBoxPurchased(
+        address indexed buyer,
+        uint48 indexed day,
+        uint256 amount,
+        bool presale,
+        uint256 futureShare,
+        uint256 nextPrizeShare,
+        uint256 vaultShare,
+        uint256 rewardShare
+    );
+
+    event LootBoxOpened(
+        address indexed player,
+        uint48 indexed day,
+        uint256 amount,
+        uint24 futureLevel,
+        uint32 futureTickets,
+        uint32 currentTickets,
+        uint256 burnie,
+        uint256 bonusBurnie
+    );
 
     // -------------------------------------------------------------------------
     // Bit Packing Masks and Shifts
@@ -475,6 +539,549 @@ contract DegenerusGameMintModule is DegenerusGameStorage {
 
         traitRebuildCursor = cursor + batch;
         finished = (traitRebuildCursor == target);
+    }
+
+    // -------------------------------------------------------------------------
+    // Future Reward Queueing
+    // -------------------------------------------------------------------------
+
+    function queueFutureRewardMints(
+        address player,
+        uint24 targetLevel,
+        uint32 quantity,
+        uint256 poolWei
+    ) external {
+        if (msg.sender != ContractAddresses.ADMIN && msg.sender != address(this)) revert E();
+        _queueFutureRewardMints(player, targetLevel, quantity, poolWei);
+    }
+
+    function _queueFutureRewardMints(
+        address player,
+        uint24 targetLevel,
+        uint32 quantity,
+        uint256 poolWei
+    ) private {
+        if (targetLevel <= level) revert E();
+        if (quantity != 0 && player == address(0)) revert E();
+
+        if (poolWei != 0) {
+            futurePrizePool[targetLevel] += poolWei;
+            futurePrizePoolTotal += poolWei;
+        }
+
+        if (quantity == 0) return;
+
+        uint32 owed = futureMintsOwed[targetLevel][player];
+        if (owed == 0) {
+            futureMintQueue[targetLevel].push(player);
+        }
+        futureMintsOwed[targetLevel][player] = owed + quantity;
+    }
+
+    // -------------------------------------------------------------------------
+    // Future Mint Activation
+    // -------------------------------------------------------------------------
+
+    function processFutureMintBatch(
+        uint32 playersToProcess,
+        uint24 lvl
+    ) external returns (bool worked, bool finished) {
+        uint256 reserved = futurePrizePool[lvl];
+        if (reserved != 0) {
+            nextPrizePool += reserved;
+            futurePrizePool[lvl] = 0;
+            futurePrizePoolTotal -= reserved;
+        }
+
+        address[] storage queue = futureMintQueue[lvl];
+        uint256 total = queue.length;
+        if (total > type(uint32).max) revert E();
+        if (total == 0) {
+            futureMintCursor = 0;
+            futureMintLevel = 0;
+            return (false, true);
+        }
+
+        if (futureMintLevel != lvl) {
+            futureMintLevel = lvl;
+            futureMintCursor = 0;
+        }
+
+        uint256 idx = futureMintCursor;
+        if (idx >= total) {
+            delete futureMintQueue[lvl];
+            futureMintCursor = 0;
+            futureMintLevel = 0;
+            return (false, true);
+        }
+
+        uint32 batch = playersToProcess == 0 ? FUTURE_MINT_PLAYER_BATCH_SIZE : playersToProcess;
+        uint256 end = idx + batch;
+        if (end > total) {
+            end = total;
+        }
+
+        while (idx < end) {
+            address player = queue[idx];
+            uint32 owed = futureMintsOwed[lvl][player];
+            if (owed != 0) {
+                futureMintsOwed[lvl][player] = 0;
+                nft.queueRewardMints(player, owed);
+            }
+            unchecked {
+                ++idx;
+            }
+        }
+
+        worked = end != futureMintCursor;
+        futureMintCursor = uint32(idx);
+        finished = idx >= total;
+        if (finished) {
+            delete futureMintQueue[lvl];
+            futureMintCursor = 0;
+            futureMintLevel = 0;
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Future Ticket Jackpot
+    // -------------------------------------------------------------------------
+
+    function payFutureTicketJackpot(uint24 lvl, uint256 randWord) external {
+        uint256 entropy = randWord;
+
+        for (uint256 offset = 2; offset <= 5; offset++) {
+            uint24 targetLevel = lvl + uint24(offset);
+            address[] storage players = futureMintQueue[targetLevel];
+            uint256 playerCount = players.length;
+
+            if (playerCount == 0) continue;
+
+            uint256 winnersFromLevel = playerCount < 5 ? playerCount : 5;
+
+            for (uint256 i; i < winnersFromLevel; i++) {
+                entropy = _entropyStep(entropy);
+                uint256 idx = entropy % playerCount;
+                address winner = players[idx];
+
+                if (futureMintsOwed[targetLevel][winner] > 0) {
+                    coin.creditFlip(winner, 500 ether);
+                }
+
+                players[idx] = players[playerCount - 1];
+                playerCount--;
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Purchases and Loot Boxes
+    // -------------------------------------------------------------------------
+
+    function purchase(
+        uint256 gamepieceQuantity,
+        uint256 mapQuantity,
+        uint256 lootBoxAmount,
+        bytes32 affiliateCode,
+        MintPaymentKind payKind
+    ) external payable {
+        if (rngLockedFlag) revert RngNotReady();
+
+        address buyer = msg.sender;
+        uint24 currentLevel = level;
+        uint8 currentState = gameState;
+        uint256 priceWei = price;
+
+        if (lootBoxAmount != 0 && lootBoxAmount < LOOTBOX_MIN) revert E();
+
+        uint256 gamepieceCost = 0;
+        uint256 mapCost = 0;
+
+        if (gamepieceQuantity > 0) {
+            if (gamepieceQuantity > type(uint32).max) revert E();
+            gamepieceCost = priceWei * gamepieceQuantity;
+        }
+
+        if (mapQuantity > 0) {
+            if (mapQuantity > type(uint32).max) revert E();
+            mapCost = (priceWei * mapQuantity) / 4;
+        }
+
+        uint256 totalCost = gamepieceCost + mapCost + lootBoxAmount;
+        if (totalCost == 0) revert E();
+
+        uint256 initialClaimable = claimableWinnings[buyer];
+
+        uint256 ethForGamepieces = 0;
+        uint256 ethForMaps = 0;
+
+        uint256 remainingEth = msg.value;
+        if (remainingEth < lootBoxAmount) revert E();
+        unchecked {
+            remainingEth -= lootBoxAmount;
+        }
+
+        if (remainingEth > 0 && (gamepieceCost + mapCost) > 0) {
+            ethForGamepieces = (remainingEth * gamepieceCost) / (gamepieceCost + mapCost);
+            ethForMaps = remainingEth - ethForGamepieces;
+        }
+
+        if (gamepieceCost > 0 && gamepieceQuantity > 0) {
+            (bool success, ) = ContractAddresses.GAMEPIECES.call{value: ethForGamepieces}(
+                abi.encodeWithSignature(
+                    "purchase((uint256,uint8,uint8,bool,bytes32))",
+                    gamepieceQuantity,
+                    uint8(0),
+                    uint8(payKind),
+                    false,
+                    affiliateCode
+                )
+            );
+            if (!success) revert E();
+        }
+
+        if (mapCost > 0 && mapQuantity > 0) {
+            (bool success, ) = ContractAddresses.GAMEPIECES.call{value: ethForMaps}(
+                abi.encodeWithSignature(
+                    "purchase((uint256,uint8,uint8,bool,bytes32))",
+                    mapQuantity,
+                    uint8(1),
+                    uint8(payKind),
+                    false,
+                    affiliateCode
+                )
+            );
+            if (!success) revert E();
+        }
+
+        if (lootBoxAmount > 0) {
+            uint48 day = _currentDayIndex();
+            bool presale = lootboxPresaleActive;
+
+            _recordLootboxMintDay(buyer, uint32(day));
+
+            uint256 existing = lootboxEth[day][buyer];
+            if (existing != 0 && lootboxPresale[day][buyer] != presale) revert E();
+
+            if (existing == 0) {
+                if (presale) {
+                    lootboxPresale[day][buyer] = true;
+                }
+            }
+            lootboxEth[day][buyer] = existing + lootBoxAmount;
+
+            uint256 futureBps = presale ? LOOTBOX_PRESALE_SPLIT_FUTURE_BPS : LOOTBOX_SPLIT_FUTURE_BPS;
+            uint256 nextBps = presale ? LOOTBOX_PRESALE_SPLIT_NEXT_BPS : LOOTBOX_SPLIT_NEXT_BPS;
+            uint256 vaultBps = presale ? LOOTBOX_PRESALE_SPLIT_VAULT_BPS : 0;
+
+            uint256 futureShare = (lootBoxAmount * futureBps) / 10_000;
+            uint256 nextShare = (lootBoxAmount * nextBps) / 10_000;
+            uint256 vaultShare = (lootBoxAmount * vaultBps) / 10_000;
+            uint256 rewardShare;
+            unchecked {
+                rewardShare = lootBoxAmount - futureShare - nextShare - vaultShare;
+            }
+
+            if (futureShare != 0) {
+                lootboxReservePool += futureShare;
+            }
+            if (nextShare != 0) {
+                nextPrizePool += nextShare;
+            }
+            if (vaultShare != 0) {
+                (bool ok, ) = payable(ContractAddresses.VAULT).call{value: vaultShare}("");
+                if (!ok) revert E();
+            }
+            if (rewardShare != 0) {
+                rewardPool += rewardShare;
+            }
+
+            if (affiliateCode != bytes32(0)) {
+                uint256 affiliateAmount = _calculateLootboxAffiliateAmount(
+                    currentLevel,
+                    currentState,
+                    lootBoxAmount,
+                    priceWei
+                );
+                affiliate.payAffiliate(affiliateAmount, affiliateCode, buyer, currentLevel);
+            }
+
+            emit LootBoxPurchased(buyer, day, lootBoxAmount, presale, futureShare, nextShare, vaultShare, rewardShare);
+
+            coin.notifyQuestLootBox(buyer, lootBoxAmount);
+        }
+
+        uint256 finalClaimable = claimableWinnings[buyer];
+        uint256 totalClaimableUsed = initialClaimable > finalClaimable ? initialClaimable - finalClaimable : 0;
+        bool spentAllClaimable = (finalClaimable <= 1 && totalClaimableUsed > 0);
+
+        if (spentAllClaimable && totalClaimableUsed >= priceWei * 3) {
+            uint256 bonusAmount = (totalClaimableUsed * PRICE_COIN_UNIT * 10) / (priceWei * 100);
+            if (bonusAmount > 0) {
+                coin.creditFlip(buyer, bonusAmount);
+            }
+        }
+    }
+
+    function openLootBox(uint48 day) external {
+        uint256 amount = lootboxEth[day][msg.sender];
+        if (amount == 0) revert E();
+
+        uint48 rngDay = day + 1;
+        uint256 rngWord = rngWordByDay[rngDay];
+        if (rngWord == 0) revert RngNotReady();
+
+        lootboxEth[day][msg.sender] = 0;
+        bool presale = lootboxPresale[day][msg.sender];
+        if (presale) {
+            lootboxPresale[day][msg.sender] = false;
+        }
+
+        uint256 entropy = uint256(keccak256(abi.encode(rngWord, msg.sender, day, amount)));
+
+        uint24 currentLevel = level;
+        uint256 levelOffset = entropy % 6;
+        uint24 targetLevel = currentLevel + uint24(levelOffset);
+
+        uint256 targetPrice = _priceForLevel(targetLevel);
+        if (targetPrice == 0) revert E();
+
+        uint256 futureBps = presale ? LOOTBOX_PRESALE_SPLIT_FUTURE_BPS : LOOTBOX_SPLIT_FUTURE_BPS;
+        uint256 futureShare = (amount * futureBps) / 10_000;
+        if (futureShare != 0) {
+            lootboxReservePool -= futureShare;
+            _queueFutureRewardMints(address(0), targetLevel, 0, futureShare);
+        }
+
+        uint256 amountFirst = amount;
+        uint256 amountSecond = 0;
+        if (amount > LOOTBOX_SPLIT_THRESHOLD) {
+            amountFirst = amount / 2;
+            amountSecond = amount - amountFirst;
+        }
+
+        uint256 burniePresale;
+        uint256 burnieNoMultiplier;
+        uint32 futureTickets;
+        (uint256 burnieOut, uint32 ticketsOut, uint256 nextEntropy, bool applyMultiplier) =
+            _resolveLootboxRoll(msg.sender, amountFirst, targetLevel, targetPrice, entropy);
+        if (burnieOut != 0) {
+            if (applyMultiplier) {
+                burniePresale += burnieOut;
+            } else {
+                burnieNoMultiplier += burnieOut;
+            }
+        }
+        if (ticketsOut != 0) {
+            uint256 totalTickets = uint256(futureTickets) + ticketsOut;
+            if (totalTickets > type(uint32).max) revert E();
+            futureTickets = uint32(totalTickets);
+        }
+        entropy = nextEntropy;
+
+        if (amountSecond != 0) {
+            (burnieOut, ticketsOut, nextEntropy, applyMultiplier) =
+                _resolveLootboxRoll(msg.sender, amountSecond, targetLevel, targetPrice, entropy);
+            if (burnieOut != 0) {
+                if (applyMultiplier) {
+                    burniePresale += burnieOut;
+                } else {
+                    burnieNoMultiplier += burnieOut;
+                }
+            }
+            if (ticketsOut != 0) {
+                uint256 totalTickets = uint256(futureTickets) + ticketsOut;
+                if (totalTickets > type(uint32).max) revert E();
+                futureTickets = uint32(totalTickets);
+            }
+            entropy = nextEntropy;
+        }
+
+        uint256 burnieAmount = burnieNoMultiplier;
+        if (presale && burniePresale != 0) {
+            burnieAmount += burniePresale * 2;
+        } else {
+            burnieAmount += burniePresale;
+        }
+
+        if (burnieAmount != 0) {
+            coin.creditFlip(msg.sender, burnieAmount);
+        }
+
+        emit LootBoxOpened(msg.sender, day, amount, targetLevel, futureTickets, 0, burnieAmount, 0);
+    }
+
+    function _recordLootboxMintDay(address player, uint32 day) private {
+        uint256 prevData = mintPacked_[player];
+        uint32 prevDay = uint32((prevData >> ETH_DAY_SHIFT) & MINT_MASK_32);
+        if (prevDay == day) {
+            return;
+        }
+        uint256 clearedDay = prevData & ~(MINT_MASK_32 << ETH_DAY_SHIFT);
+        mintPacked_[player] = clearedDay | (uint256(day) << ETH_DAY_SHIFT);
+    }
+
+    function _currentDayIndex() private view returns (uint48) {
+        uint48 deployDayBoundary = uint48((deployTime - JACKPOT_RESET_TIME) / 1 days);
+        uint48 currentDayBoundary = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
+        return currentDayBoundary - deployDayBoundary + 1;
+    }
+
+    function _calculateLootboxAffiliateAmount(
+        uint24 lvl,
+        uint8 gameState_,
+        uint256 lootBoxAmount,
+        uint256 priceWei
+    ) private pure returns (uint256) {
+        uint256 gamepieceEquivalent = lootBoxAmount / priceWei;
+        if (gamepieceEquivalent == 0) return 0;
+
+        uint256 baseAmount;
+        if (lvl > 40) {
+            uint256 pct = gameState_ != 3 ? 30 : 5;
+            baseAmount = (PRICE_COIN_UNIT * pct) / 100;
+        } else {
+            baseAmount = PRICE_COIN_UNIT / 10;
+            if (lvl <= 3 || gameState_ != 3) {
+                baseAmount = (baseAmount * 250) / 100;
+            }
+        }
+
+        return (baseAmount * gamepieceEquivalent) / 2;
+    }
+
+    function _lootboxTicketCount(
+        uint256 budgetWei,
+        uint256 priceWei,
+        uint256 entropy
+    ) private pure returns (uint32 count, uint256 nextEntropy) {
+        if (budgetWei == 0 || priceWei == 0) {
+            return (0, entropy);
+        }
+
+        nextEntropy = _entropyStep(entropy);
+        uint256 multiplierRoll = nextEntropy % 10;
+        uint256 adjustedBudget;
+        if (multiplierRoll < 2) {
+            adjustedBudget = (budgetWei * 3);
+        } else {
+            adjustedBudget = (budgetWei * 6) / 10;
+        }
+
+        uint256 base = adjustedBudget / priceWei;
+        uint256 remainder = adjustedBudget - (base * priceWei);
+        if (remainder != 0) {
+            nextEntropy = _entropyStep(nextEntropy);
+            if (nextEntropy % priceWei < remainder) {
+                unchecked {
+                    ++base;
+                }
+            }
+        }
+
+        if (base > type(uint32).max) revert E();
+        count = uint32(base);
+    }
+
+    function _resolveLootboxRoll(
+        address player,
+        uint256 amount,
+        uint24 targetLevel,
+        uint256 targetPrice,
+        uint256 entropy
+    ) private returns (uint256 burnieOut, uint32 ticketsOut, uint256 nextEntropy, bool applyPresaleMultiplier) {
+        nextEntropy = entropy;
+        if (amount == 0) return (0, 0, nextEntropy, false);
+
+        nextEntropy = _entropyStep(nextEntropy);
+
+        uint256 rollMax = 20;
+        uint256 ticketThreshold = 12;
+        uint256 largeBurnieThreshold = 16;
+        uint16 ticketBps = LOOTBOX_TICKET_ROLL_BPS;
+        uint16 smallBurnieBps = LOOTBOX_SMALL_BURNIE_ROLL_BPS;
+        uint16 largeBurnieBps = LOOTBOX_LARGE_BURNIE_ROLL_BPS;
+
+        uint256 roll = nextEntropy % rollMax;
+
+        if (roll < ticketThreshold) {
+            uint256 price = targetPrice;
+
+            uint256 ticketBudget = (amount * ticketBps) / 10_000;
+
+            if (ticketBudget < price) {
+                uint256 burnieValue = (ticketBudget * PRICE_COIN_UNIT) / targetPrice;
+                burnieOut = (burnieValue * 80) / 100;
+                applyPresaleMultiplier = false;
+            } else {
+                uint256 gamepiecePrice = price * 4;
+                bool canAffordGamepiece = ticketBudget >= gamepiecePrice;
+
+                bool awardGamepiece = false;
+                if (canAffordGamepiece) {
+                    nextEntropy = _entropyStep(nextEntropy);
+                    uint256 gamepieceRoll = nextEntropy % 6;
+                    awardGamepiece = (gamepieceRoll == 0);
+                }
+
+                if (awardGamepiece) {
+                    if (targetLevel <= level) {
+                        burnieOut = 4 * PRICE_COIN_UNIT;
+                    } else {
+                        _queueFutureRewardMints(player, targetLevel, 4, 0);
+                        ticketsOut = 4;
+                    }
+                    applyPresaleMultiplier = false;
+                } else {
+                    (uint32 tickets, uint256 entropyAfter) = _lootboxTicketCount(ticketBudget, price, nextEntropy);
+                    nextEntropy = entropyAfter;
+                    if (tickets == 0) return (0, 0, nextEntropy, false);
+
+                    if (targetLevel <= level) {
+                        burnieOut = uint256(tickets) * PRICE_COIN_UNIT;
+                    } else {
+                        _queueFutureRewardMints(player, targetLevel, tickets, 0);
+                        ticketsOut = tickets;
+                    }
+                    applyPresaleMultiplier = false;
+                }
+            }
+        } else if (roll < largeBurnieThreshold) {
+            uint256 burnieBudget = (amount * smallBurnieBps) / 10_000;
+            burnieOut = (burnieBudget * PRICE_COIN_UNIT) / targetPrice;
+            applyPresaleMultiplier = true;
+        } else {
+            uint256 burnieBudget = (amount * largeBurnieBps) / 10_000;
+            burnieOut = (burnieBudget * PRICE_COIN_UNIT) / targetPrice;
+            applyPresaleMultiplier = true;
+        }
+    }
+
+    function _priceForLevel(uint24 targetLevel) private pure returns (uint256) {
+        if (targetLevel == 0) return 0;
+        if (targetLevel < 10) {
+            return 0.025 ether / ContractAddresses.COST_DIVISOR;
+        }
+        uint24 offset = targetLevel % 100;
+        if (offset == 0 || offset < 10) {
+            return 0.25 ether;
+        }
+        if (offset < 30) {
+            return 0.05 ether;
+        }
+        if (offset < 80) {
+            return 0.1 ether;
+        }
+        return 0.15 ether;
+    }
+
+    function _entropyStep(uint256 state) private pure returns (uint256) {
+        unchecked {
+            state ^= state << 7;
+            state ^= state >> 9;
+            state ^= state << 8;
+        }
+        return state;
     }
 
     // -------------------------------------------------------------------------

@@ -1502,7 +1502,7 @@ contract DegenerusQuests is IDegenerusQuests {
      * @param quest The quest being completed.
      * @param currentDay Current quest day for pair checks.
      * @param tier Player tier (from baseStreak) for target checks.
-     * @param priceWei Price in wei (unused by current quest types).
+     * @param _priceWei Price in wei (unused by current quest types).
      *
      * This function enables "combo completion" where completing one quest
      * can automatically complete the other if its progress already meets target.
@@ -1600,7 +1600,7 @@ contract DegenerusQuests is IDegenerusQuests {
         DailyQuest memory quest,
         uint8 slot,
         uint8 tier,
-        uint256 priceWei
+        uint256 _priceWei
     ) private view returns (bool) {
         if (!_questProgressValid(state, quest, slot, quest.day)) return false;
         uint256 progress = state.progress[slot];

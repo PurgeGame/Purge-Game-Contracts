@@ -32,7 +32,6 @@ npm run sim:report   # Simulation report
 | `DegenerusGame.sol` | State machine, ETH/stETH buckets, RNG |
 | `DegenerusGamepieces.sol` | ERC721, purchase flows |
 | `BurnieCoin.sol` | BURNIE, coinflip, decimator |
-| `DegenerusBonds.sol` | Maturities, bond payouts |
 | `DegenerusJackpots.sol` | BAF + Decimator jackpots |
 | `DegenerusAffiliate.sol` | Referrals + rakeback |
 | `DegenerusVault.sol` | Vault shares and claims |
@@ -44,7 +43,6 @@ npm run sim:report   # Simulation report
 - `DegenerusGameMintModule.sol`
 - `DegenerusGameJackpotModule.sol`
 - `DegenerusGameEndgameModule.sol`
-- `DegenerusGameBondModule.sol`
 
 Quest system is standalone (`DegenerusQuests.sol`), not a delegatecall module.
 
@@ -62,9 +60,8 @@ Quest system is standalone (`DegenerusQuests.sol`), not a delegatecall module.
 | BURNIE decimals | 18 |
 | PRICE_COIN_UNIT | 1e21 (= 1000 BURNIE) |
 | JACKPOT_RESET_TIME | 82620 seconds |
-| Game states | 0=presale, 1=pregame/endgame settlement, 2=purchase, 3=burn, 86=gameover |
+| Game states | 1=setup, 2=purchase, 3=burn, 86=gameover |
 | BAF trigger | Every 10 levels |
-| Bond maturity | Every 10 levels |
 | Game over | ~365 days inactive |
 
 ---
@@ -84,8 +81,7 @@ Quest system is standalone (`DegenerusQuests.sol`), not a delegatecall module.
 
 - Buckets grow only from valid inflows or internal transfers
 - `(ETH + stETH) >= sum(all tracked buckets)`
-- `bondDeposit(trackPool=false)` increases assets without liabilities
-- `claimablePool` increases only from existing pools or bond deposits
+- `claimablePool` increases only from existing pools or scheduled payouts
 - No admin paths to withdraw user funds
 - Write-once wiring cannot be overwritten
 
@@ -123,17 +119,9 @@ Quest system is standalone (`DegenerusQuests.sol`), not a delegatecall module.
 - [ ] BAF every 10 levels
 - [ ] Decimator window enforcement
 
-### Bonds
-
-- [ ] Maturity every 5 levels, lane selection
-- [ ] Deposit splits correct
-- [ ] Game-over drain resolves in order
-- [ ] stETH/ETH fallback for payouts
-
 ### Vault
 
 - [ ] Share issuance and claims
-- [ ] Mint allowance and presale flows
 
 ### Affiliate
 

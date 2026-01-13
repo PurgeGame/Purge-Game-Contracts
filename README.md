@@ -10,10 +10,9 @@ On-chain, high-variance NFT game on Ethereum.
 | `DegenerusGamepieces.sol` | ERC721 gamepiece NFTs, purchase flows |
 | `BurnieCoin.sol` | BURNIE token (18 decimals), coinflip, quests |
 | `DegenerusQuests.sol` | Daily quest state and rewards |
-| `DegenerusBonds.sol` | Bond maturities, time-locked payouts |
 | `DegenerusJackpots.sol` | BAF + Decimator jackpots |
 | `DegenerusAffiliate.sol` | Referrals, rakeback, uplines |
-| `DegenerusVault.sol` | Vault shares (BURNIE, DGNRS, ETH/stETH) |
+| `DegenerusVault.sol` | Vault shares (BURNIE, ETH/stETH) |
 | `DegenerusTrophies.sol` | Non-transferable trophies |
 
 ## Quick Start
@@ -46,8 +45,6 @@ node scripts/deploy/deploy-production.js --network mainnet
 - ✅ Cross-reference validation
 - ✅ 5-second confirmation window
 - ✅ Comprehensive error handling
-
-**📖 Full Guide:** [docs/PRODUCTION_DEPLOY_GUIDE.md](docs/PRODUCTION_DEPLOY_GUIDE.md)
 
 **🔒 Security Analysis:** [docs/SECURITY_AND_GAS_ANALYSIS.md](docs/SECURITY_AND_GAS_ANALYSIS.md)
 

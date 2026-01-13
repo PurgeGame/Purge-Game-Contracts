@@ -22,8 +22,7 @@ Guide for AI assistants answering questions about the Degenerus contracts.
 | `DegenerusGamepieces.sol` | ERC721 gamepiece NFT |
 | `BurnieCoin.sol` | BURNIE (18 decimals), coinflip, quests |
 | `DegenerusQuests.sol` | Daily quest state and rewards (standalone) |
-| `DegenerusBonds.sol` | Maturity cycles, game-over resolution |
-| `DegenerusVault.sol` | Four share classes (BURNIE, DGNRS, ETH/stETH, DGVA all-share) |
+| `DegenerusVault.sol` | Vault shares and claims (BURNIE, ETH/stETH) |
 | `DegenerusJackpots.sol` | BAF + Decimator jackpots |
 | `DegenerusAffiliate.sol` | Referral payouts |
 | `DegenerusTrophies.sol` | Non-transferable trophies |
@@ -35,7 +34,6 @@ Guide for AI assistants answering questions about the Degenerus contracts.
 | `DegenerusGameMintModule.sol` | Mint accounting, streak bonuses |
 | `DegenerusGameJackpotModule.sol` | Daily/level jackpot logic |
 | `DegenerusGameEndgameModule.sol` | Extermination settlement |
-| `DegenerusGameBondModule.sol` | Staking, yield, game-over drain |
 
 Quest system is a standalone contract (`DegenerusQuests.sol`) wired once by admin; it is not a delegatecall module.
 
@@ -45,7 +43,6 @@ Quest system is a standalone contract (`DegenerusQuests.sol`) wired once by admi
 - Chainlink VRF subscription management
 - One-time wiring (`wireAll`)
 - Emergency VRF migration (after 3-day RNG stall)
-- Bond presale controls
 
 **Write-once wiring**: Most addresses have "AlreadyWired" patterns. Admin is for initial setup and VRF maintenance, not gameplay changes.
 
@@ -71,10 +68,10 @@ Coin: ((block.timestamp - JACKPOT_RESET_TIME) / 1 days) + 1  // stakes for "next
 
 | State | Meaning |
 |-------|---------|
-| 0 | Shutdown (post-drain) |
-| 1 | Pregame / endgame settlement |
+| 1 | Setup / endgame settlement |
 | 2 | Purchase + airdrop processing |
 | 3 | Burn phase ("Degenerus") |
+| 86 | Game over (sweep to vault) |
 
 ---
 
@@ -87,15 +84,17 @@ See [ETH_BUCKETS_AND_SOLVENCY.md](ETH_BUCKETS_AND_SOLVENCY.md) for full details.
 | Bucket | Purpose |
 |--------|---------|
 | `claimablePool` | Player claimable winnings |
-| `bondPool` | Bond obligation backing |
 | `currentPrizePool` | Current level's jackpot pot |
 | `nextPrizePool` | Next level accumulator |
 | `rewardPool` | General jackpot funding |
+| `futurePrizePoolTotal` | Aggregate of all future level reserves |
+| `lootboxReservePool` | Pending loot box allocations (allocated at opening) |
+| `decimatorHundredPool` | Level-100 decimator jackpot reserve |
+| `bafHundredPool` | Level-100 BAF jackpot reserve |
 
 ### Solvency Pattern
 
 - Buckets only increase from inflows or inter-bucket transfers
-- Untracked surplus: `bondDeposit(trackPool=false)` increases assets without increasing liabilities
 - `yieldPool()` computes: `(ETH + stETH) - obligations`
 - Fallback: `_payoutWithStethFallback` pays stETH if ETH is short
 
@@ -103,22 +102,44 @@ See [ETH_BUCKETS_AND_SOLVENCY.md](ETH_BUCKETS_AND_SOLVENCY.md) for full details.
 
 ## Primary Player Flows
 
+### Unified Purchase Function
+
+**Recommended Entry**: `DegenerusGame.purchase(gamepieceQuantity, mapQuantity, lootBoxAmount, affiliateCode, payKind)`
+
+This is the main entry point for all ETH/claimable purchases. It allows buying any combination of:
+- Gamepieces
+- MAPs
+- Loot boxes
+
+**Benefits**:
+- Single transaction for multiple purchase types
+- 10% bonus when spending all claimable winnings (minimum 3 gamepiece-equivalents)
+- Loot boxes earn affiliate rewards (50% of gamepiece rate)
+- Gas efficient
+
+**Payment modes** (`MintPaymentKind`):
+- `DirectEth`: Use msg.value
+- `Claimable`: Spend from claimable winnings
+- `Combined`: Mix of both
+
+**Note**: For BURNIE purchases only, use `DegenerusGamepieces.purchase()` with `payInCoin=true`
+
 ### 1. Buying Gamepieces
 
-**Entry**: `DegenerusGamepieces.purchase(PurchaseParams)`
+**Entry options**:
+1. `DegenerusGame.purchase(...)` - unified purchase (recommended for ETH/claimable)
+2. `DegenerusGamepieces.purchase(PurchaseParams)` - direct purchase (for BURNIE only)
 
-**Payment options** (`MintPaymentKind`):
-- `payInCoin=true`: burns BURNIE, no ETH transfer
-- `payInCoin=false` uses `MintPaymentKind`:
-  - `DirectEth`: msg.value
-  - `Claimable`: from DegenerusGame balance
-  - `Combined`: mix
+**Payment options**:
+- ETH/Claimable: Use `DegenerusGame.purchase()` with `MintPaymentKind`
+- BURNIE: Use `DegenerusGamepieces.purchase()` with `payInCoin=true`
+
 **Timing note**:
 - Purchases are allowed whenever RNG is unlocked; in state 3 the purchase is treated as the next level.
 
 **Flow**:
-1. `payInCoin=false`: NFT routes to `DegenerusGame.recordMint(...)` -> funds `nextPrizePool`
-   `payInCoin=true`: burns BURNIE, no ETH contribution
+1. ETH/claimable: Routes to `DegenerusGame.recordMint(...)` -> funds `nextPrizePool`
+   BURNIE: Burns token, no ETH contribution
 2. Streak bonuses computed in `DegenerusGameMintModule`
 3. BURNIE credits via `BurnieCoin.creditFlip(...)`
 4. Affiliate handling via `DegenerusAffiliate.payAffiliate(...)`
@@ -127,14 +148,69 @@ See [ETH_BUCKETS_AND_SOLVENCY.md](ETH_BUCKETS_AND_SOLVENCY.md) for full details.
 
 ### 2. Buying MAPs
 
-Same `purchase(...)` entry with `PurchaseKind.Map`.
+**Entry options**:
+1. `DegenerusGame.purchase(...)` with `mapQuantity` parameter (recommended for ETH/claimable)
+2. `DegenerusGamepieces.purchase(PurchaseParams)` with `PurchaseKind.Map` and `payInCoin=true` (BURNIE only)
+
+**Pricing**:
 - ETH cost: `priceWei / 4` per MAP
 - BURNIE cost: `PRICE_COIN_UNIT / 4` per MAP
+
+**Processing**:
 - Queued via `enqueueMap(...)`, processed in batches during `advanceGame` state 2
 - ETH/claimable MAP buys are allowed whenever RNG is unlocked (gameState does not gate)
 - BURNIE MAP buys are only allowed on `lastPurchaseDay` (gameState == 2) and are blocked in state 3
 
-### 3. Burning NFTs
+### 3. Loot Boxes
+
+**Entry**: `DegenerusGame.purchase(...)` with `lootBoxAmount` parameter
+
+**Unified Purchase**:
+- Use the main `purchase()` function with `lootBoxAmount` set (minimum 0.01 ETH)
+- Can combine with gamepiece/MAP purchases in same transaction
+- Loot boxes are always paid with ETH (not claimable or BURNIE)
+
+**Day Tracking**:
+- One loot box per day per player (indexed from `JACKPOT_RESET_TIME`)
+- Can add to existing day's loot box
+- Days are indexed independently
+
+**Purchase Split**:
+
+Normal mode:
+- 60% → `lootboxReservePool` (allocated to random level at opening)
+- 20% → `nextPrizePool`
+- 20% → `rewardPool`
+
+Presale mode (`lootboxPresaleActive == true`):
+- 10% → `lootboxReservePool`
+- 10% → `nextPrizePool`
+- 30% → Vault (immediate transfer)
+- 50% → `rewardPool`
+
+**Opening**: `DegenerusGame.openLootBox(uint48 day)`
+
+Requires:
+- RNG unlocked (`!rngLockedFlag`)
+- VRF entropy from daily advance
+
+Reward outcomes (d20 roll):
+- Rolls 0-11 (60%): MAP tickets OR gamepiece for target level (116.67% value)
+  - Sub-roll (d6): 1/6 chance gamepiece if budget ≥ 4× MAP price, else tickets
+- Rolls 12-15 (20%): Small BURNIE (5% normal, 10% presale)
+- Rolls 16-19 (20%): Large BURNIE (195% normal, 390% presale)
+
+Target level: `currentLevel + (0-5)` rolled uniformly at opening time
+- All tickets/gamepieces awarded for single rolled level
+- Ticket quantity calculated using rolled level's price
+- `lootboxReservePool` → `futurePrizePool[targetLevel]` at opening
+
+**Functions**:
+- `lootboxStatus(address, uint48)` - View purchase amount and presale flag
+- `startLootboxPresale()` - Admin-only, enables presale mode
+- `endLootboxPresale()` - Admin-only, disables presale mode (one-way)
+
+### 4. Burning NFTs
 
 **Entry**: `DegenerusGame.burnTokens(uint256[] tokenIds)`
 
@@ -148,7 +224,7 @@ Same `purchase(...)` entry with `PurchaseKind.Map`.
 - Appends to `traitBurnTicket[level][traitId]`
 - If trait hits zero -> extermination (on L%10=7, triggers at 1), settlement on next `advanceGame`
 
-### 4. Advancing Game
+### 5. Advancing Game
 
 **Entry**: `DegenerusGame.advanceGame(uint32 cap)`
 
@@ -162,7 +238,7 @@ Same `purchase(...)` entry with `PurchaseKind.Map`.
 - State 2: `payDailyJackpot(false, ...)` for purchase-phase early jackpots
 - State 1: Extermination settlement + carryover jackpot
 
-### 5. Claiming
+### 6. Claiming
 
 **ETH**: `DegenerusGame.claimWinnings()` - resets to 1-wei sentinel, pays out
 
@@ -181,6 +257,8 @@ What increases `nextPrizePool`:
 - ETH/claimable mints flow through `recordMint(...) -> nextPrizePool`
 - BURNIE purchases don't add ETH (burn path)
 - MAP rewards from jackpots: the MAP cost is moved into `nextPrizePool`
+- Loot box purchases: 20% in normal mode, 10% in presale mode
+- `futurePrizePool[level]` transfers to `nextPrizePool` when target level is reached
 
 ### Ratchet Mechanism
 
@@ -199,7 +277,6 @@ At `level % 100 == 0`: `lastPrizePool = rewardPool` (can jump start target)
 - Direct ETH to game: `receive() -> rewardPool`
 - Per-level save at level jackpot finalization
 - Coinflip adjustment: +/- 2% based on last-purchase-day deposits (capped 98%)
-- Yield skims: `bondUpkeep(...)` adds `yieldTotal / 20` to rewardPool
 
 ---
 
@@ -227,36 +304,15 @@ MAP rewards:
 
 ---
 
-## Bonds
-
-### Deposit Splits (External)
-
-| Destination | % |
-|-------------|---|
-| bondPool (tracked) | 20 |
-| rewardPool | 10 |
-| Untracked yield | 30 |
-| Vault (stETH preferred) | 40 |
-
-Presale: 30% vault / 50% rewardPool / 20% yield (no bondPool)
-
-Game-originated buys: no internal split, use game's existing ETH
-
-### VRF
-
-Bonds has separate VRF interface for lane resolution.
-
-### Game Over
+## Game Over
 
 Triggers:
 - `levelStartTime` set + 365 days inactive
 - Never started + ~2.5 years from deploy
 
 Sequence:
-1. `gameOverDrainToBonds()` -> `DegenerusGameBondModule.drainToBonds(...)`
-2. `DegenerusBonds.gameOver()` resolves maturities oldest-first
-3. 1-year claim window
-4. `sweepExpiredPools()` to vault
+1. `gameOverDrainToVault()` sweeps ETH + stETH into the vault
+2. Game state transitions to GAMEOVER (86)
 
 ---
 
@@ -278,8 +334,8 @@ Sequence:
 | Allowed | Not Allowed |
 |---------|-------------|
 | VRF rotation after 3-day stall | Arbitrary pool withdrawal |
-| Bond staking target (`setRewardStakeTargetBps`) | Gameplay rule changes |
-| Presale management | Redirect player winnings |
+| One-time wiring (`wireAll`) | Gameplay rule changes |
+| VRF subscription management | Redirect player winnings |
 
 ---
 
@@ -291,7 +347,6 @@ Sequence:
 | `NotTimeYet` | Wrong phase or day not rolled | Check `gameState`, day index |
 | `RngNotReady` / `RngLocked` | VRF in-flight | `rngLocked()`, wait for callback |
 | `NotDecimatorWindow` | Outside decimator window | `decWindow()` |
-| Bond deposits disabled | Wrong level window or RNG lock | `_bondPurchasesOpen`, level % 10 < 5 |
 
 ---
 
@@ -306,3 +361,6 @@ Sequence:
 | `getWinnings()` | Player's claimable ETH |
 | `rngLocked()` | Whether VRF is in-flight |
 | `rngStalledForThreeDays()` | Emergency recovery eligible |
+| `lootboxStatus(address, uint48)` | Loot box amount and presale flag for player/day |
+| `futurePrizePoolView(uint24)` | Reserved pool for specific level |
+| `futurePrizePoolTotalView()` | Aggregate of all future level reserves |

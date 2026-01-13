@@ -255,9 +255,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
     /// @param lvl Current game level.
     /// @param randWord VRF entropy for winner selection and trait derivation.
     function payDailyJackpot(bool isDaily, uint24 lvl, uint256 randWord) external {
-        uint48 deployDayBoundary = uint48((deployTime - JACKPOT_RESET_TIME) / 1 days);
-        uint48 currentDayBoundary = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
-        uint48 questDay = currentDayBoundary - deployDayBoundary + 1;
+        uint48 questDay = _calculateDayIndex();
         uint32 winningTraitsPacked;
 
         if (isDaily) {
@@ -605,9 +603,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
         uint8 traitId,
         uint256 randWord
     ) external returns (uint256 paidEth) {
-        uint48 deployDayBoundary = uint48((deployTime - JACKPOT_RESET_TIME) / 1 days);
-        uint48 currentDayBoundary = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
-        uint48 questDay = currentDayBoundary - deployDayBoundary + 1;
+        uint48 questDay = _calculateDayIndex();
         uint256 poolBps = 100;
         if (lastLevelJackpotCount == 0) {
             // Mirror the first daily jackpot rewardPool slice (2-4%) based on nextPrizePool funding.
@@ -705,9 +701,7 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
             mapJackpotUnits1 = mapUnits;
         }
 
-        uint48 deployDayBoundary = uint48((deployTime - JACKPOT_RESET_TIME) / 1 days);
-        uint48 currentDayBoundary = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
-        uint48 questDay = currentDayBoundary - deployDayBoundary + 1;
+        uint48 questDay = _calculateDayIndex();
         _rollQuestForJackpot(rngWord, true, questDay);
     }
 
@@ -2274,5 +2268,14 @@ contract DegenerusGameJackpotModule is DegenerusGameStorage {
                 slice = (slice >> 16) | (slice << 240);
             }
         }
+    }
+
+    /// @dev Calculate current day index from timestamp.
+    ///      Day 1 = deploy day. Days reset at JACKPOT_RESET_TIME (22:57 UTC).
+    /// @return Day index (1-indexed from deploy day).
+    function _calculateDayIndex() private view returns (uint48) {
+        uint48 deployDayBoundary = uint48((deployTime - JACKPOT_RESET_TIME) / 1 days);
+        uint48 currentDayBoundary = uint48((block.timestamp - JACKPOT_RESET_TIME) / 1 days);
+        return currentDayBoundary - deployDayBoundary + 1;
     }
 }

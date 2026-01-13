@@ -2,9 +2,15 @@
 pragma solidity ^0.8.26;
 
 import {IDegenerusCoinModule} from "./DegenerusGameModuleInterfaces.sol";
+import {MintPaymentKind} from "./IDegenerusGame.sol";
 
 interface IDegenerusGameEndgameModule {
     function finalizeEndgame(uint24 lvl, uint256 rngWord) external;
+}
+
+interface IDegenerusGameGameOverModule {
+    function handleGameOverDrain(uint48 day) external;
+    function handleFinalSweep() external;
 }
 
 interface IDegenerusGameJackpotModule {
@@ -52,6 +58,30 @@ interface IDegenerusGameMintModule {
         uint24 lvl,
         uint32 mintUnits
     ) external payable returns (uint256 coinReward);
+
+    function purchase(
+        uint256 gamepieceQuantity,
+        uint256 mapQuantity,
+        uint256 lootBoxAmount,
+        bytes32 affiliateCode,
+        MintPaymentKind payKind
+    ) external payable;
+
+    function openLootBox(uint48 day) external;
+
+    function queueFutureRewardMints(
+        address player,
+        uint24 targetLevel,
+        uint32 quantity,
+        uint256 poolWei
+    ) external;
+
+    function processFutureMintBatch(
+        uint32 playersToProcess,
+        uint24 lvl
+    ) external returns (bool worked, bool finished);
+
+    function payFutureTicketJackpot(uint24 lvl, uint256 randWord) external;
 
     function calculateAirdropMultiplier(
         uint32 prePurchaseCount,
