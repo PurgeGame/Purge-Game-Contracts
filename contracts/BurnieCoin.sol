@@ -9,7 +9,7 @@ pragma solidity ^0.8.26;
  * @dev ARCHITECTURE:
  *      - ERC20 standard with game contract transfer bypass
  *      - Coinflip: Daily stake windows with VRF-based 50/50 outcomes, 50-150% bonus on wins
- *      - Quest integration: Bonus flip credits for gameplay actions (mint/burn/bond)
+ *      - Quest integration: Bonus flip credits for gameplay actions (mint/burn)
  *      - Decimator burns: Burn-to-participate for decimator jackpot eligibility
  *      - Bounty: 1000 BURNIE/window accumulator; half removed each window (paid on win)
  *      - Vault escrow: 2M BURNIE virtual reserve, minted only on ContractAddresses.VAULT withdrawal
@@ -101,7 +101,7 @@ contract BurnieCoin {
     event LinkCredit(address indexed player, uint256 amount);
 
     /// @notice Emitted when virtual coin is escrowed to the vault reserve.
-    /// @param sender The contract that escrowed the funds (VAULT, BONDS, or GAME).
+    /// @param sender The contract that escrowed the funds (VAULT or GAME).
     /// @param amount The amount added to vault mint allowance (18 decimals).
     event VaultEscrowRecorded(address indexed sender, uint256 amount);
 
@@ -130,8 +130,6 @@ contract BurnieCoin {
     /// @notice Decimator burn attempted outside an active decimator window.
     error NotDecimatorWindow();
 
-    /// @notice Caller is not the authorized ContractAddresses.BONDS contract.
-    error OnlyBonds();
 
     /// @notice Caller is not the ContractAddresses.ADMIN address.
     error OnlyAdmin();
@@ -148,11 +146,11 @@ contract BurnieCoin {
     /// @notice Caller is not authorized (trusted contracts: GAME, GAMEPIECES, AFFILIATE, ICON_COLOR_REGISTRY).
     error OnlyTrustedContracts();
 
-    /// @notice Caller is not authorized (flip creditors: GAME, GAMEPIECES, AFFILIATE, BONDS).
+    /// @notice Caller is not authorized (flip creditors: GAME, GAMEPIECES, AFFILIATE).
     error OnlyFlipCreditors();
 
-    /// @notice Caller is not authorized (vault operations: VAULT, BONDS, or GAME).
-    error OnlyVaultOrBondsOrGame();
+    /// @notice Caller is not authorized (vault operations: VAULT or GAME).
+    error OnlyVaultOrGame();
 
     /*+======================================================================+
       |                         ERC20 STATE                                  |
@@ -220,7 +218,7 @@ contract BurnieCoin {
       |                                                                      |
       |  CONSTANT REFERENCES:                                                |
       |  • GAME, QUESTS, JACKPOTS, AFFILIATE                                  |
-      |  • VAULT, BONDS, ADMIN, ICON_COLOR_REGISTRY                           |
+|  • VAULT, ADMIN, ICON_COLOR_REGISTRY                                  |
       +======================================================================+*/
 
     /// @notice The main game contract; provides level, RNG state, and purchase info.
@@ -284,7 +282,7 @@ contract BurnieCoin {
     /// @notice Virtual supply the ContractAddresses.VAULT is authorized to mint (not yet circulating).
     /// @dev Seeded to 2,000,000 BURNIE. Increases via vaultEscrow(), decreases via vaultMintTo().
     ///      supplyIncUncirculated = totalSupply + _vaultMintAllowance.
-    /// @custom:security Only ContractAddresses.VAULT/ContractAddresses.BONDS/game can increase; only ContractAddresses.VAULT can mint from it.
+    /// @custom:security Only ContractAddresses.VAULT/game can increase; only ContractAddresses.VAULT can mint from it.
     uint256 private _vaultMintAllowance = 2_000_000 ether;
 
     /*+======================================================================+
@@ -530,7 +528,7 @@ contract BurnieCoin {
       |  +------------------------+----------------------------------------+ |
       |  |  onlyDegenerusGame     | degenerusGame only                     | |
       |  |  onlyTrustedContracts  | game, gamepiece, affiliate, color registry   | |
-      |  |  onlyFlipCreditors     | game, gamepiece, affiliate, BONDS            | |
+|  |  onlyFlipCreditors     | game, gamepiece, affiliate                  | |
       |  |  onlyVault             | VAULT only                             | |
       |  +-----------------------------------------------------------------+ |
       +======================================================================+*/
@@ -557,14 +555,12 @@ contract BurnieCoin {
 
     /// @dev Restricts access to contracts that can credit flip stakes.
     ///      Used for: creditFlip, creditFlipBatch.
-    ///      Includes ContractAddresses.BONDS in addition to trusted contracts.
     modifier onlyFlipCreditors() {
         address sender = msg.sender;
         if (
             sender != ContractAddresses.GAME &&
             sender != ContractAddresses.GAMEPIECES &&
-            sender != ContractAddresses.AFFILIATE &&
-            sender != ContractAddresses.BONDS
+            sender != ContractAddresses.AFFILIATE
         ) revert OnlyFlipCreditors();
         _;
     }
@@ -776,14 +772,13 @@ contract BurnieCoin {
       +======================================================================+*/
 
     /// @notice Escrow virtual coin to the ContractAddresses.VAULT (no token movement); increases mint allowance.
-    /// @dev Access: ContractAddresses.VAULT, ContractAddresses.BONDS, or game when routing coin share without touching the ContractAddresses.VAULT.
+    /// @dev Access: ContractAddresses.VAULT or game when routing coin share without touching the ContractAddresses.VAULT.
     ///      This increases the "paper" reserve that ContractAddresses.VAULT can later mint from.
     /// @param amount The amount of virtual BURNIE to add to the allowance.
     function vaultEscrow(uint256 amount) external {
         if (amount == 0) return;
         address sender = msg.sender;
-        if (sender != ContractAddresses.VAULT && sender != ContractAddresses.BONDS && sender != ContractAddresses.GAME)
-            revert OnlyVaultOrBondsOrGame();
+        if (sender != ContractAddresses.VAULT && sender != ContractAddresses.GAME) revert OnlyVaultOrGame();
         _vaultMintAllowance += amount;
         emit VaultEscrowRecorded(sender, amount);
     }
@@ -808,7 +803,7 @@ contract BurnieCoin {
       |  without requiring them to burn BURNIE directly.                     |
       +======================================================================+*/
 
-    /// @notice Credit a coinflip stake from authorized contracts (game, gamepiece, affiliate, ContractAddresses.BONDS).
+    /// @notice Credit a coinflip stake from authorized contracts (game, gamepiece, affiliate).
     /// @dev Zero address or zero amount is a no-op.
     ///      Does NOT arm bounty (canArmBounty=false) - only direct deposits can set records.
     /// @param player The player to credit.
@@ -818,7 +813,7 @@ contract BurnieCoin {
         addFlip(player, amount, false, false, false);
     }
 
-    /// @notice Credit LINK-funded bonus directly (ContractAddresses.ADMIN-triggered, not presale).
+    /// @notice Credit LINK-funded bonus directly (ContractAddresses.ADMIN-triggered).
     /// @dev Admin-only. Credits flip stake for LINK donation rewards.
     ///      Used for promotional rewards funded by LINK token proceeds.
     /// @param player The recipient address.
@@ -933,22 +928,6 @@ contract BurnieCoin {
         IDegenerusQuests module = questModule;
         (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed, bool completedBoth) = module
             .handleMint(player, quantity, paidWithEth);
-        uint256 questReward = _questApplyReward(player, reward, hardMode, questType, streak, completed, completedBoth);
-        if (questReward != 0) {
-            addFlip(player, questReward, false, false, false);
-        }
-    }
-
-    /// @notice Notify quest module of a bond purchase.
-    /// @dev Access: ContractAddresses.BONDS contract only. Credits quest rewards as flip stakes.
-    /// @param player The player who purchased ContractAddresses.BONDS.
-    /// @param basePerBondWei The ETH value per bond (for quest threshold calculation).
-    function notifyQuestBond(address player, uint256 basePerBondWei) external {
-        if (msg.sender != ContractAddresses.BONDS) revert OnlyBonds();
-        IDegenerusQuests module = questModule;
-        if (player == address(0) || basePerBondWei == 0) return;
-        (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed, bool completedBoth) = module
-            .handleBondPurchase(player, basePerBondWei);
         uint256 questReward = _questApplyReward(player, reward, hardMode, questType, streak, completed, completedBoth);
         if (questReward != 0) {
             addFlip(player, questReward, false, false, false);

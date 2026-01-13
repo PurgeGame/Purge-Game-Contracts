@@ -3,7 +3,7 @@ pragma solidity ^0.8.26;
 
 struct QuestRequirements {
     uint32 mints; // Number of mints/burns required (whole gamepieces)
-    uint256 tokenAmount; // BURNIE base units (18 decimals) for token-denominated quests; wei for bond size quests
+    uint256 tokenAmount; // BURNIE base units (18 decimals) for token-denominated quests; wei for ETH-denominated quests
 }
 
 struct QuestInfo {
@@ -40,10 +40,6 @@ interface IDegenerusQuests {
         returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed, bool completedBoth);
 
     function handleDecimator(address player, uint256 burnAmount)
-        external
-        returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed, bool completedBoth);
-
-    function handleBondPurchase(address player, uint256 basePerBondWei)
         external
         returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed, bool completedBoth);
 

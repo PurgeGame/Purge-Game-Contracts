@@ -8,7 +8,7 @@ interface IDegenerusJackpots {
         uint256 rngWord
     )
         external
-        returns (address[] memory winners, uint256[] memory amounts, uint256 bondMask, uint256 returnAmountWei);
+        returns (address[] memory winners, uint256[] memory amounts, uint256 winnerMask, uint256 returnAmountWei);
 
     function runDecimatorJackpot(
         uint256 poolWei,

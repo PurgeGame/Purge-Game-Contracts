@@ -13,7 +13,7 @@ import {IVaultCoin} from "./interfaces/IVaultCoin.sol";
 |                                                                                                        |
 |  ARCHITECTURE OVERVIEW                                                                                 |
 |  ---------------------                                                                                 |
-|  DegenerusVault holds four asset types with four independent share classes for claims:                 |
+|  DegenerusVault holds three asset types with three independent share classes for claims:              |
 |                                                                                                        |
 |  +---------------------------------------------------------------------------------------------------+ |
 |  |                              ASSET & SHARE MAPPING                                                | |
@@ -26,36 +26,31 @@ import {IVaultCoin} from "./interfaces/IVaultCoin.sol";
 |  |   +-----------------+     +-----------------+                                                     | |
 |  |   |  BURNIE         |----►|  coinShare      |  DGVB - Claims BURNIE only (80% of deposits)        | |
 |  |   +-----------------+     +-----------------+                                                     | |
-|  |   |  DGNRS          |----►|  dgnrsShare     |  DGVD - Claims DGNRS only (80% of deposits)         | |
-|  |   +-----------------+     +-----------------+                                                     | |
 |  |                                                                                                   | |
 |  |   DGVA (allShare) claims 20% of combined ETH+stETH deposits and 20% of                            | |
-|  |   BURNIE/DGNRS virtual deposits. ETH and stETH are interchangeable for DGVE/DGVA.                 | |
+|  |   BURNIE virtual deposits. ETH and stETH are interchangeable for DGVE/DGVA.                       | |
 |  |   stETH rebase yield accrues to DGVE only (DGVA does not earn yield).                             | |
 |  |   Each share class has independent supply and proportional claim rights.                          | |
 |  +---------------------------------------------------------------------------------------------------+ |
 |                                                                                                        |
 |  +---------------------------------------------------------------------------------------------------+ |
-|  |                              DEPOSIT FLOW (Bond-Only)                                             | |
+|  |                              DEPOSIT FLOW (Game-Only)                                             | |
 |  |                                                                                                   | |
-|  |   DegenerusBonds ----► deposit() ----► Pulls ETH/stETH, escrows BURNIE mint allowance             | |
-|  |        |                                                                                          | |
-|  |        +------------► depositDgnrs() ► Escrows DGNRS mint allowance                               | |
+|  |   DegenerusGame ----► deposit() ----► Pulls ETH/stETH, escrows BURNIE mint allowance              | |
 |  |                                                                                                   | |
 |  |   Split: 20% of ETH+stETH and virtual deposits accrue to DGVA; 80% to existing classes.           | |
 |  |   stETH rebase yield accrues to DGVE only.                                                        | |
 |  |                                                                                                   | |
-|  |   Note: BURNIE and DGNRS use "virtual" deposits via vaultEscrow() - no token transfer,            | |
-|  |         just increases the vault's mint allowance on those contracts.                             | |
+|  |   Note: BURNIE uses a "virtual" deposit via vaultEscrow() - no token transfer,                    | |
+|  |         just increases the vault's mint allowance on the coin contract.                           | |
 |  +---------------------------------------------------------------------------------------------------+ |
 |                                                                                                        |
 |  +---------------------------------------------------------------------------------------------------+ |
 |  |                              CLAIM FLOW (Burn Shares)                                             | |
 |  |                                                                                                   | |
 |  |   User ----► burnCoin(amount) ----► Burns coinShare ----► Mints BURNIE to user                    | |
-|  |   User ----► burnDgnrs(amount) ---► Burns dgnrsShare ---► Mints DGNRS to user                     | |
 |  |   User ----► burnEth(amount) -----► Burns ethShare -----► Sends ETH + stETH to user               | |
-|  |   User ----► burnAll(amount) -----► Burns allShare -----► Sends ETH + stETH + BURNIE + DGNRS      | |
+|  |   User ----► burnAll(amount) -----► Burns allShare -----► Sends ETH + stETH + BURNIE              | |
 |  |                                                                                                   | |
 |  |   Formula: claimAmount = (reserveBalance * sharesBurned) / totalShareSupply                       | |
 |  |                                                                                                   | |
@@ -66,7 +61,7 @@ import {IVaultCoin} from "./interfaces/IVaultCoin.sol";
 |  KEY INVARIANTS                                                                                        |
 |  --------------                                                                                        |
 |  • Share supply can never reach zero (refill mechanism)                                                |
-|  • Only BONDS can call deposit/depositDgnrs; ETH donations are open                                    |
+|  • Only GAME can call deposit; ETH donations are open                                                  |
 |  • Only this vault can mint/burn share tokens                                                          |
 |  • ETH and stETH are combined for DGVE/DGVA claims (ETH preferred, then stETH)                         |
 |  • DGVE claims exclude DGVA's reserved share of the combined pool                                      |
@@ -79,7 +74,7 @@ import {IVaultCoin} from "./interfaces/IVaultCoin.sol";
 // -----------------------------------------------------------------------------
 
 /// @title DegenerusVaultShare
-/// @notice Minimal ERC20 for vault share classes (DGVB, DGVD, DGVE, DGVA)
+/// @notice Minimal ERC20 for vault share classes (DGVB, DGVE, DGVA)
 /// @dev Only the parent vault can mint/burn. Standard ERC20 transfer/approve for users.
 contract DegenerusVaultShare {
     // ---------------------------------------------------------------------
@@ -239,7 +234,7 @@ contract DegenerusVault {
     // ---------------------------------------------------------------------
     // ERRORS
     // ---------------------------------------------------------------------
-    /// @dev Caller is not authorized (not ContractAddresses.BONDS contract)
+    /// @dev Caller is not authorized (not ContractAddresses.GAME contract)
     error Unauthorized();
     /// @dev Insufficient balance, allowance, or reserve for operation
     error Insufficient();
@@ -250,15 +245,11 @@ contract DegenerusVault {
     // EVENTS
     // ---------------------------------------------------------------------
     /// @notice Emitted when assets are deposited into the vault
-    /// @param from Depositor address (typically ContractAddresses.BONDS contract)
+    /// @param from Depositor address (typically ContractAddresses.GAME contract)
     /// @param ethAmount ETH deposited (via msg.value)
     /// @param stEthAmount stETH pulled from depositor
     /// @param coinAmount BURNIE mint allowance escrowed (virtual deposit)
     event Deposit(address indexed from, uint256 ethAmount, uint256 stEthAmount, uint256 coinAmount);
-    /// @notice Emitted when DGNRS mint allowance is escrowed
-    /// @param from Depositor address (ContractAddresses.BONDS contract)
-    /// @param dgnrsAmount DGNRS mint allowance escrowed (virtual deposit)
-    event DepositDgnrs(address indexed from, uint256 dgnrsAmount);
     /// @notice Emitted when user burns shares to claim ETH/stETH/BURNIE
     /// @param from User who burned shares
     /// @param sharesBurned Amount of shares burned
@@ -266,25 +257,18 @@ contract DegenerusVault {
     /// @param stEthOut stETH sent to user
     /// @param coinOut BURNIE minted to user
     event Claim(address indexed from, uint256 sharesBurned, uint256 ethOut, uint256 stEthOut, uint256 coinOut);
-    /// @notice Emitted when user burns DGNRS shares to claim DGNRS
-    /// @param from User who burned shares
-    /// @param sharesBurned Amount of DGNRS shares burned
-    /// @param dgnrsOut DGNRS minted to user
-    event ClaimDgnrs(address indexed from, uint256 sharesBurned, uint256 dgnrsOut);
-    /// @notice Emitted when user burns DGVA shares to claim ETH/stETH/BURNIE/DGNRS
+    /// @notice Emitted when user burns DGVA shares to claim ETH/stETH/BURNIE
     /// @param from User who burned shares
     /// @param sharesBurned Amount of DGVA shares burned
     /// @param ethOut ETH sent to user
     /// @param stEthOut stETH sent to user
     /// @param coinOut BURNIE minted to user
-    /// @param dgnrsOut DGNRS minted to user
     event ClaimAll(
         address indexed from,
         uint256 sharesBurned,
         uint256 ethOut,
         uint256 stEthOut,
-        uint256 coinOut,
-        uint256 dgnrsOut
+        uint256 coinOut
     );
 
     // ---------------------------------------------------------------------
@@ -306,8 +290,6 @@ contract DegenerusVault {
     // ---------------------------------------------------------------------
     /// @notice Share token for BURNIE claims (symbol: DGVB)
     DegenerusVaultShare private immutable coinShare;
-    /// @notice Share token for DGNRS claims (symbol: DGVD)
-    DegenerusVaultShare private immutable dgnrsShare;
     /// @notice Share token for ETH+stETH claims (symbol: DGVE)
     DegenerusVaultShare private immutable ethShare;
     /// @notice Share token for 20% multi-asset claims (symbol: DGVA)
@@ -318,8 +300,6 @@ contract DegenerusVault {
     // ---------------------------------------------------------------------
     /// @dev BURNIE token address (implements IVaultCoin)
     IVaultCoin internal constant coinToken = IVaultCoin(ContractAddresses.COIN);
-    /// @dev DGNRS token address (implements IVaultCoin)
-    IVaultCoin internal constant dgnrsToken = IVaultCoin(ContractAddresses.DGNRS);
     /// @dev stETH token address (Lido)
     IStETH internal constant steth = IStETH(ContractAddresses.STETH_TOKEN);
     // ---------------------------------------------------------------------
@@ -329,19 +309,15 @@ contract DegenerusVault {
     uint256 private dgvaEthReserve;
     /// @dev BURNIE reserved for DGVA claims (20% of virtual deposits)
     uint256 private dgvaCoinReserve;
-    /// @dev DGNRS reserved for DGVA claims (20% of virtual deposits)
-    uint256 private dgvaDgnrsReserve;
     /// @dev Tracked total BURNIE allowance (for split accounting)
     uint256 private coinTracked;
-    /// @dev Tracked total DGNRS allowance (for split accounting)
-    uint256 private dgnrsTracked;
 
     // ---------------------------------------------------------------------
     // MODIFIERS
     // ---------------------------------------------------------------------
-    /// @dev Restricts function to the ContractAddresses.BONDS contract
-    modifier onlyBonds() {
-        if (msg.sender != ContractAddresses.BONDS) revert Unauthorized();
+    /// @dev Restricts function to the ContractAddresses.GAME contract
+    modifier onlyGame() {
+        if (msg.sender != ContractAddresses.GAME) revert Unauthorized();
         _;
     }
 
@@ -349,11 +325,10 @@ contract DegenerusVault {
     // CONSTRUCTOR
     // ---------------------------------------------------------------------
     /// @notice Deploy the vault with all required addresses.
-    /// @dev Deploys four share tokens and uses the precomputed DGNRS address from ContractAddresses.
+    /// @dev Deploys the share tokens using precomputed addresses from ContractAddresses.
     constructor() {
         // Deploy share class tokens - creator receives initial 1B supply of each
         coinShare = new DegenerusVaultShare("Degenerus Vault Burnie", "DGVB");
-        dgnrsShare = new DegenerusVaultShare("Degenerus Vault DGNRS", "DGVD");
         ethShare = new DegenerusVaultShare("Degenerus Vault Eth", "DGVE");
         allShare = new DegenerusVaultShare("Degenerus Vault All", "DGVA");
 
@@ -361,22 +336,19 @@ contract DegenerusVault {
         coinTracked = coinAllowance;
         dgvaCoinReserve = coinAllowance / DGVA_SPLIT_DIVISOR;
 
-        uint256 dgnrsAllowance = dgnrsToken.vaultMintAllowance();
-        dgnrsTracked = dgnrsAllowance;
-        dgvaDgnrsReserve = dgnrsAllowance / DGVA_SPLIT_DIVISOR;
     }
 
     // ---------------------------------------------------------------------
-    // DEPOSITS (Bond-Only)
+    // DEPOSITS (Game-Only)
     // ---------------------------------------------------------------------
 
     /// @notice Deposit ETH, stETH, and/or BURNIE mint allowance into the vault
-    /// @dev Bonds contract only. BURNIE uses virtual deposit (escrows mint allowance, no transfer).
+    /// @dev Game contract only. BURNIE uses virtual deposit (escrows mint allowance, no transfer).
     ///      ETH is received via msg.value, stETH is pulled via transferFrom.
     ///      20% of ETH+stETH and virtual deposits accrue to DGVA; ETH/stETH interchangeable for DGVE/DGVA.
     /// @param coinAmount BURNIE mint allowance to escrow (virtual deposit)
     /// @param stEthAmount stETH to pull from caller
-    function deposit(uint256 coinAmount, uint256 stEthAmount) external payable onlyBonds {
+    function deposit(uint256 coinAmount, uint256 stEthAmount) external payable onlyGame {
         if (coinAmount != 0) {
             _syncCoinReserves();
             coinToken.vaultEscrow(coinAmount);
@@ -392,19 +364,6 @@ contract DegenerusVault {
         emit Deposit(msg.sender, msg.value, stEthAmount, coinAmount);
     }
 
-    /// @notice Deposit DGNRS mint allowance into the vault
-    /// @dev Bonds contract only. Virtual deposit - escrows mint allowance, no token transfer.
-    /// @param dgnrsAmount DGNRS mint allowance to escrow
-    function depositDgnrs(uint256 dgnrsAmount) external onlyBonds {
-        if (dgnrsAmount == 0) return;
-        _syncDgnrsReserves();
-        dgnrsToken.vaultEscrow(dgnrsAmount);
-        uint256 dgvaShare = dgnrsAmount / DGVA_SPLIT_DIVISOR;
-        dgvaDgnrsReserve += dgvaShare;
-        dgnrsTracked += dgnrsAmount;
-        emit DepositDgnrs(msg.sender, dgnrsAmount);
-    }
-
     /// @notice Receive ETH deposits (e.g., from game contract)
     /// @dev Anyone can send ETH; splits 20% to DGVA and 80% to DGVE (combined pool)
     receive() external payable {
@@ -412,34 +371,6 @@ contract DegenerusVault {
             dgvaEthReserve += msg.value / DGVA_SPLIT_DIVISOR;
         }
         emit Deposit(msg.sender, msg.value, 0, 0);
-    }
-
-    /// @notice Swap ETH <-> stETH with the ContractAddresses.BONDS contract for liquidity rebalancing
-    /// @dev Bonds contract only. Used to convert between ETH and stETH as needed.
-    ///      stEthForEth=true: Bonds sends stETH, receives ETH back
-    ///      stEthForEth=false: Bonds sends ETH, receives freshly staked stETH back
-    /// @param stEthForEth Direction of swap (true = stETH→ETH, false = ETH→stETH)
-    /// @param amount Amount to swap
-    function swapWithBonds(bool stEthForEth, uint256 amount) external payable onlyBonds {
-        if (amount == 0) revert Insufficient();
-
-        if (stEthForEth) {
-            // Bonds sends stETH, receives ETH
-            if (msg.value != 0) revert Insufficient();
-            if (!steth.transferFrom(msg.sender, address(this), amount)) revert TransferFailed();
-            if (address(this).balance < amount) revert Insufficient();
-            _payEth(msg.sender, amount);
-        } else {
-            // Bonds sends ETH, receives stETH (freshly staked via Lido)
-            if (msg.value != amount) revert Insufficient();
-            uint256 minted;
-            try steth.submit{value: amount}(address(0)) returns (uint256 m) {
-                minted = m;
-            } catch {
-                revert TransferFailed();
-            }
-            if (minted != 0 && !steth.transfer(msg.sender, minted)) revert TransferFailed();
-        }
     }
 
     // ---------------------------------------------------------------------
@@ -475,36 +406,6 @@ contract DegenerusVault {
 
         emit Claim(msg.sender, amount, 0, 0, coinOut);
         if (coinOut != 0) coinToken.vaultMintTo(msg.sender, coinOut);
-    }
-
-    /// @notice Burn DGVD (dgnrsShare) tokens to redeem proportional DGNRS
-    /// @dev Formula: dgnrsOut = (DGVD reserve * sharesBurned) / totalSupply
-    ///      If burning entire supply, caller receives new 1B shares (refill mechanism).
-    /// @param amount Amount of DGVD shares to burn
-    /// @return dgnrsOut Amount of DGNRS minted to caller
-    function burnDgnrs(uint256 amount) external returns (uint256 dgnrsOut) {
-        DegenerusVaultShare share = dgnrsShare;
-        uint256 bal = share.balanceOf(msg.sender);
-        if (amount == 0 || amount > bal) revert Insufficient();
-
-        _syncDgnrsReserves();
-        uint256 supplyBefore = share.totalSupply();
-        uint256 dgnrsBal = dgnrsTracked;
-        if (dgnrsBal < dgvaDgnrsReserve) revert Insufficient();
-        dgnrsBal -= dgvaDgnrsReserve;
-        dgnrsOut = (dgnrsBal * amount) / supplyBefore; // Floor division
-
-        // CEI: State changes before external calls
-        share.vaultBurn(msg.sender, amount);
-        if (supplyBefore == amount) {
-            share.vaultMint(msg.sender, REFILL_SUPPLY);
-        }
-        if (dgnrsOut != 0) {
-            dgnrsTracked -= dgnrsOut;
-        }
-
-        emit ClaimDgnrs(msg.sender, amount, dgnrsOut);
-        if (dgnrsOut != 0) dgnrsToken.vaultMintTo(msg.sender, dgnrsOut);
     }
 
     /// @notice Burn DGVE (ethShare) tokens to redeem proportional ETH and stETH
@@ -547,7 +448,7 @@ contract DegenerusVault {
         if (stEthOut != 0) _paySteth(msg.sender, stEthOut);
     }
 
-    /// @notice Burn DGVA (allShare) tokens to redeem proportional ETH/stETH, BURNIE, and DGNRS
+    /// @notice Burn DGVA (allShare) tokens to redeem proportional ETH/stETH and BURNIE
     /// @dev ETH/stETH claims are limited to DGVA's combined reserve (20% of deposits).
     ///      Formula per asset: out = (reserve * sharesBurned) / totalSupply
     ///      If burning entire supply, caller receives new 1B shares (refill mechanism).
@@ -555,26 +456,20 @@ contract DegenerusVault {
     /// @return ethOut Amount of ETH sent to caller
     /// @return stEthOut Amount of stETH sent to caller
     /// @return coinOut Amount of BURNIE minted to caller
-    /// @return dgnrsOut Amount of DGNRS minted to caller
-    function burnAll(
-        uint256 amount
-    ) external returns (uint256 ethOut, uint256 stEthOut, uint256 coinOut, uint256 dgnrsOut) {
+    function burnAll(uint256 amount) external returns (uint256 ethOut, uint256 stEthOut, uint256 coinOut) {
         DegenerusVaultShare share = allShare;
         uint256 bal = share.balanceOf(msg.sender);
         if (amount == 0 || amount > bal) revert Insufficient();
 
         (uint256 ethBal, uint256 stBal, ) = _syncEthReserves();
         _syncCoinReserves();
-        _syncDgnrsReserves();
 
         uint256 supplyBefore = share.totalSupply();
         uint256 ethReserve = dgvaEthReserve;
         uint256 coinReserve = dgvaCoinReserve;
-        uint256 dgnrsReserve = dgvaDgnrsReserve;
 
         uint256 claimValue = (ethReserve * amount) / supplyBefore;
         coinOut = (coinReserve * amount) / supplyBefore;
-        dgnrsOut = (dgnrsReserve * amount) / supplyBefore;
 
         if (claimValue <= ethBal) {
             ethOut = claimValue;
@@ -596,17 +491,12 @@ contract DegenerusVault {
             dgvaCoinReserve = coinReserve - coinOut;
             coinTracked -= coinOut;
         }
-        if (dgnrsOut != 0) {
-            dgvaDgnrsReserve = dgnrsReserve - dgnrsOut;
-            dgnrsTracked -= dgnrsOut;
-        }
 
-        emit ClaimAll(msg.sender, amount, ethOut, stEthOut, coinOut, dgnrsOut);
+        emit ClaimAll(msg.sender, amount, ethOut, stEthOut, coinOut);
 
         if (ethOut != 0) _payEth(msg.sender, ethOut);
         if (stEthOut != 0) _paySteth(msg.sender, stEthOut);
         if (coinOut != 0) coinToken.vaultMintTo(msg.sender, coinOut);
-        if (dgnrsOut != 0) dgnrsToken.vaultMintTo(msg.sender, dgnrsOut);
     }
 
     // ---------------------------------------------------------------------
@@ -623,18 +513,6 @@ contract DegenerusVault {
         uint256 supply = coinShare.totalSupply();
         // Ceiling division: ceil(coinOut * supply / reserve)
         burnAmount = (coinOut * supply + reserve - 1) / reserve;
-    }
-
-    /// @notice Calculate shares to burn for a target DGNRS output
-    /// @dev Uses ceiling division to ensure user burns enough shares
-    /// @param dgnrsOut Target DGNRS amount to receive
-    /// @return burnAmount DGVD shares required to burn
-    function previewBurnForDgnrsOut(uint256 dgnrsOut) external view returns (uint256 burnAmount) {
-        (uint256 reserve, ) = _dgnrsReservesView();
-        if (dgnrsOut == 0 || dgnrsOut > reserve) revert Insufficient();
-        uint256 supply = dgnrsShare.totalSupply();
-        // Ceiling division: ceil(dgnrsOut * supply / reserve)
-        burnAmount = (dgnrsOut * supply + reserve - 1) / reserve;
     }
 
     /// @notice Calculate shares to burn for a target ETH-equivalent value
@@ -677,16 +555,6 @@ contract DegenerusVault {
         coinOut = (coinBal * amount) / supply; // Floor division
     }
 
-    /// @notice Preview DGNRS output for burning a given amount of shares
-    /// @param amount DGVD shares to burn
-    /// @return dgnrsOut DGNRS that would be minted
-    function previewDgnrs(uint256 amount) external view returns (uint256 dgnrsOut) {
-        uint256 supply = dgnrsShare.totalSupply();
-        if (amount == 0 || amount > supply) revert Insufficient();
-        (uint256 dgnrsBal, ) = _dgnrsReservesView();
-        dgnrsOut = (dgnrsBal * amount) / supply; // Floor division
-    }
-
     /// @notice Preview ETH/stETH output for burning a given amount of shares
     /// @param amount DGVE shares to burn
     /// @return ethOut ETH that would be sent
@@ -706,20 +574,18 @@ contract DegenerusVault {
         }
     }
 
-    /// @notice Preview ETH/stETH/BURNIE/DGNRS output for burning a given amount of DGVA shares
+    /// @notice Preview ETH/stETH/BURNIE output for burning a given amount of DGVA shares
     /// @param amount DGVA shares to burn
     /// @return ethOut ETH that would be sent
     /// @return stEthOut stETH that would be sent
     /// @return coinOut BURNIE that would be minted
-    /// @return dgnrsOut DGNRS that would be minted
     function previewAll(
         uint256 amount
-    ) external view returns (uint256 ethOut, uint256 stEthOut, uint256 coinOut, uint256 dgnrsOut) {
+    ) external view returns (uint256 ethOut, uint256 stEthOut, uint256 coinOut) {
         uint256 supply = allShare.totalSupply();
         if (amount == 0 || amount > supply) revert Insufficient();
         (, uint256 ethReserve, uint256 ethBal) = _ethReservesView();
         (, uint256 coinBal) = _coinReservesView();
-        (, uint256 dgnrsBal) = _dgnrsReservesView();
         uint256 claimValue = (ethReserve * amount) / supply;
         if (claimValue <= ethBal) {
             ethOut = claimValue;
@@ -728,7 +594,6 @@ contract DegenerusVault {
             stEthOut = claimValue - ethBal;
         }
         coinOut = (coinBal * amount) / supply;
-        dgnrsOut = (dgnrsBal * amount) / supply;
     }
 
     // ---------------------------------------------------------------------
@@ -762,43 +627,11 @@ contract DegenerusVault {
         }
     }
 
-    /// @dev Sync DGNRS reserve split with the actual allowance
-    function _syncDgnrsReserves() private {
-        uint256 allowance = dgnrsToken.vaultMintAllowance();
-        uint256 tracked = dgnrsTracked;
-        if (allowance > tracked) {
-            uint256 delta = allowance - tracked;
-            uint256 dgvaShare = delta / DGVA_SPLIT_DIVISOR;
-            dgvaDgnrsReserve += dgvaShare;
-            dgnrsTracked = allowance;
-        } else if (allowance < tracked) {
-            dgnrsTracked = allowance;
-            if (dgvaDgnrsReserve > allowance) {
-                dgvaDgnrsReserve = allowance;
-            }
-        }
-    }
-
     /// @dev View helper for BURNIE reserves with pending split delta applied
     function _coinReservesView() private view returns (uint256 mainReserve, uint256 dgvaReserve) {
         uint256 allowance = coinToken.vaultMintAllowance();
         uint256 tracked = coinTracked;
         dgvaReserve = dgvaCoinReserve;
-        if (allowance > tracked) {
-            uint256 delta = allowance - tracked;
-            dgvaReserve += delta / DGVA_SPLIT_DIVISOR;
-        }
-        if (dgvaReserve > allowance) {
-            dgvaReserve = allowance;
-        }
-        mainReserve = allowance - dgvaReserve;
-    }
-
-    /// @dev View helper for DGNRS reserves with pending split delta applied
-    function _dgnrsReservesView() private view returns (uint256 mainReserve, uint256 dgvaReserve) {
-        uint256 allowance = dgnrsToken.vaultMintAllowance();
-        uint256 tracked = dgnrsTracked;
-        dgvaReserve = dgvaDgnrsReserve;
         if (allowance > tracked) {
             uint256 delta = allowance - tracked;
             dgvaReserve += delta / DGVA_SPLIT_DIVISOR;

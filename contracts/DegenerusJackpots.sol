@@ -274,13 +274,13 @@ contract DegenerusJackpots is IDegenerusJackpots {
     /// @dev Multiplier cap for Decimator burns (200 mints worth).
     uint256 private constant DECIMATOR_MULTIPLIER_CAP = 200 * PRICE_COIN_UNIT;
 
-    /// @dev Bit offset in bondMask for scatter winner flags.
+    /// @dev Bit offset in winnerMask for scatter winner flags.
     ///      First 128 bits for direct winners, upper bits for scatter.
     uint256 private constant BAF_SCATTER_MASK_OFFSET = 128;
 
-    /// @dev Number of scatter winners receiving special bond/map treatment.
-    ///      Last 40 scatter winners get bondMask flags set.
-    uint8 private constant BAF_SCATTER_BOND_WINNERS = 40;
+    /// @dev Number of scatter winners receiving MAP-routing treatment.
+    ///      Last 40 scatter winners get winnerMask flags set.
+    uint8 private constant BAF_SCATTER_MAP_WINNERS = 40;
 
     /// @dev Maximum denominator for Decimator buckets (2-10 inclusive).
     uint8 private constant DECIMATOR_MAX_DENOM = 10;
@@ -458,7 +458,7 @@ contract DegenerusJackpots is IDegenerusJackpots {
       |                                                                      |
       |  PRIZE DISTRIBUTION:                                                 |
       |  +-----------------------------------------------------------------+ |
-      |  | 10% | Top BAF bettor for this level (bondMask bit set)         | |
+      |  | 10% | Top BAF bettor for this level (winnerMask bit set)       | |
       |  | 10% | Top coinflip bettor from last 24h window                 | |
       |  |  5% | Random pick: 3rd or 4th BAF slot                         | |
       |  | 10% | Exterminator draw (prior 20 levels, 5/3/2/0%)            | |
@@ -476,19 +476,19 @@ contract DegenerusJackpots is IDegenerusJackpots {
       |  • VRF-derived randomness for all random selections                  |
       |  • Entropy chained via keccak256 for independence                    |
       |  • Unfilled prizes returned via returnAmountWei                      |
-      |  • bondMask encodes special handling for game contract               |
+      |  • winnerMask encodes special handling for game contract             |
       +======================================================================+*/
 
     /// @notice Resolve the BAF jackpot for a level.
     /// @dev Access: game contract only. Called at level end.
     ///      Distributes poolWei across multiple winner categories with eligibility checks.
-    ///      Returns arrays of winners/amounts plus bondMask for special handling.
+    ///      Returns arrays of winners/amounts plus winnerMask for special handling.
     /// @param poolWei Total ETH prize pool for distribution.
     /// @param lvl Level number being resolved.
     /// @param rngWord VRF-derived randomness seed.
     /// @return winners Array of winner addresses.
     /// @return amounts Array of prize amounts corresponding to winners.
-    /// @return bondMask Bitmask indicating which winners get special bond/map treatment.
+    /// @return winnerMask Bitmask indicating which winners get special handling.
     /// @return returnAmountWei Unawarded prize amount to return to caller.
     function runBafJackpot(
         uint256 poolWei,
@@ -498,7 +498,7 @@ contract DegenerusJackpots is IDegenerusJackpots {
         external
         override
         onlyGame
-        returns (address[] memory winners, uint256[] memory amounts, uint256 bondMask, uint256 returnAmountWei)
+        returns (address[] memory winners, uint256[] memory amounts, uint256 winnerMask, uint256 returnAmountWei)
     {
         uint256 P = poolWei;
         // Max distinct winners: 1 (top BAF) + 1 (top flip) + 1 (pick) + 3 (exterminator draw) + 3 (affiliate draw) + 3 (retro) + 50 + 50 (scatter buckets) = 112.
@@ -888,7 +888,7 @@ contract DegenerusJackpots is IDegenerusJackpots {
         }
 
         // Scatter slice: 200 total draws (4 tickets * 50 rounds). Per round, take top-2 by BAF score.
-        // Game applies special map/bond handling for the last BAF_SCATTER_BOND_WINNERS scatter winners via `bondMask`.
+        // Game applies special MAP handling for the last BAF_SCATTER_MAP_WINNERS scatter winners via `winnerMask`.
         {
             // Slice E: scatter tickets from trait sampler so casual participants can land smaller cuts.
             uint256 scatterTop = (P * 20) / 100;
@@ -990,9 +990,9 @@ contract DegenerusJackpots is IDegenerusJackpots {
 
             uint256 scatterCount = n - scatterStart;
             if (scatterCount != 0) {
-                uint256 targetSpecialCount = scatterCount < BAF_SCATTER_BOND_WINNERS
+                uint256 targetSpecialCount = scatterCount < BAF_SCATTER_MAP_WINNERS
                     ? scatterCount
-                    : BAF_SCATTER_BOND_WINNERS;
+                    : BAF_SCATTER_MAP_WINNERS;
                 for (uint256 i; i < targetSpecialCount; ) {
                     uint256 idx = (scatterStart + scatterCount - 1) - i;
                     mask |= (uint256(1) << (BAF_SCATTER_MASK_OFFSET + idx));
@@ -1013,11 +1013,11 @@ contract DegenerusJackpots is IDegenerusJackpots {
             }
         }
 
-        bondMask = mask;
+        winnerMask = mask;
 
         // Clean up leaderboard state for this level
         _clearBafTop(lvl);
-        return (winners, amounts, bondMask, toReturn);
+        return (winners, amounts, winnerMask, toReturn);
     }
 
     /*+======================================================================+

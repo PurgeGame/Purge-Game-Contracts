@@ -17,10 +17,7 @@ library ContractAddresses {
     address internal constant TROPHY_SVG_ASSETS = 0x6dc9D20D47226Af9b76bA1Bc20Cf8443C5Ddc3b6;
     address internal constant GAME_MINT_MODULE = 0x09E70bfA9c3a56d2CD6437F1fBe057f7Aa0B5078;
     address internal constant GAME_JACKPOT_MODULE = 0x2608d96c2F63c7a27D4d3094573Ef6cf13Cd748B;
-    address internal constant GAME_BOND_MODULE = 0x0fa1ecE16384b6FbDA5b448f3F588929dC96b225;
     address internal constant GAME_ENDGAME_MODULE = 0x33A77dd763462873279fC073e73D95d577d69c85;
-    address internal constant DGNRS = 0x452d4D6221Eeb5777A451e176c8BBcD6a54A0426;
-    address internal constant BONDS = 0x327Bf4F39A44224c7C6476D906560474C91aeD8b;
     address internal constant COIN = 0xcAB0eA7c2C0F0926584CD473B7B5fCb457f18826;
     address internal constant VAULT = 0xbA924bf8BFa8e10C87dCf9285569e1F0d29D14eF;
     address internal constant AFFILIATE = 0x4cF98E2b067D05f22b569d8a37f38E8Ec9D9e52A;

@@ -2,7 +2,6 @@
 pragma solidity ^0.8.26;
 
 import {IDegenerusGameJackpotModule} from "../interfaces/IDegenerusGameModules.sol";
-import {IDegenerusBondsJackpot} from "../interfaces/IDegenerusBondsJackpot.sol";
 import {IDegenerusJackpots} from "../interfaces/IDegenerusJackpots.sol";
 import {IDegenerusTrophies} from "../interfaces/IDegenerusTrophies.sol";
 import {IDegenerusAffiliate} from "../interfaces/IDegenerusAffiliate.sol";
@@ -31,7 +30,6 @@ import {ContractAddresses} from "../ContractAddresses.sol";
  *     +- IF extermination occurred (not timeout):
  *     |   +- Mint exterminator trophy (winnings packed)
  *     |   +- Pay exterminator (20-40% of prize pool)
- *     |   |   +- 25% of their share → bonds (if enabled)
  *     |   +- Pay extermination jackpot (trait ticket holders)
  *     |   +- Pay purchase rewards (20% → gamepiece/MAP rewards for winners)
  *     |
@@ -47,14 +45,7 @@ import {ContractAddresses} from "../ContractAddresses.sol";
  * - "Big-ex" levels (14, 24, 34...): Fixed 40%
  * - All other levels: Random 20-40% (VRF-derived, 1% steps)
  *
- * ## Bond Integration
  *
- * Several payout paths route a portion to bonds:
- * - Exterminator: 25% of their share → bonds
- * - BAF top winners: 20% → bonds
- * - BAF scatter winners: remainder after MAPs → bonds (100%)
- *
- * This creates time-locked value that incentivizes continued game progression.
  */
 contract DegenerusGameEndgameModule is DegenerusGameStorage {
     // -------------------------------------------------------------------------
@@ -72,7 +63,6 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
     // -------------------------------------------------------------------------
 
     IDegenerusAffiliate internal constant affiliate = IDegenerusAffiliate(ContractAddresses.AFFILIATE);
-    IDegenerusBondsJackpot internal constant bonds = IDegenerusBondsJackpot(ContractAddresses.BONDS);
     IDegenerusGamepieces internal constant gamepieces = IDegenerusGamepieces(ContractAddresses.GAMEPIECES);
     IDegenerusJackpots internal constant jackpots = IDegenerusJackpots(ContractAddresses.JACKPOTS);
     IDegenerusTrophies internal constant trophies = IDegenerusTrophies(ContractAddresses.TROPHIES);
@@ -84,17 +74,8 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
     /// @notice Sentinel value indicating level ended via timeout, not extermination.
     uint16 private constant TRAIT_ID_TIMEOUT = 420;
 
-    /// @notice Basis points of exterminator share routed to bonds (25%).
-    uint16 private constant BOND_BPS_EX = 2500;
-
-    /// @notice Basis points for bond buy on BAF top/flip/3-4 winners (20%).
-    uint16 private constant BAF_TOP_BOND_BPS = 2000;
-
-    /// @notice Basis points for bond buy on BAF scatter remainder (100%).
-    uint16 private constant BAF_SCATTER_BOND_BPS = 10_000;
-
-    /// @notice Bit offset separating top winners from scatter winners in bondMask.
-    uint8 private constant BAF_BOND_MASK_OFFSET = 128;
+    /// @notice Bit offset separating top winners from scatter winners in the special winner mask.
+    uint8 private constant BAF_MASK_OFFSET = 128;
 
     /// @notice Basis points of non-exterminator pool for purchase rewards (20%).
     uint16 private constant EXTERMINATION_PURCHASE_BPS = 2000;
@@ -119,7 +100,6 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
      * - `claimablePool` += all ETH payouts
      * - `nextPrizePool` += purchase reward pool (funds next level)
      * - `rewardPool` -= BAF/Decimator jackpot spends
-     * - `bondPool` += bond deposits from split payouts
      * - `airdropIndex` → 0 (reset for next level)
      *
      * ## Extermination vs Timeout
@@ -159,8 +139,8 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
                 exterminatorWinnings
             );
 
-            // Pay exterminator (with bond split)
-            claimableDelta += _payExterminatorShare(ex, exterminatorShare, prevLevel);
+            // Pay exterminator (claimable ETH)
+            claimableDelta += _payExterminatorShare(ex, exterminatorShare);
 
             // Remaining pool goes to jackpots and purchase rewards
             uint256 jackpotPool = poolValue > exterminatorShare ? poolValue - exterminatorShare : 0;
@@ -319,83 +299,15 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
     // -------------------------------------------------------------------------
 
     /**
-     * @notice Pay the exterminator their share with bond split.
-     * @dev 25% of exterminator share is routed to bonds (if enabled).
-     *
+     * @notice Pay the exterminator their share as claimable ETH.
      * @param ex Exterminator address.
-     * @param exterminatorShare Total ETH share before bond split.
+     * @param exterminatorShare Total ETH share.
      * @return claimableDelta ETH credited to claimable balance.
-     *
-     * ## Payout Split
-     *
-     * ```
-     * Exterminator Share
-     *     +- 75% → claimable ETH
-     *     +- 25% → bonds (creates time-locked position)
-     * ```
      */
-    function _payExterminatorShare(
-        address ex,
-        uint256 exterminatorShare,
-        uint24 lvl
-    ) private returns (uint256 claimableDelta) {
+    function _payExterminatorShare(address ex, uint256 exterminatorShare) private returns (uint256 claimableDelta) {
         if (exterminatorShare == 0) return 0;
-
-        // Split between ETH and bonds
-        uint256 ethPortion = _splitEthWithBond(ex, exterminatorShare, BOND_BPS_EX, lvl);
-
-        // Credit ETH portion to claimable
-        _addClaimableEth(ex, ethPortion);
-        claimableDelta = ethPortion;
-    }
-
-    /**
-     * @notice Split an ETH payout between claimable and bonds.
-     * @dev Used for exterminator and BAF winner payouts.
-     *
-     * @param winner Address receiving the payout.
-     * @param amount Total ETH amount before split.
-     * @param bondBps Basis points to route to bonds (e.g., 2500 = 25%).
-     * @param lvl Current level for bond routing.
-     * @return ethPortion Amount to credit as claimable ETH.
-     */
-    function _splitEthWithBond(
-        address winner,
-        uint256 amount,
-        uint16 bondBps,
-        uint24 lvl
-    ) private returns (uint256 ethPortion) {
-        uint256 bondBudget = (amount * bondBps) / 10_000;
-
-        ethPortion = amount;
-
-        // If zero budget, return full amount as ETH
-        if (bondBudget == 0) {
-            return ethPortion;
-        }
-
-        // Award bonds and reduce ETH portion
-        _awardBondPrize(winner, bondBudget, lvl);
-        ethPortion -= bondBudget;
-
-        return ethPortion;
-    }
-
-    /**
-     * @notice Award bond prizes for endgame payouts.
-     * @dev Delegates routing logic to bonds contract via awardFromGame.
-     *
-     * @param beneficiary Address to credit the bond prize.
-     * @param amount ETH amount to convert into bonds.
-     * @param lvl Current level for bond routing.
-     */
-    function _awardBondPrize(
-        address beneficiary,
-        uint256 amount,
-        uint24 lvl
-    ) private {
-        bonds.awardFromGame(beneficiary, amount, lvl);
-        bondPool += amount;
+        _addClaimableEth(ex, exterminatorShare);
+        return exterminatorShare;
     }
 
     /**
@@ -685,7 +597,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
 
     /**
      * @notice Execute BAF (Big-Ass Flip) jackpot distribution.
-     * @dev Complex payout logic with bond splits and MAP purchases.
+     * @dev Complex payout logic with MAP purchases.
      *
      * @param poolWei Total ETH for BAF distribution.
      * @param lvl Level triggering the BAF.
@@ -693,13 +605,13 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
      * @return netSpend Amount consumed from rewardPool.
      * @return claimableDelta ETH credited to claimable balances.
      *
-     * ## Winner Categories (via bondMask)
+     * ## Winner Categories (via winnerMask)
      *
-     * | Category                   | Bond Split  | Special Handling  |
-     * |----------------------------|-------------|-------------------|
-     * | Top winners (low bits)     | 20% → bonds | Direct ETH + bond |
-     * | Scatter winners (high bits)| 100% → bonds| 50% → MAPs first  |
-     * | Regular winners            | 0%          | Direct ETH        |
+     * | Category                   | Special Handling                |
+     * |----------------------------|--------------------------------|
+     * | Top winners (low bits)     | Direct ETH                      |
+     * | Scatter winners (high bits)| 50% → MAPs first, rest → ETH    |
+     * | Regular winners            | Direct ETH                      |
      *
      * ## Scatter Winner Flow
      *
@@ -709,8 +621,7 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
      *     +- Up to 50% of total scatter → MAPs
      *     |   +- Added to nextPrizePool
      *     |
-     *     +- Remainder → bonds (100%)
-     *         +- If bonds unavailable → claimable ETH
+     *     +- Remainder → claimable ETH
      * ```
      *
      * ## Trophy
@@ -726,13 +637,12 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
         (
             address[] memory winnersArr,
             uint256[] memory amountsArr,
-            uint256 bondMask,
+            uint256 winnerMask,
             uint256 refund
         ) = jackpots.runBafJackpot(poolWei, lvl, rngWord);
 
-        // Parse bondMask: low bits = top winners, high bits = scatter winners
-        uint256 topMask = bondMask & ((uint256(1) << BAF_BOND_MASK_OFFSET) - 1);
-        uint256 scatterMask = bondMask >> BAF_BOND_MASK_OFFSET;
+        // Parse winnerMask: high bits = scatter winners (used for MAP routing)
+        uint256 scatterMask = winnerMask >> BAF_MASK_OFFSET;
 
         uint256 mapPrice = uint256(price) / 4;
 
@@ -759,11 +669,10 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
             uint256 ethPortion = amount;
 
             bool scatterSpecial = (scatterMask & (uint256(1) << i)) != 0;
-            bool topBond = (topMask & (uint256(1) << i)) != 0;
 
             if (scatterSpecial) {
                 // -------------------------------------------------------------
-                // Scatter winner: MAPs first, remainder to bonds
+                // Scatter winner: MAPs first, remainder as claimable ETH
                 // -------------------------------------------------------------
 
                 if (mapPrice != 0 && mapSpent < mapTarget) {
@@ -776,50 +685,19 @@ contract DegenerusGameEndgameModule is DegenerusGameStorage {
                         _queueRewardMaps(winnersArr[i], uint32(qty));
                         mapPrizeDelta += mapCost;
 
-                        // Remainder goes to bonds
                         uint256 remainder = amount - mapCost;
-                        if (remainder != 0) {
-                            ethPortion = _splitEthWithBond(
-                                winnersArr[i],
-                                remainder,
-                                BAF_SCATTER_BOND_BPS, // 100% to bonds
-                                lvl
-                            );
-                        } else {
-                            ethPortion = 0;
-                        }
+                        ethPortion = remainder;
                         mapSpent += mapCost;
                     } else {
-                        // Amount too small for MAPs - all to bonds
-                        ethPortion = _splitEthWithBond(
-                            winnersArr[i],
-                            amount,
-                            BAF_SCATTER_BOND_BPS,
-                            lvl
-                        );
+                        // Amount too small for MAPs - all as claimable ETH
+                        ethPortion = amount;
                     }
                 } else {
-                    // MAP budget exhausted - all to bonds
-                    ethPortion = _splitEthWithBond(
-                        winnersArr[i],
-                        amount,
-                        BAF_SCATTER_BOND_BPS,
-                        lvl
-                    );
+                    // MAP budget exhausted - all as claimable ETH
+                    ethPortion = amount;
                 }
-            } else if (topBond) {
-                // -------------------------------------------------------------
-                // Top winner: 20% to bonds, 80% to claimable
-                // -------------------------------------------------------------
-
-                ethPortion = _splitEthWithBond(
-                    winnersArr[i],
-                    amount,
-                    BAF_TOP_BOND_BPS,
-                    lvl
-                );
             }
-            // Else: regular winner - full amount as claimable ETH (no split)
+            // Else: regular winner - full amount as claimable ETH
 
             if (ethPortion != 0) {
                 _addClaimableEth(winnersArr[i], ethPortion);

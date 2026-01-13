@@ -16,8 +16,6 @@ interface IDegenerusGame {
 
     function gameState() external view returns (uint8);
 
-    function presaleMintingEnabled() external view returns (bool);
-
     function mintPrice() external view returns (uint256);
 
     function decWindow() external view returns (bool on, uint24 lvl);

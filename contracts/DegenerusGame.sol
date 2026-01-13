@@ -8,20 +8,19 @@ pragma solidity ^0.8.26;
  *
  * @dev ARCHITECTURE:
  *      - 3-state FSM: PURCHASE(2) → BURN(3) → SETUP(1) → (cycle)
- *      - GAMEOVER(86) is terminal, presale gated by checks (not state)
+ *      - GAMEOVER(86) is terminal
  *      - Chainlink VRF for randomness with RNG lock to prevent manipulation
- *      - Delegatecall modules: endgame, jackpot, mint, bond (must inherit DegenerusGameStorage)
+ *      - Delegatecall modules: endgame, jackpot, mint (must inherit DegenerusGameStorage)
  *      - Prize pool flow: nextPrizePool → currentPrizePool → ContractAddresses.JACKPOTS/rewardPool → claimableWinnings
  *
  * @dev CRITICAL INVARIANTS:
- *      - address(this).balance + steth.balanceOf(this) >= claimablePool + bondPool
- *      - rngLockedFlag blocks bond operations during VRF pending
+ *      - address(this).balance + steth.balanceOf(this) >= claimablePool
  *      - gameState transitions: 2→3→1→2 (starts at 2, 86 = terminal)
  *
  * @dev SECURITY:
  *      - Pull pattern for ETH/stETH withdrawals (claimWinnings)
  *      - RNG lock prevents state manipulation during VRF callback window
- *      - Access control via onlyBonds modifier and msg.sender checks
+ *      - Access control via msg.sender checks
  *      - Delegatecall modules use constant addresses from ContractAddresses
  *      - 18h VRF timeout, 3-day stall detection, 365-day inactivity guard
  */
@@ -34,8 +33,7 @@ import {IStETH} from "./interfaces/IStETH.sol";
 import {
     IDegenerusGameEndgameModule,
     IDegenerusGameJackpotModule,
-    IDegenerusGameMintModule,
-    IDegenerusGameBondModule
+    IDegenerusGameMintModule
 } from "./interfaces/IDegenerusGameModules.sol";
 import {MintPaymentKind} from "./interfaces/IDegenerusGame.sol";
 import {DegenerusGameStorage} from "./storage/DegenerusGameStorage.sol";
@@ -47,45 +45,6 @@ import {ContractAddresses} from "./ContractAddresses.sol";
   |  Minimal interfaces for external contracts this contract interacts with.     |
   |  These are defined locally to avoid circular import dependencies.            |
   +==============================================================================+*/
-
-/// @notice Interface for DegenerusBonds operations called from game.
-interface IDegenerusBonds {
-    /// @notice Run bond maintenance operations (resolution, payouts, etc.).
-    /// @param rngWord VRF random word for any RNG-dependent operations.
-    /// @param workCapOverride Gas budget override (0 = use default).
-    /// @return done True if all maintenance is complete.
-    function bondMaintenance(uint256 rngWord, uint32 workCapOverride) external returns (bool done);
-
-    /// @notice Run daily presale payouts using game-supplied entropy.
-    /// @param rngWord RNG word from advanceGame.
-    /// @param day Day index being processed.
-    /// @param lastPurchaseDay True if prize pool target was met today.
-    /// @return advanced True if the presale payout advanced.
-    function runPresaleDailyFromGame(
-        uint256 rngWord,
-        uint48 day,
-        bool lastPurchaseDay
-    ) external returns (bool advanced);
-
-    /// @notice Resolve ContractAddresses.BONDS game-over with supplied entropy.
-    /// @param rngWord RNG word from advanceGame.
-    function gameOverWithEntropy(uint256 rngWord) external;
-
-    /// @notice True once ContractAddresses.BONDS has attempted game-over entropy.
-    function gameOverEntropyAttempted() external view returns (bool);
-
-    /// @notice Check if gamepiece/MAP purchases are enabled (presale gating).
-    /// @dev Purchases enabled when presale raised > 40 ETH OR presale ended.
-    /// @return True if gamepiece/MAP purchases are enabled, false otherwise.
-    function gamepiecePurchasesEnabled() external view returns (bool);
-}
-
-/// @notice Interface for affiliate presale status checks.
-interface IAffiliatePresaleStatus {
-    /// @notice Check presale status.
-    /// @return 0 = ended, 1 = active (no minting), 2 = active (minting enabled).
-    function presaleActive() external view returns (uint8);
-}
 
 /// @notice Interface for reading player quest states.
 interface IDegenerusQuestView {
@@ -142,7 +101,7 @@ interface IVRFCoordinator {
  * @notice Core gamepiece game contract implementing the game state machine, VRF integration,
  *         and orchestration of all gameplay mechanics.
  * @dev Inherits DegenerusGameStorage for shared storage layout with delegate modules.
- *      Uses delegatecall pattern for complex logic (endgame, jackpot, mint, bond modules).
+ *      Uses delegatecall pattern for complex logic (endgame, jackpot, mint modules).
  * @custom:security-contact burnie@degener.us
  */
 contract DegenerusGame is DegenerusGameStorage {
@@ -235,9 +194,6 @@ contract DegenerusGame is DegenerusGameStorage {
 
     /// @notice DegenerusJackpots contract for decimator/BAF jackpots.
     IDegenerusJackpots internal constant jackpots = IDegenerusJackpots(ContractAddresses.JACKPOTS);
-
-    /// @notice DegenerusBonds contract for bond upkeep and RNG lock.
-    IDegenerusBonds internal constant bonds = IDegenerusBonds(ContractAddresses.BONDS);
 
     /// @notice Affiliate program contract for bonus points and referrers.
     IDegenerusAffiliate internal constant affiliate = IDegenerusAffiliate(ContractAddresses.AFFILIATE);
@@ -354,13 +310,9 @@ contract DegenerusGame is DegenerusGameStorage {
     /**
      * @notice Initialize the game with precomputed contract references.
      * @dev All addresses are compile-time constants from ContractAddresses for gas optimization.
-     *      Infinite stETH approval to ContractAddresses.BONDS is safe as ContractAddresses.BONDS is a trusted contract.
      */
     constructor() {
-        // Grant infinite stETH approval to ContractAddresses.BONDS for staking operations.
-        if (!steth.approve(ContractAddresses.BONDS, type(uint256).max)) revert E();
-
-        // Initialize game in PURCHASE state (presale gated by presaleActive() checks)
+        // Initialize game in PURCHASE state
         gameState = GAME_STATE_PURCHASE;
         levelStartTime = uint48(block.timestamp);
     }
@@ -368,99 +320,6 @@ contract DegenerusGame is DegenerusGameStorage {
     /*+======================================================================+
       |                           MODIFIERS                                  |
       +======================================================================+*/
-
-    /// @dev Restricts access to the DegenerusBonds contract only.
-    modifier onlyBonds() {
-        if (msg.sender != ContractAddresses.BONDS) revert E();
-        _;
-    }
-
-    /*+======================================================================+
-      |                       BOND INTEGRATION                               |
-      +======================================================================+
-      |  Functions called by DegenerusBonds to manage ETH flows between      |
-      |  the game and bond system. All require onlyBonds access.             |
-      +======================================================================+*/
-
-    /// @notice Accept ETH for bond obligations or untracked yield.
-    /// @dev Access: ContractAddresses.BONDS only.
-    ///      If trackPool=true, adds to bondPool (tracked liability).
-    ///      If trackPool=false, ETH falls through as yield (yieldPool treats excess as available).
-    /// @param trackPool If true, credit to the tracked bondPool; if false, leave untracked as yield.
-    function bondDeposit(bool trackPool) external payable onlyBonds {
-        if (trackPool) {
-            bondPool += msg.value;
-        }
-        // Untracked deposits fall through; yieldPool() treats excess balance as available.
-    }
-
-    /// @notice Credit bond winnings into claimable balance and debit from the bond pool.
-    /// @dev Access: ContractAddresses.BONDS only. Moves funds from bondPool to claimablePool.
-    ///      INVARIANT: bondPool >= amount (underflow reverts in Solidity 0.8+).
-    /// @param player The player to credit.
-    /// @param amount The wei amount to credit.
-    function bondCreditToClaimable(address player, uint256 amount) external onlyBonds {
-        bondPool -= amount;
-        claimablePool += amount;
-        _addClaimableEth(player, amount);
-    }
-
-    /// @notice Batch credit bond winnings into claimable balance.
-    /// @dev Access: ContractAddresses.BONDS only. Gas-optimized for multiple credits.
-    ///      Aggregates total before single bondPool deduction.
-    /// @param players Array of player addresses.
-    /// @param amounts Array of corresponding amounts.
-    function bondCreditToClaimableBatch(address[] calldata players, uint256[] calldata amounts) external onlyBonds {
-        uint256 len = players.length;
-        if (len != amounts.length) revert E();
-
-        uint256 total;
-        for (uint256 i; i < len; ) {
-            uint256 amt = amounts[i];
-            address player = players[i];
-            if (amt != 0 && player != address(0)) {
-                _addClaimableEth(player, amt);
-                unchecked {
-                    total += amt;
-                }
-            }
-            unchecked {
-                ++i;
-            }
-        }
-
-        if (total != 0) {
-            bondPool -= total;
-            claimablePool += total;
-        }
-    }
-
-    /// @notice Convert a bond payout into MAP mints, debiting the bond pool.
-    /// @dev Access: ContractAddresses.BONDS only. Queues map mints for later processing.
-    ///      Funds flow: bondPool → nextPrizePool (for jackpot distribution).
-    /// @param player The player receiving the maps.
-    /// @param amount The ETH amount being converted.
-    /// @param quantity The number of maps to queue.
-    function bondSpendToMaps(address player, uint256 amount, uint32 quantity) external onlyBonds {
-        bondPool -= amount;
-        nextPrizePool += amount;
-
-        uint32 owed = playerMapMintsOwed[player];
-        if (owed == 0) {
-            pendingMapMints.push(player);
-        }
-        unchecked {
-            playerMapMintsOwed[player] = owed + quantity;
-        }
-    }
-
-    /// @notice View helper for ContractAddresses.BONDS to know available ETH in the game-held bond pool.
-    /// @dev Returns 0 if bondGameOver (funds drained to ContractAddresses.BONDS contract).
-    /// @return The available ETH in bondPool.
-    function bondAvailable() external view returns (uint256) {
-        if (bondGameOver) return 0;
-        return bondPool;
-    }
 
     /*+======================================================================+
       |                   VIEW: GAME STATUS & STATE                          |
@@ -502,11 +361,11 @@ contract DegenerusGame is DegenerusGameStorage {
     }
 
     /// @notice Get the untracked yield pool (excess ETH+stETH available for operations).
-    /// @dev Calculated as: (ETH balance + stETH balance) - (claimablePool + bondPool)
+    /// @dev Calculated as: (ETH balance + stETH balance) - claimablePool
     /// @return The yieldPool value (ETH wei).
     function yieldPoolView() external view returns (uint256) {
         uint256 totalBalance = address(this).balance + steth.balanceOf(address(this));
-        uint256 tracked = claimablePool + bondPool;
+        uint256 tracked = claimablePool;
         if (totalBalance <= tracked) return 0;
         return totalBalance - tracked;
     }
@@ -563,10 +422,6 @@ contract DegenerusGame is DegenerusGameStorage {
         return true;
     }
 
-    function _presaleActive() private view returns (uint8 status) {
-        return IAffiliatePresaleStatus(ContractAddresses.AFFILIATE).presaleActive();
-    }
-
     /// @notice Check if VRF has stalled for 3 consecutive days.
     /// @dev Enables emergency VRF coordinator rotation via updateVrfCoordinatorAndSub().
     /// @return True if no VRF word has been recorded for the last 3 day slots.
@@ -607,17 +462,6 @@ contract DegenerusGame is DegenerusGameStorage {
     }
 
     /*+======================================================================+
-      |                   ADMIN: PRESALE MINTING                             |
-      +======================================================================+*/
-
-    /// @notice Enable or disable presale minting (tokens/maps).
-    /// @dev Access: ContractAddresses.ADMIN only.
-    function setPresaleMintingEnabled(bool enabled) external {
-        if (msg.sender != ContractAddresses.ADMIN) revert E();
-        presaleMintingEnabledFlag = enabled;
-    }
-
-    /*+======================================================================+
       |                   VIEW: DECIMATOR & PURCHASE INFO                    |
       +======================================================================+
       |  Status views for decimator window and purchase state.               |
@@ -636,11 +480,6 @@ contract DegenerusGame is DegenerusGameStorage {
     /// @return open True if decimator window flag is set.
     function decWindowOpenFlag() external view returns (bool open) {
         return decWindowOpen;
-    }
-
-    /// @notice Check if presale minting (tokens/maps) is enabled.
-    function presaleMintingEnabled() external view returns (bool enabled) {
-        return presaleMintingEnabledFlag;
     }
 
     /// @notice Comprehensive purchase info for UI consumption.
@@ -824,7 +663,6 @@ contract DegenerusGame is DegenerusGameStorage {
         MintPaymentKind payKind
     ) external payable returns (uint256 coinReward, uint256 newClaimableBalance) {
         if (msg.sender != ContractAddresses.GAMEPIECES) revert E();
-        if (!presaleMintingEnabledFlag) revert E();
         uint256 prizeContribution;
         (prizeContribution, newClaimableBalance) = _processMintPayment(player, costWei, payKind);
         if (prizeContribution != 0) {
@@ -921,10 +759,10 @@ contract DegenerusGame is DegenerusGameStorage {
       |  GAMEOVER(86) is terminal.                                                             |
       |                                                                                        |
       |  State Transitions:                                                                    |
-      |  • State 1 (SETUP): Run endgame settlement, stake ContractAddresses.BONDS, then → 2    |
+      |  • State 1 (SETUP): Run endgame settlement, then → 2                                   |
       |  • State 2 (PURCHASE): Process airdrops until target met, then → 3                     |
       |  • State 3 (DEGENERUS): Pay daily ContractAddresses.JACKPOTS, wait for burns, then → 1 |
-      |  • State 0 (PRESALE): RNG + coinflips + daily presale payouts                          |
+      |  • State 0 (PRESALE): RNG + coinflips                                                  |
       |  • State 86 (GAMEOVER): Terminal state, no transitions                                 |
       |                                                                                        |
       |  Gating:                                                                               |
@@ -944,9 +782,8 @@ contract DegenerusGame is DegenerusGameStorage {
     ///      3. Process dormant cleanup if in setup state
     ///      4. Gate on RNG readiness (request new VRF if needed)
     ///      5. Process map mint batches
-    ///      6. Run bond maintenance if pending
-    ///      7. Execute state-specific logic (setup/purchase/degenerus)
-    ///      8. Credit caller with BURNIE reward (if cap == 0)
+    ///      6. Execute state-specific logic (setup/purchase/degenerus)
+    ///      7. Credit caller with BURNIE reward (if cap == 0)
     ///
     ///      SECURITY:
     ///      - Liveness guards prevent abandoned game lockup
@@ -970,7 +807,6 @@ contract DegenerusGame is DegenerusGameStorage {
 
         // === GAMEOVER CHECK ===
         if (_gameState == GAME_STATE_GAMEOVER) {
-            _advanceGameOver(day, lvl);
             return;
         }
 
@@ -990,8 +826,8 @@ contract DegenerusGame is DegenerusGameStorage {
                 if (rngWord == 1 || rngWord == 0) return;
                 _unlockRng(day);
             }
-            // Drain all funds to ContractAddresses.BONDS contract for holder distribution
-            gameOverDrainToBonds();
+            // Sweep all funds to the vault for final distribution
+            gameOverDrainToVault();
             return;
         }
 
@@ -1001,13 +837,8 @@ contract DegenerusGame is DegenerusGameStorage {
         do {
             // === DAILY GATE ===
             // Standard flow requires caller to have minted today (prevents gaming by non-participants)
-            // Skip gate check if presale is active and purchases not yet enabled
             // Also skip for CREATOR address to allow contract owner to advance game for maintenance
-            bool presaleActiveNoMinting = false;
-            if (lvl == 1) {
-                presaleActiveNoMinting = _presaleActive() == 1; // state 1 = presale active, no minting
-            }
-            if (cap == 0 && !presaleActiveNoMinting && caller != ContractAddresses.CREATOR) {
+            if (cap == 0 && caller != ContractAddresses.CREATOR) {
                 uint32 gateIdx = uint32(dailyIdx);
                 if (gateIdx != 0) {
                     uint256 mintData = mintPacked_[caller];
@@ -1034,27 +865,11 @@ contract DegenerusGame is DegenerusGameStorage {
                 break; // VRF requested - must wait for fulfillment
             }
 
-            // === PRESALE/TICKET JACKPOTS ===
-            if (lvl == 1 && _gameState == GAME_STATE_PURCHASE) {
-                // Run presale jackpots only during level 1.
-                uint8 presaleState = _presaleActive();
-                if (presaleState > 0) {
-                    bonds.runPresaleDailyFromGame(rngWord, day, lastPurchaseDay);
-                }
-            }
-
             // === MAP BATCH PROCESSING ===
             // Always run a map batch upfront; it no-ops when nothing is queued.
             // Single batch per call prevents gas exhaustion.
             (bool batchWorked, bool batchesFinished) = _runProcessMapBatch(cap);
             if (batchWorked || !batchesFinished) break;
-
-            // === BOND MAINTENANCE ===
-            // If bond maintenance is pending, run it before state-specific logic
-            if (bondMaintenancePending) {
-                _runBondMaintenance(rngWord, cap, day);
-                break;
-            }
 
             // +================================================================+
             // |                    STATE 1: SETUP                              |
@@ -1062,8 +877,7 @@ contract DegenerusGame is DegenerusGameStorage {
             // |  • Open decimator window at specific level positions           |
             // |  • Run endgame module (payouts, wipes, ContractAddresses.JACKPOTS)               |
             // |  • Pay carryover extermination jackpot if applicable           |
-            // |  • Stake ETH for target ratio                                  |
-            // |  • Queue bond maintenance → transition to State 2              |
+            // |  • Transition to State 2                                       |
             // +================================================================+
             if (_gameState == GAME_STATE_SETUP) {
                 // Decimator window opens at level 5, levels ending in 5 (except 95), and at level 99
@@ -1082,9 +896,6 @@ contract DegenerusGame is DegenerusGameStorage {
                     payCarryoverExterminationJackpot(lvl, uint8(lastExterminatedTrait), rngWord);
                 }
 
-                // Stake for target ratio and queue bond maintenance
-                _stakeForTargetRatioModule(lvl);
-                _bondSetup(rngWord); // Sets bondMaintenancePending = true
                 break;
             }
 
@@ -1222,19 +1033,6 @@ contract DegenerusGame is DegenerusGameStorage {
 
         // Credit caller with BURNIE reward for advancing (unless emergency cap mode)
         if (cap == 0) coinContract.creditFlip(caller, PRICE_COIN_UNIT >> 1);
-    }
-
-    /// @dev Handle game-over entropy and ContractAddresses.BONDS resolution in GAMEOVER state.
-    function _advanceGameOver(uint48 day, uint24 lvl) private {
-        if (bonds.gameOverEntropyAttempted()) return;
-
-        uint256 rngWord = _gameOverEntropy(day, lvl, false);
-        if (rngWord == 0 || rngWord == 1) return;
-
-        bonds.gameOverWithEntropy(rngWord);
-        if (dailyIdx != day) {
-            _unlockRng(day);
-        }
     }
 
     /*+======================================================================+
@@ -1523,7 +1321,6 @@ contract DegenerusGame is DegenerusGameStorage {
       |  Modules:                                                                                                      |
       |  • ContractAddresses.GAME_ENDGAME_MODULE  - Endgame settlement (payouts, wipes, ContractAddresses.JACKPOTS)    |
       |  • ContractAddresses.GAME_MINT_MODULE     - Mint data recording, airdrop multipliers                           |
-      |  • ContractAddresses.GAME_BOND_MODULE     - Bond upkeep, staking ratios, game-over drain                       |
       |  • ContractAddresses.GAME_JACKPOT_MODULE  - Jackpot calculations and payouts                                   |
       |                                                                                                                |
       |  SECURITY: delegatecall executes module code in this contract's                                                |
@@ -1628,43 +1425,6 @@ contract DegenerusGame is DegenerusGameStorage {
         if (!ok) _revertDelegate(data);
     }
 
-    /// @dev Run bond upkeep via bond module delegatecall.
-    ///      Handles bond setup at level start.
-    /// @param rngWord VRF random word for any RNG-dependent operations.
-    function _bondSetup(uint256 rngWord) private {
-        (bool ok, bytes memory data) = ContractAddresses.GAME_BOND_MODULE.delegatecall(
-            abi.encodeWithSelector(IDegenerusGameBondModule.bondUpkeep.selector, rngWord)
-        );
-        if (!ok) _revertDelegate(data);
-        // Queue maintenance so the next advanceGame call runs it in isolation.
-        bondMaintenancePending = true;
-    }
-
-    /// @dev Run bond maintenance (external call, not delegatecall).
-    ///      Progresses bond resolution and payouts.
-    /// @param rngWord VRF random word.
-    /// @param cap Gas budget override.
-    /// @param day Current day index for RNG unlock.
-    function _runBondMaintenance(uint256 rngWord, uint32 cap, uint48 day) private {
-        bool done = bonds.bondMaintenance(rngWord, cap);
-        if (done) {
-            gameState = GAME_STATE_PURCHASE; // Enter purchase/airdrop state once bond maintenance is fully settled
-            levelStartTime = uint48(block.timestamp);
-
-            bondMaintenancePending = false;
-            _unlockRng(day);
-        }
-    }
-
-    /// @dev Stake ETH for target ratio via bond module delegatecall.
-    /// @param lvl Current level (affects target ratio).
-    function _stakeForTargetRatioModule(uint24 lvl) private {
-        (bool ok, bytes memory data) = ContractAddresses.GAME_BOND_MODULE.delegatecall(
-            abi.encodeWithSelector(IDegenerusGameBondModule.stakeForTargetRatio.selector, lvl)
-        );
-        if (!ok) _revertDelegate(data);
-    }
-
     /*+========================================================================================+
       |                    DECIMATOR JACKPOT CREDITS                                           |
       +========================================================================================+
@@ -1709,7 +1469,7 @@ contract DegenerusGame is DegenerusGameStorage {
       |                    CLAIMING WINNINGS (ETH)                                             |
       +========================================================================================+
       |  Players claim accumulated winnings from ContractAddresses.JACKPOTS, affiliates,       |
-      |  ContractAddresses.BONDS, and endgame payouts through the claimWinnings() function.    |
+      |  and endgame payouts through the claimWinnings() function.                              |
       |                                                                                        |
       |  SECURITY:                                                                             |
       |  • Uses CEI pattern (Checks-Effects-Interactions)                                      |
@@ -1719,7 +1479,7 @@ contract DegenerusGame is DegenerusGameStorage {
       +========================================================================================+*/
 
     /// @notice Claim the caller's accrued ETH winnings.
-    /// @dev Aggregates all winnings: affiliates, ContractAddresses.JACKPOTS, ContractAddresses.BONDS, endgame payouts.
+    /// @dev Aggregates all winnings: affiliates, ContractAddresses.JACKPOTS, endgame payouts.
     ///      Uses pull pattern for security (CEI: check balance, update state, then transfer).
     ///
     ///      GAS OPTIMIZATION: Leaves 1 wei sentinel so subsequent credits remain
@@ -1935,15 +1695,22 @@ contract DegenerusGame is DegenerusGameStorage {
         if (!ok) _revertDelegate(data);
     }
 
-    /// @dev Drain all game funds to ContractAddresses.BONDS contract on game over.
+    /// @dev Sweep all game funds to ContractAddresses.VAULT on game over.
     ///      Called when liveness guards trigger (2.5yr deploy or 365-day inactivity).
     ///      Transitions game to GAMEOVER (86).
-    function gameOverDrainToBonds() private {
-        (bool ok, bytes memory data) = ContractAddresses.GAME_BOND_MODULE.delegatecall(
-            abi.encodeWithSelector(IDegenerusGameBondModule.drainToBonds.selector)
-        );
-        if (!ok) _revertDelegate(data);
+    function gameOverDrainToVault() private {
+        uint256 ethBal = address(this).balance;
+        uint256 stBal = steth.balanceOf(address(this));
+
         gameState = GAME_STATE_GAMEOVER; // Terminal state
+
+        if (ethBal != 0) {
+            (bool ok, ) = payable(ContractAddresses.VAULT).call{value: ethBal}("");
+            if (!ok) revert E();
+        }
+        if (stBal != 0) {
+            if (!steth.transfer(ContractAddresses.VAULT, stBal)) revert E();
+        }
     }
 
     /*+======================================================================+
@@ -2048,8 +1815,7 @@ contract DegenerusGame is DegenerusGameStorage {
         // Record the word once per day; using a zero sentinel since VRF returning 0 is effectively impossible.
         if (rngWordByDay[day] == 0) {
             rngWordByDay[day] = currentWord;
-            uint8 presaleState = _presaleActive();
-            bool bonusFlip = isMapJackpotDay || presaleState > 0;
+            bool bonusFlip = isMapJackpotDay;
             // Always run coinflip payouts once game has started (lvl always >= 1)
             coin.processCoinflipPayouts(lvl, bonusFlip, currentWord, day);
         }
@@ -2147,7 +1913,6 @@ contract DegenerusGame is DegenerusGameStorage {
 
     /// @dev Request new VRF random word from Chainlink.
     ///      Sets RNG lock to prevent manipulation during pending window.
-    ///      SECURITY: Locks bond operations until fulfillment.
     /// @param gameState_ Current game state.
     /// @param isMapJackpotDay True if this is the last purchase day.
     /// @param lvl Current level.
@@ -2214,7 +1979,7 @@ contract DegenerusGame is DegenerusGameStorage {
     }
 
     /// @dev Set new VRF configuration and reset RNG state.
-    ///      Clears any pending request and unlocks ContractAddresses.BONDS.
+    ///      Clears any pending request and unlocks RNG usage.
     /// @param newCoordinator New VRF coordinator address.
     /// @param newSubId New subscription ID.
     /// @param newKeyHash New key hash.
@@ -2236,7 +2001,7 @@ contract DegenerusGame is DegenerusGameStorage {
     }
 
     /// @dev Unlock RNG after processing is complete for the day.
-    ///      Resets VRF state and unlocks bond operations.
+    ///      Resets VRF state and re-enables RNG usage.
     /// @param day Current day index to record.
     function _unlockRng(uint48 day) private {
         dailyIdx = day;

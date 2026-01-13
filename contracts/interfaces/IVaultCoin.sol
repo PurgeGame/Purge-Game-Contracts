@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-/// @notice Interface for tokens with vault mint allowance (BURNIE, DGNRS).
-/// @dev Used by DegenerusVault, DegenerusBonds, and game modules for minting tokens
+/// @notice Interface for tokens with vault mint allowance (BURNIE).
+/// @dev Used by DegenerusVault and game modules for minting tokens
 ///      from vault escrow without requiring token transfers.
 interface IVaultCoin {
     /// @notice Increase the vault's mint allowance without transferring tokens.

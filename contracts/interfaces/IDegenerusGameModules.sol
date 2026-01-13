@@ -46,12 +46,6 @@ interface IDegenerusGameJackpotModule {
     function processMapBatch(uint32 writesBudget) external returns (bool finished);
 }
 
-interface IDegenerusGameBondModule {
-    function bondUpkeep(uint256 rngWord) external;
-    function stakeForTargetRatio(uint24 lvl) external;
-    function drainToBonds() external;
-}
-
 interface IDegenerusGameMintModule {
     function recordMintData(
         address player,

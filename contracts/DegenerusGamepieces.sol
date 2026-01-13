@@ -165,11 +165,6 @@ interface IDegenerusCoinExtended is IDegenerusCoin {
     function balanceOf(address account) external view returns (uint256);
 }
 
-/// @notice Minimal bonds interface for purchase gating.
-interface IDegenerusBondsLite {
-    function gamepiecePurchasesEnabled() external view returns (bool);
-}
-
 // ===========================================================================
 // Contract
 // ===========================================================================
@@ -217,9 +212,6 @@ contract DegenerusGamepieces {
 
     /// @notice Invalid payment kind specified.
     error InvalidPaymentKind();
-
-    /// @notice Purchases are disabled (presale hasn't raised 40 ETH yet).
-    error PurchasesDisabled();
 
     /// @notice Balance underflow (attempting to transfer/burn more than owned).
     error BalanceUnderflow();
@@ -458,9 +450,6 @@ contract DegenerusGamepieces {
 
     /// @dev Affiliate program contract for referral payouts (constant).
     IDegenerusAffiliate internal constant affiliate = IDegenerusAffiliate(ContractAddresses.AFFILIATE);
-
-    /// @dev Bonds contract for purchase gating (constant).
-    IDegenerusBondsLite internal constant bonds = IDegenerusBondsLite(ContractAddresses.BONDS);
 
     /*+======================================================================+
       |                    MINT QUEUE STATE                                  |
@@ -729,9 +718,6 @@ contract DegenerusGamepieces {
     /// @param payer Address paying for purchase.
     /// @param params Purchase parameters.
     function _routePurchase(address buyer, address payer, PurchaseParams memory params) private {
-        // Block purchases until presale raised > 40 ETH OR presale ended
-        if (!bonds.gamepiecePurchasesEnabled()) revert PurchasesDisabled();
-
         bytes32 affiliateCode = params.payInCoin ? bytes32(0) : params.affiliateCode;
         if (params.kind == PurchaseKind.Player) {
             _purchase(buyer, payer, params.quantity, params.payInCoin, affiliateCode, params.payKind);
@@ -761,7 +747,6 @@ contract DegenerusGamepieces {
         uint256 priceWei;
         (targetLevel, state, lastPurchaseDay, rngLocked_, priceWei) = g.purchaseInfo();
 
-        if (state == 0 && !g.presaleMintingEnabled()) revert NotTimeYet();
         if ((targetLevel % 20) == 16) revert NotTimeYet();
         if (rngLocked_) revert RngNotReady();
         if (payInCoin && !lastPurchaseDay) revert NotTimeYet();
@@ -865,7 +850,6 @@ contract DegenerusGamepieces {
         bool rngLocked_;
         uint256 priceWei;
         (lvl, state, lastPurchaseDay, rngLocked_, priceWei) = g.purchaseInfo();
-        if (state == 0 && !g.presaleMintingEnabled()) revert NotTimeYet();
         if (state == 3 && payInCoin) revert NotTimeYet();
         if (quantity == 0 || quantity > type(uint32).max) revert InvalidQuantity();
         if (rngLocked_) revert RngNotReady();

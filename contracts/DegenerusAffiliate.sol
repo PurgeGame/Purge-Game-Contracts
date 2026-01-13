@@ -12,19 +12,18 @@ import {ContractAddresses} from "./ContractAddresses.sol";
  * @dev ARCHITECTURE:
  *      - 3-tier referral: Player → Affiliate (base) → Upline1 (20%) → Upline2 (4%)
  *      - Rakeback: 0-25% of reward returned to referred player
- *      - Presale: affiliate payouts via creditFlip (ContractAddresses.BONDS only); rakeback returned to caller
- *      - Post-presale: affiliate payouts + quest bonuses via creditFlip; rakeback returned to caller
+ *      - Affiliate payouts + quest bonuses via creditFlip; rakeback returned to caller
  *      - Decay: 100% rewards (levels 0-50) → linear decay to 25% (levels 51-150) → 25% floor
  *      - Leaderboard: tracks top affiliate per level for mint trait bonus
  *
  * @dev SECURITY:
- *      - Access control: payAffiliate (coin/ContractAddresses.BONDS/gamepieces), shutdownPresale (ContractAddresses.BONDS only)
- *      - Referral locking: invalid codes lock slot post-presale (REF_CODE_LOCKED sentinel)
+ *      - Access control: payAffiliate (coin/gamepieces)
+ *      - Referral locking: invalid codes lock slot (REF_CODE_LOCKED sentinel)
  *      - Fixed contract addresses at deploy (no re-pointing)
  */
 
 /// @notice Interface for crediting FLIP tokens to players via the coin contract.
-/// @dev Called post-presale to distribute affiliate rewards.
+/// @dev Called to distribute affiliate rewards.
 interface IDegenerusCoinAffiliate {
     /// @notice Credit FLIP to a single player.
     /// @param player Recipient address.
@@ -43,18 +42,12 @@ interface IDegenerusCoinAffiliate {
     function affiliateQuestReward(address player, uint256 amount) external returns (uint256);
 }
 
-/// @notice Minimal interface to check purchase status from bonds.
-interface IBondsPresaleView {
-    function gamepiecePurchasesEnabled() external view returns (bool);
-}
-
 /**
  * @title DegenerusAffiliate
- * @notice Multi-tier affiliate referral system with presale support and leaderboard tracking.
+ * @notice Multi-tier affiliate referral system with leaderboard tracking.
  * @dev Central hub for all affiliate-related operations in the Degenerus ecosystem.
  *
  * INTEGRATION POINTS:
- * - DegenerusBonds: Calls payAffiliate() for bond purchases and credits returned rakeback
  * - DegenerusGamepieces: Calls payAffiliate() for map purchases
  */
 contract DegenerusAffiliate {
@@ -72,10 +65,7 @@ contract DegenerusAffiliate {
     //                              ERRORS
     // =====================================================================
 
-    /// @notice Thrown when a function restricted to ContractAddresses.BONDS is called by another address.
-    error OnlyBonds();
-
-    /// @notice Thrown when caller is not in the authorized set (coin, ContractAddresses.BONDS, gamepieces).
+    /// @notice Thrown when caller is not in the authorized set (coin, gamepieces).
     error OnlyAuthorized();
 
     /// @notice Thrown when attempting to create an affiliate code with zero or reserved value.
@@ -168,19 +158,13 @@ contract DegenerusAffiliate {
 
     /// @notice Records the game level when a player's referral was established.
     /// @dev Used by _referralRewardScaleBps() to calculate reward decay.
-    ///      Level 0 = presale/early join; decay starts after 50 levels.
+    ///      Level 0 = early join; decay starts after 50 levels.
     mapping(address => uint24) private referralJoinLevel;
 
     /// @notice Top affiliate per game level for bonus calculations.
     /// @dev Private storage; use affiliateTop() view to read.
     ///      Updated in _updateTopAffiliate() when affiliate exceeds current top.
     mapping(uint24 => PlayerScore) private affiliateTopByLevel;
-
-    /// @notice Flag indicating presale period has ended.
-    /// @dev Set permanently via shutdownPresale(). Once true:
-    ///      - payAffiliate() continues direct creditFlip() distribution
-    ///      - Cannot be unset (one-way state transition)
-    bool private presaleShutdown;
 
     /**
      * @notice Initialize affiliate contract with trusted contract addresses.
@@ -254,39 +238,6 @@ contract DegenerusAffiliate {
         return _referrerAddress(player);
     }
 
-    /**
-     * @notice Check presale status including gamepiece/MAP purchase availability.
-     * @dev Returns:
-     *      0 = Presale ended
-     *      1 = Presale active, purchases not yet enabled (< 40 ETH raised)
-     *      2 = Presale active, purchases enabled (>= 40 ETH raised)
-     * @return Presale state (0, 1, or 2).
-     */
-    function presaleActive() external view returns (uint8) {
-        if (presaleShutdown) return 0;
-
-        // Check if gamepiece/MAP purchases are enabled
-        try IBondsPresaleView(ContractAddresses.BONDS).gamepiecePurchasesEnabled() returns (bool enabled) {
-            return enabled ? 2 : 1;
-        } catch {
-            return 1; // Fallback: presale active but purchases status unknown
-        }
-    }
-
-    /**
-     * @notice Permanently close the presale period.
-     * @dev Can only be called by ContractAddresses.BONDS contract. One-way state transition.
-     *      After shutdown:
-     *      - payAffiliate() continues direct creditFlip() distribution
-     *
-     * ACCESS: ContractAddresses.BONDS only.
-     */
-    function shutdownPresale() external {
-        // SECURITY: Only ContractAddresses.BONDS can shutdown presale.
-        if (msg.sender != ContractAddresses.BONDS) revert OnlyBonds();
-        presaleShutdown = true;
-    }
-
     // =====================================================================
     //                    GAMEPLAY ENTRYPOINTS
     // =====================================================================
@@ -294,9 +245,9 @@ contract DegenerusAffiliate {
     /**
      * @notice Process affiliate rewards for a purchase or gameplay action.
      * @dev Core payout logic. Handles referral resolution, reward scaling,
-     *      multi-tier distribution, and presale vs post-presale logic.
+     *      and multi-tier distribution.
      *
-     * ACCESS: coin, ContractAddresses.BONDS, or gamepieces only.
+     * ACCESS: coin or gamepieces only.
      *
      * REWARD FLOW:
      * +--------------------------------------------------------------------+
@@ -306,12 +257,8 @@ contract DegenerusAffiliate {
      * | 4. Pay direct affiliate (base - rakeback)                          |
      * | 5. Pay upline1 (20% of scaled amount)                              |
      * | 6. Pay upline2 (20% of upline1 share = 4%)                         |
-     * | 7. Quest rewards added on top (post-presale only)                  |
+     * | 7. Quest rewards added on top                                     |
      * +--------------------------------------------------------------------+
-     *
-     * PRESALE vs POST-PRESALE:
-     * - Presale: Affiliate rewards distributed via creditFlip() (ContractAddresses.BONDS only)
-     * - Post-presale: Affiliate rewards distributed via creditFlip()
      *
      * @param amount Base reward amount (18 decimals).
      * @param code Affiliate code provided with the transaction (may be bytes32(0)).
@@ -324,16 +271,7 @@ contract DegenerusAffiliate {
         // ACCESS CONTROL
         // -----------------------------------------------------------------
         // SECURITY: Only trusted contracts can distribute affiliate rewards.
-        if (msg.sender != ContractAddresses.COIN && msg.sender != ContractAddresses.BONDS && msg.sender != ContractAddresses.GAMEPIECES) revert OnlyAuthorized();
-
-        // -----------------------------------------------------------------
-        // PRESALE GATE
-        // -----------------------------------------------------------------
-        if (!presaleShutdown) {
-            // During presale, only bond purchases accrue rewards.
-            // This keeps presale distribution anchored to bond purchases.
-            if (msg.sender != ContractAddresses.BONDS) return 0;
-        }
+        if (msg.sender != ContractAddresses.COIN && msg.sender != ContractAddresses.GAMEPIECES) revert OnlyAuthorized();
 
         // -----------------------------------------------------------------
         // REFERRAL RESOLUTION
@@ -349,11 +287,9 @@ contract DegenerusAffiliate {
             // No stored code - try to use the provided code.
             AffiliateCodeInfo storage candidate = affiliateCode[code];
             if (candidate.owner == address(0) || candidate.owner == sender) {
-                // Invalid code or self-referral: lock slot after presale.
+                // Invalid code or self-referral: lock slot.
                 // SECURITY: Prevents gaming by trying codes until one works.
-                if (!!presaleShutdown) {
-                    playerReferralCode[sender] = REF_CODE_LOCKED;
-                }
+                playerReferralCode[sender] = REF_CODE_LOCKED;
                 return 0;
             }
             // Valid code: store it permanently.
@@ -366,8 +302,8 @@ contract DegenerusAffiliate {
             info = affiliateCode[storedCode];
             if (info.owner == address(0)) {
                 // Edge case: stored code became invalid (shouldn't happen).
-                // Lock or clear the slot.
-                playerReferralCode[sender] = !presaleShutdown ? bytes32(0) : REF_CODE_LOCKED;
+                // Lock the slot.
+                playerReferralCode[sender] = REF_CODE_LOCKED;
                 return 0;
             }
         }
@@ -400,124 +336,66 @@ contract DegenerusAffiliate {
         // Upline rewards are paid out but not tracked for leaderboard scores (gas).
 
         // -----------------------------------------------------------------
-        // DISTRIBUTION (POST-PRESALE)
+        // DISTRIBUTION
         // -----------------------------------------------------------------
-        if (!!presaleShutdown) {
-            // Batch recipients for gas efficiency.
-            address[3] memory players;
-            uint256[3] memory amounts;
-            uint256 cursor;
+        // Batch recipients for gas efficiency.
+        address[3] memory players;
+        uint256[3] memory amounts;
+        uint256 cursor;
 
-            // Add quest reward bonus on top of base affiliate share.
-            uint256 questReward = coin.affiliateQuestReward(affiliateAddr, affiliateShareBase);
-            uint256 totalFlipAward = affiliateShareBase + questReward;
+        // Add quest reward bonus on top of base affiliate share.
+        uint256 questReward = coin.affiliateQuestReward(affiliateAddr, affiliateShareBase);
+        uint256 totalFlipAward = affiliateShareBase + questReward;
 
-            players[cursor] = affiliateAddr;
-            amounts[cursor] = totalFlipAward;
+        players[cursor] = affiliateAddr;
+        amounts[cursor] = totalFlipAward;
+        unchecked {
+            ++cursor;
+        }
+
+        // -------------------------------------------------------------
+        // UPLINE TIER 1 (20% of scaled amount)
+        // -------------------------------------------------------------
+        address upline = _referrerAddress(affiliateAddr);
+        if (upline != address(0) && upline != sender) {
+            uint256 baseBonus = scaledAmount / 5; // 20%
+            uint256 questRewardUpline = coin.affiliateQuestReward(upline, baseBonus);
+            uint256 totalUpline = baseBonus + questRewardUpline;
+
+            players[cursor] = upline;
+            amounts[cursor] = totalUpline;
             unchecked {
                 ++cursor;
             }
 
-            // -------------------------------------------------------------
-            // UPLINE TIER 1 (20% of scaled amount)
-            // -------------------------------------------------------------
-            address upline = _referrerAddress(affiliateAddr);
-            if (upline != address(0) && upline != sender) {
-                uint256 baseBonus = scaledAmount / 5; // 20%
-                uint256 questRewardUpline = coin.affiliateQuestReward(upline, baseBonus);
-                uint256 totalUpline = baseBonus + questRewardUpline;
+            // ---------------------------------------------------------
+            // UPLINE TIER 2 (20% of tier 1 = 4% of original)
+            // ---------------------------------------------------------
+            address upline2 = _referrerAddress(upline);
+            if (upline2 != address(0)) {
+                uint256 bonus2 = baseBonus / 5; // 20% of 20% = 4%
+                uint256 questReward2 = coin.affiliateQuestReward(upline2, bonus2);
+                uint256 totalUpline2 = bonus2 + questReward2;
 
-                players[cursor] = upline;
-                amounts[cursor] = totalUpline;
+                players[cursor] = upline2;
+                amounts[cursor] = totalUpline2;
                 unchecked {
                     ++cursor;
                 }
-
-                // ---------------------------------------------------------
-                // UPLINE TIER 2 (20% of tier 1 = 4% of original)
-                // ---------------------------------------------------------
-                address upline2 = _referrerAddress(upline);
-                if (upline2 != address(0)) {
-                    uint256 bonus2 = baseBonus / 5; // 20% of 20% = 4%
-                    uint256 questReward2 = coin.affiliateQuestReward(upline2, bonus2);
-                    uint256 totalUpline2 = bonus2 + questReward2;
-
-                    players[cursor] = upline2;
-                    amounts[cursor] = totalUpline2;
-                    unchecked {
-                        ++cursor;
-                    }
-                }
             }
+        }
 
-            // Distribute rewards (single call vs batch for gas efficiency).
-            if (cursor != 0) {
-                if (cursor == 1) {
-                    coin.creditFlip(players[0], amounts[0]);
-                } else {
-                    coin.creditFlipBatch(players, amounts);
-                }
-            }
-        } else {
-            // -------------------------------------------------------------
-            // DISTRIBUTION (PRESALE)
-            // -------------------------------------------------------------
-            // Directly credit flip stakes; no quest rewards during presale.
-            address[3] memory players;
-            uint256[3] memory amounts;
-            uint256 cursor;
-
-            players[cursor] = affiliateAddr;
-            amounts[cursor] = affiliateShareBase;
-            unchecked {
-                ++cursor;
-            }
-
-            // Upline tier 1 (20% of scaled amount).
-            address uplinePre = _referrerAddress(affiliateAddr);
-            if (uplinePre != address(0) && uplinePre != sender) {
-                uint256 baseBonusPre = scaledAmount / 5;
-                players[cursor] = uplinePre;
-                amounts[cursor] = baseBonusPre;
-                unchecked {
-                    ++cursor;
-                }
-
-                // Upline tier 2 (20% of tier 1).
-                address upline2Pre = _referrerAddress(uplinePre);
-                if (upline2Pre != address(0)) {
-                    uint256 bonus2Pre = baseBonusPre / 5;
-                    players[cursor] = upline2Pre;
-                    amounts[cursor] = bonus2Pre;
-                    unchecked {
-                        ++cursor;
-                    }
-                }
-            }
-
-            if (cursor != 0) {
-                if (cursor == 1) {
-                    coin.creditFlip(players[0], amounts[0]);
-                } else {
-                    coin.creditFlipBatch(players, amounts);
-                }
+        // Distribute rewards (single call vs batch for gas efficiency).
+        if (cursor != 0) {
+            if (cursor == 1) {
+                coin.creditFlip(players[0], amounts[0]);
+            } else {
+                coin.creditFlipBatch(players, amounts);
             }
         }
 
         emit Affiliate(amount, storedCode, sender);
         return playerRakeback;
-    }
-
-    /**
-     * @notice Forward any received ETH to the ContractAddresses.BONDS contract.
-     * @dev Prevents ETH from being accidentally stuck in this contract.
-     *      This contract should not hold ETH; all ETH flows through ContractAddresses.BONDS.
-     *
-     * SECURITY: Reverts if forward fails, preventing silent loss of funds.
-     */
-    receive() external payable {
-        (bool ok, ) = payable(ContractAddresses.BONDS).call{value: msg.value}("");
-        if (!ok) revert Insufficient();
     }
 
     // =====================================================================
@@ -598,7 +476,7 @@ contract DegenerusAffiliate {
     /**
      * @notice Record the level at which a player's referral was established.
      * @dev Only records if not already set (first referral wins).
-     *      Used for calculating reward decay over time (level 0 allowed for presale).
+     *      Used for calculating reward decay over time (level 0 allowed for early join).
      * @param player The player being referred.
      * @param lvl The current game level.
      */
@@ -629,7 +507,7 @@ contract DegenerusAffiliate {
      */
     function _referralRewardScaleBps(address player, uint24 currentLevel) private view returns (uint256 scaleBps) {
         uint24 joinLevel = referralJoinLevel[player];
-        // At/before join = full rewards (presale join level can be 0).
+        // At/before join = full rewards (join level can be 0).
         if (currentLevel <= joinLevel) return 10_000;
 
         uint256 delta = uint256(currentLevel - joinLevel);

@@ -3,7 +3,6 @@ pragma solidity ^0.8.26;
 
 import "./interfaces/IDegenerusQuests.sol";
 import "./interfaces/IDegenerusGame.sol";
-import "./interfaces/IDegenerusBondsJackpot.sol";
 import {ContractAddresses} from "./ContractAddresses.sol";
 
 /**
@@ -89,10 +88,8 @@ contract DegenerusQuests is IDegenerusQuests {
     uint8 private constant QUEST_TYPE_BURN = 4;
     /// @dev Quest type: participate in decimator burns.
     uint8 private constant QUEST_TYPE_DECIMATOR = 5;
-    /// @dev Quest type: purchase bonds.
-    uint8 private constant QUEST_TYPE_BOND = 6;
     /// @dev Total number of quest types for iteration bounds.
-    uint8 private constant QUEST_TYPE_COUNT = 7;
+    uint8 private constant QUEST_TYPE_COUNT = 6;
 
     // -------------------------------------------------------------------------
     // Difficulty Flags (packed into quest.flags)
@@ -133,8 +130,6 @@ contract DegenerusQuests is IDegenerusQuests {
 
     /// @dev Reference to the Degenerus game contract for state queries.
     IDegenerusGame internal constant questGame = IDegenerusGame(ContractAddresses.GAME);
-    /// @dev Reference to the Degenerus bonds contract for purchase-window checks.
-    IDegenerusBondsJackpot internal constant questBonds = IDegenerusBondsJackpot(ContractAddresses.BONDS);
 
     // =========================================================================
     //                                 STRUCTS
@@ -336,7 +331,6 @@ contract DegenerusQuests is IDegenerusQuests {
         bool burnAllowed = _canRollBurnQuest() || forceBurn;
         bool decAllowed = _canRollDecimatorQuest();
         bool mintBurnieAllowed = _canRollMintBurnieQuest();
-        bool bondAllowed = _canRollBondQuest();
 
         uint256 primaryEntropy = entropy;
         // Swap 128-bit halves to derive independent entropy for slot 1
@@ -344,10 +338,10 @@ contract DegenerusQuests is IDegenerusQuests {
 
         uint8 primaryType = forceMintEth
             ? QUEST_TYPE_MINT_ETH
-            : _primaryQuestType(primaryEntropy, burnAllowed, decAllowed, mintBurnieAllowed, bondAllowed);
+            : _primaryQuestType(primaryEntropy, burnAllowed, decAllowed, mintBurnieAllowed);
         uint8 bonusType = forceBurn
             ? QUEST_TYPE_BURN
-            : _bonusQuestType(bonusEntropy, primaryType, burnAllowed, decAllowed, mintBurnieAllowed, bondAllowed);
+            : _bonusQuestType(bonusEntropy, primaryType, burnAllowed, decAllowed, mintBurnieAllowed);
 
         // Single difficulty roll per day, shared by both slots for consistency
         uint8 flags = _difficultyFlags(uint16(primaryEntropy & 0x3FF));
@@ -530,55 +524,6 @@ contract DegenerusQuests is IDegenerusQuests {
             return (0, false, quest.questType, state.streak, false, false);
         }
         return _questCompleteWithPair(state, quests, slotIndex, quest, currentDay, tier, 0);
-    }
-
-    /**
-     * @notice Handle bond purchases tracked by the base-per-bond size (wei).
-     * @param player The player who purchased bonds.
-     * @param basePerBondWei ETH value per bond purchased (in wei).
-     * @dev Bond quests are only available during specific level windows.
-     *      Target is dynamically calculated based on current mint price.
-     */
-    function handleBondPurchase(
-        address player,
-        uint256 basePerBondWei
-    )
-        external
-        onlyCoin
-        returns (uint256 reward, bool hardMode, uint8 questType, uint32 streak, bool completed, bool completedBoth)
-    {
-        DailyQuest[QUEST_SLOT_COUNT] memory quests = activeQuests;
-        uint48 currentDay = _currentQuestDay(quests);
-        PlayerQuestState storage state = questPlayerState[player];
-        if (player == address(0) || basePerBondWei == 0 || currentDay == 0) {
-            return (0, false, quests[0].questType, state.streak, false, false);
-        }
-        _questSyncState(state, currentDay);
-
-        // Bond purchases are only valid during specific level windows
-        IDegenerusGame game_ = questGame;
-        if (!_bondPurchasesOpen(game_.level())) {
-            return (0, false, quests[0].questType, state.streak, false, false);
-        }
-
-        (DailyQuest memory quest, uint8 slotIndex) = _currentDayQuestOfType(quests, currentDay, QUEST_TYPE_BOND);
-        if (slotIndex == type(uint8).max) {
-            return (0, false, QUEST_TYPE_BOND, state.streak, false, false);
-        }
-
-        _questSyncProgress(state, slotIndex, currentDay, quest.version);
-        uint8 tier = _questTier(state.baseStreak);
-        uint256 priceWei = game_.mintPrice();
-        if (priceWei == 0) {
-            return (0, false, quest.questType, state.streak, false, false);
-        }
-
-        state.progress[slotIndex] = _clampedAdd128(state.progress[slotIndex], basePerBondWei);
-        uint256 target = _questBondTargetWei(tier, quest.entropy, priceWei);
-        if (state.progress[slotIndex] < target) {
-            return (0, false, quest.questType, state.streak, false, false);
-        }
-        return _questCompleteWithPair(state, quests, slotIndex, quest, currentDay, tier, priceWei);
     }
 
     /**
@@ -838,7 +783,6 @@ contract DegenerusQuests is IDegenerusQuests {
      * Note: Different quest types use different requirement fields:
      * - MINT_BURNIE, MINT_ETH, BURN → req.mints (small integer count)
      * - FLIP, DECIMATOR, AFFILIATE → req.tokenAmount (BURNIE base units)
-     * - BOND → req.tokenAmount (wei)
      */
     function _questRequirementsForTier(
         DailyQuest memory quest,
@@ -857,9 +801,6 @@ contract DegenerusQuests is IDegenerusQuests {
             req.tokenAmount = uint256(_questDecimatorTargetTokens(tier, quest.entropy)) * 1 ether;
         } else if (qType == QUEST_TYPE_AFFILIATE) {
             req.tokenAmount = uint256(_questAffiliateTargetTokens(tier, quest.entropy)) * 1 ether;
-        } else if (qType == QUEST_TYPE_BOND) {
-            uint256 priceWei = questGame.mintPrice();
-            req.tokenAmount = _questBondTargetWei(tier, quest.entropy, priceWei);
         }
     }
 
@@ -954,31 +895,6 @@ contract DegenerusQuests is IDegenerusQuests {
         // Available at X5 levels (5, 15, 25, 35...) except X95
         if (lvl < 5) return false;
         return (lvl % 10) == 5 && (lvl % 100) != 95;
-    }
-
-    /**
-     * @dev Bond quests are only enabled when bond purchases are open.
-     * @return True if bond quests can be rolled.
-     */
-    function _canRollBondQuest() private view returns (bool) {
-        return questBonds.purchasesEnabled();
-    }
-
-    /**
-     * @dev Determines if bond purchases are allowed at the given level.
-     * @param currLevel The current game level.
-     * @return open True if bond purchases are open.
-     *
-     * Bond Windows:
-     * - Levels 1-5: open
-     * - Levels 6-9: closed
-     * - Levels X0-X4: open (10-14, 20-24, etc.)
-     * - Levels X5-X9: closed (15-19, 25-29, etc.)
-     */
-    function _bondPurchasesOpen(uint24 currLevel) private pure returns (bool open) {
-        if (currLevel == 0) return false;
-        if (currLevel < 10) return currLevel < 6;
-        return (currLevel % 10) < 5;
     }
 
     // -------------------------------------------------------------------------
@@ -1271,30 +1187,6 @@ contract DegenerusQuests is IDegenerusQuests {
         return _questLinearTarget(QUEST_MIN_TOKEN, uint32(maxVal), difficulty);
     }
 
-    /**
-     * @dev Calculate bond purchase target in wei.
-     * @param tier Player's tier.
-     * @param entropy Quest entropy.
-     * @param priceWei Current mint price in wei.
-     * @return Target in wei.
-     *
-     * Range:
-     * - Minimum: 0.5x mint price
-     * - Maximum: 1.0x mint price at tier 2
-     */
-    function _questBondTargetWei(uint8 tier, uint256 entropy, uint256 priceWei) private pure returns (uint256) {
-        if (priceWei == 0) return 0;
-        uint256 minWei = priceWei >> 1; // 0.5x mint price
-        uint256 span = priceWei / 2;    // Additional 0.5x range
-        uint256 tierMax = minWei + (span * tier) / QUEST_TIER_MAX_INDEX;
-        if (tierMax <= minWei) return minWei;
-
-        uint16 difficulty = _difficultyForTarget(entropy);
-        uint256 target = minWei + (uint256(difficulty) * (tierMax - minWei)) / 1024;
-        if (target > tierMax) target = tierMax;
-        return target;
-    }
-
     // -------------------------------------------------------------------------
     // Quest Type Selection
     // -------------------------------------------------------------------------
@@ -1329,7 +1221,6 @@ contract DegenerusQuests is IDegenerusQuests {
      * Weight Distribution:
      * - MINT_ETH: 5 (most common)
      * - DECIMATOR: 4 (when allowed)
-     * - BOND: 2 (when allowed)
      * - BURN: 2 (when allowed)
      * - MINT_BURNIE: 10 (when allowed)
      * - AFFILIATE: 1
@@ -1339,8 +1230,7 @@ contract DegenerusQuests is IDegenerusQuests {
         uint256 entropy,
         bool burnAllowed,
         bool decAllowed,
-        bool mintBurnieAllowed,
-        bool bondAllowed
+        bool mintBurnieAllowed
     ) private pure returns (uint8) {
         uint16[QUEST_TYPE_COUNT] memory weights;
         uint16 total;
@@ -1351,9 +1241,6 @@ contract DegenerusQuests is IDegenerusQuests {
         }
         if (burnAllowed) {
             weights[QUEST_TYPE_BURN] = 2;
-        }
-        if (bondAllowed) {
-            weights[QUEST_TYPE_BOND] = 2;
         }
         weights[QUEST_TYPE_AFFILIATE] = 1;
         if (decAllowed) {
@@ -1410,8 +1297,7 @@ contract DegenerusQuests is IDegenerusQuests {
         uint8 primaryType,
         bool burnAllowed,
         bool decAllowed,
-        bool mintBurnieAllowed,
-        bool bondAllowed
+        bool mintBurnieAllowed
     ) private pure returns (uint8) {
         uint16[QUEST_TYPE_COUNT] memory weights;
         uint16 total;
@@ -1443,13 +1329,6 @@ contract DegenerusQuests is IDegenerusQuests {
                 }
                 continue;
             }
-            if (!bondAllowed && candidate == QUEST_TYPE_BOND) {
-                unchecked {
-                    ++candidate;
-                }
-                continue;
-            }
-
             // Apply type-specific weights
             uint16 weight = 1;
             if (candidate == QUEST_TYPE_MINT_BURNIE && mintBurnieAllowed) {
@@ -1575,7 +1454,7 @@ contract DegenerusQuests is IDegenerusQuests {
      * @param quest The quest being completed.
      * @param currentDay Current quest day for pair checks.
      * @param tier Player tier (from baseStreak) for target checks.
-     * @param priceWei Price in wei (for bond quest target calculation).
+     * @param priceWei Price in wei (unused by current quest types).
      *
      * This function enables "combo completion" where completing one quest
      * can automatically complete the other if its progress already meets target.
@@ -1628,7 +1507,7 @@ contract DegenerusQuests is IDegenerusQuests {
      * @param slot The slot to check for completion.
      * @param currentDay Current quest day for validation.
      * @param tier Player tier (from baseStreak) for target checks.
-     * @param priceWei Price in wei (for bond quest target calculation).
+     * @param priceWei Price in wei (unused by current quest types).
      */
     function _maybeCompleteOther(
         PlayerQuestState storage state,
@@ -1665,7 +1544,7 @@ contract DegenerusQuests is IDegenerusQuests {
      * @param quest The quest to check.
      * @param slot The slot index.
      * @param tier Player's tier for target calculation.
-     * @param priceWei Price in wei (for bond quest target).
+     * @param priceWei Price in wei (unused by current quest types).
      * @return True if progress >= target.
      */
     function _questReady(
@@ -1695,10 +1574,6 @@ contract DegenerusQuests is IDegenerusQuests {
         }
         if (quest.questType == QUEST_TYPE_AFFILIATE) {
             return progress >= uint256(_questAffiliateTargetTokens(tier, quest.entropy)) * 1 ether;
-        }
-        if (quest.questType == QUEST_TYPE_BOND) {
-            uint256 weiPrice = priceWei != 0 ? priceWei : questGame.mintPrice();
-            return progress >= _questBondTargetWei(tier, quest.entropy, weiPrice);
         }
         return false;
     }

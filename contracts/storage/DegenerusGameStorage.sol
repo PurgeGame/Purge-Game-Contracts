@@ -13,7 +13,6 @@ import {ContractAddresses} from "../ContractAddresses.sol";
  * This contract defines the canonical storage layout for the Degenerus game ecosystem.
  * It is inherited by:
  *   - DegenerusGame (main contract, holds actual state)
- *   - DegenerusGameBondModule (delegatecall module)
  *   - DegenerusGameEndgameModule (delegatecall module)
  *   - DegenerusGameJackpotModule (delegatecall module)
  *   - DegenerusGameMintModule (delegatecall module)
@@ -57,14 +56,11 @@ import {ContractAddresses} from "../ContractAddresses.sol";
  * | [15:16] traitCountsSeedQueued    bool     Initial traits staged flag        |
  * | [16:17] decimatorHundredReady    bool     Level %100 special primed         |
  * | [17:18] exterminationInvertFlag  bool     Exterminator bonus inversion      |
- * | [18:19] bondMaintenancePending   bool     Bond maintenance needed flag      |
- * | [19:20] mapJackpotType           uint8    0=none, 1=daily, 2=purchase       |
- * | [20:21] lastLevelJackpotCount    uint8    Jackpots processed last level     |
- * | [21:22] bondGameOver             bool     Bond pool flushed to bonds        |
- * | [22:23] presaleMintingEnabledFlag bool    Presale minting enabled           |
- * | [23:32] <padding>                         9 bytes unused                    |
+ * | [18:19] mapJackpotType           uint8    0=none, 1=daily, 2=purchase       |
+* | [19:20] lastLevelJackpotCount    uint8    Jackpots processed last level     |
+* | [20:32] <padding>                         12 bytes unused                   |
  * +-----------------------------------------------------------------------------+
- *   Total: 4+4+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1 = 23 bytes (9 bytes padding)
+*   Total: 4+4+12 = 20 bytes (12 bytes padding)
  *
  * +-----------------------------------------------------------------------------+
  * | SLOT 2 (32 bytes) — Price                                                   |
@@ -94,7 +90,7 @@ import {ContractAddresses} from "../ContractAddresses.sol";
  * 4. INITIALIZATION: Default values are set inline. For critical variables:
  *    - levelStartTime = type(uint48).max (sentinel: game not started)
  *    - lastExterminatedTrait = 420 (sentinel: no trait exterminated)
- *    - gameState = 2 (initialized to PURCHASE state, presale gated by checks)
+*    - gameState = 2 (initialized to PURCHASE state)
  *    - decWindowOpen = true (decimator window starts open)
  *    - rngFulfilled = true (no pending request at deploy)
  *    - price = 0.025 ether (initial mint price)
@@ -191,9 +187,9 @@ abstract contract DegenerusGameStorage {
     uint16 internal lastExterminatedTrait = 420;
 
     /// @dev Finite State Machine for game phases:
-    ///      0 = presale (gated by checks; game initializes to purchase)
+    ///      0 = reserved (unused)
     ///      1 = setup (awaiting start or between major phases)
-    ///      2 = purchase (mint/airdrop phase; initialized state, presale gated by checks)
+    ///      2 = purchase (mint/airdrop phase; initialized state)
     ///      3 = burn window (extermination phase)
     ///      86 = game over (terminal)
     ///
@@ -271,10 +267,6 @@ abstract contract DegenerusGameStorage {
     ///      Adds variety to extermination mechanics across levels.
     bool internal exterminationInvertFlag;
 
-    /// @dev True while bond maintenance requires dedicated advanceGame calls.
-    ///      Set when bond operations are pending; cleared when complete.
-    ///      Prevents normal game progression until bonds are serviced.
-    bool internal bondMaintenancePending;
 
     /// @dev Unified MAP jackpot pending type. Daily and purchase MAP jackpots are
     ///      mutually exclusive, so a single enum tracks which (if any) is queued:
@@ -286,13 +278,6 @@ abstract contract DegenerusGameStorage {
     ///      Used to scale the carryover extermination jackpot when the level ended early.
     uint8 internal lastLevelJackpotCount;
 
-    /// @dev True once bondPool has been flushed to bonds contract.
-    ///      Marks end-of-game state for bond obligations.
-    ///      Once true, bond claims go directly to bonds contract.
-    bool internal bondGameOver;
-
-    /// @dev True if presale minting (tokens/maps) is enabled.
-    bool internal presaleMintingEnabledFlag;
 
     // =========================================================================
     // SLOT 2: Mint Price
@@ -358,10 +343,6 @@ abstract contract DegenerusGameStorage {
     ///      SECURITY: Request ID matching prevents replay attacks on RNG.
     uint256 internal vrfRequestId;
 
-    /// @dev ETH dedicated to bond obligations.
-    ///      Lives in game contract until bondGameOver flushes to bonds.
-    ///      Tracked separately from prize pools for clean accounting.
-    uint256 internal bondPool;
 
     /// @dev Number of reverse flips purchased against current RNG word.
     ///      Tracks flip activity for jackpot sizing adjustments.

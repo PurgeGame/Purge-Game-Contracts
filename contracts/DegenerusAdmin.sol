@@ -76,10 +76,13 @@ interface IVRFCoordinatorV2_5Owner {
         returns (uint96 balance, uint96 nativeBalance, uint64 reqCount, address owner, address[] memory consumers);
 }
 
-/// @dev Game contract admin interface (VRF + presale + liquidity).
+/// @dev Game contract admin interface (VRF + liquidity).
 interface IDegenerusGameAdmin {
     /// @notice Check if RNG has been stalled for 3+ days (enables emergency recovery).
     function rngStalledForThreeDays() external view returns (bool);
+
+    /// @notice Current game state (FSM).
+    function gameState() external view returns (uint8);
 
     /// @notice Emergency update of VRF configuration during recovery.
     /// @param newCoordinator New VRF coordinator address.
@@ -90,9 +93,6 @@ interface IDegenerusGameAdmin {
     /// @notice Initial VRF wiring during setup.
     function wireVrf(address coordinator_, uint256 subId, bytes32 keyHash_) external;
 
-    /// @notice Enable or disable presale minting (tokens/maps).
-    function setPresaleMintingEnabled(bool enabled) external;
-
     /// @notice Swap owner ETH for GAME-held stETH (1:1 exchange).
     /// @param recipient Address to receive the stETH.
     /// @param amount Amount of ETH/stETH to swap.
@@ -102,22 +102,6 @@ interface IDegenerusGameAdmin {
     /// @param amount Amount of ETH to stake.
     function adminStakeEthForStEth(uint256 amount) external;
 
-}
-
-/// @dev Bonds contract admin interface (presale + staking + game-over flags).
-interface IDegenerusBondsAdmin {
-    /// @notice Configure the target stETH share (in bps) for GAME-held liquidity; 0 disables staking.
-    function setRewardStakeTargetBps(uint16 bps) external;
-
-    /// @notice Queue presale shutdown after the next jackpot time.
-    function shutdownPresale() external;
-
-
-    /// @notice True if final entropy request has been attempted.
-    function gameOverEntropyAttempted() external view returns (bool);
-
-    /// @notice True if GAME-over sequence has started.
-    function gameOverStarted() external view returns (bool);
 }
 
 /// @dev LINK token interface (ERC-677 with transferAndCall).
@@ -189,8 +173,6 @@ contract DegenerusAdmin {
     /// @dev Required component not yet wired.
     error NotWired();
 
-    /// @dev Bonds contract not ready for requested operation.
-    error BondsNotReady();
 
     /// @dev VRF subscription doesn't exist.
     error NoSubscription();
@@ -200,6 +182,9 @@ contract DegenerusAdmin {
 
     /// @dev Game-over has started; operation not allowed.
     error GameOver();
+
+    /// @dev Game-over has not started yet.
+    error GameNotOver();
 
     /// @dev Price feed is healthy; replacement not allowed.
     error FeedHealthy();
@@ -254,9 +239,6 @@ contract DegenerusAdmin {
     /// @param feed New feed address (zero disables oracle).
     event LinkEthFeedUpdated(address indexed feed);
 
-    /// @notice Emitted when presale shutdown is queued.
-    event PresaleShutdown();
-
     // =========================================================================
     // PRECOMPUTED ADDRESSES
     // =========================================================================
@@ -265,7 +247,6 @@ contract DegenerusAdmin {
     IVRFCoordinatorV2_5Owner internal constant vrfCoordinatorConst =
         IVRFCoordinatorV2_5Owner(ContractAddresses.VRF_COORDINATOR);
     IDegenerusGameAdmin internal constant gameAdmin = IDegenerusGameAdmin(ContractAddresses.GAME);
-    IDegenerusBondsAdmin internal constant bondsAdmin = IDegenerusBondsAdmin(ContractAddresses.BONDS);
     ILinkTokenLike internal constant linkToken = ILinkTokenLike(ContractAddresses.LINK_TOKEN);
     IDegenerusCoinLinkReward internal constant coinLinkReward =
         IDegenerusCoinLinkReward(ContractAddresses.COIN);
@@ -306,6 +287,9 @@ contract DegenerusAdmin {
 
     /// @dev Max staleness window before LINK/ETH feed is considered unhealthy.
     uint256 private constant LINK_ETH_MAX_STALE = 1 days;
+
+    /// @dev Terminal game state for shutdown gating.
+    uint8 private constant GAME_STATE_GAMEOVER = 86;
 
     // =========================================================================
     // ACCESS CONTROL
@@ -378,30 +362,6 @@ contract DegenerusAdmin {
         }
         linkEthPriceFeed = feed;
         emit LinkEthFeedUpdated(feed);
-    }
-
-    // =========================================================================
-    // PRESALE ADMINISTRATION
-    // =========================================================================
-
-    /// @notice Queue presale shutdown after the next jackpot time.
-    function shutdownPresale() external onlyOwner {
-        bondsAdmin.shutdownPresale();
-        emit PresaleShutdown();
-    }
-
-    /// @notice Enable or disable presale minting (tokens/maps).
-    function setPresaleMintingEnabled(bool enabled) external onlyOwner {
-        gameAdmin.setPresaleMintingEnabled(enabled);
-    }
-
-    // =========================================================================
-    // BONDS ADMINISTRATION
-    // =========================================================================
-
-    /// @notice Configure the target stETH share (in bps) for GAME-held liquidity; 0 disables staking.
-    function setRewardStakeTargetBps(uint16 bps) external onlyOwner {
-        bondsAdmin.setRewardStakeTargetBps(bps);
     }
 
     // =========================================================================
@@ -511,8 +471,8 @@ contract DegenerusAdmin {
         uint256 subId = subscriptionId;
         if (subId == 0) revert NoSubscription();
 
-        // SECURITY: Only allow shutdown after GAME-over entropy has been attempted.
-        if (!bondsAdmin.gameOverEntropyAttempted()) revert BondsNotReady();
+        // SECURITY: Only allow shutdown after GAME-over has started.
+        if (gameAdmin.gameState() != GAME_STATE_GAMEOVER) revert GameNotOver();
 
         // Cancel subscription; LINK refunds go to target.
         IVRFCoordinatorV2_5Owner(coordinator).cancelSubscription(subId, target);
@@ -558,7 +518,7 @@ contract DegenerusAdmin {
         if (amount == 0) revert InvalidAmount();
 
         // Prevent donations after GAME-over.
-        if (bondsAdmin.gameOverStarted()) revert GameOver();
+        if (gameAdmin.gameState() == GAME_STATE_GAMEOVER) revert GameOver();
 
         uint256 subId = subscriptionId;
         if (subId == 0) revert NoSubscription();
